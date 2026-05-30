@@ -71,7 +71,7 @@ export interface Conflict {
   nodeId: string;
   localUpdate: NodeUpdate;
   remoteUpdate: NodeUpdate;
-  conflictType: 'concurrent-edit' | 'version-mismatch' | 'deleted-node';
+  conflictType: 'version-mismatch' | 'deleted-node';
   detectedAt: number;
 }
 
@@ -157,8 +157,8 @@ export interface UpdateOptions {
   persistenceDependencies?: Array<string | (() => Promise<void>)>;
   /**
    * Indicates this update is for a computed/derived field (mentions, tags, backlinks, etc.)
-   * Automatically implies skipPersistence=true and skipConflictDetection=true
-   * Use this for fields that are computed from content and shouldn't be persisted directly
+   * Automatically implies skipPersistence=true.
+   * Use this for fields that are computed from content and shouldn't be persisted directly.
    */
   isComputedField?: boolean;
   /**

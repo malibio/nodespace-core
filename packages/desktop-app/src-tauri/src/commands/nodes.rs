@@ -103,6 +103,9 @@ pub struct CommandError {
     /// Optional detailed error information for debugging
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+    /// Structured conflict payload for VERSION_CONFLICT errors
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_data: Option<serde_json::Value>,
 }
 
 fn status_to_command_error(status: tonic::Status) -> CommandError {
@@ -114,10 +117,22 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
         _ => "GRPC_ERROR",
     }
     .to_string();
+
+    let conflict_data = if status.code() == tonic::Code::Aborted {
+        status
+            .metadata()
+            .get("x-version-conflict")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| serde_json::from_str(s).ok())
+    } else {
+        None
+    };
+
     CommandError {
         message: status.message().to_string(),
         code,
         details: Some(format!("{:?}", status.code())),
+        conflict_data,
     }
 }
 
@@ -131,6 +146,7 @@ pub(crate) fn proto_node_data_to_node(nd: NodeData) -> Result<Node, CommandError
             message: format!("Invalid created_at timestamp: {}", e),
             code: "PARSE_ERROR".to_string(),
             details: Some(nd.created_at.clone()),
+            conflict_data: None,
         })?;
     let modified_at = DateTime::parse_from_rfc3339(&nd.modified_at)
         .map(|dt| dt.with_timezone(&Utc))
@@ -138,6 +154,7 @@ pub(crate) fn proto_node_data_to_node(nd: NodeData) -> Result<Node, CommandError
             message: format!("Invalid modified_at timestamp: {}", e),
             code: "PARSE_ERROR".to_string(),
             details: Some(nd.modified_at.clone()),
+            conflict_data: None,
         })?;
 
     Ok(Node {
@@ -161,6 +178,7 @@ fn proto_node_response_to_node(resp: NodeResponse) -> Result<Node, CommandError>
         message: "gRPC response missing node_data".to_string(),
         code: "GRPC_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     })?;
     proto_node_data_to_node(nd)
 }
@@ -184,6 +202,7 @@ async fn validate_node_type(
                 message: format!("No schema found for node type: {}", node_type),
                 code: "SCHEMA_NOT_FOUND".to_string(),
                 details: None,
+                conflict_data: None,
             })
         }
         Err(s) => Err(status_to_command_error(s)),
@@ -196,6 +215,7 @@ pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
         details: Some(e),
+        conflict_data: None,
     })
 }
 
@@ -205,6 +225,7 @@ pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandErro
         message: e.clone(),
         code: "CONVERSION_ERROR".to_string(),
         details: Some(e),
+        conflict_data: None,
     })
 }
 
@@ -501,6 +522,7 @@ pub async fn get_children_tree(
         message: format!("Failed to parse tree JSON: {}", e),
         code: "PARSE_ERROR".to_string(),
         details: Some(tree_json),
+        conflict_data: None,
     })
 }
 
@@ -768,6 +790,7 @@ mod tests {
             message: "Test error".to_string(),
             code: "TEST_ERROR".to_string(),
             details: Some("Debug info".to_string()),
+            conflict_data: None,
         };
 
         let json = serde_json::to_string(&err).unwrap();
@@ -782,6 +805,7 @@ mod tests {
             message: "Simple error".to_string(),
             code: "SIMPLE".to_string(),
             details: None,
+            conflict_data: None,
         };
 
         let json = serde_json::to_string(&err).unwrap();

@@ -35,6 +35,7 @@ pub async fn get_all_schemas(
             message: format!("Failed to retrieve schemas: {}", s.message()),
             code: "SCHEMA_SERVICE_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     let schema_nodes: Vec<SchemaNode> = resp
@@ -79,12 +80,14 @@ pub async fn get_schema_definition(
                     message: format!("Schema '{}' not found", schema_id),
                     code: "SCHEMA_NOT_FOUND".to_string(),
                     details: None,
+                    conflict_data: None,
                 }
             } else {
                 CommandError {
                     message: format!("Schema operation failed: {}", s.message()),
                     code: "SCHEMA_SERVICE_ERROR".to_string(),
                     details: Some(format!("{:?}", s.code())),
+                    conflict_data: None,
                 }
             }
         })?;
@@ -93,6 +96,7 @@ pub async fn get_schema_definition(
         message: "gRPC GetSchemaDefinition response missing node_data".to_string(),
         code: "GRPC_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     })?;
 
     let node = proto_node_data_to_node(nd)?;
@@ -101,6 +105,7 @@ pub async fn get_schema_definition(
         message: format!("Failed to parse schema node: {}", e),
         code: "SCHEMA_SERVICE_ERROR".to_string(),
         details: Some(format!("{:?}", e)),
+        conflict_data: None,
     })
 }
 
@@ -114,6 +119,7 @@ mod tests {
             message: "Test error".to_string(),
             code: "TEST_ERROR".to_string(),
             details: Some("Debug info".to_string()),
+            conflict_data: None,
         };
 
         let json = serde_json::to_string(&err).unwrap();
@@ -128,6 +134,7 @@ mod tests {
             message: "Simple error".to_string(),
             code: "SIMPLE".to_string(),
             details: None,
+            conflict_data: None,
         };
 
         let json = serde_json::to_string(&err).unwrap();

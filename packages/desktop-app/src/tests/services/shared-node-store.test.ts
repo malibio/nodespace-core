@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import { backendAdapter } from '../../lib/services/backend-adapter';
+import { conflictNotifications } from '../../lib/stores/conflict-notifications.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource, NodeUpdate } from '../../lib/types/update-protocol';
 
@@ -47,6 +48,7 @@ describe('SharedNodeStore', () => {
     // Clean up
     store.clearAll();
     SharedNodeStore.resetInstance();
+    conflictNotifications.dismissAll();
   });
 
   // ========================================================================
@@ -1551,13 +1553,10 @@ describe('SharedNodeStore', () => {
       expect(node?.content).toBe('Immediate batch');
     });
 
-    it('should handle conflict window configuration', () => {
-      // default is 5000ms, we test setting a custom value
-      // Set custom conflict window
-      store.setConflictWindow(1000);
-
-      // Window is set (no direct getter, but we can verify it doesn't throw)
-      expect(() => store.setConflictWindow(2000)).not.toThrow();
+    it('should allow setting a custom conflict resolver', () => {
+      const resolver = store.getConflictResolver();
+      expect(resolver).toBeDefined();
+      expect(() => store.setConflictResolver(resolver)).not.toThrow();
     });
 
     it('should handle getNodesForParent with null parent', () => {
@@ -1928,9 +1927,11 @@ describe('SharedNodeStore', () => {
     });
 
     describe('Conflict Settings', () => {
-      it('should set conflict window', () => {
-        // Should not throw
-        store.setConflictWindow(10000);
+      it('should get and set conflict resolver', () => {
+        const resolver = store.getConflictResolver();
+        expect(resolver).toBeDefined();
+        store.setConflictResolver(resolver);
+        expect(store.getConflictResolver()).toBe(resolver);
       });
     });
 
@@ -2184,64 +2185,54 @@ describe('SharedNodeStore', () => {
     });
 
     describe('Conflict Detection Paths', () => {
-      it('should detect version mismatch conflict', () => {
+      it('should apply updates from multiple viewers without false conflicts', () => {
         const testNode = createTestNode('conflict-test-1');
         store.setNode(testNode, viewerSource);
 
-        // Set a short conflict window for testing
-        store.setConflictWindow(100);
-
-        // Make first update with skipConflictDetection false
         store.updateNode(
           testNode.id,
           { content: 'First update' },
           viewerSource,
-          { skipConflictDetection: false }
+          { skipConflictDetection: false, skipPersistence: true }
         );
 
-        // Get current version to verify update behavior
         const currentVersion = store.getVersion(testNode.id);
-        expect(currentVersion).toBeGreaterThan(0); // Use value to satisfy lint
+        expect(currentVersion).toBeGreaterThan(0);
 
-        // Attempt another update (simulating concurrent edit)
-        // Note: Conflict detection uses time-based window, not previousVersion
+        // Second update from another viewer — no time-window heuristic, no false conflict
         store.updateNode(
           testNode.id,
-          { content: 'Conflicting update' },
+          { content: 'Second update' },
           { type: 'viewer', viewerId: 'viewer-2' },
-          {
-            skipConflictDetection: false
-          }
+          { skipConflictDetection: false, skipPersistence: true }
         );
 
-        // Check conflict metrics
-        const metrics = store.getMetrics();
-        expect(metrics.conflictCount).toBeGreaterThanOrEqual(0);
+        expect(store.getNode(testNode.id)?.content).toBe('Second update');
+        // No spurious conflict notifications
+        expect(conflictNotifications.notifications).toHaveLength(0);
       });
 
-      it('should allow nodeType conversion even with overlapping fields', () => {
+      it('should allow nodeType conversion without triggering a conflict', () => {
         const testNode = createTestNode('nodetype-conversion-test');
         store.setNode(testNode, viewerSource);
 
-        store.setConflictWindow(100000); // Large window to ensure overlap
-
-        // First update
         store.updateNode(
           testNode.id,
           { content: '> ' },
           viewerSource,
-          { skipConflictDetection: false }
+          { skipConflictDetection: false, skipPersistence: true }
         );
 
-        // NodeType conversion update with content (should not conflict)
+        // NodeType conversion with content — must not conflict
         store.updateNode(
           testNode.id,
           { content: '> Quote text', nodeType: 'quote-block' },
           viewerSource,
-          { skipConflictDetection: false }
+          { skipConflictDetection: false, skipPersistence: true }
         );
 
         expect(store.getNode(testNode.id)?.nodeType).toBe('quote-block');
+        expect(conflictNotifications.notifications).toHaveLength(0);
       });
     });
 
