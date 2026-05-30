@@ -710,11 +710,41 @@ describe('ReactiveStructureTree', () => {
       expect(() => structureTree.assertInvariants(nodeIds, virtualIds)).toThrow(/I1/);
     });
 
+    it('I2: throws in dev for dual-parent (same child under two parents)', () => {
+      // Add child under both parent1 and parent2 by bypassing addChild's guard
+      structureTree.children.set('parent1', [{ nodeId: 'shared', order: 1 }]);
+      structureTree.children.set('parent2', [{ nodeId: 'shared', order: 1 }]);
+      const nodeIds = new Set(['shared', 'parent1', 'parent2']);
+      expect(() => structureTree.assertInvariants(nodeIds)).toThrow(/I2/);
+    });
+
     it('I3: throws in dev for unsorted order', () => {
       // Directly set unsorted state bypassing addChild
       structureTree.children.set('p', [{ nodeId: 'c1', order: 5 }, { nodeId: 'c2', order: 2 }]);
       const nodeIds = new Set(['c1', 'c2', 'p']);
       expect(() => structureTree.assertInvariants(nodeIds)).toThrow(/I3/);
+    });
+  });
+
+  describe('optimistic-then-event idempotency', () => {
+    it('authoritative relationship:created after optimistic moveInMemoryRelationship leaves single correct edge', () => {
+      // Setup: child under parent1
+      structureTree.addChild({ parentId: 'parent1', childId: 'child', order: 2 });
+
+      // Optimistic move to parent2 (e.g. from indentNode)
+      structureTree.moveInMemoryRelationship('parent1', 'parent2', 'child', 5);
+      expect(structureTree.getChildren('parent2')).toContain('child');
+      expect(structureTree.getChildren('parent1')).not.toContain('child');
+
+      // Authoritative relationship:created event arrives (via applyHasChildCreated)
+      // addChild deduplicates and re-sorts with backend order
+      structureTree.addChild({ parentId: 'parent2', childId: 'child', order: 3 });
+
+      // Must still be under parent2 with backend order, no duplicate
+      const kids = structureTree.getChildrenWithOrder('parent2');
+      expect(kids.filter((c) => c.nodeId === 'child')).toHaveLength(1);
+      expect(kids.find((c) => c.nodeId === 'child')?.order).toBe(3);
+      expect(structureTree.getChildren('parent1')).not.toContain('child');
     });
   });
 

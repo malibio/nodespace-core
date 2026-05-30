@@ -199,7 +199,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     await listen<RelationshipEvent>('relationship:updated', (event) => {
       const rel = event.payload;
       log.debug(`Relationship updated: ${rel.relationshipType} (${rel.fromId} -> ${rel.toId})`);
-      if (rel.relationshipType === 'has_child' && structureTree) {
+      if (rel.relationshipType === 'has_child') {
         applyHasChildUpdated(structureTree, {
           parentId: stripNodePrefix(rel.fromId),
           childId: stripNodePrefix(rel.toId),

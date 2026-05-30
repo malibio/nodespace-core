@@ -2063,7 +2063,13 @@ export class SharedNodeStore {
       // produces false-positive orphan violations).
       if (!isTestEnvironment()) {
         const nodeIdSet = new Set(this.nodes.keys());
-        const virtualIds = new Set(['__root__']);
+        // Allowlist __root__ sentinel plus any date nodes currently in the tree
+        // that aren't in this.nodes (e.g. when loading a child of a date node
+        // before the date node itself has been added to the store).
+        const virtualIds = new Set<string>(['__root__']);
+        for (const parentId of structureTree.children.keys()) {
+          if (isValidDateId(parentId)) virtualIds.add(parentId);
+        }
         structureTree.assertInvariants(nodeIdSet, virtualIds);
       }
 
