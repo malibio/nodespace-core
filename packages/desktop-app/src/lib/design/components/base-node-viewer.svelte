@@ -1657,9 +1657,7 @@
                     if (contentTemplate !== undefined) {
                       updatePayload.content = contentTemplate;
                     }
-                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId }, {
-                      skipConflictDetection: true
-                    });
+                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
                     if (isCustomSchemaType(newNodeType)) {
                       handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate)
                         .catch((err) => log.error('Custom entity slash command failed (real-node path):', err));
@@ -1913,9 +1911,7 @@
                     if (contentTemplate !== undefined) {
                       updatePayload.content = contentTemplate;
                     }
-                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId }, {
-                      skipConflictDetection: true
-                    });
+                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
                     if (isCustomSchemaType(newNodeType)) {
                       handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate)
                         .catch((err) => log.error('Custom entity slash command failed (real-node path):', err));

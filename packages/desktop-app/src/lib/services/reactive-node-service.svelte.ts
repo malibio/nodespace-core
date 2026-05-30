@@ -1,11 +1,9 @@
 /**
  * ReactiveNodeService - Svelte 5 Runes Adapter for SharedNodeStore
  *
- * REFACTORED FOR MULTI-VIEWER SUPPORT (Phase 1.2):
  * - Delegates node data storage to SharedNodeStore (single source of truth)
  * - Maintains per-viewer UI state (expand/collapse, focus, depth)
  * - Provides Svelte 5 reactivity via $state and $derived
- * - Backward compatible - existing API preserved
  *
  * Architecture:
  * - SharedNodeStore: Stores all node data (content, hierarchy, metadata)
@@ -374,7 +372,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
                 child.id,
                 { version: updatedChild.version },
                 { type: 'database', reason: 'move-version-sync' },
-                { skipPersistence: true, skipConflictDetection: true }
+                { skipPersistence: true }
               );
               // Note: No need to call structureTree.moveInMemoryRelationship() again
               // It was already done synchronously above for instant UI update
@@ -500,10 +498,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // a pending content update from insertSlashCommand (contentTemplate)
     const updatePayload: Partial<Node> = { nodeType };
 
-    // Skip conflict detection for nodeType changes - they are always intentional conversions
-    sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
-      skipConflictDetection: true
-    });
+    sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource);
 
     scheduleContentProcessing(nodeId, node.content);
   }
@@ -907,7 +902,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           nodeId,
           { version: updatedNode.version },
           { type: 'database', reason: 'move-version-sync' },
-          { skipPersistence: true, skipConflictDetection: true }
+          { skipPersistence: true }
         );
       } catch (error) {
         // Check if error is ignorable (unit test environment or unpersisted nodes)
@@ -1098,7 +1093,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           nodeId,
           { version: updatedNode.version },
           { type: 'database', reason: 'move-version-sync' },
-          { skipPersistence: true, skipConflictDetection: true }
+          { skipPersistence: true }
         );
 
         // Move sibling transfers (get fresh versions for each)
@@ -1115,7 +1110,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
               siblingId,
               { version: updatedSibling.version },
               { type: 'database', reason: 'move-version-sync' },
-              { skipPersistence: true, skipConflictDetection: true }
+              { skipPersistence: true }
             );
           }
         }
@@ -1229,7 +1224,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             child.id,
             { version: updatedChild.version },
             { type: 'database', reason: 'move-version-sync' },
-            { skipPersistence: true, skipConflictDetection: true }
+            { skipPersistence: true }
           );
         })
         .catch((error) => {
@@ -1629,5 +1624,4 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
 export type ReactiveNodeService = ReturnType<typeof createReactiveNodeService>;
 
-// For backward compatibility with existing imports
 export { createReactiveNodeService as ReactiveNodeService };
