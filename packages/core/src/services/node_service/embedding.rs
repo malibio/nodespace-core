@@ -1,0 +1,229 @@
+//! Embedding-related operations for NodeService.
+
+use super::*;
+
+impl NodeService {
+    /// Set the embedding waker for event-driven processing (Issue #729)
+    ///
+    /// Call this after `EmbeddingProcessor` is initialized to enable
+    /// automatic wake-on-change for embedding processing.
+    ///
+    /// # Arguments
+    /// * `waker` - The waker handle from `EmbeddingProcessor::waker()`
+    #[cfg(feature = "nlp")]
+    pub fn set_embedding_waker(&mut self, waker: crate::services::EmbeddingWaker) {
+        self.embedding_waker = Some(waker);
+    }
+
+    /// Queue a node's root for embedding regeneration
+    ///
+    /// Finds the root of the given node and marks its embedding as stale.
+    /// Used when any node in a tree is created, updated, or deleted to ensure
+    /// the root-aggregate embedding stays current.
+    ///
+    /// This is a non-blocking operation - errors are logged but don't fail the caller.
+    #[cfg(feature = "nlp")]
+    pub async fn queue_root_for_embedding(&self, node_id: &str) {
+        // Find the root of this node's tree
+        let root_id = match self.get_root_id(node_id).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to find root for node {} (embedding not queued): {}",
+                    node_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Get root node type to check if it's embeddable (optimized - no full node fetch)
+        let root_type = match self.store.get_node_type(&root_id).await {
+            Ok(Some(node_type)) => node_type,
+            Ok(None) => {
+                tracing::warn!("Root node {} not found (embedding not queued)", root_id);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get root node type {} (embedding not queued): {}",
+                    root_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Only queue if root is an embeddable type
+        if !self.is_embeddable_type(&root_type) {
+            tracing::debug!(
+                "Root {} is not embeddable (type: {}), skipping embedding queue",
+                root_id,
+                root_type
+            );
+            return;
+        }
+
+        // Check if embedding exists for this root
+        let has_embedding = match self.store.has_embeddings(&root_id).await {
+            Ok(has) => has,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to check embeddings for root {} (assuming none exist): {}",
+                    root_id,
+                    e
+                );
+                false
+            }
+        };
+
+        // Mark existing embedding as stale or create new stale marker
+        let result = if has_embedding {
+            self.store.mark_root_embedding_stale(&root_id).await
+        } else {
+            self.store.create_stale_embedding_marker(&root_id).await
+        };
+
+        if let Err(e) = result {
+            tracing::warn!(
+                "Failed to queue root {} for embedding (via node {}): {}",
+                root_id,
+                node_id,
+                e
+            );
+        } else {
+            tracing::debug!(
+                "📥 Queued root {} for embedding (triggered by node {})",
+                root_id,
+                node_id
+            );
+
+            // Wake the embedding processor (fire-and-forget)
+            if let Some(ref waker) = self.embedding_waker {
+                tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
+                waker.wake();
+            } else {
+                tracing::warn!(
+                    "⚠️ No embedding waker configured - root {} will not be processed automatically",
+                    root_id
+                );
+            }
+        }
+    }
+
+    /// Static async version of queue_root_for_embedding for use in spawned tasks
+    ///
+    /// This is used when we want to fire-and-forget the embedding queue operation
+    /// without blocking the calling thread (e.g., during node updates).
+    #[cfg(feature = "nlp")]
+    pub(crate) async fn queue_root_for_embedding_async(
+        store: &std::sync::Arc<crate::db::SqliteStore>,
+        behaviors: &std::sync::Arc<crate::behaviors::NodeBehaviorRegistry>,
+        node_id: &str,
+        embedding_waker: Option<&crate::services::EmbeddingWaker>,
+    ) {
+        // Find the root of this node's tree using optimized parent ID traversal
+        let root_id = {
+            let mut current_id = node_id.to_string();
+            loop {
+                match store.get_parent_id(&current_id).await {
+                    Ok(Some(pid)) => current_id = pid,
+                    Ok(None) => break current_id, // Found root
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to find root for node {} (embedding not queued): {}",
+                            node_id,
+                            e
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Get root node type to check if it's embeddable (optimized - no full node fetch)
+        let root_type = match store.get_node_type(&root_id).await {
+            Ok(Some(node_type)) => node_type,
+            Ok(None) => {
+                tracing::warn!("Root node {} not found (embedding not queued)", root_id);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get root node type {} (embedding not queued): {}",
+                    root_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Only queue if root is an embeddable type (Issue #1018: behavior-driven)
+        let behavior: std::sync::Arc<dyn crate::behaviors::NodeBehavior> =
+            behaviors.get(&root_type).unwrap_or_else(|| {
+                std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(&root_type))
+            });
+        let probe = Node {
+            id: "probe".to_string(),
+            node_type: root_type.clone(),
+            content: "probe".to_string(),
+            version: 1,
+            properties: serde_json::json!({}),
+            mentions: vec![],
+            mentioned_in: vec![],
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            title: None,
+            lifecycle_status: "active".to_string(),
+        };
+        if behavior.get_embeddable_content(&probe).is_none() {
+            tracing::debug!(
+                "Root {} is not embeddable (type: {}), skipping embedding queue",
+                root_id,
+                root_type
+            );
+            return;
+        }
+
+        // Check if embedding exists for this root
+        let has_embedding = match store.has_embeddings(&root_id).await {
+            Ok(has) => has,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to check embeddings for root {} (assuming none exist): {}",
+                    root_id,
+                    e
+                );
+                false
+            }
+        };
+
+        // Mark existing embedding as stale or create new stale marker
+        let result = if has_embedding {
+            store.mark_root_embedding_stale(&root_id).await
+        } else {
+            store.create_stale_embedding_marker(&root_id).await
+        };
+
+        if let Err(e) = result {
+            tracing::warn!(
+                "Failed to queue root {} for embedding (via node {}): {}",
+                root_id,
+                node_id,
+                e
+            );
+        } else {
+            tracing::debug!(
+                "📥 Queued root {} for embedding (triggered by node {})",
+                root_id,
+                node_id
+            );
+
+            // Wake the embedding processor (fire-and-forget)
+            if let Some(waker) = embedding_waker {
+                tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
+                waker.wake();
+            }
+        }
+    }
+}
