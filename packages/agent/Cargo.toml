@@ -67,3 +67,7 @@ tempfile = "3"
 name = "ollama_integration"
 path = "tests/ollama_integration.rs"
 required-features = ["testing"]
+
+[[test]]
+name = "search_skills_latency"
+path = "tests/search_skills_latency.rs"
