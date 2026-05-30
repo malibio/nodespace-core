@@ -171,6 +171,7 @@
     let unlistenDatabase: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
     let unlistenDaemonStatus: Promise<() => void> | null = null;
+    let unlistenSkillCliMissing: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
     let cleanupProSync: (() => void) | null = null;
@@ -199,6 +200,12 @@
         .catch((err) => {
           log.debug('Could not sync theme from backend preferences:', err);
         });
+
+      // Show a warning if the nodespace CLI is not on $PATH after skill install (Issue #1199).
+      unlistenSkillCliMissing = listen<{ warning: string }>('skill:cli-missing', (event) => {
+        log.warn('nodespace CLI not on PATH:', event.payload.warning);
+        statusBar.error(event.payload.warning);
+      });
 
       // Listen for daemon connectivity failures (Issue #1179).
       // Emitted by lib.rs when nodespaced is not reachable after 5s.
@@ -494,6 +501,9 @@
       }
       if (unlistenDaemonStatus) {
         (await unlistenDaemonStatus)();
+      }
+      if (unlistenSkillCliMissing) {
+        (await unlistenSkillCliMissing)();
       }
       cleanupProSync?.();
       if (cleanupMCP) {

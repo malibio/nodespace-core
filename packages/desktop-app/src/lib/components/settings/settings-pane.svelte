@@ -7,6 +7,7 @@
     import ImportSettings from './sections/import-settings.svelte';
     import DiagnosticsSettings from './sections/diagnostics-settings.svelte';
     import ModelManager from './model-manager.svelte';
+    import IntegrationsSettings from './sections/integrations-settings.svelte';
 
     let activeCategory = $state('database');
 
@@ -26,6 +27,8 @@
             <ImportSettings />
         {:else if activeCategory === 'ai-models'}
             <ModelManager />
+        {:else if activeCategory === 'integrations'}
+            <IntegrationsSettings />
         {:else if activeCategory === 'about'}
             <DiagnosticsSettings />
         {/if}

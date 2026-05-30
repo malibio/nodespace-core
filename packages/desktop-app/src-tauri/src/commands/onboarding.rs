@@ -1,8 +1,10 @@
-//! Onboarding wizard Tauri commands (Issue #1180).
+//! Onboarding wizard Tauri commands (Issues #1180, #1199).
 //!
-//! Handles first-launch setup: PATH configuration and Claude Code skill
+//! Handles first-launch setup: PATH configuration and NodeSpace skill
 //! installation. Completion state is persisted to `~/.nodespace/config.json`.
+//! Skill installation state is tracked separately in `~/.nodespace/setup.json`.
 
+use crate::skill_setup::{self, SkillSetupResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -132,43 +134,39 @@ pub async fn configure_path() -> Result<(), String> {
     Ok(())
 }
 
-const SKILL_MD_CONTENT: &str = r#"# NodeSpace Knowledge Graph
-
-NodeSpace is running locally. Use the `nodespace` CLI or the skill shims to
-interact with the knowledge graph.
-
-## Available Tools
-
-Use `nodespace_*` tools to interact with the knowledge graph:
-- `nodespace_create_node` — Create a new node
-- `nodespace_get_node` — Retrieve a node by ID
-- `nodespace_update_node` — Update node content or properties
-- `nodespace_search_semantic` — Search nodes by content
-- `nodespace_get_children` — Get child nodes
-
-## When to Use
-
-- When the user asks to save, retrieve, or organize information
-- When capturing notes, tasks, or decisions from a coding session
-- When the user references their NodeSpace or knowledge graph
-"#;
-
-/// Write `SKILL.md` to `~/.claude/skills/nodespace/SKILL.md`.
-/// Creates parent directories as needed. Safe to call repeatedly.
+/// Install the NodeSpace skill into detected agents (delegates to skill_setup).
+/// Idempotent when called via the onboarding wizard; marks skill_configured in config.
 #[tauri::command]
 pub async fn configure_skill() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let skill_dir = home.join(".claude").join("skills").join("nodespace");
+    let result = skill_setup::install_skill(false).await;
+    if result.success {
+        Ok(())
+    } else {
+        Err(result.error.unwrap_or_else(|| "Skill installation failed".to_string()))
+    }
+}
 
-    tokio::fs::create_dir_all(&skill_dir)
+/// Run the skill installer (for manual re-trigger from Settings → Integrations).
+/// `force = true` bypasses the idempotency guard in setup.json.
+#[tauri::command]
+pub async fn install_skill(force: bool) -> Result<SkillSetupResult, String> {
+    Ok(skill_setup::install_skill(force).await)
+}
+
+/// Return the current skill setup status without re-running the installer.
+#[tauri::command]
+pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
+    let state = skill_setup::read_setup_state()
         .await
-        .map_err(|e| format!("Failed to create skill directory: {e}"))?;
-
-    tokio::fs::write(skill_dir.join("SKILL.md"), SKILL_MD_CONTENT)
-        .await
-        .map_err(|e| format!("Failed to write SKILL.md: {e}"))?;
-
-    Ok(())
+        .map_err(|e| e.to_string())?;
+    let cli_on_path = skill_setup::check_cli_on_path();
+    Ok(SkillSetupResult {
+        success: state.skill_installed,
+        agents_installed: vec![],
+        cli_on_path,
+        cli_warning: skill_setup::cli_warning(cli_on_path),
+        error: None,
+    })
 }
 
 /// Persist the onboarding completion state to `~/.nodespace/config.json`.
