@@ -1608,6 +1608,26 @@ impl SqliteStore {
         Ok(affected)
     }
 
+    /// Atomically update a batch of nodes in a single transaction.
+    ///
+    /// **OCC contract:** This is an intentional last-write-wins fast-path for trusted internal
+    /// callers (e.g. AI skill pipelines, markdown import). It does NOT perform version-checked
+    /// OCC. Callers that need conflict detection should use `update_node` (the single-node path)
+    /// in a loop or use the daemon `update_nodes_batch` RPC which threads per-node versions.
+    ///
+    /// **TOCTOU note:** All fields are written without a pre-read. Unspecified fields
+    /// (`None`) are preserved via SQL `COALESCE` — the entire read-modify-write is one
+    /// atomic SQL statement per node inside the transaction with no pool reads escaping
+    /// the tx.
+    ///
+    /// **`properties` semantics:** `Some(value)` **replaces** the existing JSON object
+    /// entirely (unlike `update_node`, which merges key-by-key). `None` keeps the existing
+    /// value unchanged.
+    ///
+    /// **`title` semantics:** `Some(Some("text"))` sets a new title; `Some(None)` clears
+    /// it to NULL; `None` leaves the existing title unchanged.
+    ///
+    /// Returns an error (and rolls back) if any node id is not found.
     pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<()> {
         if updates.is_empty() {
             return Ok(());
@@ -1630,18 +1650,53 @@ impl SqliteStore {
             .context("Failed to begin bulk update transaction")?;
 
         for (id, update) in &updates {
-            let current = self
-                .get_node(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
+            let props_json = update
+                .properties
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("Failed to serialize properties in bulk update")?;
 
-            let updated_content = update.content.clone().unwrap_or(current.content);
-            let updated_node_type = update.node_type.clone().unwrap_or(current.node_type);
+            // All five NodeUpdate fields are covered. COALESCE preserves the existing
+            // column value when the caller passes None, closing the TOCTOU window with
+            // no pre-read escaping the transaction.
+            let affected = tx
+                .execute(
+                    "UPDATE node SET \
+                    content          = COALESCE(?1, content), \
+                    node_type        = COALESCE(?2, node_type), \
+                    properties       = COALESCE(?3, properties), \
+                    lifecycle_status = COALESCE(?4, lifecycle_status), \
+                    version          = version + 1, \
+                    modified_at      = ?5 \
+                WHERE id = ?6",
+                    libsql::params![
+                        update.content.clone(),
+                        update.node_type.clone(),
+                        props_json,
+                        update.lifecycle_status.clone(),
+                        now.clone(),
+                        id.clone()
+                    ],
+                )
+                .await
+                .context("Failed to update node in bulk update")?;
 
-            tx.execute(
-                "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
-                libsql::params![updated_content, updated_node_type, now.clone(), id.clone()],
-            ).await.context("Failed to update node in bulk update")?;
+            if affected == 0 {
+                return Err(anyhow::anyhow!("Node not found: {}", id));
+            }
+
+            // `title` uses Option<Option<String>>: Some(Some(t)) sets, Some(None) clears
+            // to NULL, None skips. COALESCE can't express "write NULL intentionally", so
+            // we handle title with a separate statement only when the caller touches it.
+            if let Some(title) = &update.title {
+                tx.execute(
+                    "UPDATE node SET title = ?1 WHERE id = ?2",
+                    libsql::params![title.clone(), id.clone()],
+                )
+                .await
+                .context("Failed to update title in bulk update")?;
+            }
         }
 
         tx.commit().await.context("Failed to commit bulk update")?;
@@ -1656,6 +1711,16 @@ impl SqliteStore {
         Ok(created)
     }
 
+    /// Insert a batch of nodes (and optional parent→child relationships) in a single transaction.
+    ///
+    /// **Partial-failure contract:** All inserts occur inside one transaction. Any error
+    /// (duplicate id, constraint violation, serialization failure) triggers an early `?`-return,
+    /// which drops `tx` without calling `commit()` — the entire batch is rolled back atomically.
+    /// Callers never observe a partial write.
+    ///
+    /// **Validation note:** `validate_node_type` is a pure in-memory check against
+    /// `self.valid_node_types`; it does not touch the database and therefore cannot read
+    /// uncommitted state from `tx`.
     pub async fn bulk_create_hierarchy(
         &self,
         nodes: Vec<(
@@ -2599,7 +2664,11 @@ impl SqliteStore {
             0.0
         };
         let new_order = FractionalOrderCalculator::calculate_order(
-            if last_order > 0.0 { Some(last_order) } else { None },
+            if last_order > 0.0 {
+                Some(last_order)
+            } else {
+                None
+            },
             None,
         );
 
