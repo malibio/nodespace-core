@@ -53,6 +53,12 @@ vi.mock('$lib/services/backend-adapter', () => ({
   },
 }));
 
+// Mock delete-confirmation service — default: auto-confirm (no dialog)
+const mockConfirmNodeDeletion = vi.fn().mockResolvedValue(true);
+vi.mock('$lib/services/delete-confirmation.svelte', () => ({
+  confirmNodeDeletion: (...args: unknown[]) => mockConfirmNodeDeletion(...args),
+}));
+
 // Mock reactive-structure-tree to avoid complex dependency setup
 vi.mock('$lib/stores/reactive-structure-tree.svelte', () => ({
   structureTree: {
@@ -801,9 +807,16 @@ describe('ReactiveNodeService - Delete Node', () => {
   let events: NodeManagerEvents;
   let _sharedNodeStore: SharedNodeStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     SharedNodeStore.resetInstance();
     _sharedNodeStore = SharedNodeStore.getInstance();
+
+    // Reset confirmation mock to auto-confirm by default
+    mockConfirmNodeDeletion.mockResolvedValue(true);
+
+    // Reset getDescendants to return no descendants by default
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    vi.mocked(backendAdapter.getDescendants).mockResolvedValue([]);
 
     events = {
       focusRequested: vi.fn(),
@@ -869,6 +882,56 @@ describe('ReactiveNodeService - Delete Node', () => {
 
   it('does nothing for non-existent node', async () => {
     await expect(service.deleteNode('non-existent')).resolves.not.toThrow();
+  });
+
+  it('shows confirmation when node has descendants', async () => {
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    const mockDescendant: Node = {
+      id: 'child-1',
+      nodeType: 'text',
+      content: 'child',
+      version: 1,
+      properties: {},
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+    vi.mocked(backendAdapter.getDescendants).mockResolvedValue([mockDescendant]);
+
+    await service.deleteNode('delete-test');
+
+    expect(mockConfirmNodeDeletion).toHaveBeenCalledWith(1);
+    // Confirmation returned true (default mock) so deletion proceeds
+    expect(events.nodeDeleted).toHaveBeenCalledWith('delete-test');
+  });
+
+  it('aborts deletion when user cancels confirmation', async () => {
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    const mockDescendant: Node = {
+      id: 'child-1',
+      nodeType: 'text',
+      content: 'child',
+      version: 1,
+      properties: {},
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+    vi.mocked(backendAdapter.getDescendants).mockResolvedValue([mockDescendant]);
+    mockConfirmNodeDeletion.mockResolvedValue(false);
+
+    await service.deleteNode('delete-test');
+
+    expect(mockConfirmNodeDeletion).toHaveBeenCalledWith(1);
+    // Cancelled — node must still exist
+    expect(service.findNode('delete-test')).not.toBeNull();
+    expect(events.nodeDeleted).not.toHaveBeenCalled();
+  });
+
+  it('skips confirmation for leaf nodes (no descendants)', async () => {
+    await service.deleteNode('delete-test');
+
+    // confirmNodeDeletion called with 0 → skips dialog internally
+    expect(mockConfirmNodeDeletion).toHaveBeenCalledWith(0);
+    expect(events.nodeDeleted).toHaveBeenCalledWith('delete-test');
   });
 });
 

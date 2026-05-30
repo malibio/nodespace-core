@@ -14,7 +14,6 @@
     class="overlay"
     role="none"
     onclick={confirmation.cancel}
-    onkeydown={handleKeydown}
     tabindex="-1"
   >
     <div
@@ -24,7 +23,7 @@
       aria-labelledby="delete-modal-title"
       aria-describedby="delete-modal-desc"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={handleKeydown}
       tabindex="0"
     >
       <h2 id="delete-modal-title">Delete node and {confirmation.pending.descendantCount}

@@ -13,10 +13,16 @@ let _pending = $state<PendingConfirmation | null>(null);
  * Show a confirmation dialog before deleting a node with descendants.
  * Returns true if the user confirms, false if they cancel.
  * Nodes with no descendants (descendantCount === 0) skip the dialog and return true immediately.
+ * Returns false immediately if another confirmation is already in progress.
  */
 export async function confirmNodeDeletion(descendantCount: number): Promise<boolean> {
   if (descendantCount === 0) {
     return true;
+  }
+
+  if (_pending !== null) {
+    log.warn('Delete confirmation already in progress — ignoring concurrent request');
+    return false;
   }
 
   log.debug(`Showing delete confirmation for ${descendantCount} descendants`);
