@@ -1076,9 +1076,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Node is already persisted - proceed with MOVE operation
-    // Update local state and transfer siblings (BEFORE backend for instant UI)
-    // structureTree.moveInMemoryRelationship below is the authoritative optimistic update;
-    // no mirror write to Node.parentId needed — structureTree is the single source of truth.
+    // structureTree is the single source of truth for hierarchy.
 
     // CRITICAL FIX: Update ReactiveStructureTree for browser mode
     if (newParentId) {
@@ -1286,7 +1284,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         });
 
       // Update ReactiveStructureTree for immediate UI update
-      // structureTree is the single source of truth; no mirror write to Node.parentId needed.
       if (newParentForChild !== null) {
         structureTree.moveInMemoryRelationship(nodeId, newParentForChild, child.id);
       }
