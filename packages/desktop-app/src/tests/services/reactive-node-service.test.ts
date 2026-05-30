@@ -22,6 +22,7 @@ import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { Node } from '$lib/types';
 import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
 import { waitForPendingMoveOperations } from '$lib/services/pending-operations';
+import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
 // Mock backend-adapter to avoid backend calls in tests
 vi.mock('$lib/services/backend-adapter', () => ({
@@ -1683,6 +1684,49 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
     service.createNode(parentId, 'New');
 
     expect(events.nodeCreated).toHaveBeenCalled();
+  });
+
+  it('emits child-transfer-failure notification when background moveNode rejects', async () => {
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    const { SharedNodeStore: SS } = await import('$lib/services/shared-node-store.svelte');
+    const moveNodeMock = vi.mocked(backendAdapter.moveNode);
+
+    conflictNotifications.dismissAll();
+
+    const parentId = service.createNode('reference', 'Parent');
+    const childId = service.createNode(parentId, 'Child');
+    service.setExpanded(parentId, true);
+
+    const store = SS.getInstance();
+    const childNode = store.getNode(childId);
+    if (!childNode) throw new Error('childId not in store');
+
+    // Spy on getNodesForParent so the transfer branch sees a child
+    const getNodesForParentSpy = vi.spyOn(store, 'getNodesForParent').mockImplementation(
+      (id) => (id === parentId ? [childNode] : [])
+    );
+
+    // Capture call count before triggering the background transfer
+    const callsBefore = moveNodeMock.mock.calls.length;
+    moveNodeMock.mockRejectedValueOnce(new Error('Network error'));
+
+    // Triggers background child transfer (children.length > 0 && isExpanded && !insertAtBeginning)
+    service.createNode(parentId, 'New node');
+
+    // Verify moveNode was called — confirms the background transfer path was entered
+    // (waitForNodeSaves has a 500ms debounce before the persistence operation fires)
+    await vi.waitFor(() => {
+      expect(moveNodeMock.mock.calls.length).toBeGreaterThan(callsBefore);
+    }, { timeout: 3000 });
+
+    // After moveNode rejects, the catch block should emit the notification
+    await vi.waitFor(() => {
+      expect(conflictNotifications.notifications.length).toBeGreaterThan(0);
+    }, { timeout: 1000 });
+
+    getNodesForParentSpy.mockRestore();
+
+    expect(conflictNotifications.notifications[0].conflictType).toBe('child-transfer-failure');
   });
 });
 
