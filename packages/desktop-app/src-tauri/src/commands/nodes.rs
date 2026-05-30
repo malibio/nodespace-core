@@ -443,6 +443,7 @@ pub async fn delete_node(
     let dr = resp.into_inner();
     Ok(DeleteResult {
         existed: dr.existed,
+        deleted_count: dr.deleted_count,
     })
 }
 

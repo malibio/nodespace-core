@@ -833,44 +833,42 @@ describe('ReactiveNodeService - Delete Node', () => {
     service.destroy();
   });
 
-  it('deletes node from store', () => {
-    service.deleteNode('delete-test');
+  it('deletes node from store', async () => {
+    await service.deleteNode('delete-test');
 
     const node = service.findNode('delete-test');
     expect(node).toBeNull();
   });
 
-  it('removes node from rootNodeIds', () => {
+  it('removes node from rootNodeIds', async () => {
     expect(service.rootNodeIds).toContain('delete-test');
 
-    service.deleteNode('delete-test');
+    await service.deleteNode('delete-test');
 
     expect(service.rootNodeIds).not.toContain('delete-test');
   });
 
-  it('fires nodeDeleted event', () => {
-    service.deleteNode('delete-test');
+  it('fires nodeDeleted event', async () => {
+    await service.deleteNode('delete-test');
 
     expect(events.nodeDeleted).toHaveBeenCalledWith('delete-test');
   });
 
-  it('fires hierarchyChanged event', () => {
-    service.deleteNode('delete-test');
+  it('fires hierarchyChanged event', async () => {
+    await service.deleteNode('delete-test');
 
     expect(events.hierarchyChanged).toHaveBeenCalled();
   });
 
-  it('cleans up UI state', () => {
-    service.deleteNode('delete-test');
+  it('cleans up UI state', async () => {
+    await service.deleteNode('delete-test');
 
     const uiState = service.getUIState('delete-test');
     expect(uiState).toBeUndefined();
   });
 
-  it('does nothing for non-existent node', () => {
-    expect(() => {
-      service.deleteNode('non-existent');
-    }).not.toThrow();
+  it('does nothing for non-existent node', async () => {
+    await expect(service.deleteNode('non-existent')).resolves.not.toThrow();
   });
 });
 
@@ -2231,7 +2229,7 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
     service.destroy();
   });
 
-  it('deleteNode cleans up debounced operations with fastTimer', () => {
+  it('deleteNode cleans up debounced operations with fastTimer', async () => {
     const node: Node = {
       id: 'cleanup-test',
       nodeType: 'text',
@@ -2248,14 +2246,14 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
     service.updateNodeContent('cleanup-test', 'New content');
 
     // Delete node immediately (timers still active)
-    service.deleteNode('cleanup-test');
+    await service.deleteNode('cleanup-test');
 
     // Node should be deleted
     const deletedNode = service.findNode('cleanup-test');
     expect(deletedNode).toBeNull();
   });
 
-  it('deleteNode cleans up debounced operations with both timers', () => {
+  it('deleteNode cleans up debounced operations with both timers', async () => {
     const node: Node = {
       id: 'cleanup-both',
       nodeType: 'text',
@@ -2273,12 +2271,12 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
     service.updateNodeContent('cleanup-both', 'Update 2');
 
     // Delete while timers are pending
-    service.deleteNode('cleanup-both');
+    await service.deleteNode('cleanup-both');
 
     expect(service.findNode('cleanup-both')).toBeNull();
   });
 
-  it('deleteNode handles nodes without debounced operations', () => {
+  it('deleteNode handles nodes without debounced operations', async () => {
     const node: Node = {
       id: 'no-debounce',
       nodeType: 'text',
@@ -2292,7 +2290,7 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
     service.initializeNodes([node]);
 
     // Delete immediately without any content updates
-    service.deleteNode('no-debounce');
+    await service.deleteNode('no-debounce');
 
     expect(service.findNode('no-debounce')).toBeNull();
   });

@@ -2164,6 +2164,7 @@ impl NodeAccessor for NodeService {
 mod tests {
     use super::*;
     use crate::db::SqliteStore;
+    use crate::InsertPosition;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -3202,5 +3203,140 @@ mod tests {
             assert!(contents.contains("Batch 2"));
             assert!(contents.contains("Batch 3"));
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Atomic subtree cascade delete tests (Issue #220)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_delete_node_cascades_subtree_atomically() {
+        let (service, _temp) = create_test_service().await;
+
+        // Build: root → child1 → grandchild
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        let grandchild_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "grandchild".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        service
+            .create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+        service
+            .create_parent_edge(&grandchild_id, &child_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        // Delete root → all three nodes must disappear
+        let root = service.get_node(&root_id).await.unwrap().unwrap();
+        let result = service.delete_node(&root_id, root.version).await.unwrap();
+
+        assert!(result.existed);
+        assert_eq!(result.deleted_count, 3, "root + child + grandchild = 3");
+
+        assert!(service.get_node(&root_id).await.unwrap().is_none());
+        assert!(service.get_node(&child_id).await.unwrap().is_none());
+        assert!(service.get_node(&grandchild_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_version_conflict_leaves_subtree_intact() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        service
+            .create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        // Delete with stale version → VersionConflict, nothing deleted
+        let result = service.delete_node(&root_id, 999).await;
+        assert!(
+            matches!(result, Err(NodeServiceError::VersionConflict { .. })),
+            "expected VersionConflict, got {:?}",
+            result
+        );
+
+        // Subtree intact
+        assert!(service.get_node(&root_id).await.unwrap().is_some());
+        assert!(service.get_node(&child_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_occ_guards_only_target_not_descendants() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        service
+            .create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        // Update the child (bumping its version) — should NOT cause the cascade to fail
+        let child_update = NodeUpdate::new().with_content("updated child".to_string());
+        service
+            .update_node_unchecked(&child_id, child_update)
+            .await
+            .unwrap();
+
+        // Delete root with its correct version — cascade should succeed despite child version change
+        let root = service.get_node(&root_id).await.unwrap().unwrap();
+        let result = service.delete_node(&root_id, root.version).await.unwrap();
+
+        assert!(result.existed);
+        assert_eq!(result.deleted_count, 2);
+
+        assert!(service.get_node(&root_id).await.unwrap().is_none());
+        assert!(service.get_node(&child_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_idempotent_for_missing_node() {
+        let (service, _temp) = create_test_service().await;
+
+        let result = service.delete_node("nonexistent-id", 1).await.unwrap();
+        assert!(!result.existed);
+        assert_eq!(result.deleted_count, 0);
     }
 }

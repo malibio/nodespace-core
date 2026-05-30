@@ -64,8 +64,8 @@ export interface UpdateNodeInput {
 }
 
 export interface DeleteResult {
-  deletedId: string;
-  deletedChildCount: number;
+  existed: boolean;
+  deletedCount: number;
 }
 
 export interface EdgeRecord {
@@ -585,8 +585,8 @@ class MockAdapter implements BackendAdapter {
   async updateTaskNode(_id: string, _version: number, _update: TaskNodeUpdate): Promise<TaskNode> {
     return {} as TaskNode;
   }
-  async deleteNode(id: string, _version: number): Promise<DeleteResult> {
-    return { deletedId: id, deletedChildCount: 0 };
+  async deleteNode(_id: string, _version: number): Promise<DeleteResult> {
+    return { existed: true, deletedCount: 0 };
   }
   async getChildren(_parentId: string): Promise<Node[]> {
     return [];

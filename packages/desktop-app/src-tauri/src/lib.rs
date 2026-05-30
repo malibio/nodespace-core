@@ -253,10 +253,7 @@ pub fn run() {
                                 }
                             }
                         } else {
-                            tracing::warn!(
-                                "Skill install failed: {:?}",
-                                result.error
-                            );
+                            tracing::warn!("Skill install failed: {:?}", result.error);
                         }
                     }
 
