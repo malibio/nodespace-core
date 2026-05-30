@@ -21,13 +21,12 @@
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { SseEvent } from '$lib/types/sse-events';
-import type { Node } from '$lib/types/node';
-import { nodeToTaskNode } from '$lib/types/task-node';
 import { backendAdapter } from './backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 import { scheduleCollectionRefresh, scheduleSchemaRefresh } from '$lib/utils/collection-refresh';
 import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schema-plugin-loader';
 import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
+import { normalizeNodeData } from './node-normalize';
 
 const log = createLogger('BrowserSyncService');
 
@@ -193,24 +192,6 @@ class BrowserSyncService {
   }
 
   /**
-   * Normalize node data from SSE events to type-specific format
-   *
-   * SSE events send generic Node objects where type-specific fields (like task status)
-   * are stored in `properties`. This function converts them to the flat format
-   * expected by the frontend stores and components.
-   *
-   * @param nodeData - Raw node data from SSE event
-   * @returns Normalized node with flat type-specific fields for typed nodes
-   */
-  private normalizeNodeData(nodeData: Node): Node {
-    if (nodeData.nodeType === 'task') {
-      return nodeToTaskNode(nodeData) as unknown as Node;
-    }
-    // Add other type-specific conversions here as needed (e.g., SchemaNode)
-    return nodeData;
-  }
-
-  /**
    * Handle parsed SSE event
    *
    * Routes events to appropriate store/tree handlers to update UI.
@@ -336,7 +317,7 @@ class BrowserSyncService {
       const node = await backendAdapter.getNode(nodeId);
       if (node) {
         // Normalize node data to type-specific format (e.g., TaskNode with flat status)
-        const normalizedNode = this.normalizeNodeData(node);
+        const normalizedNode = normalizeNodeData(node);
         // Use database source with sse-sync reason to indicate external change via SSE
         sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'sse-sync' }, true);
         log.debug(`${eventType}: updated store for node`, nodeId);

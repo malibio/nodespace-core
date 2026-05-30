@@ -25,13 +25,12 @@ import type {
 } from '$lib/types/event-types';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
-import type { Node } from '$lib/types/node';
-import { nodeToTaskNode } from '$lib/types/task-node';
 import { backendAdapter } from './backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 import { scheduleCollectionRefresh, scheduleSchemaRefresh } from '$lib/utils/collection-refresh';
 import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schema-plugin-loader';
 import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
+import { normalizeNodeData } from './node-normalize';
 
 const log = createLogger('TauriSync');
 
@@ -46,24 +45,6 @@ const log = createLogger('TauriSync');
  */
 function stripNodePrefix(id: string): string {
   return id.startsWith('node:') ? id.slice('node:'.length) : id;
-}
-
-/**
- * Normalize node data from domain events to type-specific format
- *
- * Domain events send generic Node objects where type-specific fields (like task status)
- * are stored in `properties`. This function converts them to the flat format
- * expected by the frontend stores and components.
- *
- * @param nodeData - Raw node data from domain event
- * @returns Normalized node with flat type-specific fields for typed nodes
- */
-function normalizeNodeData(nodeData: Node): Node {
-  if (nodeData.nodeType === 'task') {
-    return nodeToTaskNode(nodeData) as unknown as Node;
-  }
-  // Add other type-specific conversions here as needed (e.g., SchemaNode)
-  return nodeData;
 }
 
 /**
