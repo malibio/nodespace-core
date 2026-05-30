@@ -1127,14 +1127,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // Node is already persisted - proceed with MOVE operation
     // Update local state and transfer siblings (BEFORE backend for instant UI)
-    // Update node's parentId to move it to the new parent
-    // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
-    sharedNodeStore.updateNode(
-      nodeId,
-      { parentId: newParentId },
-      { type: 'database', reason: 'outdent-node' },
-      { isComputedField: true }
-    );
+    // structureTree.moveInMemoryRelationship below is the authoritative optimistic update;
+    // no mirror write to Node.parentId needed — structureTree is the single source of truth.
 
     // CRITICAL FIX: Update ReactiveStructureTree for browser mode
     if (newParentId) {
@@ -1155,14 +1149,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           const siblingDepth = newDepth + 1;
           _uiState[siblingId] = { ..._uiState[siblingId], depth: siblingDepth };
           updateDescendantDepths(siblingId);
-
-          // Update parentId to move sibling to new parent (nodeId = the outdented node)
-          sharedNodeStore.updateNode(
-            siblingId,
-            { parentId: nodeId },
-            { type: 'database', reason: 'outdent-transfer' },
-            { isComputedField: true }
-          );
 
           // Update structure tree: move sibling from oldParent to nodeId (the outdented node)
           // Order: sequential integers to maintain original sibling order (AC=1, AD=2, AE=3, etc.)
@@ -1349,15 +1335,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           log.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChild}:`, error);
         });
 
-      // Update local state for immediate UI feedback
-      sharedNodeStore.updateNode(
-        child.id,
-        { parentId: newParentForChild },
-        viewerSource,
-        { isComputedField: true } // Skip persistence since moveNodeCommand handles it
-      );
-
       // Update ReactiveStructureTree for immediate UI update
+      // structureTree is the single source of truth; no mirror write to Node.parentId needed.
       if (newParentForChild !== null) {
         structureTree.moveInMemoryRelationship(nodeId, newParentForChild, child.id);
       }
