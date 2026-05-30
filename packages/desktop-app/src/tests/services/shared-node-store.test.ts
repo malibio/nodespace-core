@@ -2433,10 +2433,10 @@ describe('SharedNodeStore', () => {
         const testNode = createTestNode('structure-type-test');
         store.setNode(testNode, viewerSource);
 
-        // Structural update (parentId change)
-        store.updateNode(testNode.id, { parentId: 'new-parent' }, viewerSource);
+        // Structural update (content change as a proxy for structural classification)
+        store.updateNode(testNode.id, { nodeType: 'task' }, viewerSource);
 
-        expect(store.getNode(testNode.id)?.parentId).toBe('new-parent');
+        expect(store.getNode(testNode.id)?.nodeType).toBe('task');
       });
 
       it('should classify metadata changes', () => {

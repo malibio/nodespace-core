@@ -57,11 +57,11 @@ describe('Split-Pane Content Isolation', () => {
       properties: {}
     };
 
-    // Set up nodes with parentId to establish hierarchy
+    // Set up nodes in store (hierarchy tracked via structureTree below)
     sharedNodeStore.setNode(parentA, { type: 'database', reason: 'test-setup' });
     sharedNodeStore.setNode(parentB, { type: 'database', reason: 'test-setup' });
-    sharedNodeStore.setNode({ ...childA1, parentId: 'parent-a' }, { type: 'database', reason: 'test-setup' });
-    sharedNodeStore.setNode({ ...childB1, parentId: 'parent-b' }, { type: 'database', reason: 'test-setup' });
+    sharedNodeStore.setNode(childA1, { type: 'database', reason: 'test-setup' });
+    sharedNodeStore.setNode(childB1, { type: 'database', reason: 'test-setup' });
 
     // Set up hierarchy relationships in structureTree for hierarchy queries
     structureTree.__testOnly_addChild({ parentId: 'parent-a', childId: 'child-a1', order: 1.0 });
@@ -106,7 +106,7 @@ describe('Split-Pane Content Isolation', () => {
     };
 
     sharedNodeStore.setNode(parent, { type: 'database', reason: 'test-setup' });
-    sharedNodeStore.setNode({ ...child1, parentId: 'shared-parent' }, { type: 'database', reason: 'test-setup' });
+    sharedNodeStore.setNode(child1, { type: 'database', reason: 'test-setup' });
 
     // Set up hierarchy relationship in structureTree for hierarchy queries
     structureTree.__testOnly_addChild({ parentId: 'shared-parent', childId: 'child-1', order: 1.0 });

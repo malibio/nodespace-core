@@ -78,11 +78,8 @@ describe('Architecture Performance Benchmarks', () => {
   const generateTestNodes = (nodeCount: number) => {
     const nodes = [];
     for (let i = 0; i < nodeCount; i++) {
-      const parentIndex = Math.floor(i / 10) * 10;
-      const parentId = i > 0 && i !== parentIndex ? `node-${parentIndex}` : null;
-
       nodes.push(
-        createTestNode(`node-${i}`, `Content for node ${i}`, 'text', parentId, {
+        createTestNode(`node-${i}`, `Content for node ${i}`, 'text', {
           createdAt: new Date().toISOString()
         })
       );

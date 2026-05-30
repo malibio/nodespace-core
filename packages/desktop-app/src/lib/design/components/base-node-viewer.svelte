@@ -524,15 +524,11 @@
    */
   function promotePlaceholderToNode(
     placeholder: Node,
-    parentNodeId: string,
+    _parentNodeId: string,
     overrides: { content?: string; nodeType?: string }
-  ): Node & { parentId?: string } {
-    // CRITICAL FIX (Issue #528): Include transient parentId field
-    // This field is NOT part of the Node model (which stores hierarchy as graph edges)
-    // but is needed by the backend HTTP API to create the parent-child edge relationship
-    // The backend will extract this field and call operations.create_node() with it
-    // Note (Issue #533): _containerId removed - backend auto-derives root from parent chain
-    // Note (Issue #575): beforeSiblingId removed - backend now handles sibling ordering
+  ): Node {
+    // parentId is derived from structureTree at CREATE time (see shared-node-store persistence path)
+    // Caller must call reactiveStructureTree.addChild before setNode fires persistence
     return {
       id: placeholder.id,
       nodeType: overrides.nodeType ?? placeholder.nodeType,
@@ -541,9 +537,7 @@
       createdAt: placeholder.createdAt,
       modifiedAt: new Date().toISOString(),
       properties: placeholder.properties,
-      mentions: placeholder.mentions || [],
-      // Transient field for backend edge creation (not persisted in Node model)
-      parentId: parentNodeId // Root/container auto-derived from parent chain by backend
+      mentions: placeholder.mentions || []
     };
   }
 

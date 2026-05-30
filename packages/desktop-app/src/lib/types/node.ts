@@ -79,13 +79,6 @@ export interface Node {
   /** Primary content/text of the node */
   content: string;
 
-  /**
-   * Parent node ID (graph edge relationship)
-   * Managed via graph edges in backend, cached in frontend for performance
-   * null = root-level node (no parent)
-   */
-  parentId?: string | null;
-
   /** Creation timestamp (ISO 8601) - backend sets this */
   createdAt: string;
 

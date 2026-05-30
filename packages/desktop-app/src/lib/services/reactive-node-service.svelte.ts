@@ -248,18 +248,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const afterUIState = _uiState[afterNodeId] || createDefaultUIState(afterNodeId);
     const newDepth = afterUIState.depth;
 
-    // Determine parent from parameter or use afterNode's parentId directly
-    // CRITICAL FIX: Don't rely on broken parentsCache - use the node's own parentId field
+    // Determine parent from explicit parameter or structureTree (single source of truth)
     let newParentId: string | null;
     if (parentId !== undefined) {
       newParentId = parentId;
-    } else if (afterNode.parentId !== undefined) {
-      // Use afterNode's parentId directly - this is the authoritative source
-      newParentId = afterNode.parentId ?? null;
     } else {
-      // Fallback: try cache (for compatibility, though it may be null)
-      const parents = sharedNodeStore.getParentsForNode(afterNodeId);
-      newParentId = parents.length > 0 ? parents[0].id : null;
+      newParentId = structureTree.getParent(afterNodeId);
     }
 
     let initialContent = content;
@@ -293,12 +287,13 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         : { type: 'end' };
 
     // Create Node with unified type system
+    // parentId is NOT on Node — structureTree is the single source of truth for hierarchy.
+    // The persistence path derives parent from structureTree.getParent(nodeId) at CREATE time.
     const newNode: Node & { insertPosition?: InsertPosition | null } = {
       id: nodeId,
       nodeType: nodeType,
       content: initialContent,
       createdAt: new Date().toISOString(),
-      parentId: newParentId,
       insertPosition,
       modifiedAt: new Date().toISOString(),
       version: 1,
@@ -444,7 +439,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     // Handle hierarchy positioning
-    // NOTE: Now using backend queries instead of afterNode.parentId
     const afterNodeParents = sharedNodeStore.getParentsForNode(afterNodeId);
     const afterNodeIsRoot = afterNodeParents.length === 0;
 
@@ -769,13 +763,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const parent = parents[0];
     const oldParentId = parent.id;
 
-    // CRITICAL FIX: Use structureTree as authoritative source for parent hierarchy
-    // The Node.parentId field can be stale during rapid operations because:
-    // 1. indentNode updates structureTree synchronously via moveInMemoryRelationship
-    // 2. But Node.parentId in SharedNodeStore may not reflect the latest hierarchy
-    // ReactiveStructureTree is the single source of truth for hierarchy during rapid edits
-    const structureTreeParentId = structureTree.getParent(oldParentId);
-    const newParentId = structureTreeParentId ?? parent.parentId ?? null;
+    // structureTree is the single source of truth for hierarchy
+    const newParentId = structureTree.getParent(oldParentId);
 
     // Find siblings that come after this node (they will become children)
     // Backend returns children already sorted via fractional ordering
@@ -845,12 +834,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return false;
 
-    // Find previous sibling (indent target)
-    // CRITICAL FIX: Use node's own parentId first (authoritative), then fallback to structureTree
-    // This fixes the placeholder promotion issue where structureTree may be stale when a promoted
-    // placeholder has a parentId but hasn't been registered in the structure tree yet.
-    const structureTreeParents = sharedNodeStore.getParentsForNode(nodeId);
-    const currentParentId = node.parentId ?? (structureTreeParents.length > 0 ? structureTreeParents[0].id : null);
+    // Find previous sibling (indent target) — structureTree is the single source of truth
+    const currentParentId = structureTree.getParent(nodeId);
 
     // Get siblings (already sorted by backend via fractional ordering)
     let siblings: string[];
@@ -889,17 +874,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via domain events
     // Sibling positioning removed (Issue #557) - Backend handles ordering via fractional IDs
 
-    // Update local state and notify (BEFORE backend call for instant UI response)
-    // Update node's parentId to move it to the new parent
-    // NOTE: beforeSiblingId removed from node - backend handles ordering via fractional ordering
-    sharedNodeStore.updateNode(
-      nodeId,
-      { parentId: targetParentId },
-      { type: 'database', reason: 'indent-node' },
-      { isComputedField: true }
-    );
-
-    // CRITICAL FIX: Update ReactiveStructureTree for browser mode
+    // Update ReactiveStructureTree (single source of truth for hierarchy)
     // In Tauri mode, domain events update the tree, but in browser mode we must do it manually
     structureTree.moveInMemoryRelationship(currentParentId, targetParentId, nodeId);
 
@@ -918,22 +893,18 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // 3. The CREATE will happen with the correct parent - no MOVE needed!
       //
       // This is more efficient and avoids race conditions entirely.
-      log.debug(`[indentNode] Node ${nodeId.substring(0, 8)} not persisted yet, updating parentId for CREATE`);
+      log.debug(`[indentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`);
 
-      // Get the current node with updated parentId
+      // structureTree already updated above — at CREATE time, persistence path will derive
+      // parentId from structureTree.getParent(nodeId). Re-trigger setNode to cancel the pending
+      // CREATE and schedule a new one (with cleared insertPosition so it appends to new parent).
       const updatedNode = sharedNodeStore.getNode(nodeId);
       if (updatedNode) {
-        // Update the node's parentId and clear insertAfterNodeId
-        // IMPORTANT: insertAfterNodeId referenced a sibling under the OLD parent,
-        // so it's invalid for the new parent. Set to null to append at end of new parent's children.
-        const nodeWithNewParent = {
+        const nodeWithClearedInsert = {
           ...updatedNode,
-          parentId: targetParentId,
           insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
         } as typeof updatedNode & { insertPosition?: InsertPosition | null };
-        // Re-set the node to trigger a new CREATE with correct parentId
-        // The previous pending CREATE will be cancelled by the new one
-        sharedNodeStore.setNode(nodeWithNewParent, viewerSource);
+        sharedNodeStore.setNode(nodeWithClearedInsert, viewerSource);
       }
 
       // No moveOperation needed - the CREATE will include the correct parent
@@ -1055,28 +1026,23 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         //
         // This is more efficient and avoids race conditions where the CREATE
         // fires with stale insertAfterNodeId while parentId has been updated.
-        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} not persisted yet, updating parentId for CREATE`);
+        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`);
 
-        // Get the current node with updated parentId
-        const updatedNode = sharedNodeStore.getNode(nodeId);
-        if (updatedNode) {
-          // Update the node's parentId and clear insertAfterNodeId
-          // IMPORTANT: insertAfterNodeId referenced a sibling under the OLD parent,
-          // so it's invalid for the new parent. Set to null to append at end of new parent's children.
-          const nodeWithNewParent = {
-            ...updatedNode,
-            parentId: newParentId,
-            insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
-          } as typeof updatedNode & { insertPosition?: InsertPosition | null };
-          // Re-set the node to trigger a new CREATE with correct parentId
-          // The previous pending CREATE will be cancelled by the new one
-          sharedNodeStore.setNode(nodeWithNewParent, { type: 'database', reason: 'outdent-node' });
-        }
-
-        // Update structure tree for browser mode
+        // Update structure tree first so persistence path can derive parentId from structureTree
         if (newParentId) {
           const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
           structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
+        }
+
+        // Re-trigger setNode to cancel the pending CREATE and schedule a new one.
+        // Persistence path derives parentId from structureTree.getParent(nodeId) at CREATE time.
+        const updatedNode = sharedNodeStore.getNode(nodeId);
+        if (updatedNode) {
+          const nodeWithClearedInsert = {
+            ...updatedNode,
+            insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
+          } as typeof updatedNode & { insertPosition?: InsertPosition | null };
+          sharedNodeStore.setNode(nodeWithClearedInsert, { type: 'database', reason: 'outdent-node' });
         }
 
         events.hierarchyChanged();
@@ -1085,42 +1051,26 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // No moveOperation needed - the CREATE will include the correct parent
         return true;
       } else {
-        // CREATE is in-flight! This is a tricky race condition.
-        // The CREATE operation reads current node state at execution time (from this.nodes).
-        // We need to update the node in the store NOW so the CREATE sees the updated parent
-        // and cleared insertAfterNodeId.
-        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} CREATE in-flight, updating store for in-flight CREATE`);
+        // CREATE is in-flight! Update structureTree now so the in-flight CREATE closure reads
+        // the correct parentId from structureTree.getParent(nodeId) at execution time.
+        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} CREATE in-flight, updating structureTree for in-flight CREATE`);
 
-        // Get current node and update it in-place with new parent and cleared insertAfterNodeId
-        const currentNode = sharedNodeStore.getNode(nodeId);
-        if (currentNode) {
-          // Update the store so the in-flight CREATE sees the new parentId
-          // Use 'database' source with isComputedField to avoid triggering another persistence operation
-          sharedNodeStore.updateNode(
-            nodeId,
-            { parentId: newParentId },
-            { type: 'database', reason: 'outdent-node-inflight-fix' },
-            { isComputedField: true }
-          );
-
-          // CRITICAL: Clear insertAfterNodeId since it references a sibling under the OLD parent
-          // The CREATE operation reads current node state at execution time, so we need to
-          // directly clear this on the node object in the store.
-          // Since sharedNodeStore.getNode returns a reference to the actual object, we can mutate it.
-          (currentNode as typeof currentNode & { insertPosition?: InsertPosition | null }).insertPosition = { type: 'end' } as InsertPosition;
-        }
-
-        // Update structure tree for browser mode (same as non-executing case)
+        // Update structure tree so in-flight CREATE derives correct parentId
         if (newParentId) {
           const insertOrder = calculateOutdentInsertOrder(newParentId, oldParentId);
           structureTree.moveInMemoryRelationship(oldParentId, newParentId, nodeId, insertOrder);
         }
 
+        // Clear stale insertPosition on the in-store node (references sibling under OLD parent)
+        const currentNode = sharedNodeStore.getNode(nodeId);
+        if (currentNode) {
+          (currentNode as typeof currentNode & { insertPosition?: InsertPosition | null }).insertPosition = { type: 'end' } as InsertPosition;
+        }
+
         events.hierarchyChanged();
         _updateTrigger++;
 
-        // The in-flight CREATE will read the updated state and create with correct parent.
-        // No additional MOVE needed since we updated before the CREATE reads the state.
+        // The in-flight CREATE will read structureTree.getParent(nodeId) and create with correct parent.
         return true;
       }
     }
@@ -1645,13 +1595,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         autoFocus?: boolean;
         inheritHeaderLevel?: number;
         isInitialPlaceholder?: boolean;
-        /**
-         * Optional parent mapping for test scenarios where backend queries aren't available.
-         * Maps node ID to parent ID. If not provided, uses backend queries.
-         *
-         * Example: { 'child-1': 'parent', 'child-2': 'parent' }
-         */
-        parentMapping?: Record<string, string | null>;
       }
     ): void {
       // NOTE: We no longer cleanup unpersisted nodes here
@@ -1668,8 +1611,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         expanded: options?.expanded ?? true,
         autoFocus: options?.autoFocus ?? false,
         inheritHeaderLevel: options?.inheritHeaderLevel ?? 0,
-        isInitialPlaceholder: options?.isInitialPlaceholder ?? false,
-        parentMapping: options?.parentMapping
+        isInitialPlaceholder: options?.isInitialPlaceholder ?? false
       };
 
       // Compute depth for a node based on parent chain using backend queries
@@ -1712,22 +1654,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           isPlaceholder: skipPersistence && isPlaceholder
         });
       }
-
-      // CRITICAL: Build parent-child relationship cache from loaded nodes
-      // This populates sharedNodeStore's childrenCache and parentsCache
-      //
-      // Always build cache from nodes' parentId field
-      // This works for both test scenarios and production (backend sets parentId)
-      const nodesByParent = new Map<string | null, string[]>();
-      for (const node of nodes) {
-        const parentKey = defaults.parentMapping?.[node.id] ?? node.parentId ?? null;
-        if (!nodesByParent.has(parentKey)) {
-          nodesByParent.set(parentKey, []);
-        }
-        nodesByParent.get(parentKey)!.push(node.id);
-      }
-
-      // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via domain events
 
       // Second pass: Compute depths and identify roots
       // NOTE: Now using backend queries to determine which nodes are children

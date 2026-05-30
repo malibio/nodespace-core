@@ -91,14 +91,13 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
    * Note: order is not stored in Node type (it's in edges), but we track it
    * separately in tests that need ordering logic
    */
-  function createTestNode(id: string, parentId?: string): Node {
+  function createTestNode(id: string): Node {
     const node: Node = {
       id,
       nodeType: 'text',
       content: `Content for ${id}`,
       version: 1,
       properties: {},
-      parentId,
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString()
     };
@@ -232,8 +231,8 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
     it('should demonstrate floating point limits in rapid insertions', () => {
       // Create parent with initial children
       createTestNode('parent');
-      createTestNode('child-1', 'parent');
-      createTestNode('child-2', 'parent');
+      createTestNode('child-1');
+      createTestNode('child-2');
 
       // Simulate rapid node creation at position after child-1
       // This demonstrates why the backend needs rebalancing
@@ -332,45 +331,43 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
       // 2. User immediately presses Tab (indents new node)
 
       createTestNode('parent');
-      createTestNode('sibling', 'parent');
+      createTestNode('sibling');
 
       // Simulate rapid node creation + indent
       const newNodeId = 'new-node';
-      createTestNode(newNodeId, 'parent');
+      createTestNode(newNodeId);
 
-      // Verify node was created
+      // Verify node was created (hierarchy is tracked in structureTree)
       const newNode = sharedNodeStore.getNode(newNodeId);
       expect(newNode).toBeDefined();
-      expect(newNode?.parentId).toBe('parent');
     });
 
     it('should handle indent followed by immediate outdent', () => {
       // Tab→Shift+Tab race condition scenario
-      // If outdent uses stale parentId, node ends up in wrong location
+      // If outdent uses stale parent info, node ends up in wrong location
 
       // Setup: parent with child that has its own child
       createTestNode('grandparent');
-      createTestNode('parent', 'grandparent');
-      createTestNode('child', 'parent');
+      createTestNode('parent');
+      createTestNode('child');
 
-      // After indent, child should be under parent
+      // Verify child node was created (hierarchy tracked in structureTree)
       const childAfterIndent = sharedNodeStore.getNode('child');
-      expect(childAfterIndent?.parentId).toBe('parent');
+      expect(childAfterIndent).toBeDefined();
     });
 
     it('should preserve sibling relationships through rapid operations', () => {
       // Create parent with 5 children
       createTestNode('parent');
       for (let i = 1; i <= 5; i++) {
-        createTestNode(`child-${i}`, 'parent');
+        createTestNode(`child-${i}`);
       }
 
-      // Verify all children exist and have correct parent
+      // Verify all children exist (hierarchy tracked in structureTree)
       const childIds = ['child-1', 'child-2', 'child-3', 'child-4', 'child-5'];
       for (const childId of childIds) {
         const node = sharedNodeStore.getNode(childId);
         expect(node).toBeDefined();
-        expect(node?.parentId).toBe('parent');
       }
 
       // Simulate reordering operations - order calculations are correct
@@ -418,14 +415,13 @@ describe('Stress Test - High Volume Operations', () => {
     service.destroy();
   });
 
-  function createTestNode(id: string, parentId?: string): Node {
+  function createTestNode(id: string): Node {
     const node: Node = {
       id,
       nodeType: 'text',
       content: `Content for ${id}`,
       version: 1,
       properties: {},
-      parentId,
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString()
     };
@@ -437,7 +433,7 @@ describe('Stress Test - High Volume Operations', () => {
     // Create initial hierarchy
     createTestNode('root');
     for (let i = 0; i < 10; i++) {
-      createTestNode(`node-${i}`, 'root');
+      createTestNode(`node-${i}`);
     }
 
     // Verify we can call moveNode mock 100 times without errors
@@ -457,15 +453,14 @@ describe('Stress Test - High Volume Operations', () => {
     const childIds = [];
     for (let i = 0; i < 20; i++) {
       const id = `child-${i}`;
-      createTestNode(id, 'parent');
+      createTestNode(id);
       childIds.push(id);
     }
 
-    // Verify all children exist
+    // Verify all children exist (hierarchy tracked in structureTree)
     for (const id of childIds) {
       const node = sharedNodeStore.getNode(id);
       expect(node).toBeDefined();
-      expect(node?.parentId).toBe('parent');
     }
 
     // Burst of 50 rapid updates
@@ -478,11 +473,10 @@ describe('Stress Test - High Volume Operations', () => {
       );
     }
 
-    // All nodes should still exist and have correct parent
+    // All nodes should still exist after burst
     for (const id of childIds) {
       const node = sharedNodeStore.getNode(id);
       expect(node).toBeDefined();
-      expect(node?.parentId).toBe('parent');
     }
   });
 
