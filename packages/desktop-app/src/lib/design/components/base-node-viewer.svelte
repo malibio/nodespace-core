@@ -613,7 +613,7 @@
   function requestNodeFocus(nodeId: string, position: number) {
     // Use FocusManager as single source of truth for focus management
     // This replaces the old DOM-based focus approach
-    focusManager.setEditingNode(nodeId, paneId, position);
+    focusManager.focusNodeAtPosition(nodeId, position, paneId);
 
     // Force textarea update to ensure merged content is visible immediately
     // Especially important for Safari which doesn't always reactive-update properly
@@ -769,16 +769,16 @@
     }
 
     // Set cursor position using FocusManager (single source of truth)
-    // Issue #664: For inherited type nodes (Enter key on typed node), use setEditingNodeFromInheritedType
+    // Issue #664: For inherited type nodes (Enter key on typed node), use focusNodeFromInheritedType
     // which sets pattern state to 'inherited' (cannot revert to text).
     // This is different from pattern-detected type conversions which CAN revert.
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
       if (nodeType !== 'text') {
         // Non-text inherited nodes: Use inherited-type signal (pattern state = 'inherited', cannot revert)
-        focusManager.setEditingNodeFromInheritedType(newNodeId, newNodeCursorPosition, paneId);
+        focusManager.focusNodeFromInheritedType(newNodeId, newNodeCursorPosition, paneId);
       } else {
         // Text nodes: Use regular editing node
-        focusManager.setEditingNode(newNodeId, paneId, newNodeCursorPosition);
+        focusManager.focusNodeAtPosition(newNodeId, newNodeCursorPosition, paneId);
       }
     }
 
@@ -994,7 +994,7 @@
     // 1. Switching from view mode to edit mode (isEditing derived value)
     // 2. Focusing the textarea (autoFocus effect in base-node.svelte)
     // 3. Calling controller.enterFromArrowNavigation() with pixel-accurate positioning
-    focusManager.setEditingNodeFromArrowNavigation(targetNodeId, direction, pixelOffset, paneId);
+    focusManager.focusNodeFromArrowNav(targetNodeId, direction, pixelOffset, paneId);
   }
 
   // Handle arrow key navigation between nodes using entry/exit methods
@@ -1517,7 +1517,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Set editing state BEFORE store update
-                      focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+                      focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
 
                       // Add to shared store with persistence enabled
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
@@ -1556,7 +1556,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   // Normalize content for code-block conversion
                   if (newNodeType === 'code-block') {
@@ -1585,7 +1585,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   log.debug('slashCommandSelected:', {
                     nodeId: node.id,
@@ -1744,7 +1744,7 @@
                     // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
                     tick().then(() => {
                       // Set editing state BEFORE store update
-                      focusManager.setEditingNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+                      focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
 
                       // Add to shared store with persistence enabled
                       sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
@@ -1783,7 +1783,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   // Normalize content for code-block conversion
                   if (newNodeType === 'code-block') {
@@ -1841,7 +1841,7 @@
 
                   // CRITICAL: Set editing state BEFORE updating node type
                   // This ensures focus manager state is ready when the new component mounts
-                  focusManager.setEditingNodeFromTypeConversion(node.id, cursorPosition, paneId);
+                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
                   log.debug('slashCommandSelected:', {
                     nodeId: node.id,

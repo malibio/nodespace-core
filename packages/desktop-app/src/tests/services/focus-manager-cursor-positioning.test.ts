@@ -1,7 +1,7 @@
 /**
  * Tests for FocusManager cursor positioning refactor (Issue #281)
  *
- * Verifies unified cursor position state and new API methods
+ * Verifies unified cursor position state and API methods
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -13,7 +13,7 @@ describe('FocusManager - Cursor Positioning (Issue #281)', () => {
     focusManager.clearEditing();
   });
 
-  describe('New unified API', () => {
+  describe('Unified API', () => {
     it('focusNode should set default cursor position', () => {
       focusManager.focusNode('test-node-1', 'default');
 
@@ -60,40 +60,25 @@ describe('FocusManager - Cursor Positioning (Issue #281)', () => {
         pixelOffset: 150
       });
     });
-  });
 
-  describe('Legacy API compatibility', () => {
-    it('setEditingNode without position should create default cursor position', () => {
-      focusManager.setEditingNode('legacy-node-1', 'default');
+    it('focusNodeFromTypeConversion should set node-type-conversion cursor position', () => {
+      focusManager.focusNodeFromTypeConversion('test-node-6', 25, 'default');
 
-      expect(focusManager.editingNodeId).toBe('legacy-node-1');
-      expect(focusManager.cursorPosition).toEqual({ type: 'default', skipSyntax: true });
-      // Legacy getters should also work
-      expect(focusManager.pendingCursorPosition).toBeNull();
-    });
-
-    it('setEditingNode with position should create absolute cursor position', () => {
-      focusManager.setEditingNode('legacy-node-2', 'default', 25);
-
-      expect(focusManager.editingNodeId).toBe('legacy-node-2');
-      expect(focusManager.cursorPosition).toEqual({ type: 'absolute', position: 25 });
-      // Legacy getters should be in sync
-      expect(focusManager.pendingCursorPosition).toBe(25);
-    });
-
-    it('setEditingNodeFromArrowNavigation should create arrow-navigation position', () => {
-      focusManager.setEditingNodeFromArrowNavigation('legacy-node-3', 'up', 200, 'default');
-
-      expect(focusManager.editingNodeId).toBe('legacy-node-3');
+      expect(focusManager.editingNodeId).toBe('test-node-6');
       expect(focusManager.cursorPosition).toEqual({
-        type: 'arrow-navigation',
-        direction: 'up',
-        pixelOffset: 200
+        type: 'node-type-conversion',
+        position: 25
       });
-      // Legacy getters should be in sync
-      expect(focusManager.arrowNavDirection).toBe('up');
-      expect(focusManager.arrowNavPixelOffset).toBe(200);
-      expect(focusManager.arrowNavigationContext).toEqual({ direction: 'up', pixelOffset: 200 });
+    });
+
+    it('focusNodeFromInheritedType should set inherited-type cursor position', () => {
+      focusManager.focusNodeFromInheritedType('test-node-7', 10, 'default');
+
+      expect(focusManager.editingNodeId).toBe('test-node-7');
+      expect(focusManager.cursorPosition).toEqual({
+        type: 'inherited-type',
+        position: 10
+      });
     });
   });
 
@@ -106,7 +91,6 @@ describe('FocusManager - Cursor Positioning (Issue #281)', () => {
       focusManager.clearCursorPosition();
 
       expect(focusManager.cursorPosition).toBeNull();
-      expect(focusManager.pendingCursorPosition).toBeNull();
     });
   });
 
@@ -121,9 +105,6 @@ describe('FocusManager - Cursor Positioning (Issue #281)', () => {
 
       expect(focusManager.editingNodeId).toBeNull();
       expect(focusManager.cursorPosition).toBeNull();
-      expect(focusManager.pendingCursorPosition).toBeNull();
-      expect(focusManager.arrowNavDirection).toBeNull();
-      expect(focusManager.arrowNavPixelOffset).toBeNull();
     });
   });
 
@@ -178,28 +159,20 @@ describe('FocusManager - Cursor Positioning (Issue #281)', () => {
   });
 
   describe('Reactivity and state consistency', () => {
-    it('should maintain consistency between new and legacy state', () => {
-      // Test absolute position
+    it('should update editingNodeId when focusing', () => {
       focusManager.focusNodeAtPosition('test', 15, 'default');
+      expect(focusManager.editingNodeId).toBe('test');
       expect(focusManager.cursorPosition).toEqual({ type: 'absolute', position: 15 });
-      expect(focusManager.pendingCursorPosition).toBe(15);
 
-      // Test arrow navigation
       focusManager.focusNodeFromArrowNav('test', 'down', 75, 'default');
       expect(focusManager.cursorPosition).toEqual({
         type: 'arrow-navigation',
         direction: 'down',
         pixelOffset: 75
       });
-      expect(focusManager.arrowNavDirection).toBe('down');
-      expect(focusManager.arrowNavPixelOffset).toBe(75);
 
-      // Test clearing
       focusManager.focusNode('test', 'default');
       expect(focusManager.cursorPosition?.type).toBe('default');
-      expect(focusManager.pendingCursorPosition).toBeNull();
-      expect(focusManager.arrowNavDirection).toBeNull();
-      expect(focusManager.arrowNavPixelOffset).toBeNull();
     });
   });
 });

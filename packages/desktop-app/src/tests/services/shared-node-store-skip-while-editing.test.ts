@@ -60,7 +60,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     store.setNode(optimisticNode, viewerSource);
 
     // User focuses the node (actively editing)
-    focusManager.setEditingNode('n1', 'default');
+    focusManager.focusNode('n1', 'default');
 
     // Daemon broadcast lands with the older confirmed content
     const stalerNode = makeNode('n1', 'hell', 2);
@@ -113,7 +113,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   it('does apply viewer-source updates to a focused node (user actions are authoritative)', () => {
     const initial = makeNode('n4', 'before', 1);
     store.setNode(initial, viewerSource);
-    focusManager.setEditingNode('n4', 'default');
+    focusManager.focusNode('n4', 'default');
 
     // The user themselves is the source — this is their own typed change.
     const userEdit = makeNode('n4', 'after', 1);
@@ -125,7 +125,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   it('does apply database events when the node has never been seen locally', () => {
     // First time the local store sees this node — the guard's "existingNode"
     // check ensures we still accept the new state.
-    focusManager.setEditingNode('n5', 'default'); // even with focus on the id
+    focusManager.focusNode('n5', 'default'); // even with focus on the id
     const incoming = makeNode('n5', 'fresh from cloud', 1);
     store.setNode(incoming, databaseSource);
 
@@ -135,7 +135,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   it('preserves the optimistic content AND leaves local version untouched (no reactive mutation)', () => {
     const optimistic = makeNode('n6', 'local-newer', 3);
     store.setNode(optimistic, viewerSource);
-    focusManager.setEditingNode('n6', 'default');
+    focusManager.focusNode('n6', 'default');
 
     const broadcast = makeNode('n6', 'cloud-older', 7);
     store.setNode(broadcast, databaseSource);
@@ -164,7 +164,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // earlier startsWith heuristic mis-classified), treat as foreign.
     const optimistic = makeNode('foreign', 'alice typed this', 3);
     store.setNode(optimistic, viewerSource);
-    focusManager.setEditingNode('foreign', 'default');
+    focusManager.focusNode('foreign', 'default');
     // Alice last persisted "alice typed this" to backend.
     store.__test_setLastPersistedContent('foreign', 'alice typed this');
 
@@ -199,7 +199,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // broadcast is correctly classified as foreign.
     const aliceOptimistic = makeNode('shared', 'hello world', 5);
     store.setNode(aliceOptimistic, viewerSource);
-    focusManager.setEditingNode('shared', 'default');
+    focusManager.focusNode('shared', 'default');
     // Alice has never persisted "hello" — only "hello world" via her
     // own typing. (For the regression check the exact prior value
     // doesn't matter — what matters is that it ISN'T "hello".)
@@ -233,7 +233,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     expect(store.computeOccVersionForUpdate('persist')).toBe(1);
 
     // Guard fires for an own-echo broadcast (content matches what we sent).
-    focusManager.setEditingNode('persist', 'default');
+    focusManager.focusNode('persist', 'default');
     store.setNode(makeNode('persist', 'abc', 5), databaseSource);
 
     // Local .version unchanged, but the persistence path now picks 5.
@@ -284,7 +284,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
 
     // Focus the node so the next database event hits the guard and stashes
     // its version in the non-reactive cache.
-    focusManager.setEditingNode('n7', 'default');
+    focusManager.focusNode('n7', 'default');
     store.setNode(makeNode('n7', 'older', 9), databaseSource);
     // Verify the local view didn't change (guard fired).
     expect(store.getNode('n7')?.content).toBe('seed');
