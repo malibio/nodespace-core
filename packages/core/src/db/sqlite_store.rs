@@ -1615,9 +1615,17 @@ impl SqliteStore {
     /// OCC. Callers that need conflict detection should use `update_node` (the single-node path)
     /// in a loop or use the daemon `update_nodes_batch` RPC which threads per-node versions.
     ///
-    /// **TOCTOU note:** Unspecified fields (`content`/`node_type = None`) are preserved via
-    /// SQL `COALESCE` — no read-then-write; the read-modify-write is a single atomic SQL
-    /// statement inside the transaction with no pool reads escaping the tx.
+    /// **TOCTOU note:** All fields are written without a pre-read. Unspecified fields
+    /// (`None`) are preserved via SQL `COALESCE` — the entire read-modify-write is one
+    /// atomic SQL statement per node inside the transaction with no pool reads escaping
+    /// the tx.
+    ///
+    /// **`properties` semantics:** `Some(value)` **replaces** the existing JSON object
+    /// entirely (unlike `update_node`, which merges key-by-key). `None` keeps the existing
+    /// value unchanged.
+    ///
+    /// **`title` semantics:** `Some(Some("text"))` sets a new title; `Some(None)` clears
+    /// it to NULL; `None` leaves the existing title unchanged.
     ///
     /// Returns an error (and rolls back) if any node id is not found.
     pub async fn bulk_update(&self, updates: Vec<(String, NodeUpdate)>) -> Result<()> {
@@ -1642,15 +1650,52 @@ impl SqliteStore {
             .context("Failed to begin bulk update transaction")?;
 
         for (id, update) in &updates {
-            // COALESCE(?1, content) keeps the existing value when the caller supplies None,
-            // eliminating the pre-read and closing the TOCTOU window entirely.
-            let affected = tx.execute(
-                "UPDATE node SET content = COALESCE(?1, content), node_type = COALESCE(?2, node_type), version = version + 1, modified_at = ?3 WHERE id = ?4",
-                libsql::params![update.content.clone(), update.node_type.clone(), now.clone(), id.clone()],
-            ).await.context("Failed to update node in bulk update")?;
+            let props_json = update
+                .properties
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("Failed to serialize properties in bulk update")?;
+
+            // All five NodeUpdate fields are covered. COALESCE preserves the existing
+            // column value when the caller passes None, closing the TOCTOU window with
+            // no pre-read escaping the transaction.
+            let affected = tx
+                .execute(
+                    "UPDATE node SET \
+                    content          = COALESCE(?1, content), \
+                    node_type        = COALESCE(?2, node_type), \
+                    properties       = COALESCE(?3, properties), \
+                    lifecycle_status = COALESCE(?4, lifecycle_status), \
+                    version          = version + 1, \
+                    modified_at      = ?5 \
+                WHERE id = ?6",
+                    libsql::params![
+                        update.content.clone(),
+                        update.node_type.clone(),
+                        props_json,
+                        update.lifecycle_status.clone(),
+                        now.clone(),
+                        id.clone()
+                    ],
+                )
+                .await
+                .context("Failed to update node in bulk update")?;
 
             if affected == 0 {
                 return Err(anyhow::anyhow!("Node not found: {}", id));
+            }
+
+            // `title` uses Option<Option<String>>: Some(Some(t)) sets, Some(None) clears
+            // to NULL, None skips. COALESCE can't express "write NULL intentionally", so
+            // we handle title with a separate statement only when the caller touches it.
+            if let Some(title) = &update.title {
+                tx.execute(
+                    "UPDATE node SET title = ?1 WHERE id = ?2",
+                    libsql::params![title.clone(), id.clone()],
+                )
+                .await
+                .context("Failed to update title in bulk update")?;
             }
         }
 

@@ -481,8 +481,11 @@ impl NodeService {
             ))
         })?;
 
-        // Step 2: Validate all nodes BEFORE performing atomic update
-        // This ensures we fail fast before any database changes
+        // Step 2: Validate all nodes BEFORE performing atomic update.
+        // This ensures we fail fast before any database changes.
+        // Note: this validation snapshot is taken before the store transaction; any
+        // concurrent write landing between here and store.bulk_update is silently
+        // overwritten — intentional under the last-write-wins contract (see store doc).
         for (id, update) in &updates {
             // Look up existing node from batch result
             let existing = existing_nodes

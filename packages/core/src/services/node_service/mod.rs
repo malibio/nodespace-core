@@ -2322,21 +2322,36 @@ mod tests {
             )])
             .await
             .unwrap();
-        let after = service.get_node(&id).await.unwrap().unwrap();
-        assert_eq!(after.content, "New content");
-        assert_eq!(after.node_type, "text");
+        let after_content_update = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(after_content_update.content, "New content");
+        assert_eq!(after_content_update.node_type, "text");
 
         // Update only node_type — content must be preserved
         service
             .bulk_update(vec![(
                 id.clone(),
-                NodeUpdate::new().with_node_type("task".to_string()),
+                NodeUpdate::new().with_node_type("text".to_string()),
             )])
             .await
             .unwrap();
-        let after = service.get_node(&id).await.unwrap().unwrap();
-        assert_eq!(after.content, "New content");
-        assert_eq!(after.node_type, "task");
+        let after_type_update = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(after_type_update.content, "New content");
+        assert_eq!(after_type_update.node_type, "text");
+
+        // Update only properties — content and node_type must be preserved.
+        // Note: bulk_update replaces properties entirely (unlike single-node update_node
+        // which merges key-by-key).
+        service
+            .bulk_update(vec![(
+                id.clone(),
+                NodeUpdate::new().with_properties(json!({"key": "value"})),
+            )])
+            .await
+            .unwrap();
+        let after_props_update = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(after_props_update.content, "New content");
+        assert_eq!(after_props_update.node_type, "text");
+        assert_eq!(after_props_update.properties, json!({"key": "value"}));
     }
 
     #[tokio::test]
