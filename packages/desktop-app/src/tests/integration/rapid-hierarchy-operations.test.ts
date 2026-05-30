@@ -290,12 +290,7 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
         expect(node).toBeDefined();
       }
 
-      // Simulate reordering operations - fractional order is computed daemon-side
-      const orderBetween2And3 = (2 + 3) / 2;
-      expect(orderBetween2And3).toBe(2.5);
-
-      const orderBetween2And2_5 = (2 + 2.5) / 2;
-      expect(orderBetween2And2_5).toBe(2.25);
+      // Fractional order is computed daemon-side; frontend uses positional intent only.
     });
   });
 });

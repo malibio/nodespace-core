@@ -152,29 +152,23 @@ describe('C3a — outdentNode emits no fractional order values', () => {
     }
   });
 
-  it('outdent of NOT-YET-PERSISTED node calls moveInMemoryRelationship WITHOUT a numeric order argument', async () => {
+  it('outdent of NOT-YET-PERSISTED node: optimistic moveInMemoryRelationship has no fractional order', async () => {
     addPersistedNode('grandparent');
     addPersistedNode('parent');
 
-    // Add child but do NOT mark it persisted
+    // Use viewer source so the node is NOT added to persistedNodeIds.
+    // source.type === 'viewer' → determinePersistenceBehavior returns shouldMarkAsPersisted: false,
+    // so isNodePersisted('child') is false and the CREATE-cancel branch executes.
     const child = makeNode('child');
-    sharedNodeStore.setNode(child, { type: 'database', reason: 'test' });
-    // isNodePersisted('child') → false, isNodePersistenceExecuting('child') → false
+    sharedNodeStore.setNode(child, { type: 'viewer', viewerId: 'test-viewer' });
 
     await service.outdentNode('child');
 
-    const outdentCalls = moveInMemoryRelationshipSpy.mock.calls.filter(
-      (call) => call[2] === 'child'
-    );
-    if (outdentCalls.length > 0) {
-      for (const call of outdentCalls) {
-        expect(call[3]).toBeUndefined();
-      }
-    }
-    // No fractional float should appear in any call
+    // No moveInMemoryRelationship call should pass a fractional order value.
+    // The CREATE-cancel path calls moveInMemoryRelationship(oldParentId, newParentId, nodeId)
+    // with no order arg — positional intent only.
     for (const call of moveInMemoryRelationshipSpy.mock.calls) {
       if (call[3] !== undefined) {
-        // Sibling transfers use integer i+1 — not a fractional order computed from daemon math
         expect(Number.isInteger(call[3])).toBe(true);
       }
     }

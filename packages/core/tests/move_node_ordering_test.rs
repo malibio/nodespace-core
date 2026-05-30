@@ -112,15 +112,16 @@ mod move_node_ordering_tests {
             )
             .await?;
 
-        // Receive RelationshipUpdated event
-        let envelope = timeout(Duration::from_secs(2), rx.recv())
-            .await
-            .expect("Event should be emitted within 2 seconds")
-            .expect("Should receive event");
-
-        // Assert it is a RelationshipUpdated for has_child with a real order
-        let order = extract_order_from_event(&envelope.event)
-            .expect("RelationshipUpdated payload must contain numeric `order`");
+        // Loop until we receive a RelationshipUpdated event (defensive against unrelated events)
+        let order = loop {
+            let envelope = timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .expect("RelationshipUpdated event should arrive within 2 seconds")
+                .expect("Channel should not close");
+            if let Some(o) = extract_order_from_event(&envelope.event) {
+                break o;
+            }
+        };
 
         // The emitted order must be finite (not NaN, not infinity)
         assert!(order.is_finite(), "order must be a finite float: {}", order);

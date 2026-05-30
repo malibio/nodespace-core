@@ -264,11 +264,12 @@ export class ReactiveStructureTree {
       });
     }
 
-    // Calculate order if not provided - append to end
+    // Calculate order if not provided - append after last child by value (not count)
     let newOrder = order;
     if (newOrder === undefined) {
       const existingChildren = this.children.get(newParentId) || [];
-      newOrder = existingChildren.length > 0 ? existingChildren.length + 1.0 : 1.0;
+      const lastOrder = existingChildren[existingChildren.length - 1]?.order ?? 0;
+      newOrder = lastOrder + 1.0;
     }
 
     // Add to new parent
