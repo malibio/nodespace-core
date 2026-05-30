@@ -822,6 +822,14 @@ export class SharedNodeStore {
   }
 
   /**
+   * Get parent ID for a node, delegating to structureTree as the single source of truth.
+   */
+  getParentId(nodeId: string): string | null {
+    if (!structureTree) return null;
+    return structureTree.getParent(nodeId);
+  }
+
+  /**
    * Check if a node exists
    */
   hasNode(nodeId: string): boolean {
@@ -2048,6 +2056,21 @@ export class SharedNodeStore {
       // relationship:created event fired before the backend persisted the correct order).
       if (allRelationships.length > 0) {
         structureTree.batchAddRelationships(allRelationships);
+      }
+
+      // Run invariant check after hydration completes (skipped in test environment
+      // because the structureTree singleton accumulates state across tests and
+      // produces false-positive orphan violations).
+      if (!isTestEnvironment()) {
+        const nodeIdSet = new Set(this.nodes.keys());
+        // Allowlist __root__ sentinel plus any date nodes currently in the tree
+        // that aren't in this.nodes (e.g. when loading a child of a date node
+        // before the date node itself has been added to the store).
+        const virtualIds = new Set<string>(['__root__']);
+        for (const parentId of structureTree.children.keys()) {
+          if (isValidDateId(parentId)) virtualIds.add(parentId);
+        }
+        structureTree.assertInvariants(nodeIdSet, virtualIds);
       }
 
       return allNodes;

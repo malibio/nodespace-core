@@ -21,7 +21,7 @@ interface ChildInfo {
   order: number;
 }
 
-class ReactiveStructureTree {
+export class ReactiveStructureTree {
   // Reactive map using Svelte 5 $state.raw() - only reassignment triggers reactivity,
   // so we must reassign after every mutation (see notifyChange())
   children = $state.raw(new Map<string, ChildInfo[]>());
@@ -289,6 +289,55 @@ class ReactiveStructureTree {
       children.sort((a, b) => a.order - b.order);
       this.children.set(parentId, children);
       this.notifyChange();
+    }
+  }
+
+  /**
+   * Check hierarchy invariants after hydration.
+   * I1: No orphan edges (every childId/parentId in children exists in nodeIds set).
+   * I2: Single parent per child (no childId under two different parents).
+   * I3: Sorted order (each parent's ChildInfo[] non-decreasing by order).
+   *
+   * Call once after batchAddRelationships completes during hydration.
+   * In dev mode throws on violation; in prod logs only.
+   *
+   * @param nodeIds - Set of all known node IDs (from SharedNodeStore.nodes)
+   * @param virtualIds - Additional allowed IDs not in nodeIds (e.g. '__root__', virtual date nodes)
+   */
+  assertInvariants(nodeIds: Set<string>, virtualIds: Set<string> = new Set()): void {
+    const isKnown = (id: string) => nodeIds.has(id) || virtualIds.has(id);
+    const seen = new Map<string, string>(); // childId -> parentId
+    const violations: string[] = [];
+
+    for (const [parentId, childInfos] of this.children) {
+      if (!isKnown(parentId)) {
+        violations.push(`I1: orphan parentId "${parentId}" not in nodeIds`);
+      }
+      let prevOrder = -Infinity;
+      for (const { nodeId, order } of childInfos) {
+        if (!isKnown(nodeId)) {
+          violations.push(`I1: orphan childId "${nodeId}" (parent "${parentId}") not in nodeIds`);
+        }
+        const existingParent = seen.get(nodeId);
+        if (existingParent && existingParent !== parentId) {
+          violations.push(`I2: dual-parent "${nodeId}" under "${existingParent}" and "${parentId}"`);
+        }
+        seen.set(nodeId, parentId);
+        if (order < prevOrder) {
+          violations.push(`I3: unsorted order for "${nodeId}" under "${parentId}" (${order} < ${prevOrder})`);
+        }
+        prevOrder = order;
+      }
+    }
+
+    if (violations.length === 0) return;
+
+    const invLog = createLogger('HierarchyInvariant');
+    for (const v of violations) {
+      invLog.error(v);
+    }
+    if (import.meta.env.DEV) {
+      throw new Error(`HierarchyInvariant violations:\n${violations.join('\n')}`);
     }
   }
 

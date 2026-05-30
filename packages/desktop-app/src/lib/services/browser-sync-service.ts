@@ -27,6 +27,7 @@ import { backendAdapter } from './backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 import { scheduleCollectionRefresh, scheduleSchemaRefresh } from '$lib/utils/collection-refresh';
 import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schema-plugin-loader';
+import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
 
 const log = createLogger('BrowserSyncService');
 
@@ -274,30 +275,18 @@ class BrowserSyncService {
 
       case 'relationshipCreated': {
         log.debug(`Relationship created: ${event.relationshipType} (${event.fromId} -> ${event.toId})`);
-
         if (event.relationshipType === 'has_child') {
-          // Hierarchy relationship
-          if (structureTree) {
-            const order = (event.properties?.order as number) ?? Date.now();
-            const existingChildren = structureTree.getChildrenWithOrder(event.fromId);
-            const alreadyExists = existingChildren.some((c) => c.nodeId === event.toId);
-            if (!alreadyExists) {
-              structureTree.addChild({
-                parentId: event.fromId,
-                childId: event.toId,
-                order
-              });
-            }
-          }
+          applyHasChildCreated(structureTree, {
+            parentId: event.fromId,
+            childId: event.toId,
+            order: (event.properties as { order?: unknown } | undefined)?.order
+          });
         } else if (event.relationshipType === 'member_of') {
-          // Collection membership changed - refresh collections sidebar
           log.debug(`Member added: ${event.fromId} to collection ${event.toId}`);
           scheduleCollectionRefresh(event.toId);
         } else if (event.relationshipType === 'mentions') {
-          // Mention relationship - log for now
           log.debug(`Mention created: ${event.fromId} mentions ${event.toId}`);
         } else {
-          // Custom relationship type
           log.debug(`Custom relationship created: ${event.relationshipType}`);
         }
         break;
@@ -305,28 +294,24 @@ class BrowserSyncService {
 
       case 'relationshipUpdated': {
         log.debug(`Relationship updated: ${event.relationshipType} (${event.fromId} -> ${event.toId})`);
-
         if (event.relationshipType === 'has_child') {
-          // Future: Update child order in structure tree
-          log.debug(`Hierarchy order updated for ${event.toId}`);
+          applyHasChildUpdated(structureTree, {
+            parentId: event.fromId,
+            childId: event.toId,
+            order: (event.properties as { order?: unknown } | undefined)?.order
+          });
         }
         break;
       }
 
       case 'relationshipDeleted': {
         log.debug(`Relationship deleted: ${event.relationshipType} (${event.id}) from ${event.fromId} to ${event.toId}`);
-
         if (event.relationshipType === 'has_child') {
-          // Hierarchy deletion - update ReactiveStructureTree
-          if (structureTree) {
-            structureTree.removeChild({
-              parentId: event.fromId,
-              childId: event.toId,
-              order: 0 // Order doesn't matter for removal
-            });
-          }
+          applyHasChildDeleted(structureTree, {
+            parentId: event.fromId,
+            childId: event.toId
+          });
         } else if (event.relationshipType === 'member_of') {
-          // Collection membership removed - refresh collections sidebar
           log.debug(`Member removed from collection: ${event.id}`);
           scheduleCollectionRefresh(event.toId);
         } else if (event.relationshipType === 'mentions') {
