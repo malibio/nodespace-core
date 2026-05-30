@@ -1766,8 +1766,6 @@ impl NodeService {
         parent_id: &str,
         position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
-        use tokio::time::{sleep, Duration};
-        let start = std::time::Instant::now();
         tracing::debug!(
             child_id = %child_id,
             parent_id = %parent_id,
@@ -1799,135 +1797,15 @@ impl NodeService {
             .await?;
         let insert_after_id: Option<&str> = resolved.as_deref();
 
-        // Use store's move_node which creates the has_child relationship atomically.
-        // Retry if sibling not found (eventual consistency).
-        // Note: create_parent_edge uses 10×100ms (up to 1s) because it is called during
-        // outdent operations where the sibling to insert after may have a freshly created
-        // parent edge that hasn't propagated yet.
-        let mut last_error = None;
-        let mut attempt_count = 0;
-        let mut actual_order: f64 = 0.0;
-        for _attempt in 0..10 {
-            attempt_count += 1;
-            match self
-                .store
-                .move_node(child_id, Some(parent_id), insert_after_id)
-                .await
-            {
-                Ok(order) => {
-                    actual_order = order;
-                    tracing::debug!(
-                        "create_parent_edge: move_node succeeded on attempt {} at {}ms",
-                        attempt_count,
-                        start.elapsed().as_millis()
-                    );
-                    last_error = None;
-                    break;
-                }
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains("Sibling not found") {
-                        tracing::debug!(
-                            "create_parent_edge: sibling not found, retry {} at {}ms",
-                            attempt_count,
-                            start.elapsed().as_millis()
-                        );
-                        last_error = Some(err_str);
-                        sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                    return Err(NodeServiceError::query_failed(err_str));
-                }
-            }
-        }
-        if let Some(err) = last_error {
-            return Err(NodeServiceError::query_failed(err));
-        }
-
-        // Defensive guard: verify position and retry with reorder if wrong.
-        if let Some(after_id) = insert_after_id {
-            tracing::debug!(
-                "create_parent_edge: starting position verification at {}ms",
-                start.elapsed().as_millis()
-            );
-            let mut verify_attempt = 0;
-            let mut position_verified = false;
-            'outer: for _attempt in 0..20 {
-                verify_attempt += 1;
-                sleep(Duration::from_millis(50)).await;
-
-                let children = self.get_children(parent_id).await?;
-                let child_pos = children.iter().position(|c| c.id == child_id);
-                let after_pos = children.iter().position(|c| c.id == after_id);
-
-                match (child_pos, after_pos) {
-                    (Some(c_pos), Some(a_pos)) if c_pos == a_pos + 1 => {
-                        tracing::debug!(
-                            "create_parent_edge: position verified on attempt {} at {}ms",
-                            verify_attempt,
-                            start.elapsed().as_millis()
-                        );
-                        position_verified = true;
-                        break 'outer;
-                    }
-                    (Some(_), Some(_)) => {
-                        tracing::debug!(
-                            "create_parent_edge: wrong position, reordering at {}ms",
-                            start.elapsed().as_millis()
-                        );
-                        let reorder_result = self
-                            .store
-                            .move_node(child_id, Some(parent_id), Some(after_id))
-                            .await
-                            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-                        actual_order = reorder_result;
-
-                        for _verify in 0..10 {
-                            sleep(Duration::from_millis(50)).await;
-                            let verify_children = self.get_children(parent_id).await?;
-                            let v_child_pos = verify_children.iter().position(|c| c.id == child_id);
-                            let v_after_pos = verify_children.iter().position(|c| c.id == after_id);
-
-                            if let (Some(c), Some(a)) = (v_child_pos, v_after_pos) {
-                                if c == a + 1 {
-                                    position_verified = true;
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        tracing::debug!(
-                            "create_parent_edge: nodes not visible, retry {} at {}ms",
-                            verify_attempt,
-                            start.elapsed().as_millis()
-                        );
-                    }
-                }
-            }
-            if !position_verified {
-                tracing::warn!(
-                    child_id = %child_id,
-                    parent_id = %parent_id,
-                    after_id = %after_id,
-                    actual_order = %actual_order,
-                    "create_parent_edge: position verification exhausted after {} attempts — \
-                     emitting event with unconfirmed order",
-                    verify_attempt
-                );
-            }
-        } else {
-            tracing::debug!(
-                "create_parent_edge: no insert_after, skipping verification at {}ms",
-                start.elapsed().as_millis()
-            );
-        }
+        // SQLite is synchronous/ACID: move_node commits before returning; the result
+        // is immediately visible on the next read. Trust the single call result.
+        let actual_order = self
+            .store
+            .move_node(child_id, Some(parent_id), insert_after_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         // Emit RelationshipCreated event (Issue #811: unified relationship events)
-        tracing::debug!(
-            "create_parent_edge: emitting event at {}ms",
-            start.elapsed().as_millis()
-        );
         self.emit_event(DomainEvent::RelationshipCreated {
             relationship: crate::db::events::RelationshipEvent::new(
                 format!("relationship:{}:{}", parent_id, child_id),
@@ -1938,10 +1816,7 @@ impl NodeService {
             ),
         });
 
-        tracing::debug!(
-            "create_parent_edge: COMPLETE at {}ms",
-            start.elapsed().as_millis()
-        );
+        tracing::debug!("create_parent_edge: COMPLETE");
         Ok(())
     }
 

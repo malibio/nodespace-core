@@ -294,34 +294,26 @@ impl NodeService {
         // Step 3: Validate sibling (if After) - treat as best-effort hint.
         // If the sibling doesn't exist or has moved to a different parent, fall
         // back to End so new nodes land at the bottom rather than the top.
-        // Retry up to 5 times with 50ms backoff against transient lookup
-        // failures during rapid empty-node creation (Enter, Enter, Enter).
+        // SQLite is synchronous/ACID: a node written by a prior awaited call is
+        // immediately visible; a single check is sufficient.
         if let crate::services::InsertPositionOwned::After(ref sibling_id) = params.position.clone()
         {
-            use tokio::time::{sleep, Duration};
-            let mut sibling_valid = false;
-            for _attempt in 0..5 {
-                sibling_valid = match self.get_node(sibling_id).await {
-                    Ok(Some(_)) => match self.get_parent(sibling_id).await {
-                        Ok(sibling_parent) => {
-                            let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
-                            sibling_parent_id == params.parent_id.as_deref()
-                        }
-                        Err(_) => false,
-                    },
-                    _ => false,
-                };
-                if sibling_valid {
-                    break;
-                }
-                sleep(Duration::from_millis(50)).await;
-            }
+            let sibling_valid = match self.get_node(sibling_id).await {
+                Ok(Some(_)) => match self.get_parent(sibling_id).await {
+                    Ok(sibling_parent) => {
+                        let sibling_parent_id = sibling_parent.as_ref().map(|p| p.id.as_str());
+                        sibling_parent_id == params.parent_id.as_deref()
+                    }
+                    Err(_) => false,
+                },
+                _ => false,
+            };
 
             if !sibling_valid {
                 tracing::warn!(
                     sibling_id = %sibling_id,
                     parent_id = ?params.parent_id,
-                    "position sibling is stale after retries (moved or deleted), falling back to End"
+                    "position sibling is stale (moved or deleted), falling back to End"
                 );
                 params.position = crate::services::InsertPositionOwned::End;
             }
