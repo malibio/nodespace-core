@@ -1266,7 +1266,7 @@ async fn fetch_node(service: &Arc<CoreNodeService>, node_id: &str) -> Result<Nod
     service
         .get_node(node_id)
         .await
-        .map_err(|e| Status::internal(format!("get_node failed: {}", e)))?
+        .map_err(service_error_to_status)?
         .ok_or_else(|| Status::not_found(format!("Node not found: {}", node_id)))
 }
 
@@ -1395,7 +1395,7 @@ fn ops_error_to_status(err: OpsError) -> Status {
             node_id, expected, actual
         )),
         OpsError::ValidationFailed(msg) => {
-            Status::failed_precondition(format!("Validation failed: {}", msg))
+            Status::invalid_argument(format!("Validation failed: {}", msg))
         }
         OpsError::InvalidParams(msg) => Status::invalid_argument(msg),
         OpsError::Internal(msg) => Status::internal(msg),
@@ -1670,5 +1670,139 @@ mod tests {
         });
         let resp = svc.delete_node(req).await.unwrap().into_inner();
         assert!(!resp.existed);
+    }
+
+    // -- Error mapping parity tests ------------------------------------------
+    //
+    // For each NodeServiceError variant: assert the resulting tonic::Status code.
+    // These exercise the full NodeServiceError → OpsError → Status chain.
+
+    fn to_status(err: NodeServiceError) -> tonic::Status {
+        service_error_to_status(err)
+    }
+
+    #[test]
+    fn error_mapping_node_not_found_returns_not_found() {
+        let s = to_status(NodeServiceError::node_not_found("abc"));
+        assert_eq!(s.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn error_mapping_version_conflict_returns_aborted() {
+        let s = to_status(NodeServiceError::version_conflict("n1", 3, 5));
+        assert_eq!(s.code(), tonic::Code::Aborted);
+    }
+
+    #[test]
+    fn error_mapping_validation_failed_returns_invalid_argument() {
+        use nodespace_core::models::ValidationError;
+        let s = to_status(NodeServiceError::ValidationFailed(
+            ValidationError::MissingField("x".into()),
+        ));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_invalid_parent_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::invalid_parent("p1"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_invalid_root_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::invalid_root("r1"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_circular_reference_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::circular_reference("A→B→A"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_hierarchy_violation_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::hierarchy_violation("root immutable"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_invalid_update_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::invalid_update("cannot change type"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_invalid_collection_path_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::invalid_collection_path("empty segment"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_collection_cycle_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::collection_cycle("A→B→A"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_collection_depth_exceeded_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::collection_depth_exceeded(
+            "a:b:c:d:e:f",
+            5,
+        ));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_playbook_validation_failed_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::PlaybookValidationFailed {
+            errors: "bad rule".into(),
+        });
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn error_mapping_collection_not_found_returns_not_found() {
+        let s = to_status(NodeServiceError::collection_not_found("inbox"));
+        assert_eq!(s.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn error_mapping_database_error_returns_internal() {
+        use nodespace_core::db::DatabaseError;
+        let s = to_status(NodeServiceError::DatabaseError(
+            DatabaseError::initialization_failed("conn lost"),
+        ));
+        assert_eq!(s.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn error_mapping_transaction_failed_returns_internal() {
+        let s = to_status(NodeServiceError::transaction_failed("commit failed"));
+        assert_eq!(s.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn error_mapping_serialization_error_returns_internal() {
+        let s = to_status(NodeServiceError::serialization_error("bad json"));
+        assert_eq!(s.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn error_mapping_query_failed_returns_internal() {
+        let s = to_status(NodeServiceError::query_failed("syntax error"));
+        assert_eq!(s.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn error_mapping_bulk_operation_failed_returns_internal() {
+        let s = to_status(NodeServiceError::bulk_operation_failed("3 of 5 failed"));
+        assert_eq!(s.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn error_mapping_initialization_error_returns_internal() {
+        let s = to_status(NodeServiceError::initialization_error("db unavailable"));
+        assert_eq!(s.code(), tonic::Code::Internal);
     }
 }
