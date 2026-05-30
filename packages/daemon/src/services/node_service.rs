@@ -628,11 +628,36 @@ impl GrpcNodeService for NodeServiceImpl {
         )
         .map_err(Status::invalid_argument)?;
 
-        let task = self
+        let task = match self
             .node_service
             .update_task_node(&req.node_id, req.version, update)
             .await
-            .map_err(service_error_to_status)?;
+        {
+            Ok(t) => t,
+            Err(NodeServiceError::VersionConflict {
+                node_id,
+                expected_version,
+                actual_version,
+            }) => {
+                // Fetch the authoritative current state so the client can
+                // hydrate without a second round-trip (mirrors the pattern
+                // used by node_ops::update_node for regular-node conflicts).
+                let current_node = self
+                    .node_service
+                    .get_node(&node_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|n| serde_json::to_value(&n).ok());
+                return Err(ops_error_to_status(OpsError::VersionConflict {
+                    node_id,
+                    expected: expected_version,
+                    actual: actual_version,
+                    current_node,
+                }));
+            }
+            Err(e) => return Err(service_error_to_status(e)),
+        };
 
         // Convert TaskNode back to Node for proto wire shape. Frontend reconstructs
         // the typed view via task_node_to_typed_value on the Tauri side.
@@ -1683,6 +1708,12 @@ mod tests {
 
     #[test]
     fn error_mapping_version_conflict_returns_aborted() {
+        // Tests the service_error_to_status (From<NodeServiceError>) path — i.e. the
+        // generic conversion used for non-task-node service calls. current_node is null
+        // because no get_node() call precedes the conversion.
+        // The task-node RPC handler intercepts VersionConflict earlier and embeds
+        // current_node before calling ops_error_to_status; see
+        // update_task_node_version_conflict_embeds_current_node.
         let s = to_status(NodeServiceError::version_conflict("n1", 3, 5));
         assert_eq!(s.code(), tonic::Code::Aborted);
         // The payload must be present so the Tauri command can surface it.
@@ -1694,9 +1725,114 @@ mod tests {
         assert_eq!(json["node_id"], "n1");
         assert_eq!(json["expected"], 3);
         assert_eq!(json["actual"], 5);
-        // current_node is null for the NodeServiceError path (task nodes, direct service calls).
-        // node_ops::update_node fills it in for regular-node conflicts.
+        // current_node is null for the generic From<NodeServiceError> conversion path.
         assert_eq!(json["current_node"], serde_json::Value::Null);
+    }
+
+    /// update_task_node RPC handler must embed current_node in the x-version-conflict
+    /// header so the frontend can hydrate without a second round-trip.
+    ///
+    /// Scenario:
+    ///  1. Create a task node at version 1.
+    ///  2. Update it directly via the core service (version 1 → 2), simulating a
+    ///     concurrent remote write.
+    ///  3. Attempt UpdateTaskNode via the RPC handler with the old version 1 — must
+    ///     return Aborted with x-version-conflict whose current_node is non-null.
+    #[tokio::test]
+    async fn update_task_node_version_conflict_embeds_current_node() {
+        let (svc, _tmp) = make_service().await;
+
+        // Use a fixed UUID so we can reference it by ID in subsequent calls.
+        let task_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        // Step 1: Create a task node via the RPC handler.
+        let create_req = Request::new(crate::nodespace::CreateNodeRequest {
+            id: Some(task_id.to_string()),
+            node_type: "task".to_string(),
+            content: "Initial task".to_string(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: "{}".to_string(),
+            position: None,
+        });
+        svc.create_node(create_req).await.unwrap();
+
+        // Step 2: Advance the version by updating the node directly through the core
+        // service (simulating a concurrent remote writer at version 1).
+        svc.node_service
+            .update_node(
+                task_id,
+                1, // version 1 → 2
+                nodespace_core::models::NodeUpdate {
+                    content: Some("Remote concurrent edit".to_string()),
+                    node_type: None,
+                    properties: None,
+                    title: None,
+                    lifecycle_status: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Step 3: Attempt UpdateTaskNode with the stale version 1.
+        let conflict_req = Request::new(crate::nodespace::UpdateTaskNodeRequest {
+            node_id: task_id.to_string(),
+            version: 1, // stale — backend is at version 2
+            status: Some("done".to_string()),
+            priority: None,
+            due_date: None,
+            assignee: None,
+            started_at: None,
+            completed_at: None,
+            content: None,
+            properties: None,
+        });
+        let err = svc
+            .update_task_node(conflict_req)
+            .await
+            .expect_err("expected VersionConflict error");
+
+        // Must return Aborted.
+        assert_eq!(
+            err.code(),
+            tonic::Code::Aborted,
+            "expected Aborted status code"
+        );
+
+        // Must carry x-version-conflict header.
+        let header = err
+            .metadata()
+            .get("x-version-conflict")
+            .expect("x-version-conflict header missing for task-node OCC");
+        let json: serde_json::Value = serde_json::from_str(header.to_str().unwrap()).unwrap();
+
+        assert_eq!(json["node_id"], task_id);
+        assert_eq!(json["expected"], 1);
+        // NOTE: task-node update_task_node service sets actual_version=0 ("unknown")
+        // because the SQLite transaction abort does not surface the winner's version.
+        // The authoritative current state is carried in current_node instead.
+        assert_eq!(json["actual"], 0);
+
+        // current_node must be non-null — the handler fetches it before returning.
+        assert!(
+            !json["current_node"].is_null(),
+            "task-node VersionConflict must embed current_node (got null)"
+        );
+        // The embedded node must reflect the remote write.
+        assert_eq!(
+            json["current_node"]["content"], "Remote concurrent edit",
+            "current_node must reflect the winning remote write"
+        );
+        // current_node.version must be >= 2 (the winning concurrent write incremented it).
+        let embedded_version = json["current_node"]["version"]
+            .as_i64()
+            .expect("current_node.version must be an integer");
+        assert!(
+            embedded_version >= 2,
+            "current_node must carry the post-conflict version (got {})",
+            embedded_version
+        );
     }
 
     #[test]
