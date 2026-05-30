@@ -9,8 +9,49 @@
  * in all plugin scripts.
  */
 
-import { searchSemantic, getNode, createNode, updateNode, getChildren, ToolError }
-  from '@nodespace/agent-tools';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+class NodespaceCLIError extends Error {
+  constructor(
+    message: string,
+    public readonly exitCode: number | null,
+    public readonly stderr: string
+  ) {
+    super(message);
+    this.name = 'NodespaceCLIError';
+  }
+}
+
+async function runCLI(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('nodespace', ['--json', ...args], {
+      env: process.env,
+      timeout: 30_000
+    });
+    return stdout.trim();
+  } catch (err: unknown) {
+    if (
+      err !== null &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as NodeJS.ErrnoException).code === 'ENOENT'
+    ) {
+      throw new NodespaceCLIError(
+        'nodespace CLI not found on $PATH. Install NodeSpace and ensure the nodespace binary is accessible.',
+        null,
+        ''
+      );
+    }
+    if (err !== null && typeof err === 'object' && 'stderr' in err && 'code' in err) {
+      const e = err as { stderr: string; code: number | null; message: string };
+      throw new NodespaceCLIError(e.message, e.code, e.stderr);
+    }
+    throw err;
+  }
+}
 
 declare const plugin: {
   registerTool(spec: {
@@ -33,15 +74,9 @@ plugin.registerTool({
     required: ['query']
   },
   execute: async ({ query, limit }) => {
-    try {
-      return await searchSemantic(
-        String(query),
-        typeof limit === 'number' ? limit : undefined
-      );
-    } catch (err) {
-      if (err instanceof ToolError) throw new Error(`[${err.code}] ${err.message}`);
-      throw err;
-    }
+    const args = ['search', String(query)];
+    if (typeof limit === 'number') args.push('--limit', String(limit));
+    return runCLI(args);
   }
 });
 
@@ -56,12 +91,7 @@ plugin.registerTool({
     required: ['node_id']
   },
   execute: async ({ node_id }) => {
-    try {
-      return await getNode(String(node_id));
-    } catch (err) {
-      if (err instanceof ToolError) throw new Error(`[${err.code}] ${err.message}`);
-      throw err;
-    }
+    return runCLI(['node', 'get', String(node_id)]);
   }
 });
 
@@ -78,16 +108,9 @@ plugin.registerTool({
     required: ['type', 'content']
   },
   execute: async ({ type, content, parent_id }) => {
-    try {
-      return await createNode(
-        String(type),
-        String(content),
-        parent_id !== undefined ? String(parent_id) : undefined
-      );
-    } catch (err) {
-      if (err instanceof ToolError) throw new Error(`[${err.code}] ${err.message}`);
-      throw err;
-    }
+    const args = ['node', 'create', '--type', String(type), '--content', String(content)];
+    if (parent_id !== undefined) args.push('--parent', String(parent_id));
+    return runCLI(args);
   }
 });
 
@@ -103,12 +126,7 @@ plugin.registerTool({
     required: ['node_id', 'content']
   },
   execute: async ({ node_id, content }) => {
-    try {
-      return await updateNode(String(node_id), String(content));
-    } catch (err) {
-      if (err instanceof ToolError) throw new Error(`[${err.code}] ${err.message}`);
-      throw err;
-    }
+    return runCLI(['node', 'update', String(node_id), '--content', String(content)]);
   }
 });
 
@@ -123,11 +141,6 @@ plugin.registerTool({
     required: ['node_id']
   },
   execute: async ({ node_id }) => {
-    try {
-      return await getChildren(String(node_id));
-    } catch (err) {
-      if (err instanceof ToolError) throw new Error(`[${err.code}] ${err.message}`);
-      throw err;
-    }
+    return runCLI(['node', 'children', String(node_id)]);
   }
 });

@@ -1,8 +1,7 @@
 //! Onboarding wizard Tauri commands (Issue #1180).
 //!
-//! Handles first-launch setup: PATH configuration, MCP integration, and
-//! Claude Code skill installation. Completion state is persisted to
-//! `~/.nodespace/config.json`.
+//! Handles first-launch setup: PATH configuration and Claude Code skill
+//! installation. Completion state is persisted to `~/.nodespace/config.json`.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -13,9 +12,7 @@ use std::path::PathBuf;
 pub struct OnboardingStatus {
     pub completed: bool,
     pub path_configured: bool,
-    pub mcp_configured: bool,
     pub skill_configured: bool,
-    pub claude_desktop_detected: bool,
     pub claude_code_detected: bool,
     pub path_already_configured: bool,
 }
@@ -34,7 +31,6 @@ struct NodespaceConfig {
 #[serde(default)]
 struct IntegrationsConfig {
     path_configured: bool,
-    mcp_configured: bool,
     skill_configured: bool,
 }
 
@@ -107,8 +103,6 @@ pub async fn check_onboarding_status() -> Result<OnboardingStatus, String> {
 
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
 
-    let claude_desktop_detected = home.join("Library/Application Support/Claude").exists();
-
     let claude_code_detected = home.join(".claude").exists();
 
     // Check whether the PATH export is already in any shell config.
@@ -120,9 +114,7 @@ pub async fn check_onboarding_status() -> Result<OnboardingStatus, String> {
     Ok(OnboardingStatus {
         completed: cfg.onboarding_completed,
         path_configured: cfg.integrations.path_configured,
-        mcp_configured: cfg.integrations.mcp_configured,
         skill_configured: cfg.integrations.skill_configured,
-        claude_desktop_detected,
         claude_code_detected,
         path_already_configured,
     })
@@ -140,70 +132,19 @@ pub async fn configure_path() -> Result<(), String> {
     Ok(())
 }
 
-/// Merge the `nodespace` MCP server entry into Claude Desktop's config file.
-///
-/// Reads `~/Library/Application Support/Claude/claude_desktop_config.json`,
-/// sets `mcpServers.nodespace`, and writes back. Creates the file if absent.
-/// Returns an error if the existing JSON is malformed.
-#[tauri::command]
-pub async fn configure_mcp() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let claude_dir = home.join("Library/Application Support/Claude");
-    let config_path = claude_dir.join("claude_desktop_config.json");
-
-    // Parse existing config or start with an empty object.
-    let mut root: serde_json::Value = if config_path.exists() {
-        let raw = tokio::fs::read_to_string(&config_path)
-            .await
-            .map_err(|e| format!("Failed to read Claude Desktop config: {e}"))?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("Claude Desktop config contains invalid JSON: {e}"))?;
-        if !parsed.is_object() {
-            return Err("Claude Desktop config is not a JSON object".to_string());
-        }
-        parsed
-    } else {
-        serde_json::json!({})
-    };
-
-    // Ensure mcpServers key exists as an object.
-    if !root.get("mcpServers").is_some_and(|v| v.is_object()) {
-        root["mcpServers"] = serde_json::json!({});
-    }
-
-    root["mcpServers"]["nodespace"] = serde_json::json!({
-        "command": "nodespace",
-        "args": ["mcp"]
-    });
-
-    // Ensure target directory exists.
-    tokio::fs::create_dir_all(&claude_dir)
-        .await
-        .map_err(|e| format!("Failed to create Claude config directory: {e}"))?;
-
-    let serialized = serde_json::to_string_pretty(&root)
-        .map_err(|e| format!("Failed to serialize MCP config: {e}"))?;
-
-    tokio::fs::write(&config_path, serialized)
-        .await
-        .map_err(|e| format!("Failed to write Claude Desktop config: {e}"))?;
-
-    Ok(())
-}
-
 const SKILL_MD_CONTENT: &str = r#"# NodeSpace Knowledge Graph
 
-NodeSpace is running locally with an MCP server at your disposal.
+NodeSpace is running locally. Use the `nodespace` CLI or the skill shims to
+interact with the knowledge graph.
 
 ## Available Tools
 
-Use `mcp__nodespace__*` tools to interact with the knowledge graph:
-- `mcp__nodespace__create_node` — Create a new node
-- `mcp__nodespace__get_node` — Retrieve a node by ID
-- `mcp__nodespace__update_node` — Update node content or properties
-- `mcp__nodespace__delete_node` — Delete a node
-- `mcp__nodespace__search_nodes` — Search nodes by content
-- `mcp__nodespace__get_children` — Get child nodes
+Use `nodespace_*` tools to interact with the knowledge graph:
+- `nodespace_create_node` — Create a new node
+- `nodespace_get_node` — Retrieve a node by ID
+- `nodespace_update_node` — Update node content or properties
+- `nodespace_search_semantic` — Search nodes by content
+- `nodespace_get_children` — Get child nodes
 
 ## When to Use
 
@@ -234,14 +175,12 @@ pub async fn configure_skill() -> Result<(), String> {
 #[tauri::command]
 pub async fn complete_onboarding(
     path_configured: bool,
-    mcp_configured: bool,
     skill_configured: bool,
 ) -> Result<(), String> {
     let cfg = NodespaceConfig {
         onboarding_completed: true,
         integrations: IntegrationsConfig {
             path_configured,
-            mcp_configured,
             skill_configured,
         },
     };

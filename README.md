@@ -22,7 +22,7 @@ For full documentation, see [nodespace-docs](../nodespace-docs/).
 
 Developers using AI assistants waste time copying files, re-explaining architecture, and watching context degrade mid-session. NodeSpace fixes this by sitting between your knowledge and your AI tools:
 
-- **80% fewer roundtrips** — AI agents query your knowledge base via MCP instead of scanning files with grep/ripgrep
+- **80% fewer roundtrips** — AI agents query your knowledge base via the NodeSpace skill instead of scanning files with grep/ripgrep
 - **Runs entirely on your machine** — no cloud accounts, no API calls, no data leaving localhost
 - **Works offline** — on planes, behind VPNs, anywhere
 
@@ -52,27 +52,6 @@ git clone https://github.com/NodeSpaceAI/nodespace-core
 cd nodespace-core
 bun install
 bun run tauri:dev
-```
-
----
-
-## MCP Setup
-
-NodeSpace includes a built-in MCP server that starts automatically when you open the app. Your AI tools connect to it locally — there's nothing to deploy or host.
-
-### Claude Code / Cursor / Codex / Other MCP Clients
-
-Add to your MCP settings (e.g., `~/.claude.json` for Claude Code):
-
-```json
-{
-  "mcpServers": {
-    "nodespace": {
-      "type": "http",
-      "url": "http://localhost:3100/mcp"
-    }
-  }
-}
 ```
 
 ---

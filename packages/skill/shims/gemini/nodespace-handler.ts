@@ -14,8 +14,49 @@
  *   stdout (error):   `{ "error": "<message>" }` + exit code 1
  */
 
-import { searchSemantic, getNode, createNode, updateNode, getChildren, ToolError }
-  from '@nodespace/agent-tools';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+class NodespaceCLIError extends Error {
+  constructor(
+    message: string,
+    public readonly exitCode: number | null,
+    public readonly stderr: string
+  ) {
+    super(message);
+    this.name = 'NodespaceCLIError';
+  }
+}
+
+async function runCLI(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('nodespace', ['--json', ...args], {
+      env: process.env,
+      timeout: 30_000
+    });
+    return stdout.trim();
+  } catch (err: unknown) {
+    if (
+      err !== null &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as NodeJS.ErrnoException).code === 'ENOENT'
+    ) {
+      throw new NodespaceCLIError(
+        'nodespace CLI not found on $PATH. Install NodeSpace and ensure the nodespace binary is accessible.',
+        null,
+        ''
+      );
+    }
+    if (err !== null && typeof err === 'object' && 'stderr' in err && 'code' in err) {
+      const e = err as { stderr: string; code: number | null; message: string };
+      throw new NodespaceCLIError(e.message, e.code, e.stderr);
+    }
+    throw err;
+  }
+}
 
 interface ToolCall {
   name: string;
@@ -25,25 +66,24 @@ interface ToolCall {
 async function dispatch(call: ToolCall): Promise<unknown> {
   const { name, args } = call;
   switch (name) {
-    case 'nodespace_search_semantic':
-      return searchSemantic(
-        String(args.query),
-        typeof args.limit === 'number' ? args.limit : undefined
-      );
+    case 'nodespace_search_semantic': {
+      const cliArgs = ['search', String(args.query)];
+      if (typeof args.limit === 'number') cliArgs.push('--limit', String(args.limit));
+      return runCLI(cliArgs);
+    }
     case 'nodespace_get_node':
-      return getNode(String(args.node_id));
-    case 'nodespace_create_node':
-      return createNode(
-        String(args.type),
-        String(args.content),
-        args.parent_id !== undefined ? String(args.parent_id) : undefined
-      );
+      return runCLI(['node', 'get', String(args.node_id)]);
+    case 'nodespace_create_node': {
+      const cliArgs = ['node', 'create', '--type', String(args.type), '--content', String(args.content)];
+      if (args.parent_id !== undefined) cliArgs.push('--parent', String(args.parent_id));
+      return runCLI(cliArgs);
+    }
     case 'nodespace_update_node':
-      return updateNode(String(args.node_id), String(args.content));
+      return runCLI(['node', 'update', String(args.node_id), '--content', String(args.content)]);
     case 'nodespace_get_children':
-      return getChildren(String(args.node_id));
+      return runCLI(['node', 'children', String(args.node_id)]);
     default:
-      throw new ToolError('UNKNOWN_TOOL', `Unknown tool: ${name}`);
+      throw new NodespaceCLIError(`Unknown tool: ${name}`, null, '');
   }
 }
 
@@ -58,8 +98,8 @@ async function main(): Promise<void> {
     const result = await dispatch(call);
     process.stdout.write(JSON.stringify({ result }));
   } catch (err) {
-    const message = err instanceof ToolError
-      ? `[${err.code}] ${err.message}`
+    const message = err instanceof NodespaceCLIError
+      ? `[CLI_ERROR] ${err.message}`
       : String(err);
     process.stdout.write(JSON.stringify({ error: message }));
     process.exit(1);

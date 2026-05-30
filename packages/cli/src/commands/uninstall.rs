@@ -1,7 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,17 +8,9 @@ use std::process::Command;
 pub struct UninstallArgs {}
 
 fn home_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("$HOME is unset — cannot determine home directory")?;
+    let home = std::env::var("HOME")
+        .map_err(|_| anyhow::anyhow!("$HOME is unset — cannot determine home directory"))?;
     Ok(PathBuf::from(home))
-}
-
-fn read_yn_prompt() -> bool {
-    let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
-        return false;
-    }
-    let trimmed = input.trim();
-    trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")
 }
 
 pub fn run(_args: UninstallArgs) -> Result<()> {
@@ -30,7 +21,6 @@ pub fn run(_args: UninstallArgs) -> Result<()> {
     remove_bin_dir(&home);
     remove_sock(&home);
     remove_claude_skill(&home);
-    prompt_remove_mcp(&home)?;
 
     println!("NodeSpace uninstalled. Your data at ~/.nodespace/database/ has been preserved.");
 
@@ -88,53 +78,4 @@ fn remove_sock(home: &Path) {
 fn remove_claude_skill(home: &Path) {
     let skill_dir = home.join(".claude").join("skills").join("nodespace");
     let _ = fs::remove_dir_all(&skill_dir);
-}
-
-fn prompt_remove_mcp(home: &Path) -> Result<()> {
-    print!("Remove MCP entry from Claude Desktop config? [Y/n] ");
-    io::stdout().flush().context("flush stdout")?;
-
-    if !read_yn_prompt() {
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    let config_path = home
-        .join("Library")
-        .join("Application Support")
-        .join("Claude")
-        .join("claude_desktop_config.json");
-
-    #[cfg(target_os = "linux")]
-    let config_path = home
-        .join(".config")
-        .join("Claude")
-        .join("claude_desktop_config.json");
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return Ok(());
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        if !config_path.exists() {
-            return Ok(());
-        }
-
-        let contents = fs::read_to_string(&config_path)
-            .with_context(|| format!("read {}", config_path.display()))?;
-
-        let mut value: serde_json::Value = serde_json::from_str(&contents)
-            .with_context(|| format!("parse {}", config_path.display()))?;
-
-        if let Some(mcp_servers) = value.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
-            mcp_servers.remove("nodespace");
-        }
-
-        let updated =
-            serde_json::to_string_pretty(&value).context("serialize claude desktop config")?;
-        fs::write(&config_path, updated)
-            .with_context(|| format!("write {}", config_path.display()))?;
-    }
-
-    Ok(())
 }

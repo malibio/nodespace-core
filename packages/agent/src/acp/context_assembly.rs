@@ -209,7 +209,7 @@ pub struct GraphContextAssembler {
     embedding_service: Option<Arc<NodeEmbeddingService>>,
     seed_node_ids: Vec<String>,
     token_budget: u32,
-    /// Root of the `@nodespace/agent-tools/shims/` directory. When set,
+    /// Root of the `packages/skill/shims/` directory. When set,
     /// `write_context_file` copies the per-agent shim files into the session
     /// directory and appends tool activation instructions to the context file.
     shim_source_dir: Option<PathBuf>,
@@ -245,7 +245,7 @@ impl GraphContextAssembler {
         self
     }
 
-    /// Set the root of the `@nodespace/agent-tools/shims/` directory.
+    /// Set the root of the `packages/skill/shims/` directory.
     ///
     /// When set, `write_context_file` copies per-agent shim files into the
     /// session temp directory and appends NodeSpace tool activation
