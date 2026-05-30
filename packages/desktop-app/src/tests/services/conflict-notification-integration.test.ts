@@ -11,34 +11,6 @@ import { conflictNotifications } from '../../lib/stores/conflict-notifications.s
 import { backendAdapter } from '../../lib/services/backend-adapter';
 import type { Node } from '../../lib/types';
 
-vi.mock('../../lib/services/backend-adapter', () => ({
-  backendAdapter: {
-    updateNode: vi.fn().mockResolvedValue(undefined),
-    createNode: vi.fn().mockResolvedValue(undefined),
-    deleteNode: vi.fn().mockResolvedValue(undefined),
-    getNode: vi.fn().mockResolvedValue(null),
-    getChildren: vi.fn().mockResolvedValue([]),
-    getDescendants: vi.fn().mockResolvedValue([]),
-    getChildrenTree: vi.fn().mockResolvedValue(null),
-    moveNode: vi.fn().mockResolvedValue(undefined),
-    moveChildrenToParent: vi.fn().mockResolvedValue([]),
-    createMention: vi.fn().mockResolvedValue(undefined),
-    deleteMention: vi.fn().mockResolvedValue(undefined),
-    getOutgoingMentions: vi.fn().mockResolvedValue([]),
-    getIncomingMentions: vi.fn().mockResolvedValue([]),
-    getMentioningContainers: vi.fn().mockResolvedValue([]),
-    queryNodes: vi.fn().mockResolvedValue([]),
-    mentionAutocomplete: vi.fn().mockResolvedValue([]),
-    createContainerNode: vi.fn().mockResolvedValue('mock-id'),
-    updateTaskNode: vi.fn().mockResolvedValue(undefined),
-  },
-  insertPosition: {
-    beginning: () => ({ type: 'beginning' }),
-    end: () => ({ type: 'end' }),
-    after: (siblingId: string) => ({ type: 'after', siblingId }),
-  },
-}));
-
 const makeNode = (id: string, version = 1): Node => ({
   id,
   nodeType: 'text',
