@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
+import { backendAdapter } from '../../lib/services/backend-adapter';
 import type { Node } from '../../lib/types';
 import type { UpdateSource, NodeUpdate } from '../../lib/types/update-protocol';
 
@@ -489,10 +490,9 @@ describe('SharedNodeStore', () => {
         };
         store.setNode(parentNode, viewerSource);
 
-        const tauriCmds = await import('../../lib/services/tauri-commands');
-        const getNodeSpy = vi.spyOn(tauriCmds, 'getNode');
+        const getNodeSpy = vi.spyOn(backendAdapter, 'getNode');
         const getChildrenSpy = vi
-          .spyOn(tauriCmds, 'getChildren')
+          .spyOn(backendAdapter, 'getChildren')
           .mockResolvedValue([]);
 
         await store.loadChildrenForParent('parent-already-loaded');
@@ -511,12 +511,11 @@ describe('SharedNodeStore', () => {
           content: 'Fetched parent'
         };
 
-        const tauriCmds = await import('../../lib/services/tauri-commands');
         const getNodeSpy = vi
-          .spyOn(tauriCmds, 'getNode')
+          .spyOn(backendAdapter, 'getNode')
           .mockResolvedValue(parentNode);
         const getChildrenSpy = vi
-          .spyOn(tauriCmds, 'getChildren')
+          .spyOn(backendAdapter, 'getChildren')
           .mockResolvedValue([]);
 
         await store.loadChildrenForParent('parent-not-in-store');
@@ -538,12 +537,11 @@ describe('SharedNodeStore', () => {
           content: 'Child content'
         };
 
-        const tauriCmds = await import('../../lib/services/tauri-commands');
         const getNodeSpy = vi
-          .spyOn(tauriCmds, 'getNode')
+          .spyOn(backendAdapter, 'getNode')
           .mockResolvedValue(null);
         const getChildrenSpy = vi
-          .spyOn(tauriCmds, 'getChildren')
+          .spyOn(backendAdapter, 'getChildren')
           .mockResolvedValue([childNode]);
 
         // Should not throw even though getNode returned null
@@ -1037,7 +1035,7 @@ describe('SharedNodeStore', () => {
       };
 
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockResolvedValue(mockTree);
 
       const nodes = await store.loadChildrenTree('parent-1');
@@ -1067,7 +1065,7 @@ describe('SharedNodeStore', () => {
       };
 
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockResolvedValue(mockTree);
 
       const nodes = await store.loadChildrenTree('parent-1');
@@ -1081,7 +1079,7 @@ describe('SharedNodeStore', () => {
 
     it('should handle null tree response', async () => {
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockResolvedValue(null);
 
       const nodes = await store.loadChildrenTree('non-existent');
@@ -1098,7 +1096,7 @@ describe('SharedNodeStore', () => {
       const dateId = '2026-03-14';
 
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockResolvedValue(null);
 
       const nodes = await store.loadChildrenTree(dateId);
@@ -1132,7 +1130,7 @@ describe('SharedNodeStore', () => {
 
       let callCount = 0;
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockImplementation(async () => {
           callCount++;
           // Simulate slow network
@@ -1180,7 +1178,7 @@ describe('SharedNodeStore', () => {
       };
 
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockResolvedValue(mockTree);
 
       await store.loadChildrenTree('parent-1');
@@ -1194,7 +1192,7 @@ describe('SharedNodeStore', () => {
 
     it('should handle database errors gracefully', async () => {
       const getChildrenTreeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getChildrenTree')
+        .spyOn(backendAdapter, 'getChildrenTree')
         .mockRejectedValue(new Error('Database connection failed'));
 
       await expect(store.loadChildrenTree('parent-1')).rejects.toThrow(
@@ -1628,7 +1626,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode to return server state
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockResolvedValue(mockServerNode);
 
       // Trigger resync
@@ -1666,7 +1664,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockResolvedValue(mockServerNode);
 
       // Trigger resync
@@ -1708,7 +1706,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockResolvedValue(mockServerNode);
 
       // Trigger resync
@@ -1742,7 +1740,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode to return null (node not found)
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockResolvedValue(null);
 
       // Trigger resync - should not throw
@@ -1770,7 +1768,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode to throw error
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockRejectedValue(new Error('Network error'));
 
       // Trigger resync and expect it to throw (error is propagated to caller)
@@ -1792,7 +1790,7 @@ describe('SharedNodeStore', () => {
 
       // Mock tauriCommands.getNode to return server state (version 5)
       const getNodeSpy = vi
-        .spyOn(await import('../../lib/services/tauri-commands'), 'getNode')
+        .spyOn(backendAdapter, 'getNode')
         .mockResolvedValue(mockServerNode);
 
       // Resync to version 5
@@ -2393,11 +2391,9 @@ describe('SharedNodeStore', () => {
         const testNode = createTestNode('concurrent-resync-test');
         store.setNode(testNode, viewerSource);
 
-        const tauriCommands = await import('$lib/services/tauri-commands');
         let callCount = 0;
 
-        // Use spyOn instead of vi.mocked
-        const getNodeSpy = vi.spyOn(tauriCommands, 'getNode').mockImplementation(async () => {
+        const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockImplementation(async () => {
           callCount++;
           // Simulate delay
           await new Promise((resolve) => setTimeout(resolve, 50));

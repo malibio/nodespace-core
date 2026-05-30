@@ -45,8 +45,8 @@
     localAgentEndSession,
     ensureModelReady,
     ollamaAvailable,
-    getNode as fetchNode,
   } from '$lib/services/tauri-commands';
+  import { backendAdapter } from '$lib/services/backend-adapter';
   import { statusBar } from '$lib/stores/status-bar';
   import { createLogger } from '$lib/utils/logger';
 
@@ -502,7 +502,7 @@
     // route on — the root cause class behind the original "picker does nothing".
     if (!sharedNodeStore.getNode(nodeId)) {
       try {
-        const fetched = await fetchNode(nodeId);
+        const fetched = await backendAdapter.getNode(nodeId);
         if (fetched) {
           sharedNodeStore.setNode(fetched, {
             type: 'database',

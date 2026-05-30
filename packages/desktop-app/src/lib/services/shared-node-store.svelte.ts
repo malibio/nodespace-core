@@ -25,7 +25,7 @@
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
-import * as tauriCommands from './tauri-commands';
+import { backendAdapter } from './backend-adapter';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { isVersionConflict } from '$lib/types/errors';
 import { isValidDateId } from '$lib/types/date-node';
@@ -550,7 +550,7 @@ export class SharedNodeStore {
    * Test-only helper to seed the "content this client last sent" cache
    * without running the persistence path. Production code populates this
    * cache from the UpdateNode/CreateNode RPC sites; tests don't have a
-   * tauriCommands mock running and need a way to assert the
+   * backendAdapter mock running and need a way to assert the
    * `isPlausibleOwnEcho` heuristic's gate on real own-write history.
    * Marked `__test_` to keep it out of the production call surface.
    */
@@ -1127,7 +1127,7 @@ export class SharedNodeStore {
                       // Generic path → hub table properties JSON update
                       // CRITICAL: Capture updated node to get new version from backend
                       // This prevents version conflicts on subsequent updates
-                      updatedNodeFromBackend = await tauriCommands.updateNode(
+                      updatedNodeFromBackend = await backendAdapter.updateNode(
                         nodeId,
                         currentVersion,
                         updatePayload
@@ -1177,7 +1177,7 @@ export class SharedNodeStore {
                         parentId: this.getParentId(nodeId),
                         insertPosition: null
                       };
-                      await tauriCommands.createNode(updateFallbackInput);
+                      await backendAdapter.createNode(updateFallbackInput);
                       this.persistedNodeIds.add(nodeId); // Now it's persisted
                     } else {
                       // Re-throw other errors
@@ -1201,12 +1201,12 @@ export class SharedNodeStore {
                     parentId: this.getParentId(nodeId),
                     insertPosition: null
                   };
-                  await tauriCommands.createNode(updatePathCreateInput);
+                  await backendAdapter.createNode(updatePathCreateInput);
                   this.persistedNodeIds.add(nodeId); // Track as persisted
 
                   // CRITICAL: Fetch the created node to get its version from backend
                   // This prevents version conflicts on subsequent updates
-                  const createdNode = await tauriCommands.getNode(nodeId);
+                  const createdNode = await backendAdapter.getNode(nodeId);
                   if (createdNode) {
                     const localNode = this.nodes.get(nodeId);
                     if (localNode) {
@@ -1492,7 +1492,7 @@ export class SharedNodeStore {
                   // database broadcast for this node can be classified as
                   // an own-echo (see `isPlausibleOwnEcho`).
                   this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                  await tauriCommands.updateNode(nodeId, currentVersion, currentNode);
+                  await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
                   const errorMessage =
@@ -1518,7 +1518,7 @@ export class SharedNodeStore {
                       insertPosition: null
                     };
                     this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                    await tauriCommands.createNode(fallbackCreateInput);
+                    await backendAdapter.createNode(fallbackCreateInput);
                     this.persistedNodeIds.add(nodeId);
                   } else {
                     throw updateError;
@@ -1550,12 +1550,12 @@ export class SharedNodeStore {
                   insertPosition: nodeWithInsertPos.insertPosition ?? null
                 };
                 this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                await tauriCommands.createNode(createInput);
+                await backendAdapter.createNode(createInput);
                 this.persistedNodeIds.add(nodeId); // Track as persisted
 
                 // CRITICAL: Fetch the created node to get its version from backend
                 // This prevents version conflicts on subsequent updates
-                const createdNode = await tauriCommands.getNode(nodeId);
+                const createdNode = await backendAdapter.getNode(nodeId);
                 if (createdNode) {
                   // BUG FIX: Only update the VERSION, not the entire node!
                   // The user may have continued typing while createNode was in flight.
@@ -1721,7 +1721,7 @@ export class SharedNodeStore {
               // Get current version for optimistic concurrency control
               // Note: node has already been removed from this.nodes, so we use the captured node variable
               const currentVersion = node.version ?? 1;
-              await tauriCommands.deleteNode(nodeId, currentVersion);
+              await backendAdapter.deleteNode(nodeId, currentVersion);
             } catch (dbError) {
               const error = dbError instanceof Error ? dbError : new Error(String(dbError));
 
@@ -1828,7 +1828,7 @@ export class SharedNodeStore {
           const currentNode = this.nodes.get(nodeId);
           const currentVersion = currentNode?.version ?? existingNode.version ?? 1;
 
-          const updatedTaskNode = await tauriCommands.updateTaskNode(
+          const updatedTaskNode = await backendAdapter.updateTaskNode(
             nodeId,
             currentVersion,
             update
@@ -1933,13 +1933,13 @@ export class SharedNodeStore {
       // This prevents BaseNodeViewer from treating a not-yet-loaded parent as a
       // stale/deleted node and closing the tab prematurely (issue #941).
       if (!this.nodes.has(parentId)) {
-        const parentNode = await tauriCommands.getNode(parentId);
+        const parentNode = await backendAdapter.getNode(parentId);
         if (parentNode) {
           this.setNode(parentNode, databaseSource);
         }
       }
 
-      const nodes = await tauriCommands.getChildren(parentId);
+      const nodes = await backendAdapter.getChildren(parentId);
 
       // Add nodes to store with database source
       // Database source type will automatically mark nodes as persisted (see determinePersistenceBehavior)
@@ -2001,7 +2001,7 @@ export class SharedNodeStore {
 
   private async doLoadChildrenTree(parentId: string): Promise<Node[]> {
     try {
-      const tree = await tauriCommands.getChildrenTree(parentId);
+      const tree = await backendAdapter.getChildrenTree(parentId);
 
       if (!tree) {
         // Date nodes are virtual — they are created lazily in the backend when their first
@@ -2464,7 +2464,7 @@ export class SharedNodeStore {
     this.resyncingNodes.add(nodeId);
 
     try {
-      const serverNode = await tauriCommands.getNode(nodeId);
+      const serverNode = await backendAdapter.getNode(nodeId);
 
       if (serverNode) {
         // Replace in-memory node with server state
@@ -3133,7 +3133,7 @@ export class SharedNodeStore {
 
             // CRITICAL: Capture updated node to get new version from backend
             // This prevents version conflicts on subsequent updates
-            const updatedNodeFromBackend = await tauriCommands.updateNode(nodeId, currentVersion, changes);
+            const updatedNodeFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, changes);
 
             // Update local node with backend version
             const localNode = this.nodes.get(nodeId);
@@ -3153,12 +3153,12 @@ export class SharedNodeStore {
                 parentId: this.getParentId(nodeId),
                 insertPosition: null
               };
-              await tauriCommands.createNode(batchCreateInput);
+              await backendAdapter.createNode(batchCreateInput);
               this.persistedNodeIds.add(nodeId);
 
               // CRITICAL: Fetch the created node to get its version from backend
               // This prevents version conflicts on subsequent updates
-              const createdNode = await tauriCommands.getNode(nodeId);
+              const createdNode = await backendAdapter.getNode(nodeId);
               if (createdNode) {
                 // BUG FIX: Only update the VERSION, not the entire node!
                 // The user may have continued typing while createNode was in flight.
@@ -3190,7 +3190,7 @@ export class SharedNodeStore {
                   }
                 }
                 const currentVersion = raceCurrentNode?.version ?? finalNode.version ?? 1;
-                const updatedNodeFromBackend = await tauriCommands.updateNode(nodeId, currentVersion, changes);
+                const updatedNodeFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, changes);
                 this.persistedNodeIds.add(nodeId);
 
                 // Update local node with backend version

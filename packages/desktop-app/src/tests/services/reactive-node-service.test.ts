@@ -22,10 +22,32 @@ import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { Node } from '$lib/types';
 import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
 
-// Mock tauri-commands to avoid backend calls in tests
-vi.mock('$lib/services/tauri-commands', () => ({
-  moveNode: vi.fn().mockResolvedValue(undefined),
-  getNode: vi.fn().mockResolvedValue(null)
+// Mock backend-adapter to avoid backend calls in tests
+vi.mock('$lib/services/backend-adapter', () => ({
+  backendAdapter: {
+    moveNode: vi.fn().mockResolvedValue(undefined),
+    getNode: vi.fn().mockResolvedValue(null),
+    createNode: vi.fn().mockResolvedValue('mock-id'),
+    updateNode: vi.fn().mockResolvedValue(null),
+    deleteNode: vi.fn().mockResolvedValue({ deleted: true }),
+    getChildren: vi.fn().mockResolvedValue([]),
+    getChildrenTree: vi.fn().mockResolvedValue(null),
+    getDescendants: vi.fn().mockResolvedValue([]),
+    createMention: vi.fn().mockResolvedValue(undefined),
+    deleteMention: vi.fn().mockResolvedValue(undefined),
+    getOutgoingMentions: vi.fn().mockResolvedValue([]),
+    getIncomingMentions: vi.fn().mockResolvedValue([]),
+    getMentioningContainers: vi.fn().mockResolvedValue([]),
+    queryNodes: vi.fn().mockResolvedValue([]),
+    mentionAutocomplete: vi.fn().mockResolvedValue([]),
+    createContainerNode: vi.fn().mockResolvedValue('mock-container-id'),
+    updateTaskNode: vi.fn().mockResolvedValue(null),
+  },
+  insertPosition: {
+    beginning: () => ({ type: 'beginning' }),
+    end: () => ({ type: 'end' }),
+    after: (siblingId: string) => ({ type: 'after', siblingId }),
+  },
 }));
 
 // Mock reactive-structure-tree to avoid complex dependency setup

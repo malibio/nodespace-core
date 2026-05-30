@@ -46,7 +46,7 @@
   } from '$lib/services/slash-command-service';
   import type { TriggerContext } from '$lib/services/content-processor';
   import { getIconConfig, resolveNodeState, type NodeType } from '$lib/design/icons/registry';
-  import * as tauriCommands from '$lib/services/tauri-commands';
+  import { backendAdapter } from '$lib/services/backend-adapter';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import type { Node as NodeData } from '$lib/types/node';
@@ -325,7 +325,7 @@
       // - Excludes: date, schema node types
       // - Text-based types (text, header, code-block, quote-block, ordered-list): only root nodes
       // - Other types (task, query, etc.): included regardless of hierarchy
-      const backendResults: NodeData[] = await tauriCommands.mentionAutocomplete(query, 10);
+      const backendResults: NodeData[] = await backendAdapter.mentionAutocomplete(query, 10);
 
       // Convert to NodeResult format
       // Use title field (markdown-stripped) if available, otherwise fall back to content
@@ -412,10 +412,10 @@
 
       const newNodeId = uuidv4();
 
-      // Create node using Tauri commands (works in Tauri environment)
+      // Create node via backendAdapter (TauriAdapter in desktop, HttpAdapter in browser dev)
       // Note: Sibling ordering is now handled by the backend via sibling_order column,
       // so we don't need to pass beforeSiblingId here.
-      await tauriCommands.createNode({
+      await backendAdapter.createNode({
         id: newNodeId,
         content: title,
         nodeType: 'text',
