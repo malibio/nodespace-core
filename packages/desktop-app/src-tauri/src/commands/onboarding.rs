@@ -164,16 +164,7 @@ pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
         success: state.skill_installed,
         agents_installed: vec![],
         cli_on_path,
-        cli_warning: if cli_on_path {
-            None
-        } else {
-            Some(
-                "The `nodespace` CLI was not found on $PATH. \
-                 Install it via the NodeSpace DMG or `cargo install nodespace-cli`, \
-                 then restart your terminal."
-                    .to_string(),
-            )
-        },
+        cli_warning: skill_setup::cli_warning(cli_on_path),
         error: None,
     })
 }

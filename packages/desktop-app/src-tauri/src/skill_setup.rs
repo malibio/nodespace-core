@@ -161,25 +161,23 @@ fn run_skill_installer() -> Result<Vec<String>, String> {
         ));
     }
 
-    // Parse agent names from lines like "✓ claude-code: installed 2 file(s)"
+    // Parse agent names from success lines like "✓ claude-code: installed 2 file(s)".
+    // Filter on the original line first so file-path sub-lines ("  → /path/...")
+    // and diagnostic text ("Checked:", "To install manually...") are excluded.
     let agents = stdout
         .lines()
+        .filter(|line| line.trim_start().starts_with('✓'))
         .filter_map(|line| {
-            let line = line.trim_start_matches(['✓', '⚠', ' ', '\t']);
-            let agent = line.split(':').next()?;
-            let agent = agent.trim();
-            if !agent.is_empty() && !agent.starts_with("No supported") {
-                Some(agent.to_string())
-            } else {
-                None
-            }
+            let line = line.trim_start_matches(['✓', ' ', '\t']);
+            let agent = line.split(':').next()?.trim();
+            if !agent.is_empty() { Some(agent.to_string()) } else { None }
         })
         .collect();
 
     Ok(agents)
 }
 
-fn cli_warning(cli_on_path: bool) -> Option<String> {
+pub(crate) fn cli_warning(cli_on_path: bool) -> Option<String> {
     if cli_on_path {
         return None;
     }
