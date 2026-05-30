@@ -9,7 +9,7 @@
 //! `nodespace-docs/development/benchmarks/search-skills-latency.md`.
 //!
 //! Run with:
-//!   cargo test -p nodespace-agent --test search_skills_latency --features testing -- --nocapture
+//!   cargo test -p nodespace-agent --test search_skills_latency -- --nocapture
 //!
 //! Gracefully skips if no inference backend is available (Ollama not running and
 //! no local GGUF model downloaded).
@@ -30,6 +30,27 @@ use nodespace_agent::ModelManager;
 use nodespace_nlp_engine::chat::ChatConfig;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Walk up from `CARGO_MANIFEST_DIR` searching for a `nodespace-docs` sibling directory.
+///
+/// Works correctly in both primary checkout and worktree layouts without
+/// hardcoding a level count (which differs between the two contexts).
+fn find_docs_benchmarks_dir() -> Option<std::path::PathBuf> {
+    let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for _ in 0..10 {
+        let candidate = dir.join("../nodespace-docs/development/benchmarks");
+        if let Ok(canonical) = candidate.canonicalize() {
+            return Some(canonical);
+        }
+        // Also check if the parent of nodespace-docs exists (dir may not exist yet)
+        let docs_parent = dir.join("../nodespace-docs/development");
+        if docs_parent.exists() {
+            return Some(dir.join("../nodespace-docs/development/benchmarks"));
+        }
+        dir = dir.join("..");
+    }
+    None
+}
 
 // ---------------------------------------------------------------------------
 // Backend resolution (shared pattern with ollama_integration.rs)
@@ -286,6 +307,9 @@ impl ScenarioStats {
 
     fn percentile_wall_ms(&self, p: f64) -> u64 {
         let mut vals = self.wall_ms_values();
+        if vals.is_empty() {
+            return 0;
+        }
         vals.sort_unstable();
         let idx = ((p / 100.0) * (vals.len() - 1) as f64).round() as usize;
         vals[idx.min(vals.len() - 1)]
@@ -364,11 +388,12 @@ async fn measure_turn(
 // Markdown report builder
 // ---------------------------------------------------------------------------
 
-fn build_report(model_name: &str, scenarios: &[ScenarioStats], n: usize) -> String {
+fn build_report(model_name: &str, scenarios: &[ScenarioStats], n: usize, date: &str) -> String {
     let mut md = String::new();
 
     md.push_str("# search_skills End-to-End Latency Benchmark\n\n");
     md.push_str(&format!("**Model:** `{model_name}`  \n"));
+    md.push_str(&format!("**Date:** {date}  \n"));
     md.push_str(&format!("**Runs per scenario:** {n}  \n"));
     md.push_str("**Metric:** wall-clock time per full agent turn (inference + tool dispatch + final response)\n\n");
     md.push_str("---\n\n");
@@ -460,7 +485,7 @@ fn build_report(model_name: &str, scenarios: &[ScenarioStats], n: usize) -> Stri
     md.push_str(
         "- Tool responses are stubs (no real database I/O) to isolate inference latency.\n",
     );
-    md.push_str("`search_skills` returns a single high-confidence Research & Search match; downstream tools return representative canned results.\n");
+    md.push_str("- `search_skills` returns a single high-confidence Research & Search match; downstream tools return representative canned results.\n");
     md.push_str("- Wall-clock is measured from the `send_message` call until the `AgentTurnResult` is returned, covering prompt assembly, all inference rounds, and tool dispatch.\n");
     md.push_str("- Token counts are cumulative across all inference rounds in the turn (prompt and completion separately).\n");
 
@@ -522,7 +547,7 @@ async fn bench_search_skills_e2e_latency() {
     // -----------------------------------------------------------------------
     let mut scenario2 = ScenarioStats::new(
         "2. Single skill turn",
-        "Model calls search_skills once, receives Research & Search match, then calls search_semantic",
+        "Intent: knowledge-base lookup (expected to trigger search_skills → downstream search tool)",
     );
 
     eprintln!("\n--- Scenario 2: Single skill turn ---");
@@ -552,7 +577,7 @@ async fn bench_search_skills_e2e_latency() {
     // -----------------------------------------------------------------------
     let mut scenario3 = ScenarioStats::new(
         "3. Multi-skill turn",
-        "Message spanning two skills; model calls search_skills twice with distinct queries, each followed by downstream tool invocations",
+        "Intent: cross-skill request spanning search and creation (expected to trigger search_skills twice)",
     );
 
     eprintln!("\n--- Scenario 3: Multi-skill turn ---");
@@ -582,6 +607,18 @@ async fn bench_search_skills_e2e_latency() {
     // -----------------------------------------------------------------------
     let scenarios = vec![scenario1, scenario2, scenario3];
 
+    // Warn if scenarios 2/3 never called search_skills — the latency data
+    // then reflects direct tool routing, not skill-discovery overhead.
+    for (idx, s) in scenarios.iter().enumerate().skip(1) {
+        if !s.runs.is_empty() && s.runs.iter().all(|r| r.search_skills_calls == 0) {
+            eprintln!(
+                "WARN: search_skills was never called in scenario {} — \
+                 latency reflects direct tool routing, not skill-discovery overhead",
+                idx + 1
+            );
+        }
+    }
+
     eprintln!("\n=== SUMMARY ===");
     for s in &scenarios {
         if s.runs.is_empty() {
@@ -603,30 +640,35 @@ async fn bench_search_skills_e2e_latency() {
     // -----------------------------------------------------------------------
     // Write report to nodespace-docs
     // -----------------------------------------------------------------------
-    let report = build_report(&model_name, &scenarios, N_RUNS);
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let report = build_report(&model_name, &scenarios, N_RUNS, &date);
 
-    // Walk up from CARGO_MANIFEST_DIR to find the nodespace-docs sibling repo.
-    // CARGO_MANIFEST_DIR = packages/agent inside the worktree or primary checkout.
-    // We navigate: packages/agent → packages → nodespace-core → nodespace → nodespace-docs
-    let docs_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../..") // worktree root's parent (the nodespace/ workspace dir)
-        .join("nodespace-docs/development/benchmarks");
+    // Walk up from CARGO_MANIFEST_DIR searching for a nodespace-docs sibling.
+    // Handles both the primary checkout and worktree layouts without hardcoding
+    // a level count (which differs between the two contexts).
+    let docs_dir = find_docs_benchmarks_dir();
 
-    let report_path = if docs_dir.exists() || std::fs::create_dir_all(&docs_dir).is_ok() {
-        let p = docs_dir.join("search-skills-latency.md");
-        match std::fs::write(&p, &report) {
-            Ok(_) => {
-                eprintln!("\nReport written to: {}", p.display());
-                Some(p)
-            }
-            Err(e) => {
-                eprintln!("\nWARN: could not write report to {}: {e}", p.display());
-                None
+    let report_path = match docs_dir {
+        Some(dir) => {
+            let _ = std::fs::create_dir_all(&dir);
+            let p = dir.join("search-skills-latency.md");
+            match std::fs::write(&p, &report) {
+                Ok(_) => {
+                    eprintln!("\nReport written to: {}", p.display());
+                    Some(p)
+                }
+                Err(e) => {
+                    eprintln!("\nWARN: could not write report to {}: {e}", p.display());
+                    None
+                }
             }
         }
-    } else {
-        eprintln!("\nWARN: nodespace-docs/development/benchmarks/ not found — report not saved");
-        None
+        None => {
+            eprintln!(
+                "\nWARN: nodespace-docs/development/benchmarks/ not found — report not saved"
+            );
+            None
+        }
     };
 
     // Always print the report to stdout so CI captures it
