@@ -12,7 +12,7 @@ import { shouldUseDatabase } from './should-use-database';
 
 /**
  * HTTP Adapter interface - DEPRECATED stub for type compatibility
- * @deprecated Use tauri-commands instead
+ * @deprecated Use backendAdapter instead
  */
 export interface HttpAdapter {
   initializeDatabase(): Promise<void>;

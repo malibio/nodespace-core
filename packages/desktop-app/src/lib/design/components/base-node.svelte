@@ -412,7 +412,7 @@
 
       const newNodeId = uuidv4();
 
-      // Create node using Tauri commands (works in Tauri environment)
+      // Create node via backendAdapter (TauriAdapter in desktop, HttpAdapter in browser dev)
       // Note: Sibling ordering is now handled by the backend via sibling_order column,
       // so we don't need to pass beforeSiblingId here.
       await backendAdapter.createNode({

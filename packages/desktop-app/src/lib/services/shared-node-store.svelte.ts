@@ -550,7 +550,7 @@ export class SharedNodeStore {
    * Test-only helper to seed the "content this client last sent" cache
    * without running the persistence path. Production code populates this
    * cache from the UpdateNode/CreateNode RPC sites; tests don't have a
-   * tauriCommands mock running and need a way to assert the
+   * backendAdapter mock running and need a way to assert the
    * `isPlausibleOwnEcho` heuristic's gate on real own-write history.
    * Marked `__test_` to keep it out of the production call surface.
    */
