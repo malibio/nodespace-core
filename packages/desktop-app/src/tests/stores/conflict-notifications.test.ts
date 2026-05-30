@@ -10,7 +10,7 @@ describe('conflictNotifications', () => {
     const id = conflictNotifications.add({
       nodeId: 'node-1',
       message: 'Your edit was overwritten by another pane',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
 
     expect(id).toBeTruthy();
@@ -23,7 +23,7 @@ describe('conflictNotifications', () => {
     const id1 = conflictNotifications.add({
       nodeId: 'node-1',
       message: 'msg',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
     const id2 = conflictNotifications.add({
       nodeId: 'node-2',
@@ -39,12 +39,12 @@ describe('conflictNotifications', () => {
     const id1 = conflictNotifications.add({
       nodeId: 'node-1',
       message: 'msg',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
     conflictNotifications.add({
       nodeId: 'node-2',
       message: 'msg',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
 
     conflictNotifications.dismiss(id1);
@@ -54,8 +54,8 @@ describe('conflictNotifications', () => {
   });
 
   it('dismissAll clears all notifications', () => {
-    conflictNotifications.add({ nodeId: 'a', message: 'msg', conflictType: 'concurrent-edit' });
-    conflictNotifications.add({ nodeId: 'b', message: 'msg', conflictType: 'concurrent-edit' });
+    conflictNotifications.add({ nodeId: 'a', message: 'msg', conflictType: 'version-mismatch' });
+    conflictNotifications.add({ nodeId: 'b', message: 'msg', conflictType: 'version-mismatch' });
 
     conflictNotifications.dismissAll();
 
@@ -67,7 +67,7 @@ describe('conflictNotifications', () => {
     conflictNotifications.add({
       nodeId: 'node-1',
       message: 'msg',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
     const after = Date.now();
 
@@ -80,7 +80,7 @@ describe('conflictNotifications', () => {
     conflictNotifications.add({
       nodeId: 'node-1',
       message: 'msg',
-      conflictType: 'concurrent-edit'
+      conflictType: 'version-mismatch'
     });
 
     conflictNotifications.dismiss('nonexistent-id');
@@ -90,12 +90,12 @@ describe('conflictNotifications', () => {
 
   it('caps notifications at 10 and drops the oldest on overflow', () => {
     for (let i = 0; i < 10; i++) {
-      conflictNotifications.add({ nodeId: `node-${i}`, message: 'msg', conflictType: 'concurrent-edit' });
+      conflictNotifications.add({ nodeId: `node-${i}`, message: 'msg', conflictType: 'version-mismatch' });
     }
     expect(conflictNotifications.notifications).toHaveLength(10);
     expect(conflictNotifications.notifications[0].nodeId).toBe('node-0');
 
-    conflictNotifications.add({ nodeId: 'node-overflow', message: 'msg', conflictType: 'concurrent-edit' });
+    conflictNotifications.add({ nodeId: 'node-overflow', message: 'msg', conflictType: 'version-mismatch' });
 
     expect(conflictNotifications.notifications).toHaveLength(10);
     expect(conflictNotifications.notifications[0].nodeId).toBe('node-1');

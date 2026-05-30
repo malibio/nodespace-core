@@ -286,15 +286,13 @@ describe('SharedNodeStore - Extended Coverage', () => {
       expect(updated?.nodeType).toBe('quote-block');
     });
 
-    it('should detect concurrent edits within conflict window', () => {
+    it('should apply sequential updates from different viewers (last-write-wins)', () => {
       store.setNode(mockNode, viewerSource);
-      store.setConflictWindow(5000);
 
-      // Create two updates within the conflict window
-      store.updateNode(mockNode.id, { content: 'Edit 1' }, viewerSource);
-      store.updateNode(mockNode.id, { content: 'Edit 2' }, { type: 'viewer', viewerId: 'viewer-2' });
+      store.updateNode(mockNode.id, { content: 'Edit 1' }, viewerSource, { skipPersistence: true });
+      store.updateNode(mockNode.id, { content: 'Edit 2' }, { type: 'viewer', viewerId: 'viewer-2' }, { skipPersistence: true });
 
-      // Both updates should be applied (last-write-wins)
+      // Last write wins
       expect(store.getNode(mockNode.id)?.content).toBe('Edit 2');
     });
   });

@@ -53,6 +53,7 @@ pub async fn get_all_collections(
             message: format!("Failed to query collections: {}", s.message()),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     let collections = resp.into_inner().collections;
@@ -62,6 +63,7 @@ pub async fn get_all_collections(
             message: "gRPC CollectionInfo missing node_data".to_string(),
             code: "GRPC_ERROR".to_string(),
             details: None,
+            conflict_data: None,
         })?;
         let node = proto_node_data_to_node(nd)?;
         let node_value = node_to_typed_value(node)?;
@@ -93,6 +95,7 @@ pub async fn get_collection_members(
             message: format!("Failed to get collection members: {}", s.message()),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     let nodes: Result<Vec<Node>, CommandError> = resp
@@ -126,6 +129,7 @@ pub async fn get_collection_members_recursive(
             ),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     let nodes: Result<Vec<Node>, CommandError> = resp
@@ -156,6 +160,7 @@ pub async fn get_node_collections(
             message: format!("Failed to get node collections: {}", s.message()),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     Ok(resp.into_inner().collection_ids)
@@ -182,6 +187,7 @@ pub async fn add_node_to_collection(
         message: format!("Failed to add node to collection: {}", s.message()),
         code: "COLLECTION_ERROR".to_string(),
         details: Some(format!("{:?}", s.code())),
+        conflict_data: None,
     })?;
     Ok(())
 }
@@ -208,6 +214,7 @@ pub async fn add_node_to_collection_path(
             message: format!("Failed to add node to collection path: {}", s.message()),
             code: "COLLECTION_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     Ok(resp.into_inner().collection_id)
@@ -234,6 +241,7 @@ pub async fn remove_node_from_collection(
         message: format!("Failed to remove node from collection: {}", s.message()),
         code: "COLLECTION_ERROR".to_string(),
         details: Some(format!("{:?}", s.code())),
+        conflict_data: None,
     })?;
     Ok(())
 }
@@ -259,6 +267,7 @@ pub async fn find_collection_by_path(
             message: format!("Failed to find collection: {}", s.message()),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     match resp.into_inner().node {
@@ -268,6 +277,7 @@ pub async fn find_collection_by_path(
                 message: "gRPC OptionalNodeResponse missing node_data".to_string(),
                 code: "GRPC_ERROR".to_string(),
                 details: None,
+                conflict_data: None,
             })?;
             let node = proto_node_data_to_node(nd)?;
             Ok(Some(node_to_typed_value(node)?))
@@ -294,6 +304,7 @@ pub async fn get_collection_by_name(
             message: format!("Failed to get collection by name: {}", s.message()),
             code: "QUERY_ERROR".to_string(),
             details: Some(format!("{:?}", s.code())),
+            conflict_data: None,
         })?;
 
     match resp.into_inner().node {
@@ -303,6 +314,7 @@ pub async fn get_collection_by_name(
                 message: "gRPC OptionalNodeResponse missing node_data".to_string(),
                 code: "GRPC_ERROR".to_string(),
                 details: None,
+                conflict_data: None,
             })?;
             let node = proto_node_data_to_node(nd)?;
             Ok(Some(node_to_typed_value(node)?))
@@ -338,6 +350,7 @@ pub async fn create_collection(
                 message: format!("Failed to create collection: {}", s.message()),
                 code: code.to_string(),
                 details: Some(format!("{:?}", s.code())),
+                conflict_data: None,
             }
         })?;
 
@@ -374,6 +387,7 @@ pub async fn rename_collection(
                 message: format!("Failed to rename collection: {}", s.message()),
                 code: code.to_string(),
                 details: Some(format!("{:?}", s.code())),
+                conflict_data: None,
             }
         })?;
 
@@ -381,6 +395,7 @@ pub async fn rename_collection(
         message: "gRPC RenameCollection response missing node_data".to_string(),
         code: "GRPC_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     })?;
     let node = proto_node_data_to_node(nd)?;
     node_to_typed_value(node)
@@ -410,6 +425,7 @@ pub async fn delete_collection(
         message: format!("Failed to delete collection: {}", s.message()),
         code: "DELETE_ERROR".to_string(),
         details: Some(format!("{:?}", s.code())),
+        conflict_data: None,
     })?;
     Ok(())
 }

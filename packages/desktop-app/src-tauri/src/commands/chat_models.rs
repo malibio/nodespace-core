@@ -24,6 +24,7 @@ fn model_error(message: impl Into<String>) -> CommandError {
         message: message.into(),
         code: "MODEL_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
         message: msg.to_string(),
         code: "GRPC_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     }
 }
 

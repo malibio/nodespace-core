@@ -19,6 +19,7 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
         message: msg.to_string(),
         code: "GRPC_ERROR".to_string(),
         details: None,
+        conflict_data: None,
     }
 }
 
@@ -103,6 +104,7 @@ pub async fn search_roots(
             message: "Query parameter cannot be empty".to_string(),
             code: "INVALID_PARAMETER".to_string(),
             details: None,
+            conflict_data: None,
         });
     }
 
@@ -112,6 +114,7 @@ pub async fn search_roots(
                 message: "Threshold must be between 0.0 and 1.0".to_string(),
                 code: "INVALID_PARAMETER".to_string(),
                 details: None,
+                conflict_data: None,
             });
         }
     }

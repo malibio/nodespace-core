@@ -55,6 +55,9 @@ impl From<NodeServiceError> for OpsError {
                 node_id,
                 expected: expected_version,
                 actual: actual_version,
+                // task_node path: get_node() is not called before this conversion, so
+                // current_node is unavailable here. The frontend falls back to
+                // resyncNodeFromServer for task-node conflicts (see #1268 follow-up).
                 current_node: None,
             },
             NodeServiceError::ValidationFailed(e) => OpsError::ValidationFailed(e.to_string()),
