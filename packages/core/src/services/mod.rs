@@ -188,7 +188,9 @@ pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
 pub use migration_registry::{MigrationRegistry, MigrationTransform};
-pub use node_service::{CreateNodeParams, NodeService, SubtreeData, DEFAULT_QUERY_LIMIT};
+pub use node_service::{
+    CompletenessResult, CreateNodeParams, NodeService, SubtreeData, DEFAULT_QUERY_LIMIT,
+};
 pub use query_service::{
     FilterOperator, FilterType, QueryDefinition, QueryFilter, QueryService, RelationshipType,
     SortConfig, SortDirection,

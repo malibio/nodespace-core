@@ -1,24 +1,19 @@
-//! Node Service - Core CRUD Operations
+//! NodeService — public facade and shared infrastructure.
 //!
-//! This module provides the main business logic layer for node operations:
-//!
-//! - CRUD operations (create, read, update, delete)
-//! - Hierarchy management (get_children, move_node, reorder_siblings)
-//! - Bulk operations with transactions
-//! - Query operations with filtering
-//!
-//! # Scope
-//!
-//! Initial implementation supports Text, Task, and Date nodes for E2E testing.
-//! Person and Project node support will be added in separate issues.
+//! This file owns:
+//! - The `NodeService` struct definition and `Clone` impl
+//! - Construction (`new`, `seed_*`) and accessors (`store`, `behaviors`, `with_client`,
+//!   `subscribe_to_events`)
+//! - Hierarchy methods (Phase 4 — kept here until #1237 lands; will move to `hierarchy.rs`)
+//! - `NodeAccessor` trait impl
+//! - Module declarations for the focused sub-modules:
+//!   `crud`, `relationship`, `schema`, `bulk`, `query`, `embedding`
+//! - Shared helper functions (`compute_property_changes`, `extract_mentions`, etc.)
+//! - All integration tests
 //!
 //! # Root Node Detection
 //!
-//! Root nodes (topics, date nodes, etc.) are the primary targets for semantic search.
-//! They are identified by `root_id IS NULL` in the database.
-//!
-//! **CRITICAL:** Never use `node_type == 'topic'` for root detection.
-//! The node_type field indicates the node's behavior, not its root status.
+//! Root nodes are identified by `root_id IS NULL`. Never use `node_type == "topic"`.
 //!
 //! Examples:
 //! - Root node: `root_id = NULL` (e.g., @mention pages, date nodes)
@@ -715,7 +710,7 @@ pub struct NodeService {
     /// Optional playbook execution context for cycle detection (Issue #995)
     ///
     /// When set, emitted events carry this context in EventEnvelope metadata.
-    /// Use `with_execution_context()` to create a scoped instance.
+    /// Use `scoped_for_playbook()` to create a scoped instance.
     pub(crate) execution_context: Option<crate::db::events::PlaybookExecutionContext>,
 
     /// Optional waker to trigger embedding processor (Issue #729)
@@ -1133,11 +1128,15 @@ impl NodeService {
         cloned
     }
 
-    /// Create a scoped NodeService with playbook execution context (Issue #995)
+    /// Return a scoped `NodeService` that tags all emitted events with the given
+    /// playbook execution context (Issue #995).
     ///
-    /// Events emitted through this instance carry the execution context in
-    /// `EventEnvelope.metadata.playbook_context` for cycle detection.
-    pub(crate) fn with_execution_context(
+    /// Events emitted through the returned instance carry `playbook_context` in
+    /// `EventEnvelope.metadata` for cycle detection in the playbook engine.
+    ///
+    /// **Restricted to `crate::playbook`.** Call sites outside the playbook
+    /// module are a misuse — use `with_client` for general event-source tagging.
+    pub(crate) fn scoped_for_playbook(
         &self,
         ctx: crate::db::events::PlaybookExecutionContext,
     ) -> Self {
