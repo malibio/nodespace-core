@@ -1366,11 +1366,28 @@ fn ops_error_to_status(err: OpsError) -> Status {
             node_id,
             expected,
             actual,
-            ..
-        } => Status::aborted(format!(
-            "Version conflict on {}: expected {}, got {}",
-            node_id, expected, actual
-        )),
+            current_node,
+        } => {
+            let message = format!(
+                "Version conflict on {}: expected {}, got {}",
+                node_id, expected, actual
+            );
+            let payload = serde_json::json!({
+                "node_id": node_id,
+                "expected": expected,
+                "actual": actual,
+                "current_node": current_node,
+            });
+            let mut status = Status::new(tonic::Code::Aborted, message);
+            if let Ok(json) = serde_json::to_string(&payload) {
+                if let Ok(val) =
+                    json.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+                {
+                    status.metadata_mut().insert("x-version-conflict", val);
+                }
+            }
+            status
+        }
         OpsError::ValidationFailed(msg) => {
             Status::invalid_argument(format!("Validation failed: {}", msg))
         }
@@ -1668,6 +1685,15 @@ mod tests {
     fn error_mapping_version_conflict_returns_aborted() {
         let s = to_status(NodeServiceError::version_conflict("n1", 3, 5));
         assert_eq!(s.code(), tonic::Code::Aborted);
+        // The payload must be present so the Tauri command can surface it.
+        let header = s
+            .metadata()
+            .get("x-version-conflict")
+            .expect("x-version-conflict header missing");
+        let json: serde_json::Value = serde_json::from_str(header.to_str().unwrap()).unwrap();
+        assert_eq!(json["node_id"], "n1");
+        assert_eq!(json["expected"], 3);
+        assert_eq!(json["actual"], 5);
     }
 
     #[test]

@@ -78,59 +78,48 @@ export class NodeOperationError extends Error {
 }
 
 /**
- * MCP Version Conflict Error Data
- * Matches the error data structure from Rust MCP layer (packages/core/src/mcp/types.rs)
+ * Structured conflict payload carried by VERSION_CONFLICT CommandErrors.
+ * Mirrors the JSON emitted by the daemon's x-version-conflict metadata header.
  */
 export interface VersionConflictData {
-  /** Error type identifier */
-  type: 'VersionConflict';
-
   /** Node ID that had the conflict */
   node_id: string;
 
   /** Version the client expected */
-  expected_version: number;
+  expected: number;
 
   /** Actual current version in database */
-  actual_version: number;
+  actual: number;
 
-  /** Full current node state from database for client-side merge */
-  current_node: import('./node').Node;
+  /** Full current node state from database for client-side hydration */
+  current_node: import('./node').Node | null;
 }
 
 /**
- * MCP Error Response Format
- * Matches JSON-RPC 2.0 error format with custom version conflict code
+ * A CommandError that carries a structured version-conflict payload.
+ * Produced by the daemon → Tauri command → frontend pipeline when two
+ * writers race on the same node version.
  */
-export interface MCPError {
-  /** JSON-RPC error code (-32005 for version conflicts) */
-  code: number;
-
-  /** Human-readable error message */
-  message: string;
-
-  /** Optional structured error data (contains VersionConflictData for conflicts) */
-  data?: VersionConflictData | unknown;
+export interface VersionConflictCommandError extends CommandError {
+  code: 'VERSION_CONFLICT';
+  conflictData: VersionConflictData;
 }
 
 /**
- * Version conflict error code constant
- */
-export const VERSION_CONFLICT_CODE = -32005;
-
-/**
- * Type guard to check if an MCP error is a version conflict
+ * Type guard: returns true when the thrown value is a VERSION_CONFLICT
+ * CommandError carrying the daemon's structured conflict payload.
+ *
+ * Matches the gRPC/Tauri shape: { code: "VERSION_CONFLICT", conflictData: {...} }
  */
 export function isVersionConflict(
   error: unknown
-): error is MCPError & { data: VersionConflictData } {
+): error is VersionConflictCommandError {
   if (typeof error !== 'object' || error === null) return false;
 
   const err = error as Record<string, unknown>;
-  return (
-    err.code === VERSION_CONFLICT_CODE &&
-    typeof err.data === 'object' &&
-    err.data !== null &&
-    (err.data as Record<string, unknown>).type === 'VersionConflict'
-  );
+  if (err.code !== 'VERSION_CONFLICT') return false;
+  if (typeof err.conflictData !== 'object' || err.conflictData === null) return false;
+
+  const cd = err.conflictData as Record<string, unknown>;
+  return typeof cd.node_id === 'string';
 }

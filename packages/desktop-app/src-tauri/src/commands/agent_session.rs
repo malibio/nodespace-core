@@ -141,6 +141,7 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
         message: status.message().to_string(),
         code,
         details: Some(format!("{:?}", status.code())),
+        conflict_data: None,
     }
 }
 

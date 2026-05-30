@@ -50,10 +50,10 @@ import type {
 } from '$lib/types/update-protocol';
 import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
-const CONFLICT_MESSAGE: Record<Conflict['conflictType'], string> = {
-  'concurrent-edit': 'Your edit was overwritten by another pane',
+const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
-  'deleted-node': 'The node you edited was deleted by another pane'
+  'deleted-node': 'The node you edited was deleted by another pane',
+  'child-transfer-failure': "Changes couldn't be saved. Please try again."
 };
 
 const log = createLogger('SharedNodeStore');
@@ -511,7 +511,6 @@ export class SharedNodeStore {
 
   // Conflict resolution
   private conflictResolver: ConflictResolver = createDefaultResolver();
-  private conflictWindowMs = 5000; // 5 seconds default for conflict detection
 
   // Pending operations (optimistic updates)
   private pendingUpdates = new Map<string, NodeUpdate[]>();
@@ -861,12 +860,11 @@ export class SharedNodeStore {
   ): void {
     const startTime = performance.now();
 
-    // Handle isComputedField flag - automatically set skipPersistence and skipConflictDetection
+    // Handle isComputedField flag - automatically set skipPersistence
     if (options.isComputedField) {
       options = {
         ...options,
-        skipPersistence: true,
-        skipConflictDetection: true
+        skipPersistence: true
       };
     }
 
@@ -1233,8 +1231,8 @@ export class SharedNodeStore {
               } catch (dbError) {
                 const error = dbError instanceof Error ? dbError : new Error(String(dbError));
 
-                // Check if this is a VERSION_CONFLICT error (OCC)
-                const isOccError = isVersionConflict(dbError);
+                // Check if this is a VERSION_CONFLICT error (daemon OCC)
+                const occError = isVersionConflict(dbError) ? dbError : null;
 
                 // Suppress expected errors in in-memory test mode
                 if (shouldLogDatabaseErrors()) {
@@ -1250,22 +1248,38 @@ export class SharedNodeStore {
                 // Rollback the optimistic update
                 this.rollbackUpdate(nodeId, update);
 
-                // If this is an OCC error, clear queued ops and resync from server
-                if (isOccError) {
+                // If this is an OCC error, hydrate from authoritative current_node and notify
+                if (occError) {
                   log.warn(
-                    `OCC error detected for node ${nodeId}. ` +
-                    `Clearing queued ops and resyncing from server...`
+                    `OCC conflict for node ${nodeId}: ` +
+                    `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
                   );
 
                   // Clear queued operations to prevent stale-version retries
                   PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
-                  // Resync asynchronously - don't block the error propagation
-                  this.resyncNodeFromServer(nodeId).catch((resyncError) => {
-                    log.error(
-                      `Failed to resync after OCC error for node ${nodeId}:`,
-                      resyncError
-                    );
+                  const currentNode = occError.conflictData.current_node;
+                  if (currentNode) {
+                    // Hydrate directly from the authoritative node returned by daemon
+                    this.nodes.set(nodeId, currentNode);
+                    this.versions.set(nodeId, currentNode.version ?? 1);
+                    this.persistedNodeIds.add(nodeId);
+                    this.pendingUpdates.delete(nodeId);
+                    this.notifySubscribers(nodeId, currentNode, { type: 'database', reason: 'occ-resync' });
+                  } else {
+                    // Fallback: fetch from server if daemon didn't embed current_node
+                    this.resyncNodeFromServer(nodeId).catch((resyncError) => {
+                      log.error(
+                        `Failed to resync after OCC error for node ${nodeId}:`,
+                        resyncError
+                      );
+                    });
+                  }
+
+                  conflictNotifications.add({
+                    nodeId,
+                    message: CONFLICT_MESSAGE['version-mismatch'],
+                    conflictType: 'version-mismatch'
                   });
                 }
 
@@ -1855,7 +1869,7 @@ export class SharedNodeStore {
           }
         } catch (dbError) {
           const error = dbError instanceof Error ? dbError : new Error(String(dbError));
-          const isOccError = isVersionConflict(dbError);
+          const occError = isVersionConflict(dbError) ? dbError : null;
 
           // Suppress expected errors in in-memory test mode
           if (shouldLogDatabaseErrors()) {
@@ -1869,18 +1883,34 @@ export class SharedNodeStore {
           this.nodes.set(nodeId, existingNode);
           this.notifySubscribers(nodeId, existingNode, source);
 
-          // If this is an OCC error, clear queued ops and resync from server
-          if (isOccError) {
+          // If this is an OCC error, hydrate from authoritative current_node and notify
+          if (occError) {
             log.warn(
-              `OCC error detected for task node ${nodeId}. ` +
-              `Clearing queued ops and resyncing from server...`
+              `OCC conflict for task node ${nodeId}: ` +
+              `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
             );
             PersistenceCoordinator.getInstance().clearQueued(nodeId);
-            this.resyncNodeFromServer(nodeId).catch((resyncError) => {
-              log.error(
-                `Failed to resync after OCC error for task node ${nodeId}:`,
-                resyncError
-              );
+
+            const currentNode = occError.conflictData.current_node;
+            if (currentNode) {
+              this.nodes.set(nodeId, currentNode);
+              this.versions.set(nodeId, currentNode.version ?? 1);
+              this.persistedNodeIds.add(nodeId);
+              this.pendingUpdates.delete(nodeId);
+              this.notifySubscribers(nodeId, currentNode, { type: 'database', reason: 'occ-resync' });
+            } else {
+              this.resyncNodeFromServer(nodeId).catch((resyncError) => {
+                log.error(
+                  `Failed to resync after OCC error for task node ${nodeId}:`,
+                  resyncError
+                );
+              });
+            }
+
+            conflictNotifications.add({
+              nodeId,
+              message: CONFLICT_MESSAGE['version-mismatch'],
+              conflictType: 'version-mismatch'
             });
           }
 
@@ -2285,9 +2315,7 @@ export class SharedNodeStore {
     // - Events are emitted
     this.updateNode(update.nodeId, update.changes, update.source, {
       // External updates from database should skip persistence to avoid loops
-      skipPersistence: sourceType === 'database',
-      // MCP server updates should go through conflict detection
-      skipConflictDetection: false
+      skipPersistence: sourceType === 'database'
     });
   }
 
@@ -2304,12 +2332,11 @@ export class SharedNodeStore {
       return null;
     }
 
-    // Check for version mismatch
+    // Detect version mismatch: incoming external update conflicts with a pending local write
     if (
       incomingUpdate.previousVersion !== undefined &&
       this.versions.get(nodeId) !== incomingUpdate.previousVersion
     ) {
-      // Version mismatch - concurrent edit detected
       const lastPending = pending[pending.length - 1];
       return {
         nodeId,
@@ -2318,35 +2345,6 @@ export class SharedNodeStore {
         conflictType: 'version-mismatch',
         detectedAt: Date.now()
       };
-    }
-
-    // Check for concurrent edits (same field modified within time window)
-    for (const pendingUpdate of pending) {
-      const timeDiff = Math.abs(incomingUpdate.timestamp - pendingUpdate.timestamp);
-      if (timeDiff < this.conflictWindowMs) {
-        // Check if same fields were modified
-        const incomingFields = new Set(Object.keys(incomingUpdate.changes));
-        const pendingFields = new Set(Object.keys(pendingUpdate.changes));
-        const overlap = [...incomingFields].some((field) => pendingFields.has(field));
-
-        if (overlap) {
-          // SPECIAL CASE: NodeType changes with content are not conflicts - they're pattern-triggered conversions
-          // Allow nodeType updates to proceed even if content overlaps with pending update
-          const isNodeTypeConversion = 'nodeType' in incomingUpdate.changes;
-          if (isNodeTypeConversion) {
-            // Allow this update - it's a pattern-triggered conversion, not a conflict
-            continue;
-          }
-
-          return {
-            nodeId,
-            localUpdate: pendingUpdate,
-            remoteUpdate: incomingUpdate,
-            conflictType: 'concurrent-edit',
-            detectedAt: Date.now()
-          };
-        }
-      }
     }
 
     return null;
@@ -2397,14 +2395,6 @@ export class SharedNodeStore {
    */
   getConflictResolver(): ConflictResolver {
     return this.conflictResolver;
-  }
-
-  /**
-   * Set conflict detection window (in milliseconds)
-   * Updates within this time window are considered potentially concurrent
-   */
-  setConflictWindow(ms: number): void {
-    this.conflictWindowMs = ms;
   }
 
   // ========================================================================

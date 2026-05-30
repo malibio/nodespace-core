@@ -5,19 +5,18 @@
  * - CommandError interface and type guard
  * - Error conversion utilities
  * - Custom error classes (DatabaseInitializationError, NodeOperationError)
- * - MCP version conflict detection
+ * - gRPC version conflict detection (isVersionConflict)
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   type CommandError,
-  type MCPError,
   type VersionConflictData,
+  type VersionConflictCommandError,
   isCommandError,
   toError,
   DatabaseInitializationError,
   NodeOperationError,
-  VERSION_CONFLICT_CODE,
   isVersionConflict
 } from '$lib/types/errors';
 import type { Node } from '$lib/types/node';
@@ -374,17 +373,7 @@ describe('NodeOperationError', () => {
   });
 });
 
-describe('VERSION_CONFLICT_CODE Constant', () => {
-  it('has correct value', () => {
-    expect(VERSION_CONFLICT_CODE).toBe(-32005);
-  });
-
-  it('is a number', () => {
-    expect(typeof VERSION_CONFLICT_CODE).toBe('number');
-  });
-});
-
-describe('isVersionConflict Type Guard', () => {
+describe('isVersionConflict Type Guard (gRPC shape)', () => {
   const createMockNode = (): Node => ({
     id: 'node-123',
     nodeType: 'text',
@@ -395,38 +384,25 @@ describe('isVersionConflict Type Guard', () => {
     properties: {}
   });
 
-  it('identifies valid version conflict error', () => {
-    const versionConflictData: VersionConflictData = {
-      type: 'VersionConflict',
+  const makeConflict = (overrides?: Partial<VersionConflictData>): VersionConflictCommandError => ({
+    message: 'Version conflict on node-123: expected 3, got 5',
+    code: 'VERSION_CONFLICT',
+    details: 'Aborted',
+    conflictData: {
       node_id: 'node-123',
-      expected_version: 3,
-      actual_version: 5,
-      current_node: createMockNode()
-    };
-
-    const error: MCPError = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Version conflict detected',
-      data: versionConflictData
-    };
-
-    expect(isVersionConflict(error)).toBe(true);
+      expected: 3,
+      actual: 5,
+      current_node: createMockNode(),
+      ...overrides
+    }
   });
 
-  it('identifies version conflict with complete data', () => {
-    const error: MCPError = {
-      code: -32005,
-      message: 'Conflict',
-      data: {
-        type: 'VersionConflict',
-        node_id: 'node-456',
-        expected_version: 1,
-        actual_version: 2,
-        current_node: createMockNode()
-      }
-    };
+  it('identifies valid gRPC VERSION_CONFLICT error', () => {
+    expect(isVersionConflict(makeConflict())).toBe(true);
+  });
 
-    expect(isVersionConflict(error)).toBe(true);
+  it('identifies conflict with null current_node (daemon could not fetch)', () => {
+    expect(isVersionConflict(makeConflict({ current_node: null }))).toBe(true);
   });
 
   it('rejects null', () => {
@@ -437,88 +413,20 @@ describe('isVersionConflict Type Guard', () => {
     expect(isVersionConflict(undefined)).toBe(false);
   });
 
-  it('rejects error with wrong code', () => {
-    const error = {
-      code: -32000,
-      message: 'Different error',
-      data: {
-        type: 'VersionConflict',
-        node_id: 'node-123',
-        expected_version: 3,
-        actual_version: 5,
-        current_node: createMockNode()
-      }
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
+  it('rejects error with wrong code string', () => {
+    expect(isVersionConflict({ message: 'err', code: 'NODE_NOT_FOUND', conflictData: { node_id: 'x' } })).toBe(false);
   });
 
-  it('rejects error without data', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Error without data'
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
+  it('rejects error without conflictData', () => {
+    expect(isVersionConflict({ message: 'err', code: 'VERSION_CONFLICT' })).toBe(false);
   });
 
-  it('rejects error with null data', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Error with null data',
-      data: null
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
+  it('rejects error with null conflictData', () => {
+    expect(isVersionConflict({ message: 'err', code: 'VERSION_CONFLICT', conflictData: null })).toBe(false);
   });
 
-  it('rejects error with wrong data type string', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Wrong type',
-      data: {
-        type: 'DifferentError',
-        node_id: 'node-123',
-        expected_version: 3,
-        actual_version: 5
-      }
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
-  });
-
-  it('rejects error with missing type field', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Missing type',
-      data: {
-        node_id: 'node-123',
-        expected_version: 3,
-        actual_version: 5
-      }
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
-  });
-
-  it('rejects error with non-object data', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'String data',
-      data: 'some string'
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
-  });
-
-  it('rejects error with array data', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Array data',
-      data: ['array', 'items']
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
+  it('rejects error with conflictData missing node_id', () => {
+    expect(isVersionConflict({ message: 'err', code: 'VERSION_CONFLICT', conflictData: { expected: 1, actual: 2 } })).toBe(false);
   });
 
   it('rejects string values', () => {
@@ -526,105 +434,33 @@ describe('isVersionConflict Type Guard', () => {
   });
 
   it('rejects number values', () => {
-    expect(isVersionConflict(VERSION_CONFLICT_CODE)).toBe(false);
+    expect(isVersionConflict(42)).toBe(false);
   });
 
   it('rejects boolean values', () => {
     expect(isVersionConflict(false)).toBe(false);
   });
 
-  it('rejects plain objects without required structure', () => {
-    const error = {
-      someKey: 'someValue',
-      code: VERSION_CONFLICT_CODE
-    };
-
-    expect(isVersionConflict(error)).toBe(false);
-  });
-
   it('rejects Error instances', () => {
     expect(isVersionConflict(new Error('test'))).toBe(false);
   });
 
-  it('handles partial data structure', () => {
-    const error = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Partial data',
-      data: {
-        type: 'VersionConflict'
-        // Missing other required fields
-      }
-    };
-
-    // Should still pass type guard since it only checks type field
-    expect(isVersionConflict(error)).toBe(true);
-  });
-});
-
-describe('MCPError Interface', () => {
-  it('accepts valid MCPError structure', () => {
-    const error: MCPError = {
-      code: -32000,
-      message: 'Generic error'
-    };
-
-    expect(error.code).toBe(-32000);
-    expect(error.message).toBe('Generic error');
-    expect(error.data).toBeUndefined();
-  });
-
-  it('accepts MCPError with version conflict data', () => {
-    const versionConflictData: VersionConflictData = {
-      type: 'VersionConflict',
-      node_id: 'node-123',
-      expected_version: 1,
-      actual_version: 2,
-      current_node: {
-        id: 'node-123',
-        nodeType: 'text',
-        content: 'Test',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 2,
-        properties: {}
-      }
-    };
-
-    const error: MCPError = {
-      code: VERSION_CONFLICT_CODE,
-      message: 'Version conflict',
-      data: versionConflictData
-    };
-
-    expect(error.code).toBe(VERSION_CONFLICT_CODE);
-    expect(error.data).toBeDefined();
-    if (isVersionConflict(error)) {
-      expect(error.data.type).toBe('VersionConflict');
-      expect(error.data.node_id).toBe('node-123');
-      expect(error.data.expected_version).toBe(1);
-      expect(error.data.actual_version).toBe(2);
+  it('exposes typed conflictData fields after narrowing', () => {
+    const err = makeConflict();
+    if (isVersionConflict(err)) {
+      expect(err.conflictData.node_id).toBe('node-123');
+      expect(err.conflictData.expected).toBe(3);
+      expect(err.conflictData.actual).toBe(5);
     }
-  });
-
-  it('accepts MCPError with unknown data', () => {
-    const error: MCPError = {
-      code: -32001,
-      message: 'Custom error',
-      data: { customField: 'custom value' }
-    };
-
-    expect(error.code).toBe(-32001);
-    expect(error.data).toEqual({ customField: 'custom value' });
   });
 });
 
 describe('VersionConflictData Interface', () => {
   it('accepts valid version conflict data structure', () => {
     const data: VersionConflictData = {
-      type: 'VersionConflict',
       node_id: 'node-789',
-      expected_version: 10,
-      actual_version: 15,
+      expected: 10,
+      actual: 15,
       current_node: {
         id: 'node-789',
         nodeType: 'task',
@@ -636,53 +472,32 @@ describe('VersionConflictData Interface', () => {
       }
     };
 
-    expect(data.type).toBe('VersionConflict');
     expect(data.node_id).toBe('node-789');
-    expect(data.expected_version).toBe(10);
-    expect(data.actual_version).toBe(15);
+    expect(data.expected).toBe(10);
+    expect(data.actual).toBe(15);
     expect(data.current_node).toBeDefined();
-    expect(data.current_node.version).toBe(15);
   });
 
-  it('handles version conflict with zero versions', () => {
+  it('accepts null current_node (daemon fallback)', () => {
     const data: VersionConflictData = {
-      type: 'VersionConflict',
       node_id: 'node-000',
-      expected_version: 0,
-      actual_version: 1,
-      current_node: {
-        id: 'node-000',
-        nodeType: 'text',
-        content: 'Content',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1,
-        properties: {}
-      }
+      expected: 0,
+      actual: 1,
+      current_node: null
     };
 
-    expect(data.expected_version).toBe(0);
-    expect(data.actual_version).toBe(1);
+    expect(data.current_node).toBeNull();
   });
 
-  it('handles version conflict with large version numbers', () => {
+  it('handles large version numbers', () => {
     const data: VersionConflictData = {
-      type: 'VersionConflict',
       node_id: 'node-large',
-      expected_version: 999999,
-      actual_version: 1000000,
-      current_node: {
-        id: 'node-large',
-        nodeType: 'text',
-        content: 'Content',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1000000,
-        properties: {}
-      }
+      expected: 999999,
+      actual: 1000000,
+      current_node: null
     };
 
-    expect(data.expected_version).toBe(999999);
-    expect(data.actual_version).toBe(1000000);
+    expect(data.expected).toBe(999999);
+    expect(data.actual).toBe(1000000);
   });
 });
