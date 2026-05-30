@@ -5,7 +5,7 @@
 
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, OrderBy, PropertyFilter};
 use crate::ops::OpsError;
-use crate::services::{CollectionService, NodeService};
+use crate::services::{CollectionService, InsertPositionOwned, NodeService};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -17,9 +17,12 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct CreateNodeInput {
+    /// Optional explicit node ID; generated if `None`.
+    pub id: Option<String>,
     pub node_type: String,
     pub content: String,
     pub parent_id: Option<String>,
+    pub position: InsertPositionOwned,
     pub properties: Value,
     /// Optional collection path (e.g. "hr:policy:vacation")
     pub collection: Option<String>,
@@ -145,11 +148,11 @@ pub async fn create_node(
 
     let node_id = node_service
         .create_node_with_parent(crate::services::CreateNodeParams {
-            id: None,
+            id: input.id,
             node_type: input.node_type,
             content: input.content,
             parent_id: input.parent_id,
-            position: crate::services::InsertPositionOwned::End,
+            position: input.position,
             properties: input.properties,
         })
         .await
@@ -234,46 +237,59 @@ pub async fn update_node(
         lifecycle_status: input.lifecycle_status,
     };
 
-    // Auto-fetch version if not provided
-    let version = match input.version {
-        Some(v) => v,
-        None => {
-            let node = node_service
-                .get_node(&input.node_id)
-                .await
-                .map_err(|e| OpsError::Internal(format!("Failed to get node: {}", e)))?
-                .ok_or_else(|| OpsError::NotFound {
-                    id: input.node_id.clone(),
-                })?;
-            node.version
-        }
-    };
+    // When there are no field changes, skip the core update call — a no-op
+    // NodeUpdate would be rejected with "Update contains no changes". Collection
+    // operations below are still applied.
+    let current_node = if update.is_empty() {
+        node_service
+            .get_node(&input.node_id)
+            .await
+            .map_err(|e| OpsError::Internal(format!("Failed to get node: {}", e)))?
+            .ok_or_else(|| OpsError::NotFound {
+                id: input.node_id.clone(),
+            })?
+    } else {
+        // Auto-fetch version if not provided
+        let version = match input.version {
+            Some(v) => v,
+            None => {
+                let node = node_service
+                    .get_node(&input.node_id)
+                    .await
+                    .map_err(|e| OpsError::Internal(format!("Failed to get node: {}", e)))?
+                    .ok_or_else(|| OpsError::NotFound {
+                        id: input.node_id.clone(),
+                    })?;
+                node.version
+            }
+        };
 
-    let updated_node = match node_service
-        .update_node(&input.node_id, version, update)
-        .await
-    {
-        Ok(node) => node,
-        Err(crate::services::NodeServiceError::VersionConflict {
-            node_id,
-            expected_version,
-            actual_version,
-        }) => {
-            // Embed current state for client-side merge
-            let current_node = node_service
-                .get_node(&node_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|n| serde_json::to_value(&n).ok());
-            return Err(OpsError::VersionConflict {
+        match node_service
+            .update_node(&input.node_id, version, update)
+            .await
+        {
+            Ok(node) => node,
+            Err(crate::services::NodeServiceError::VersionConflict {
                 node_id,
-                expected: expected_version,
-                actual: actual_version,
-                current_node,
-            });
+                expected_version,
+                actual_version,
+            }) => {
+                // Embed current state for client-side merge
+                let current_node = node_service
+                    .get_node(&node_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|n| serde_json::to_value(&n).ok());
+                return Err(OpsError::VersionConflict {
+                    node_id,
+                    expected: expected_version,
+                    actual: actual_version,
+                    current_node,
+                });
+            }
+            Err(e) => return Err(OpsError::from(e)),
         }
-        Err(e) => return Err(OpsError::from(e)),
     };
 
     // Handle collection operations
@@ -302,9 +318,9 @@ pub async fn update_node(
             .get_node(&input.node_id)
             .await
             .map_err(|e| OpsError::Internal(format!("Failed to fetch updated node: {}", e)))?
-            .unwrap_or(updated_node)
+            .unwrap_or(current_node)
     } else {
-        updated_node
+        current_node
     };
 
     let node_data = node_to_typed_value(final_node)?;
