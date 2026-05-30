@@ -19,8 +19,6 @@ GITHUB_DL="https://github.com/NodeSpaceAI/nodespace-core/releases/download"
 LAUNCHD_LABEL="app.nodespace.daemon"
 PLIST_PATH="$HOME/Library/LaunchAgents/app.nodespace.daemon.plist"
 SYSTEMD_SERVICE="$HOME/.config/systemd/user/nodespace.service"
-MCP_CONFIG_MACOS="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
-MCP_CONFIG_LINUX="$HOME/.config/Claude/claude_desktop_config.json"
 SKILL_PATH="$HOME/.claude/skills/nodespace/SKILL.md"
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -256,52 +254,6 @@ case "${_ans:-Y}" in
         fi
         ;;
     *) printf '  Skipped. Run: export PATH="$HOME/.nodespace/bin:$PATH"\n' ;;
-esac
-
-# ── MCP (Claude Desktop) ──────────────────────────────────────────────────────
-printf '\nConnect NodeSpace to Claude Desktop (MCP)? [Y/n] '
-read -r _ans
-case "${_ans:-Y}" in
-    [Yy]*)
-        case "$OS" in
-            Darwin) _mcp_cfg="$MCP_CONFIG_MACOS" ;;
-            *)      _mcp_cfg="$MCP_CONFIG_LINUX" ;;
-        esac
-
-        _mcp_entry='"nodespace": {\n    "command": "nodespace",\n    "args": ["mcp"]\n  }'
-
-        if [ -f "$_mcp_cfg" ]; then
-            if grep -q '"nodespace"' "$_mcp_cfg" 2>/dev/null; then
-                printf '  nodespace MCP entry already present in %s\n' "$_mcp_cfg"
-            elif grep -q '"mcpServers"' "$_mcp_cfg" 2>/dev/null; then
-                # Insert after the opening brace of mcpServers
-                # Use awk for reliable multi-line insertion
-                awk '
-                    /"mcpServers"/ { print; getline; print; printf "    %s,\n", entry; next }
-                    { print }
-                ' entry="$_mcp_entry" "$_mcp_cfg" > "$_mcp_cfg.tmp" \
-                    && mv "$_mcp_cfg.tmp" "$_mcp_cfg"
-                printf '  Added nodespace MCP entry to %s\n' "$_mcp_cfg"
-            else
-                printf '  Could not locate mcpServers in %s\n' "$_mcp_cfg"
-                printf '  Add manually:\n    %s\n' "$_mcp_entry"
-            fi
-        else
-            mkdir -p "$(dirname "$_mcp_cfg")"
-            cat > "$_mcp_cfg" <<JSON
-{
-  "mcpServers": {
-    "nodespace": {
-      "command": "nodespace",
-      "args": ["mcp"]
-    }
-  }
-}
-JSON
-            printf '  Created %s\n' "$_mcp_cfg"
-        fi
-        ;;
-    *) printf '  Skipped\n' ;;
 esac
 
 # ── Claude Code skill ─────────────────────────────────────────────────────────

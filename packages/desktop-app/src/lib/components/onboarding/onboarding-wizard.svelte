@@ -15,14 +15,12 @@
 
   // ── types ──────────────────────────────────────────────────────────────────
 
-  type WizardStep = 'path' | 'mcp' | 'skill' | 'summary';
+  type WizardStep = 'path' | 'skill' | 'summary';
 
   interface OnboardingStatus {
     completed: boolean;
     pathConfigured: boolean;
-    mcpConfigured: boolean;
     skillConfigured: boolean;
-    claudeDesktopDetected: boolean;
     claudeCodeDetected: boolean;
     pathAlreadyConfigured: boolean;
   }
@@ -35,12 +33,10 @@
   let stepError = $state<string | null>(null);
 
   // Which steps are active (some may be skipped if prerequisites missing)
-  let showMcp = $state(false);
   let showSkill = $state(false);
 
   // What was actually configured (for summary)
   let pathDone = $state(false);
-  let mcpDone = $state(false);
   let skillDone = $state(false);
 
   // Whether the PATH export was already present before we ran
@@ -51,7 +47,6 @@
   const stepSequence = $derived(
     (() => {
       const steps: WizardStep[] = ['path'];
-      if (showMcp) steps.push('mcp');
       if (showSkill) steps.push('skill');
       steps.push('summary');
       return steps;
@@ -73,11 +68,9 @@
   onMount(() => {
     invoke<OnboardingStatus>('check_onboarding_status')
       .then((status) => {
-        showMcp = status.claudeDesktopDetected;
         showSkill = status.claudeCodeDetected;
         pathWasAlreadyConfigured = status.pathAlreadyConfigured;
         log.debug('Onboarding status loaded', {
-          showMcp,
           showSkill,
           pathAlreadyConfigured: status.pathAlreadyConfigured,
         });
@@ -100,22 +93,6 @@
     } catch (err) {
       stepError = err instanceof Error ? err.message : String(err);
       log.error('Failed to configure PATH', err);
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  async function handleConfigureMcp() {
-    isLoading = true;
-    stepError = null;
-    try {
-      await invoke('configure_mcp');
-      mcpDone = true;
-      stepSuccess = true;
-      log.info('MCP configured successfully');
-    } catch (err) {
-      stepError = err instanceof Error ? err.message : String(err);
-      log.error('Failed to configure MCP', err);
     } finally {
       isLoading = false;
     }
@@ -146,10 +123,9 @@
     try {
       await invoke('complete_onboarding', {
         pathConfigured: pathDone,
-        mcpConfigured: mcpDone,
         skillConfigured: skillDone,
       });
-      log.info('Onboarding completed', { pathDone, mcpDone, skillDone });
+      log.info('Onboarding completed', { pathDone, skillDone });
     } catch (err) {
       log.warn('Could not persist onboarding completion', err);
     }
@@ -239,37 +215,6 @@
         {/if}
       {/if}
 
-      <!-- ── MCP step ───────────────────────────────────────────────────── -->
-      {#if currentStep === 'mcp'}
-        <div class="onboarding-header">
-          <h2>Connect NodeSpace to Claude?</h2>
-          <p>
-            Registers NodeSpace as an MCP server in Claude Desktop so Claude can read and write
-            your knowledge graph directly.
-          </p>
-        </div>
-
-        {#if stepSuccess}
-          <div class="success-banner">
-            NodeSpace added to <code>claude_desktop_config.json</code>. Restart Claude Desktop to
-            activate.
-          </div>
-          <div class="step-actions">
-            <button class="primary-button" onclick={nextStep}>Next</button>
-          </div>
-        {:else}
-          {#if stepError}
-            <div class="error-banner">{stepError}</div>
-          {/if}
-          <div class="step-actions">
-            <button class="primary-button" onclick={handleConfigureMcp} disabled={isLoading}>
-              {isLoading ? 'Configuring…' : 'Connect Claude Desktop'}
-            </button>
-            <button class="skip-button" onclick={skipCurrentStep} disabled={isLoading}>Skip</button>
-          </div>
-        {/if}
-      {/if}
-
       <!-- ── Skill step ─────────────────────────────────────────────────── -->
       {#if currentStep === 'skill'}
         <div class="onboarding-header">
@@ -330,27 +275,6 @@
               {/if}
             </span>
           </li>
-
-          {#if showMcp}
-            <li class:configured={mcpDone} class:skipped={!mcpDone}>
-              <span class="summary-icon">
-                {#if mcpDone}
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                {:else}
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                {/if}
-              </span>
-              <span>
-                Claude Desktop MCP
-                {#if !mcpDone}<span class="summary-note">(skipped)</span>{/if}
-              </span>
-            </li>
-          {/if}
 
           {#if showSkill}
             <li class:configured={skillDone} class:skipped={!skillDone}>
