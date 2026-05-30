@@ -92,6 +92,13 @@ pub enum NodeServiceError {
     /// Playbook validation failed (synchronous gate before persist)
     #[error("Playbook validation failed: {errors}")]
     PlaybookValidationFailed { errors: String },
+
+    /// Node cannot be a parent because its type does not allow children
+    #[error("Node '{parent_id}' (type '{node_type}') cannot have children")]
+    NotAContainer {
+        parent_id: String,
+        node_type: String,
+    },
 }
 
 impl NodeServiceError {
@@ -193,6 +200,14 @@ impl NodeServiceError {
         Self::CollectionDepthExceeded {
             path: path.into(),
             max_depth,
+        }
+    }
+
+    /// Create a not-a-container error
+    pub fn not_a_container(parent_id: impl Into<String>, node_type: impl Into<String>) -> Self {
+        Self::NotAContainer {
+            parent_id: parent_id.into(),
+            node_type: node_type.into(),
         }
     }
 
@@ -344,6 +359,15 @@ mod tests {
             NodeServiceError::CollectionDepthExceeded { .. }
         ));
         assert!(msg.contains("maximum depth of 5"));
+    }
+
+    #[test]
+    fn test_not_a_container_error() {
+        let err = NodeServiceError::not_a_container("parent-id", "query");
+        let msg = err.to_string();
+        assert!(matches!(err, NodeServiceError::NotAContainer { .. }));
+        assert!(msg.contains("parent-id"));
+        assert!(msg.contains("query"));
     }
 
     #[test]
