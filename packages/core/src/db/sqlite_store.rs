@@ -1344,6 +1344,79 @@ impl SqliteStore {
         Ok(new_order)
     }
 
+    /// Re-parent an ordered set of existing children to `new_parent_id` in a
+    /// single transaction. Returns the assigned fractional order for each child,
+    /// preserving the input array order as their sibling order under the new parent.
+    ///
+    /// The caller is responsible for OCC validation (version check + version bump)
+    /// before and after this call; this method only mutates `has_child` edges.
+    pub async fn move_children_to_parent(
+        &self,
+        new_parent_id: &str,
+        child_ids: &[&str],
+    ) -> Result<Vec<f64>> {
+        if child_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now().to_rfc3339();
+
+        // Compute sequential fractional orders for N children starting from the
+        // new parent's last child position. Because the new parent is always the
+        // freshly-created split node it starts empty, so we allocate N evenly-spaced
+        // orders from scratch via FractionalOrderCalculator.
+        let orders: Vec<f64> = (0..child_ids.len())
+            .map(|i| {
+                let prev = if i == 0 {
+                    None
+                } else {
+                    Some((i as f64) * 1000.0)
+                };
+                FractionalOrderCalculator::calculate_order(prev, None)
+            })
+            .collect();
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin move_children_to_parent transaction")?;
+
+        for (child_id, &order) in child_ids.iter().zip(orders.iter()) {
+            let child_id = child_id.to_string();
+            // Remove old has_child edge (whatever parent it had)
+            tx.execute(
+                "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![child_id.clone()],
+            )
+            .await
+            .context("Failed to delete old has_child edge")?;
+
+            // Insert new has_child edge under new_parent_id
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            let rel_props = serde_json::json!({"order": order}).to_string();
+            tx.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                libsql::params![
+                    rel_id,
+                    new_parent_id.to_string(),
+                    child_id,
+                    rel_props,
+                    now.clone(),
+                    now.clone()
+                ],
+            )
+            .await
+            .context("Failed to insert new has_child edge")?;
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit move_children_to_parent")?;
+
+        Ok(orders)
+    }
+
     pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
         let mut rows = self.db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",

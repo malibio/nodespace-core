@@ -46,8 +46,9 @@ use crate::nodespace::{
     GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
     GetNodesBatchRequest, GetNodesBatchResponse, GetRootsRequest, GetSchemaDefinitionRequest,
     MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
-    MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse,
-    NodeReference, NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
+    MoveChildrenToParentRequest, MoveChildrenToParentResponse, MoveNodeRequest,
+    NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse, NodeReference,
+    NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
     OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
     RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
     RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SearchRequest,
@@ -530,6 +531,34 @@ impl GrpcNodeService for NodeServiceImpl {
             .map_err(service_error_to_status)?;
 
         Ok(Response::new(ReorderNodeResponse {}))
+    }
+
+    async fn move_children_to_parent(
+        &self,
+        request: Request<MoveChildrenToParentRequest>,
+    ) -> Result<Response<MoveChildrenToParentResponse>, Status> {
+        let req = request.into_inner();
+
+        let children: Vec<(String, i64)> = req
+            .children
+            .into_iter()
+            .map(|c| (c.node_id, c.version))
+            .collect();
+
+        let updated = self
+            .node_service
+            .move_children_to_parent(&req.new_parent_id, &children)
+            .await
+            .map_err(service_error_to_status)?;
+
+        let children_proto = updated
+            .into_iter()
+            .map(|n| node_to_proto(n, None, None))
+            .collect();
+
+        Ok(Response::new(MoveChildrenToParentResponse {
+            children: children_proto,
+        }))
     }
 
     async fn create_mention(
@@ -1833,6 +1862,15 @@ mod tests {
             "current_node must carry the post-conflict version (got {})",
             embedded_version
         );
+    }
+
+    #[test]
+    fn error_mapping_version_conflict_from_move_children_batch_returns_aborted() {
+        // move_children_to_parent surfaces a VersionConflict for the first offender;
+        // the daemon must map it to Aborted so the frontend recognises it as a
+        // child-transfer-failure (identical pipeline to single MoveNode conflicts).
+        let s = to_status(NodeServiceError::version_conflict("child-k", 1, 5));
+        assert_eq!(s.code(), tonic::Code::Aborted);
     }
 
     #[test]

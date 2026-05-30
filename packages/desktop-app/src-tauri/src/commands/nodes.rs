@@ -10,11 +10,11 @@ use crate::types::{
 };
 use chrono::{DateTime, Utc};
 use nodespace_proto::nodespace::{
-    CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
+    ChildMove, CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetNodeRequest, GetSchemaDefinitionRequest,
-    MentionAutocompleteRequest, MentionTargetRequest, MoveNodeRequest, NodeData, NodeResponse,
-    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest,
-    UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+    MentionAutocompleteRequest, MentionTargetRequest, MoveChildrenToParentRequest, MoveNodeRequest,
+    NodeData, NodeResponse, OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
+    ReorderNodeRequest, UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
 };
 use nodespace_proto::NodeServiceClient;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,14 @@ use tonic::transport::Channel;
 use tonic::Request;
 
 use crate::services::GrpcClient;
+
+/// Per-child OCC token for `move_children_to_parent`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildMoveInput {
+    pub node_id: String,
+    pub version: i64,
+}
 
 /// Explicit insertion position for new/moved nodes.
 ///
@@ -481,6 +489,38 @@ pub async fn reorder_node(
     .await
     .map_err(status_to_command_error)?;
     Ok(())
+}
+
+/// Atomically re-parent an ordered set of children to a new parent (one RPC, one transaction)
+#[tauri::command]
+pub async fn move_children_to_parent(
+    client: State<'_, GrpcClient>,
+    new_parent_id: String,
+    children: Vec<ChildMoveInput>,
+) -> Result<Vec<Value>, CommandError> {
+    let mut c = client.client().await;
+    let resp = c
+        .move_children_to_parent(Request::new(MoveChildrenToParentRequest {
+            new_parent_id,
+            children: children
+                .into_iter()
+                .map(|cm| ChildMove {
+                    node_id: cm.node_id,
+                    version: cm.version,
+                })
+                .collect(),
+        }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let nodes: Result<Vec<Node>, CommandError> = resp
+        .into_inner()
+        .children
+        .into_iter()
+        .map(proto_node_data_to_node)
+        .collect();
+
+    nodes_to_typed_values(nodes?)
 }
 
 /// Get child nodes of a parent node

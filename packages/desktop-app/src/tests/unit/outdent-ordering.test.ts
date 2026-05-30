@@ -35,6 +35,7 @@ vi.mock('$lib/services/backend-adapter', () => ({
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString()
     }),
+    moveChildrenToParent: vi.fn().mockResolvedValue([]),
     getNode: vi.fn().mockResolvedValue(null),
     createNode: vi.fn().mockResolvedValue('mock-id'),
     updateNode: vi.fn().mockResolvedValue(null),

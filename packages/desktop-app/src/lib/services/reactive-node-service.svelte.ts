@@ -353,35 +353,32 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
         }
 
-        // BACKGROUND PERSISTENCE: Database sync with error handling and rollback
-        // Database updates happen asynchronously without blocking UI
+        // BACKGROUND PERSISTENCE: Atomically transfer all children in one RPC (C3c).
+        // Structure tree already updated above; this persists to the daemon.
         Promise.resolve().then(async () => {
           try {
-            // Wait for newNode to be persisted to database
-            // This prevents FOREIGN KEY constraint violations when children reference the new parent
+            // Wait for newNode to be persisted so children can reference it as parent.
             await sharedNodeStore.waitForNodeSaves([nodeId]);
 
-            // Persist child transfers to database
-            // Structure tree already updated above, so UI is already correct
-            for (const child of children) {
-              // Move child to be under the new node in database (with OCC)
-              // Backend returns updated child with new version
-              const updatedChild = await backendAdapter.moveNode(child.id, child.version, nodeId, null);
-              // Sync child's local version from backend response
+            // Single atomic RPC — all-or-nothing OCC, one transaction in the daemon.
+            const updatedChildren = await backendAdapter.moveChildrenToParent(
+              nodeId,
+              children.map(c => ({ id: c.id, version: c.version }))
+            );
+
+            // Sync versions from the response (order reconciles via RelationshipUpdated events).
+            for (const updated of updatedChildren) {
               sharedNodeStore.updateNode(
-                child.id,
-                { version: updatedChild.version },
+                updated.id,
+                { version: updated.version },
                 { type: 'database', reason: 'move-version-sync' },
                 { skipPersistence: true }
               );
-              // Note: No need to call structureTree.moveInMemoryRelationship() again
-              // It was already done synchronously above for instant UI update
             }
           } catch (error) {
-            // ROLLBACK: Revert optimistic UI changes on failure
+            // ROLLBACK: Revert optimistic UI changes on failure (preserves #656 notification).
             log.error('[createNode] Failed to transfer children to database, rolling back:', error);
             for (const child of children) {
-              // Move children back to original parent in structure tree
               structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
             }
             conflictNotifications.add({

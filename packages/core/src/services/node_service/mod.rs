@@ -1743,6 +1743,103 @@ impl NodeService {
         Ok(())
     }
 
+    /// Atomically re-parent an ordered set of existing children to `new_parent_id`
+    /// in a single transaction (all-or-nothing OCC).
+    ///
+    /// All version checks happen up-front inside a single DB transaction. If any
+    /// child has a version mismatch the entire batch is rolled back — nothing moves.
+    /// On success each child's version is bumped and a `RelationshipUpdated` event
+    /// is emitted so the frontend hierarchy-sync path reconciles order idempotently.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_parent_id` — freshly-created split node; must be an empty container
+    /// * `children`      — `(node_id, expected_version)` pairs in sibling order
+    pub async fn move_children_to_parent(
+        &self,
+        new_parent_id: &str,
+        children: &[(String, i64)],
+    ) -> Result<Vec<Node>, NodeServiceError> {
+        if children.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Verify new parent exists and can hold children.
+        let parent_node = self
+            .get_node(new_parent_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::invalid_parent(new_parent_id))?;
+
+        if !self
+            .behavior_for(&parent_node.node_type)
+            .can_have_children()
+        {
+            return Err(NodeServiceError::not_a_container(
+                new_parent_id,
+                &parent_node.node_type,
+            ));
+        }
+
+        // OCC pre-validation: fetch all children and check versions.
+        // If any mismatch is found we return immediately — nothing has been written.
+        let mut nodes = Vec::with_capacity(children.len());
+        for (node_id, expected_version) in children {
+            let node = self
+                .get_node(node_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::node_not_found(node_id.as_str()))?;
+
+            if node.version != *expected_version {
+                return Err(NodeServiceError::version_conflict(
+                    node_id,
+                    *expected_version,
+                    node.version,
+                ));
+            }
+
+            // Date nodes are top-level containers and cannot be moved.
+            if node.node_type == "date" {
+                return Err(NodeServiceError::hierarchy_violation(format!(
+                    "Date node '{}' cannot be moved (it's a top-level container)",
+                    node_id
+                )));
+            }
+
+            nodes.push(node);
+        }
+
+        // Delegate the atomic edge-swap to the store.
+        let child_id_refs: Vec<&str> = children.iter().map(|(id, _)| id.as_str()).collect();
+        let orders = self
+            .store
+            .move_children_to_parent(new_parent_id, &child_id_refs)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Bump each child's version and emit RelationshipUpdated so hierarchy-sync
+        // can reconcile order idempotently (C3a-consistent path).
+        let mut updated = Vec::with_capacity(nodes.len());
+        for (node, order) in nodes.iter().zip(orders.iter()) {
+            let updated_node = self
+                .update_node_with_version_bump(&node.id, node.version)
+                .await?;
+
+            self.emit_event(crate::db::events::DomainEvent::RelationshipUpdated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", new_parent_id, node.id),
+                    new_parent_id,
+                    &node.id,
+                    "has_child",
+                    serde_json::json!({"order": order}),
+                ),
+            });
+
+            updated.push(updated_node);
+        }
+
+        Ok(updated)
+    }
+
     /// Resolve an `InsertPosition` to a concrete `Option<String>` for the store layer.
     ///
     /// - `Beginning` → `None` (store interprets `None` as "before the first child")
@@ -2759,6 +2856,221 @@ mod tests {
         assert!(
             result.is_ok(),
             "create_node_with_parent should accept a container parent"
+        );
+    }
+
+    // C3c: atomic child-transfer tests
+    #[tokio::test]
+    async fn test_move_children_to_parent_success() {
+        let (service, _temp) = create_test_service().await;
+
+        let parent = Node::new("text".to_string(), "Original Parent".to_string(), json!({}));
+        let parent_id = service.create_node(parent).await.unwrap();
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = service.create_node(new_parent).await.unwrap();
+
+        // Create two children under the original parent
+        let child1_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Child 1".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let child2_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Child 2".to_string(),
+                parent_id: Some(parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let child1 = service.get_node(&child1_id).await.unwrap().unwrap();
+        let child2 = service.get_node(&child2_id).await.unwrap().unwrap();
+
+        let children = vec![
+            (child1_id.clone(), child1.version),
+            (child2_id.clone(), child2.version),
+        ];
+
+        let updated = service
+            .move_children_to_parent(&new_parent_id, &children)
+            .await
+            .unwrap();
+
+        assert_eq!(updated.len(), 2);
+
+        // Children now live under new_parent — version was bumped
+        let updated1 = service.get_node(&child1_id).await.unwrap().unwrap();
+        let updated2 = service.get_node(&child2_id).await.unwrap().unwrap();
+        assert!(updated1.version > child1.version);
+        assert!(updated2.version > child2.version);
+
+        // Verify actual parent relationships via get_children
+        let new_parent_children = service.get_children(&new_parent_id).await.unwrap();
+        let new_child_ids: Vec<&str> = new_parent_children.iter().map(|n| n.id.as_str()).collect();
+        assert!(new_child_ids.contains(&child1_id.as_str()));
+        assert!(new_child_ids.contains(&child2_id.as_str()));
+
+        // Original parent now has no children
+        let original_children = service.get_children(&parent_id).await.unwrap();
+        assert!(original_children.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_all_or_nothing_on_stale_version() {
+        let (service, _temp) = create_test_service().await;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = service.create_node(new_parent).await.unwrap();
+
+        let old_parent = Node::new("text".to_string(), "Old Parent".to_string(), json!({}));
+        let old_parent_id = service.create_node(old_parent).await.unwrap();
+
+        let child1_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Child 1".to_string(),
+                parent_id: Some(old_parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let child2_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "text".to_string(),
+                content: "Child 2".to_string(),
+                parent_id: Some(old_parent_id.clone()),
+                position: crate::services::InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let child1 = service.get_node(&child1_id).await.unwrap().unwrap();
+        // child2 uses stale version 0 — should trigger OCC failure
+        let stale_version = 0;
+
+        let children = vec![
+            (child1_id.clone(), child1.version),
+            (child2_id.clone(), stale_version),
+        ];
+
+        let result = service
+            .move_children_to_parent(&new_parent_id, &children)
+            .await;
+
+        assert!(result.is_err(), "stale version should cause failure");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, NodeServiceError::VersionConflict { .. }),
+            "expected VersionConflict, got {:?}",
+            err
+        );
+
+        // ALL-OR-NOTHING: child1 must still be under old_parent, not new_parent
+        let old_children = service.get_children(&old_parent_id).await.unwrap();
+        let old_ids: Vec<&str> = old_children.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            old_ids.contains(&child1_id.as_str()),
+            "child1 should still be under old_parent after rollback"
+        );
+        assert!(
+            old_ids.contains(&child2_id.as_str()),
+            "child2 should still be under old_parent after rollback"
+        );
+
+        let new_children = service.get_children(&new_parent_id).await.unwrap();
+        assert!(
+            new_children.is_empty(),
+            "new_parent should have no children after rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_rejects_non_container_parent() {
+        let (service, _temp) = create_test_service().await;
+
+        // query nodes cannot have children
+        let leaf = Node::new("query".to_string(), "my query".to_string(), json!({}));
+        let leaf_id = service.create_node(leaf).await.unwrap();
+
+        let child = Node::new("text".to_string(), "child".to_string(), json!({}));
+        let child_id = service.create_node(child).await.unwrap();
+        let child_node = service.get_node(&child_id).await.unwrap().unwrap();
+
+        let result = service
+            .move_children_to_parent(&leaf_id, &[(child_id.clone(), child_node.version)])
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), NodeServiceError::NotAContainer { .. }),
+            "expected NotAContainer error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_preserves_sibling_order() {
+        let (service, _temp) = create_test_service().await;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = service.create_node(new_parent).await.unwrap();
+
+        let old_parent = Node::new("text".to_string(), "Old Parent".to_string(), json!({}));
+        let old_parent_id = service.create_node(old_parent).await.unwrap();
+
+        let mut child_ids = Vec::new();
+        for i in 0..3 {
+            let id = service
+                .create_node_with_parent(CreateNodeParams {
+                    id: None,
+                    node_type: "text".to_string(),
+                    content: format!("Child {}", i),
+                    parent_id: Some(old_parent_id.clone()),
+                    position: crate::services::InsertPositionOwned::End,
+                    properties: json!({}),
+                })
+                .await
+                .unwrap();
+            child_ids.push(id);
+        }
+
+        let children: Vec<(String, i64)> = {
+            let mut v = Vec::new();
+            for id in &child_ids {
+                let n = service.get_node(id).await.unwrap().unwrap();
+                v.push((id.clone(), n.version));
+            }
+            v
+        };
+
+        service
+            .move_children_to_parent(&new_parent_id, &children)
+            .await
+            .unwrap();
+
+        // get_children returns in order — confirm the sequence is preserved
+        let new_children = service.get_children(&new_parent_id).await.unwrap();
+        assert_eq!(new_children.len(), 3);
+        let returned_ids: Vec<&str> = new_children.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            returned_ids,
+            child_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>()
         );
     }
 
