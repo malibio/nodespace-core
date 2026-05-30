@@ -386,7 +386,8 @@ message UpsertNodeWithParentRequest {
 message MoveNodeRequest {
   string node_id = 1;
   int64 version = 2;
-  // unset or "" = move to root (None on the ops layer); present = new parent ID.
+  // unset = move to root (None on the ops layer); present = new parent ID.
+  // The daemon normalizes "" to None so both encode "root" for legacy callers.
   optional string new_parent_id = 3;
   // Explicit insertion position. Unset (no variant set) = End.
   // See CreateNodeRequest.position for encoding notes on the bool variants.

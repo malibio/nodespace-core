@@ -477,7 +477,8 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<NodeResponse>, Status> {
         let req = request.into_inner();
 
-        let new_parent = req.new_parent_id;
+        // Normalize "" to None: both unset and empty-string mean "move to root".
+        let new_parent = req.new_parent_id.filter(|s| !s.is_empty());
 
         use crate::nodespace::move_node_request::Position as MovePos;
         let position = match req.position {

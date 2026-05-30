@@ -930,3 +930,66 @@ async fn move_node_to_root_when_new_parent_id_unset() {
 
     let _ = shutdown.send(());
 }
+
+/// B5 AC: move_node with new_parent_id = Some("") must also move to root.
+/// The daemon normalizes "" → None so legacy callers aren't broken.
+#[tokio::test]
+async fn move_node_to_root_when_new_parent_id_empty_string() {
+    use nodespace_daemon::nodespace::{GetRootsRequest, MoveNodeRequest};
+
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let parent = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "parent2".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create parent")
+        .into_inner();
+
+    let child = client
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "child2".into(),
+            parent_id: Some(parent.node_id.clone()),
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create child")
+        .into_inner();
+
+    // Move to root via empty string — daemon normalizes "" to None.
+    client
+        .move_node(MoveNodeRequest {
+            node_id: child.node_id.clone(),
+            version: 1,
+            new_parent_id: Some(String::new()),
+            position: None,
+        })
+        .await
+        .expect("move_node with empty new_parent_id failed");
+
+    let roots = client
+        .get_roots(GetRootsRequest { limit: 100, offset: 0 })
+        .await
+        .expect("get_roots failed")
+        .into_inner();
+    let root_ids: Vec<&str> = roots.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        root_ids.contains(&child.node_id.as_str()),
+        "child should be a root node after move with new_parent_id=''"
+    );
+
+    let _ = shutdown.send(());
+}
