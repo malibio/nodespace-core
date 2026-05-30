@@ -21,6 +21,7 @@ import {
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { Node } from '$lib/types';
 import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { waitForPendingMoveOperations } from '$lib/services/pending-operations';
 
 // Mock backend-adapter to avoid backend calls in tests
 vi.mock('$lib/services/backend-adapter', () => ({
@@ -1456,6 +1457,65 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
   it('indentNode fires hierarchyChanged event', async () => {
     await service.indentNode('sibling');
 
+    expect(events.hierarchyChanged).toHaveBeenCalled();
+  });
+
+  // C3b: container gate — synchronous UI guard
+  it('indentNode returns false when previous sibling cannot have children (non-container)', async () => {
+    // Replace 'parent' with a query node (non-container) so 'sibling' cannot indent under it
+    SharedNodeStore.resetInstance();
+    _sharedNodeStore = SharedNodeStore.getInstance();
+    service.destroy();
+    service = createReactiveNodeService(events);
+
+    const nodes: Node[] = [
+      {
+        id: 'leaf-parent',
+        nodeType: 'query', // query nodes cannot have children
+        content: 'A query',
+        version: 1,
+        properties: {},
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+      },
+      {
+        id: 'target-node',
+        nodeType: 'text',
+        content: 'Want to indent',
+        version: 1,
+        properties: {},
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+      }
+    ];
+    service.initializeNodes(nodes);
+
+    const result = await service.indentNode('target-node');
+    expect(result).toBe(false);
+  });
+
+  // C3b: rollback when daemon rejects with a container-violation error
+  it('indentNode rolls back optimistic update when moveNode rejects with a non-ignorable error', async () => {
+    const { backendAdapter } = await import('$lib/services/backend-adapter');
+    const moveNodeMock = vi.mocked(backendAdapter.moveNode);
+
+    // Capture depth before indent
+    const depthBefore = service.getUIState('sibling')?.depth ?? 0;
+
+    // Simulate daemon rejecting with a validation error (e.g., NotAContainer → InvalidArgument)
+    moveNodeMock.mockRejectedValueOnce(
+      new Error('Validation failed: Node cannot have children')
+    );
+
+    // indentNode fires optimistic update then returns; the move runs as a background promise
+    await service.indentNode('sibling');
+    // Drain the background move operation so the rollback branch executes
+    await waitForPendingMoveOperations();
+
+    // Rollback must restore the original depth
+    const depthAfter = service.getUIState('sibling')?.depth ?? 0;
+    expect(depthAfter).toBe(depthBefore);
+    // hierarchyChanged must have fired at least twice (optimistic + rollback)
     expect(events.hierarchyChanged).toHaveBeenCalled();
   });
 

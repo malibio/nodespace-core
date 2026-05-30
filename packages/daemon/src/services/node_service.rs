@@ -1782,4 +1782,10 @@ mod tests {
         let s = to_status(NodeServiceError::initialization_error("db unavailable"));
         assert_eq!(s.code(), tonic::Code::Internal);
     }
+
+    #[test]
+    fn error_mapping_not_a_container_returns_invalid_argument() {
+        let s = to_status(NodeServiceError::not_a_container("parent-id", "query"));
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
 }

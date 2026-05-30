@@ -283,11 +283,21 @@ impl NodeService {
             self.ensure_date_exists(parent_id).await?;
         }
 
-        // Step 2: Validate parent exists (if provided)
+        // Step 2: Validate parent exists and is a container (if provided)
         if let Some(ref parent_id) = params.parent_id {
-            let parent_exists = self.node_exists(parent_id).await?;
-            if !parent_exists {
-                return Err(NodeServiceError::invalid_parent(parent_id));
+            let parent_node = self
+                .get_node(parent_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::invalid_parent(parent_id.as_str()))?;
+
+            if !self
+                .behavior_for(&parent_node.node_type)
+                .can_have_children()
+            {
+                return Err(NodeServiceError::not_a_container(
+                    parent_id.as_str(),
+                    &parent_node.node_type,
+                ));
             }
         }
 
@@ -1411,6 +1421,27 @@ impl NodeService {
                 })?;
 
             // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
+        }
+
+        // Enforce container rule: the (now-existent) parent must accept children
+        {
+            let parent_node = self
+                .store
+                .get_node(parent_id)
+                .await
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!("Failed to fetch parent: {}", e))
+                })?
+                .ok_or_else(|| NodeServiceError::invalid_parent(parent_id))?;
+            if !self
+                .behavior_for(&parent_node.node_type)
+                .can_have_children()
+            {
+                return Err(NodeServiceError::not_a_container(
+                    parent_id,
+                    &parent_node.node_type,
+                ));
+            }
         }
 
         // Upsert the node (update if exists, create if not)
