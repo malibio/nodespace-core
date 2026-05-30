@@ -37,6 +37,7 @@ const log = createLogger('ReactiveNodeService');
 import { backendAdapter } from './backend-adapter';
 import type { InsertPosition } from '$lib/services/backend-adapter';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
+import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
 export interface NodeManagerEvents {
   focusRequested: (nodeId: string, position?: number) => void;
@@ -385,8 +386,11 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
               // Move children back to original parent in structure tree
               structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
             }
-            // TODO(#656): Emit error event for UI notification (toast/banner)
-            // https://github.com/malibio/nodespace-core/issues/656
+            conflictNotifications.add({
+              nodeId,
+              message: "Changes couldn't be saved. Please try again.",
+              conflictType: 'child-transfer-failure'
+            });
           }
         });
     }
