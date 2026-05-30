@@ -1694,6 +1694,9 @@ mod tests {
         assert_eq!(json["node_id"], "n1");
         assert_eq!(json["expected"], 3);
         assert_eq!(json["actual"], 5);
+        // current_node is null for the NodeServiceError path (task nodes, direct service calls).
+        // node_ops::update_node fills it in for regular-node conflicts.
+        assert_eq!(json["current_node"], serde_json::Value::Null);
     }
 
     #[test]
