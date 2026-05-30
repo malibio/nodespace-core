@@ -667,7 +667,10 @@ impl GrpcNodeService for NodeServiceImpl {
                     nodespace_core::markdown::MarkdownError::InvalidParams(m) => {
                         Status::invalid_argument(m)
                     }
-                    other => Status::internal(format!("ExportMarkdown failed: {other}")),
+                    nodespace_core::markdown::MarkdownError::CreationFailed(m) => {
+                        Status::failed_precondition(format!("Node creation failed: {m}"))
+                    }
+                    nodespace_core::markdown::MarkdownError::Internal(m) => Status::internal(m),
                 })?;
 
         let markdown = result["markdown"]
@@ -708,7 +711,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .node_service
             .get_nodes(&id_refs)
             .await
-            .map_err(|e| Status::internal(format!("get_nodes_batch failed: {e}")))?;
+            .map_err(service_error_to_status)?;
 
         let fetched_ids: std::collections::HashSet<String> =
             fetched.iter().map(|n| n.id.clone()).collect();

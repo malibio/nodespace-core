@@ -66,8 +66,8 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::HierarchyViolation(msg) => {
                 OpsError::ValidationFailed(format!("Hierarchy violation: {}", msg))
             }
-            NodeServiceError::PlaybookValidationFailed { .. } => {
-                OpsError::InvalidParams(err.to_string())
+            NodeServiceError::PlaybookValidationFailed { errors } => {
+                OpsError::InvalidParams(errors)
             }
             NodeServiceError::CollectionNotFound(name) => OpsError::NotFound { id: name },
             NodeServiceError::InvalidUpdate(msg) => OpsError::ValidationFailed(msg),
