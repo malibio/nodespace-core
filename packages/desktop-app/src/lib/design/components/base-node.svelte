@@ -459,7 +459,7 @@
 
     // Re-enter edit mode if we've lost focus (shouldn't happen with preventDefault, but safety check)
     if (!isEditing && textareaElement) {
-      focusManager.setEditingNode(nodeId, paneId);
+      focusManager.focusNode(nodeId, paneId);
       await tick();
     }
 
@@ -572,19 +572,19 @@
   // Controller event handlers
   const controllerEvents: TextareaControllerEvents = {
     contentChanged: (content: string, cursorPosition: number) => {
-      // Clear node-type-conversion flag after first content change
+      // Clear node-type-conversion cursor after first content change
       // This allows normal blur behavior to resume after placeholder promotion is complete
       if (focusManager.cursorPosition?.type === 'node-type-conversion') {
-        focusManager.clearNodeTypeConversionCursorPosition();
+        focusManager.clearCursorPosition();
       }
       dispatch('contentChanged', { content, cursorPosition });
     },
     focus: () => {
       // Use FocusManager as single source of truth
       // Only update if this node isn't already set as editing
-      // (Don't overwrite arrow navigation context set by setEditingNodeFromArrowNavigation)
+      // (Don't overwrite arrow navigation context set by focusNodeFromArrowNav)
       if (focusManager.editingNodeId !== nodeId) {
-        focusManager.setEditingNode(nodeId, paneId);
+        focusManager.focusNode(nodeId, paneId);
       }
 
       // REMOVED: Don't clear node-type-conversion flag here
@@ -769,7 +769,7 @@
   // This is the standard Svelte pattern - request focus when component mounts
   onMount(() => {
     if (autoFocus) {
-      focusManager.setEditingNode(nodeId, paneId);
+      focusManager.focusNode(nodeId, paneId);
     }
   });
 
@@ -925,7 +925,7 @@
         }
         if (e.key === 'Enter' || e.key === ' ') {
           // Use FocusManager instead of directly setting isEditing
-          focusManager.setEditingNode(nodeId, paneId);
+          focusManager.focusNode(nodeId, paneId);
           setTimeout(() => controller?.focus(), 0);
         }
       }}
