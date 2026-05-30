@@ -562,13 +562,8 @@ export class SharedNodeStore {
    * Decide whether the persistence path should clear a CREATE's
    * `InsertPosition.After` hint as "stale" before talking to the backend.
    *
-   * **Trust hierarchy**: `structureTree` is the authoritative source for
-   * `has_child` parent-child relationships (it's the in-memory mirror of
-   * the backend's hierarchy edges). The bare `Node.parentId` field is
-   * opportunistically populated by some load paths (e.g. local creates)
-   * but is `null` for nodes loaded via `getChildrenTree`, where the wire
-   * shape strips it. Always consult `structureTree.getParent` for
-   * hierarchy decisions; never rely on `Node.parentId` alone.
+   * `structureTree` is the authoritative source for parent-child relationships.
+   * Parent is derived from `structureTree.getParent(nodeId)` at CREATE time.
    *
    * Returns `true` only when `structureTree` reports a parent for the
    * sibling AND that parent disagrees with the new node's
@@ -1173,7 +1168,16 @@ export class SharedNodeStore {
                       log.warn(
                         `Node ${nodeId} not found in database, creating instead of updating (error: ${updateError.message})`
                       );
-                      await tauriCommands.createNode(currentNode);
+                      const updateFallbackInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                        id: currentNode.id,
+                        nodeType: currentNode.nodeType,
+                        content: currentNode.content,
+                        properties: currentNode.properties,
+                        mentions: currentNode.mentions,
+                        parentId: this.getParentId(nodeId),
+                        insertPosition: null
+                      };
+                      await tauriCommands.createNode(updateFallbackInput);
                       this.persistedNodeIds.add(nodeId); // Now it's persisted
                     } else {
                       // Re-throw other errors
@@ -1188,7 +1192,16 @@ export class SharedNodeStore {
                     log.warn(`Node ${nodeId} no longer exists in store, skipping create persistence`);
                     return;
                   }
-                  await tauriCommands.createNode(currentNode);
+                  const updatePathCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                    id: currentNode.id,
+                    nodeType: currentNode.nodeType,
+                    content: currentNode.content,
+                    properties: currentNode.properties,
+                    mentions: currentNode.mentions,
+                    parentId: this.getParentId(nodeId),
+                    insertPosition: null
+                  };
+                  await tauriCommands.createNode(updatePathCreateInput);
                   this.persistedNodeIds.add(nodeId); // Track as persisted
 
                   // CRITICAL: Fetch the created node to get its version from backend
@@ -1495,8 +1508,17 @@ export class SharedNodeStore {
                     log.warn(
                       `Node ${nodeId} not found in database, creating instead of updating (error: ${errorMessage})`
                     );
+                    const fallbackCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                      id: currentNode.id,
+                      nodeType: currentNode.nodeType,
+                      content: currentNode.content,
+                      properties: currentNode.properties,
+                      mentions: currentNode.mentions,
+                      parentId: this.getParentId(nodeId),
+                      insertPosition: null
+                    };
                     this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                    await tauriCommands.createNode(currentNode);
+                    await tauriCommands.createNode(fallbackCreateInput);
                     this.persistedNodeIds.add(nodeId);
                   } else {
                     throw updateError;
@@ -1506,18 +1528,29 @@ export class SharedNodeStore {
                 const nodeWithInsertPos = currentNode as Node & { insertPosition?: InsertPosition | null };
                 if (nodeWithInsertPos.insertPosition?.type === 'after' && nodeWithInsertPos.insertPosition.siblingId) {
                   const siblingId = nodeWithInsertPos.insertPosition.siblingId;
-                  if (this.shouldClearStaleInsertAfter(siblingId, currentNode.parentId)) {
+                  const currentParentId = this.getParentId(nodeId);
+                  if (this.shouldClearStaleInsertAfter(siblingId, currentParentId)) {
                     log.debug(
                       `[CREATE] Clearing stale insertPosition.after for ${nodeId.substring(0, 8)}: ` +
                         `sibling ${siblingId.substring(0, 8)} reports a ` +
-                        `different parent via structureTree (node.parentId=${currentNode.parentId?.substring(0, 8) ?? 'null'})`
+                        `different parent via structureTree (structureTree parent=${currentParentId?.substring(0, 8) ?? 'null'})`
                     );
                     nodeWithInsertPos.insertPosition = { type: 'end' };
                   }
                 }
 
+                // Derive parent from structureTree (single source of truth for hierarchy)
+                const createInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                  id: currentNode.id,
+                  nodeType: currentNode.nodeType,
+                  content: currentNode.content,
+                  properties: currentNode.properties,
+                  mentions: currentNode.mentions,
+                  parentId: this.getParentId(nodeId),
+                  insertPosition: nodeWithInsertPos.insertPosition ?? null
+                };
                 this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                await tauriCommands.createNode(currentNode);
+                await tauriCommands.createNode(createInput);
                 this.persistedNodeIds.add(nodeId); // Track as persisted
 
                 // CRITICAL: Fetch the created node to get its version from backend
@@ -1556,10 +1589,10 @@ export class SharedNodeStore {
           },
           {
             // Use debounce mode for new viewer nodes to coalesce rapid updates.
-            // This allows indent/outdent to modify the parentId BEFORE the CREATE fires,
+            // This allows indent/outdent to update structureTree BEFORE the CREATE fires,
             // enabling single-transaction create-with-correct-parent instead of CREATE + MOVE.
             // The indentNode function checks isNodePersisted() and handles unpersisted nodes
-            // by re-triggering setNode with the new parentId (cancelling the previous pending CREATE).
+            // by updating structureTree and re-triggering setNode (cancelling the previous pending CREATE).
             mode: source.type === 'viewer' && isNewNode ? 'debounce' : 'immediate',
             dependencies: dependencies.length > 0 ? dependencies : undefined
           }
@@ -3111,7 +3144,16 @@ export class SharedNodeStore {
           } else {
             // Try CREATE, but handle race condition where old path persisted first
             try {
-              await tauriCommands.createNode(finalNode);
+              const batchCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
+                id: finalNode.id,
+                nodeType: finalNode.nodeType,
+                content: finalNode.content,
+                properties: finalNode.properties,
+                mentions: finalNode.mentions,
+                parentId: this.getParentId(nodeId),
+                insertPosition: null
+              };
+              await tauriCommands.createNode(batchCreateInput);
               this.persistedNodeIds.add(nodeId);
 
               // CRITICAL: Fetch the created node to get its version from backend

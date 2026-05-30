@@ -23,7 +23,7 @@ import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types/node';
 
 // Helper to create test nodes
-function createTestNode(id: string, content: string, parentId?: string): Node {
+function createTestNode(id: string, content: string): Node {
   return {
     id,
     content,
@@ -31,8 +31,7 @@ function createTestNode(id: string, content: string, parentId?: string): Node {
     version: 1,
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
-    properties: {},
-    parentId
+    properties: {}
   };
 }
 
@@ -146,8 +145,8 @@ describe('Multi-Tab/Pane Reactivity', () => {
     it('should propagate hierarchy changes when node is indented', async () => {
       // Setup: Create parent and two children at same level
       const parent = createTestNode('struct-parent', 'Parent');
-      const child1 = createTestNode('struct-child-1', 'Child 1', 'struct-parent');
-      const child2 = createTestNode('struct-child-2', 'Child 2', 'struct-parent');
+      const child1 = createTestNode('struct-child-1', 'Child 1');
+      const child2 = createTestNode('struct-child-2', 'Child 2');
 
       sharedNodeStore.setNode(parent, { type: 'database', reason: 'test-setup' });
       sharedNodeStore.setNode(child1, { type: 'database', reason: 'test-setup' });
@@ -195,8 +194,8 @@ describe('Multi-Tab/Pane Reactivity', () => {
     it('should show chevron/expand indicator in both viewers after indent', async () => {
       // Setup: Child1 initially has no children
       const parent = createTestNode('chevron-parent', 'Parent');
-      const child1 = createTestNode('chevron-child-1', 'Child 1', 'chevron-parent');
-      const child2 = createTestNode('chevron-child-2', 'Child 2', 'chevron-parent');
+      const child1 = createTestNode('chevron-child-1', 'Child 1');
+      const child2 = createTestNode('chevron-child-2', 'Child 2');
 
       sharedNodeStore.setNode(parent, { type: 'database', reason: 'test-setup' });
       sharedNodeStore.setNode(child1, { type: 'database', reason: 'test-setup' });
@@ -224,8 +223,8 @@ describe('Multi-Tab/Pane Reactivity', () => {
     it('should allow two panes to view same parent with independent state', async () => {
       // Setup: Create parent with children
       const parent = createTestNode('split-parent', 'Split Parent');
-      const child1 = createTestNode('split-child-1', 'Child 1', 'split-parent');
-      const child2 = createTestNode('split-child-2', 'Child 2', 'split-parent');
+      const child1 = createTestNode('split-child-1', 'Child 1');
+      const child2 = createTestNode('split-child-2', 'Child 2');
 
       sharedNodeStore.setNode(parent, { type: 'database', reason: 'test-setup' });
       sharedNodeStore.setNode(child1, { type: 'database', reason: 'test-setup' });
@@ -253,8 +252,8 @@ describe('Multi-Tab/Pane Reactivity', () => {
     it('should maintain independent expansion state per viewer', async () => {
       // Setup
       const parent = createTestNode('expand-parent', 'Parent');
-      const child = createTestNode('expand-child', 'Child', 'expand-parent');
-      const grandchild = createTestNode('expand-grandchild', 'Grandchild', 'expand-child');
+      const child = createTestNode('expand-child', 'Child');
+      const grandchild = createTestNode('expand-grandchild', 'Grandchild');
 
       sharedNodeStore.setNode(parent, { type: 'database', reason: 'test-setup' });
       sharedNodeStore.setNode(child, { type: 'database', reason: 'test-setup' });
@@ -306,7 +305,7 @@ describe('Multi-Tab/Pane Reactivity', () => {
 
       // Act: Create placeholder in viewer 1
       const placeholderId = 'placeholder-temp-123';
-      const placeholderNode = createTestNode(placeholderId, '', 'promo-parent');
+      const placeholderNode = createTestNode(placeholderId, '');
       sharedNodeStore.setNode(placeholderNode, { type: 'viewer', viewerId: 'test-viewer-1' });
       structureTree.__testOnly_addChild({ parentId: 'promo-parent', childId: placeholderId, order: 2.0 });
 
@@ -336,13 +335,13 @@ describe('Multi-Tab/Pane Reactivity', () => {
 
       // Create placeholder
       const tempId = 'temp-placeholder-456';
-      const placeholder = createTestNode(tempId, 'Placeholder content', 'id-parent');
+      const placeholder = createTestNode(tempId, 'Placeholder content');
       sharedNodeStore.setNode(placeholder, { type: 'viewer', viewerId: 'test-viewer-1' });
       structureTree.__testOnly_addChild({ parentId: 'id-parent', childId: tempId, order: 1.0 });
 
       // Simulate backend assigning permanent ID by creating new node and deleting old
       const permanentId = 'permanent-node-789';
-      const permanentNode = createTestNode(permanentId, 'Placeholder content', 'id-parent');
+      const permanentNode = createTestNode(permanentId, 'Placeholder content');
       sharedNodeStore.setNode(permanentNode, { type: 'database', reason: 'promotion' });
 
       // Delete placeholder

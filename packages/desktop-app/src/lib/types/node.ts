@@ -79,13 +79,6 @@ export interface Node {
   /** Primary content/text of the node */
   content: string;
 
-  /**
-   * Parent node ID (graph edge relationship)
-   * Managed via graph edges in backend, cached in frontend for performance
-   * null = root-level node (no parent)
-   */
-  parentId?: string | null;
-
   /** Creation timestamp (ISO 8601) - backend sets this */
   createdAt: string;
 
@@ -411,7 +404,7 @@ export function formatCollectionPath(segments: CollectionPathSegment[]): string 
  *
  * ## Type System Mapping (TypeScript → Rust)
  *
- * For nullable fields (parentId, embeddingVector):
+ * For nullable fields (embeddingVector):
  *
  * | TypeScript Value | Meaning | Rust Type | Behavior |
  * |-----------------|---------|-----------|----------|
@@ -422,14 +415,11 @@ export function formatCollectionPath(segments: CollectionPathSegment[]): string 
  * ## Example Usage
  *
  * ```typescript
- * // Don't update parentId (leave as-is)
+ * // Update content only
  * updateNode('node-1', { content: 'New content' });
  *
- * // Clear parentId (set to NULL, making it a root node)
- * updateNode('node-1', { parentId: null });
- *
- * // Set parentId to a value
- * updateNode('node-1', { parentId: 'parent-node-id' });
+ * // Clear embedding vector
+ * updateNode('node-1', { embeddingVector: null });
  * ```
  *
  * ## Implementation Details

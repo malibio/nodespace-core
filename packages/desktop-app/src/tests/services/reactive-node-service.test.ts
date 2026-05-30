@@ -201,7 +201,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'root-2',
@@ -211,7 +210,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -231,7 +229,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'node-2',
@@ -241,7 +238,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'node-3',
@@ -251,7 +247,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -286,7 +281,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -313,7 +307,6 @@ describe('ReactiveNodeService - Initialize Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -894,7 +887,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'root-2',
@@ -904,7 +896,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -925,7 +916,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'child',
@@ -935,7 +925,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'parent'
       }
     ];
 
@@ -956,7 +945,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -980,7 +968,6 @@ describe('ReactiveNodeService - Visible Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1130,7 +1117,6 @@ describe('ReactiveNodeService - Reactive Updates', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     _sharedNodeStore.setNode(node, { type: 'database', reason: 'test' });
@@ -1150,7 +1136,6 @@ describe('ReactiveNodeService - Reactive Updates', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     _sharedNodeStore.setNode(node, { type: 'database', reason: 'test' });
@@ -1189,7 +1174,6 @@ describe('ReactiveNodeService - Create Node', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     service.initializeNodes([referenceNode]);
@@ -1285,7 +1269,6 @@ describe('ReactiveNodeService - Combine Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'node-2',
@@ -1295,7 +1278,6 @@ describe('ReactiveNodeService - Combine Nodes', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1420,7 +1402,6 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'sibling',
@@ -1430,7 +1411,6 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1488,12 +1468,9 @@ describe('ReactiveNodeService - Indent/Outdent Node', () => {
     const grandparentId = service.createNode('parent', 'Grandparent');
     const parentId = service.createNode(grandparentId, 'Parent');
     const child1Id = service.createNode(parentId, 'Child 1');
-    const child2Id = service.createNode(child1Id, 'Child 2');
+    service.createNode(child1Id, 'Child 2');
 
-    // Set up parent-child relationships
-    await _sharedNodeStore.updateNode(parentId, { parentId: grandparentId }, { type: 'database', reason: 'test' });
-    await _sharedNodeStore.updateNode(child1Id, { parentId: parentId }, { type: 'database', reason: 'test' });
-    await _sharedNodeStore.updateNode(child2Id, { parentId: parentId }, { type: 'database', reason: 'test' });
+    // Hierarchy is tracked via structureTree (not stored on Node)
 
     // Outdent child1 (child2 should become child of child1)
     await service.outdentNode(child1Id);
@@ -1528,7 +1505,6 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     service.initializeNodes([referenceNode]);
@@ -1590,10 +1566,7 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
   it('createNode transfers children from expanded parent', () => {
     // Create parent with child
     const parentId = service.createNode('reference', 'Parent with child');
-    const childId = service.createNode(parentId, 'Child');
-
-    // Update to establish parent-child relationship
-    _sharedNodeStore.updateNode(childId, { parentId: parentId }, { type: 'database', reason: 'test' });
+    service.createNode(parentId, 'Child');
 
     // Ensure parent is expanded
     service.setExpanded(parentId, true);
@@ -1607,9 +1580,8 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
 
   it('createNode does not transfer children when insertAtBeginning=true', () => {
     const parentId = service.createNode('reference', 'Parent');
-    const childId = service.createNode(parentId, 'Child');
+    service.createNode(parentId, 'Child');
 
-    _sharedNodeStore.updateNode(childId, { parentId: parentId }, { type: 'database', reason: 'test' });
     service.setExpanded(parentId, true);
 
     // Insert at beginning should not transfer children
@@ -1620,9 +1592,7 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
 
   it('createNode does not transfer children from collapsed parent', () => {
     const parentId = service.createNode('reference', 'Parent');
-    const childId = service.createNode(parentId, 'Child');
-
-    _sharedNodeStore.updateNode(childId, { parentId: parentId }, { type: 'database', reason: 'test' });
+    service.createNode(parentId, 'Child');
 
     // Collapse parent
     service.setExpanded(parentId, false);
@@ -1671,7 +1641,6 @@ describe('ReactiveNodeService - CombineNodes with Children', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'current',
@@ -1681,7 +1650,6 @@ describe('ReactiveNodeService - CombineNodes with Children', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1713,7 +1681,6 @@ describe('ReactiveNodeService - CombineNodes with Children', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'node2',
@@ -1723,7 +1690,6 @@ describe('ReactiveNodeService - CombineNodes with Children', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1769,7 +1735,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'child1',
@@ -1779,7 +1744,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'root'
       },
       {
         id: 'child2',
@@ -1789,7 +1753,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'child1'
       }
     ];
 
@@ -1813,7 +1776,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'child1',
@@ -1823,7 +1785,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'parent'
       },
       {
         id: 'child2',
@@ -1833,7 +1794,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'parent'
       }
     ];
 
@@ -1859,7 +1819,6 @@ describe('ReactiveNodeService - VisibleNodes Recursive', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1894,7 +1853,7 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
     service.destroy();
   });
 
-  it('initializeNodes with parentMapping uses mapping for hierarchy', () => {
+  it('initializeNodes initializes all provided nodes', () => {
     const nodes: Node[] = [
       {
         id: 'parent',
@@ -1903,8 +1862,7 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         version: 1,
         properties: {},
         createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        parentId: null
+        modifiedAt: new Date().toISOString()
       },
       {
         id: 'child',
@@ -1913,25 +1871,19 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         version: 1,
         properties: {},
         createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        parentId: null // Will use parentMapping instead
+        modifiedAt: new Date().toISOString()
       }
     ];
 
-    service.initializeNodes(nodes, {
-      parentMapping: {
-        child: 'parent'
-      }
-    });
+    service.initializeNodes(nodes);
 
-    // parentMapping is used to build hierarchy
     // Both nodes should be initialized
     expect(service.nodes.size).toBe(2);
 
     // Parent should be in root nodes
     expect(service.rootNodeIds).toContain('parent');
 
-    // Child hierarchy is determined by parentMapping during initialization
+    // Child should have UI state
     const childUIState = service.getUIState('child');
     expect(childUIState).toBeDefined();
   });
@@ -1946,7 +1898,6 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'real',
@@ -1956,7 +1907,6 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       }
     ];
 
@@ -1979,7 +1929,6 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: null
       },
       {
         id: 'level1',
@@ -1989,7 +1938,6 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'level0'
       },
       {
         id: 'level2',
@@ -1999,7 +1947,6 @@ describe('ReactiveNodeService - InitializeNodes Edge Cases', () => {
         properties: {},
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
-        parentId: 'level1'
       }
     ];
 
@@ -2166,7 +2113,6 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     service.initializeNodes([node]);
@@ -2191,7 +2137,6 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     service.initializeNodes([node]);
@@ -2215,7 +2160,6 @@ describe('ReactiveNodeService - Debounced Operations Cleanup', () => {
       properties: {},
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
-      parentId: null
     };
 
     service.initializeNodes([node]);

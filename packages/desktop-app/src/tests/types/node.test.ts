@@ -45,19 +45,18 @@ describe('isNode type guard', () => {
       expect(isNode(fullNode)).toBe(true);
     });
 
-    it('accepts node with null parentId', () => {
-      const nodeWithNullParent: Node = {
+    it('accepts root node (no parentId field)', () => {
+      const rootNode: Node = {
         id: 'root-1',
         nodeType: 'text',
         content: 'Root node',
-        parentId: null,
         createdAt: '2025-12-05T10:00:00Z',
         modifiedAt: '2025-12-05T10:00:00Z',
         version: 1,
         properties: {}
       };
 
-      expect(isNode(nodeWithNullParent)).toBe(true);
+      expect(isNode(rootNode)).toBe(true);
     });
 
     it('accepts node with empty content', () => {
@@ -551,7 +550,6 @@ describe('integration tests', () => {
       id: 'root',
       nodeType: 'text',
       content: 'Root',
-      parentId: null,
       createdAt: '2025-12-05T10:00:00Z',
       modifiedAt: '2025-12-05T10:00:00Z',
       version: 1,
@@ -562,7 +560,6 @@ describe('integration tests', () => {
       id: 'child',
       nodeType: 'text',
       content: 'Child',
-      parentId: 'root',
       createdAt: '2025-12-05T10:00:00Z',
       modifiedAt: '2025-12-05T10:00:00Z',
       version: 1,

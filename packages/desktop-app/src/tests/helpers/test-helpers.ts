@@ -31,7 +31,6 @@ import type { Node, NodeUIState } from '$lib/types/node';
  * @param idOrOptions - Node ID (string) or options object (Partial<Node>)
  * @param content - Node content (when using positional parameters)
  * @param nodeType - Optional node type (when using positional parameters)
- * @param parentId - Parent node ID to set parentId (when using positional parameters)
  * @param additionalProps - Additional properties to override (when using positional parameters)
  * @returns Complete Node object
  *
@@ -39,18 +38,15 @@ import type { Node, NodeUIState } from '$lib/types/node';
  * ```typescript
  * // Positional parameters (legacy)
  * const node = createTestNode('my-id', 'My content');
- * const childNode = createTestNode('child', 'Child content', 'text', 'parent-id');
  *
  * // Options object (preferred)
  * const node = createTestNode({ id: 'my-id', content: 'My content' });
- * const childNode = createTestNode({ parentId: 'parent-id', content: 'Child' });
  * ```
  */
 export function createTestNode(
   idOrOptions?: string | Partial<Node>,
   content?: string,
   nodeType?: string,
-  parentId?: string | null, // Parent node ID - sets parentId for hierarchy
   additionalProps?: Partial<Node>
 ): Node {
   // Handle object-based call (preferred)
@@ -63,7 +59,6 @@ export function createTestNode(
       id,
       nodeType: options.nodeType || 'text',
       content: options.content ?? 'Test content',
-      parentId: options.parentId ?? null,
       createdAt: options.createdAt || now,
       modifiedAt: options.modifiedAt || now,
       version: options.version ?? 1,
@@ -82,7 +77,6 @@ export function createTestNode(
     id,
     nodeType: nodeType || 'text',
     content: content ?? 'Test content',
-    parentId: parentId ?? null, // Use parentId parameter for hierarchy
     createdAt: now,
     modifiedAt: now,
     version: 1,
