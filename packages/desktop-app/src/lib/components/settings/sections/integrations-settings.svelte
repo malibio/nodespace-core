@@ -6,9 +6,6 @@
   const log = createLogger('IntegrationsSettings');
 
   interface IntegrationStatus {
-    completed: boolean;
-    pathConfigured: boolean;
-    skillConfigured: boolean;
     claudeCodeDetected: boolean;
     pathAlreadyConfigured: boolean;
   }
