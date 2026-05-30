@@ -48,13 +48,12 @@ import type {
   StoreMetrics,
   UpdateOptions
 } from '$lib/types/update-protocol';
-import { conflictNotifications, type ConflictNotification } from '$lib/stores/conflict-notifications.svelte';
+import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
-const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
+const CONFLICT_MESSAGE: Record<Conflict['conflictType'], string> = {
   'concurrent-edit': 'Your edit was overwritten by another pane',
   'version-mismatch': 'Your edit conflicted with a remote change',
-  'deleted-node': 'The node you edited was deleted by another pane',
-  'child-transfer-failure': "Changes couldn't be saved. Please try again."
+  'deleted-node': 'The node you edited was deleted by another pane'
 };
 
 const log = createLogger('SharedNodeStore');
