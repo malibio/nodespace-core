@@ -98,20 +98,32 @@ async fn append_path_to_file(path: &PathBuf) -> Result<bool, String> {
 
 /// Remove all NodeSpace PATH lines from a shell file. Returns `true` if modified.
 async fn remove_path_from_file(path: &PathBuf) -> Result<bool, String> {
-    if !path.exists() || !file_contains_nodespace_path(path).await {
+    if !path.exists() {
         return Ok(false);
     }
     let content = tokio::fs::read_to_string(path)
         .await
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    if !content.contains("$HOME/.nodespace/bin") {
+        return Ok(false);
+    }
     let filtered: Vec<&str> = content
         .lines()
         .filter(|l| {
             !l.contains("$HOME/.nodespace/bin") && !l.trim_start().starts_with("# NodeSpace CLI")
         })
         .collect();
-    // Trim trailing blank lines added by our insertion, then restore final newline.
-    let mut result = filtered.join("\n");
+    // Strip trailing blank lines left by the separator we wrote, then restore final newline.
+    let trimmed: Vec<&str> = filtered
+        .iter()
+        .copied()
+        .rev()
+        .skip_while(|l| l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let mut result = trimmed.join("\n");
     result.push('\n');
     tokio::fs::write(path, result)
         .await
@@ -217,6 +229,7 @@ pub async fn get_integrations_status() -> Result<OnboardingStatus, String> {
 }
 
 /// Remove the NodeSpace skill files from all detected agent skill directories.
+/// Resets both setup.json (authoritative for get_skill_setup_status) and config.json.
 #[tauri::command]
 pub async fn remove_skill() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
@@ -226,6 +239,10 @@ pub async fn remove_skill() -> Result<(), String> {
             .await
             .map_err(|e| format!("Failed to remove skill directory: {e}"))?;
     }
+
+    skill_setup::reset_skill_state()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut cfg = read_config().await?;
     cfg.integrations.skill_configured = false;

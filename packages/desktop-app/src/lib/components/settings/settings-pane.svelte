@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
-    import { loadSettings } from '$lib/stores/settings';
+    import { onMount } from 'svelte';
+    import { get } from 'svelte/store';
+    import { loadSettings, settingsInitialCategory } from '$lib/stores/settings';
     import SettingsSidebar from './settings-sidebar.svelte';
     import DatabaseSettings from './sections/database-settings.svelte';
     import DisplaySettings from './sections/display-settings.svelte';
@@ -9,25 +10,13 @@
     import ModelManager from './model-manager.svelte';
     import IntegrationsSettings from './sections/integrations-settings.svelte';
 
-    let activeCategory = $state('database');
-    let unlistenNavigate: (() => void) | null = null;
+    const initial = get(settingsInitialCategory);
+    settingsInitialCategory.set(null);
 
-    onMount(async () => {
+    let activeCategory = $state(initial ?? 'database');
+
+    onMount(() => {
         loadSettings();
-
-        if (
-            typeof window !== 'undefined' &&
-            (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-        ) {
-            const { listen } = await import('@tauri-apps/api/event');
-            unlistenNavigate = await listen<string>('settings-navigate-to', (event) => {
-                activeCategory = event.payload;
-            });
-        }
-    });
-
-    onDestroy(() => {
-        unlistenNavigate?.();
     });
 </script>
 

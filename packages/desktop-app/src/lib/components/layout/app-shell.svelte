@@ -21,6 +21,7 @@
   import { collectionsData } from '$lib/stores/collections';
   import { loadPersistedState, addTab, tabState, setActiveTab } from '$lib/stores/navigation';
   import { get } from 'svelte/store';
+  import { settingsInitialCategory } from '$lib/stores/settings';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
@@ -367,8 +368,10 @@
         }
       });
 
-      // Listen for File → Integrations menu — open settings tab focused on Integrations
-      unlistenIntegrations = listen('menu-open-integrations', async () => {
+      // Listen for File → Integrations menu — open settings tab focused on Integrations.
+      // Sets settingsInitialCategory before addTab so the pane reads it synchronously on mount.
+      unlistenIntegrations = listen('menu-open-integrations', () => {
+        settingsInitialCategory.set('integrations');
         const state = get(tabState);
         const existingSettingsTab = state.tabs.find((t) => t.type === 'settings');
         if (existingSettingsTab) {
@@ -383,10 +386,6 @@
             paneId: activePaneId
           });
         }
-        // Small delay to let the settings pane mount before navigating
-        await new Promise<void>((r) => setTimeout(r, 50));
-        const { emit } = await import('@tauri-apps/api/event');
-        emit('settings-navigate-to', 'integrations');
       });
 
       // Set up MCP event listeners for real-time UI updates
