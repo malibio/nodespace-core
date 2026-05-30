@@ -23,6 +23,7 @@ import type { Node } from '$lib/types';
 vi.mock('$lib/services/backend-adapter', () => ({
   backendAdapter: {
     moveNode: vi.fn().mockResolvedValue(undefined),
+    moveChildrenToParent: vi.fn().mockResolvedValue([]),
     getNode: vi.fn().mockResolvedValue(null),
     createNode: vi.fn().mockResolvedValue('mock-id'),
     updateNode: vi.fn().mockResolvedValue(null),

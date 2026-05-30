@@ -27,6 +27,7 @@ service NodeService {
   // Hierarchy mutations
   rpc MoveNode(MoveNodeRequest) returns (NodeResponse);
   rpc ReorderNode(ReorderNodeRequest) returns (ReorderNodeResponse);
+  rpc MoveChildrenToParent(MoveChildrenToParentRequest) returns (MoveChildrenToParentResponse);
 
   // Mentions
   rpc CreateMention(CreateMentionRequest) returns (MentionResponse);
@@ -412,6 +413,31 @@ message ReorderNodeRequest {
 
 // reorder_node returns () in the ops layer; we return Empty.
 message ReorderNodeResponse {}
+
+// ---------------------------------------------------------------------------
+// MoveChildrenToParent
+// ---------------------------------------------------------------------------
+
+// Atomically re-parents an ordered set of existing children to a new parent
+// in a single transaction. Used by the split-node operation to transfer
+// children without N round-trips and without partial-transfer risk.
+message MoveChildrenToParentRequest {
+  // The freshly-created split node that will become the new parent.
+  string new_parent_id = 1;
+  // Ordered children to re-parent; sibling order is preserved in array order.
+  repeated ChildMove children = 2;
+}
+
+// Per-child OCC token: version must match the daemon's current version.
+message ChildMove {
+  string node_id = 1;
+  int64 version = 2;
+}
+
+// Returns the updated children with new versions and authoritative orders.
+message MoveChildrenToParentResponse {
+  repeated NodeData children = 1;
+}
 
 // ---------------------------------------------------------------------------
 // Mentions
