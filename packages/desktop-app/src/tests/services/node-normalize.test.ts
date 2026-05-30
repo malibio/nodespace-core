@@ -40,27 +40,24 @@ describe('normalizeNodeData', () => {
     expect((result as any).status).toBe('open');
   });
 
-  /**
-   * Parity test: both sync paths must produce identical output from identical input.
-   * This is the anti-drift guard — if either path diverges, this test breaks.
-   */
-  it('Tauri path and browser path produce identical output (parity guard)', () => {
-    const taskNode = makeNode({
+  // Drift guard: both sync paths (Tauri + browser) call this single function, so the
+  // transformation contract below applies identically to both runtime modes. Adding a
+  // future type branch here is the one-place change that covers both paths.
+  it('normalizes full task node with status, priority, and dueDate', () => {
+    const node = makeNode({
       nodeType: 'task',
-      properties: { task: { status: 'in_progress', priority: 'low', dueDate: '2024-12-31' } } as Record<
-        string,
-        unknown
-      >
+      properties: {
+        task: { status: 'in_progress', priority: 'low', dueDate: '2024-12-31' }
+      } as Record<string, unknown>
     });
-
-    // Both paths now call the same shared normalizeNodeData — simulate both invocations
-    const tauriResult = normalizeNodeData(taskNode);
-    const browserResult = normalizeNodeData(taskNode);
-
-    expect(tauriResult).toEqual(browserResult);
+    const result = normalizeNodeData(node);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((tauriResult as any).status).toBe('in_progress');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((browserResult as any).dueDate).toBe('2024-12-31');
+    const r = result as any;
+    expect(r.nodeType).toBe('task');
+    expect(r.status).toBe('in_progress');
+    expect(r.priority).toBe('low');
+    expect(r.dueDate).toBe('2024-12-31');
+    expect(r.id).toBe('test-id');
+    expect(r.content).toBe('test content');
   });
 });
