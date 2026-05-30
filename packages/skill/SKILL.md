@@ -1,8 +1,29 @@
 # NodeSpace Skill
 
-NodeSpace is a local-first knowledge graph that stores notes, tasks, and structured data on your machine. Use it to persist information across sessions, build personal knowledge bases, and retrieve context from previous work.
+NodeSpace is a local-first knowledge graph that stores notes, tasks, and structured data on your machine. It persists across sessions — what you save today is searchable tomorrow.
 
-NodeSpace uses **SQLite (libsql)** as its storage engine, accessed via the `nodespaced` gRPC daemon.
+## How NodeSpace Thinks (Mental Model)
+
+**Everything is a node.** A node has a type, markdown content, and optional typed properties. Node types are schema-defined: `text`, `task`, and `date` are built-ins; custom types come from user-defined schemas (`nodespace schema list` shows what's registered).
+
+**Built-in node types:**
+- `text` — freeform notes, documents, findings, summaries
+- `task` — structured to-do items; carry status (`todo`/`in_progress`/`done`) and priority
+- `date` — daily anchor nodes (e.g. "2026-05-30"); the temporal spine of the graph. Attach time-sensitive findings under the relevant date node so they're retrievable by day.
+
+**Hierarchy is first-class edges, not nesting.** A node has one parent edge. Children are ordered via fractional ordering — siblings have a stable position without gap-numbering. Moving or reordering a node is an edge operation (change the parent or sibling position), not a recreate-and-delete.
+
+**Content is markdown.** Store prose, code blocks, lists — whatever fits the note. The export commands render it back as clean markdown.
+
+## When to Use NodeSpace (Session Judgment)
+
+Use NodeSpace as a working memory across sessions:
+
+1. **Session start** — run the preflight, then search for prior context before you begin. (`nodespace search "topic"`)
+2. **During the session** — save discoveries, decisions, and summaries as you go. Don't wait until the end.
+3. **Session end** — anything worth remembering next time should be stored. NodeSpace persists across sessions; your context window does not.
+
+Date nodes make temporal retrieval reliable: if a finding is time-bound, attach it under today's date node so future searches can scope by day.
 
 ## Preflight Check
 
@@ -22,13 +43,6 @@ Run this preflight once per session or task, not before every individual command
 | `command not found: nodespace` | CLI not installed or not on `$PATH` | Tell the user: NodeSpace CLI is not installed. They need to install it (e.g. via the NodeSpace DMG or `cargo install nodespace-cli`). Do not proceed. |
 | `Could not connect to nodespaced` | Daemon not running | Surface the CLI's own message to the user: start the daemon with `nodespaced`. Do not retry automatically — wait for confirmation. |
 | `diagnostics` shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing. |
-
-## When to Use NodeSpace
-
-- **Store notes or findings**: Save research, decisions, or summaries you'll want later
-- **Search for context**: Look up information stored in previous sessions
-- **Create structured data**: Organize tasks, project notes, or any typed content
-- **Build a knowledge graph**: Link related information with parent-child relationships
 
 ## Prerequisites
 
@@ -211,6 +225,18 @@ nodespace node create --type text --content "Project: API Redesign"
 
 # Add sub-notes under it
 nodespace node create --type text --content "Decision: use REST not GraphQL" --parent abc123
+```
+
+### Attach a finding to today's date node
+
+Date node IDs are the date string itself (`"2026-05-30"`). Pass the date string directly as `--parent` — the daemon auto-creates the date node if it doesn't exist yet.
+
+```bash
+# Attach a finding under today — date node is created automatically if absent
+nodespace node create --type text --content "Discovered: rate limiter uses fixed windows" --parent "2026-05-30"
+
+# To retrieve an existing date node directly
+nodespace node get "2026-05-30"
 ```
 
 ### Export a document for AI context
