@@ -227,10 +227,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return sharedNodeStore.getNode(nodeId) || null;
   }
 
-  // DEPRECATED: clearAllAutoFocus() removed
-  // Focus is now managed by FocusManager (single source of truth)
-  // Use focusManager.setEditingNode(nodeId) or focusManager.clearEditing() instead
-
   function createNode(
     afterNodeId: string,
     content: string = '',
@@ -314,7 +310,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       mentions: []
     };
 
-    // Create UI state (autoFocus removed - now derived from FocusManager)
     const newUIState = createDefaultUIState(nodeId, {
       depth: newDepth,
       expanded: true,
@@ -380,7 +375,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Set focus using FocusManager (single source of truth)
     // This replaces manual autoFocus flag manipulation
     if (shouldFocusNewNode) {
-      focusManager.setEditingNode(nodeId, paneId);
+      focusManager.focusNode(nodeId, paneId);
     }
 
     // NOTE: Sibling linked list updates removed - backend handles ordering via fractional ordering
@@ -488,7 +483,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     // If we're not focusing the new node, keep focus on the original node
     if (!shouldFocusNewNode && afterNode) {
-      focusManager.setEditingNode(afterNodeId, paneId);
+      focusManager.focusNode(afterNodeId, paneId);
     }
 
     return nodeId;
@@ -556,9 +551,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // Only send nodeType — don't include content to avoid cancelling
     // a pending content update from insertSlashCommand (contentTemplate)
     const updatePayload: Partial<Node> = { nodeType };
-
-    // Note: Schema defaults extraction was removed in Issue #690 simplification
-    // The backend handles defaults via SchemaNode if needed
 
     // Skip conflict detection for nodeType changes - they are always intentional conversions
     sharedNodeStore.updateNode(nodeId, updatePayload, viewerSource, {
@@ -714,7 +706,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // NOTE: Sorted children cache removed - backend provides pre-sorted children
 
     // Set focus on the previous node using FocusManager
-    focusManager.setEditingNode(previousNodeId, paneId, mergePosition);
+    focusManager.focusNodeAtPosition(previousNodeId, mergePosition, paneId);
     events.focusRequested(previousNodeId, mergePosition);
     events.nodeDeleted(currentNodeId);
     events.hierarchyChanged();
