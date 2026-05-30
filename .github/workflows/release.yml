@@ -304,26 +304,6 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies (agent-tools)
-        run: bun install
-        working-directory: packages/agent-tools
-
-      - name: Set version from release tag (agent-tools)
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          npm version "${TAG#v}" --no-git-tag-version
-        working-directory: packages/agent-tools
-
-      - name: Build @nodespaceai/agent-tools
-        run: bun run build
-        working-directory: packages/agent-tools
-
-      - name: Publish @nodespaceai/agent-tools
-        run: npm publish --access public
-        working-directory: packages/agent-tools
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Install dependencies (skill)
         run: bun install
         working-directory: packages/skill

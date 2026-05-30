@@ -417,7 +417,6 @@ pub fn run() {
             // First-launch onboarding wizard (Issue #1180)
             commands::onboarding::check_onboarding_status,
             commands::onboarding::configure_path,
-            commands::onboarding::configure_mcp,
             commands::onboarding::configure_skill,
             commands::onboarding::complete_onboarding,
         ])
