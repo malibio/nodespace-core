@@ -170,6 +170,7 @@
     let unlistenImport: Promise<() => void> | null = null;
     let unlistenDatabase: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
+    let unlistenIntegrations: Promise<() => void> | null = null;
     let unlistenDaemonStatus: Promise<() => void> | null = null;
     let unlistenSkillCliMissing: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
@@ -366,6 +367,28 @@
         }
       });
 
+      // Listen for File → Integrations menu — open settings tab focused on Integrations
+      unlistenIntegrations = listen('menu-open-integrations', async () => {
+        const state = get(tabState);
+        const existingSettingsTab = state.tabs.find((t) => t.type === 'settings');
+        if (existingSettingsTab) {
+          setActiveTab(existingSettingsTab.id, existingSettingsTab.paneId);
+        } else {
+          const activePaneId = state.activePaneId;
+          addTab({
+            id: 'settings',
+            title: 'Settings',
+            type: 'settings',
+            closeable: true,
+            paneId: activePaneId
+          });
+        }
+        // Small delay to let the settings pane mount before navigating
+        await new Promise<void>((r) => setTimeout(r, 50));
+        const { emit } = await import('@tauri-apps/api/event');
+        emit('settings-navigate-to', 'integrations');
+      });
+
       // Set up MCP event listeners for real-time UI updates
       cleanupMCP = setupMCPListeners(SharedNodeStore.getInstance());
     } else {
@@ -498,6 +521,9 @@
       }
       if (unlistenSettings) {
         (await unlistenSettings)();
+      }
+      if (unlistenIntegrations) {
+        (await unlistenIntegrations)();
       }
       if (unlistenDaemonStatus) {
         (await unlistenDaemonStatus)();

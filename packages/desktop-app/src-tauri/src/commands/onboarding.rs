@@ -96,6 +96,29 @@ async fn append_path_to_file(path: &PathBuf) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Remove all NodeSpace PATH lines from a shell file. Returns `true` if modified.
+async fn remove_path_from_file(path: &PathBuf) -> Result<bool, String> {
+    if !path.exists() || !file_contains_nodespace_path(path).await {
+        return Ok(false);
+    }
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let filtered: Vec<&str> = content
+        .lines()
+        .filter(|l| {
+            !l.contains("$HOME/.nodespace/bin") && !l.trim_start().starts_with("# NodeSpace CLI")
+        })
+        .collect();
+    // Trim trailing blank lines added by our insertion, then restore final newline.
+    let mut result = filtered.join("\n");
+    result.push('\n');
+    tokio::fs::write(path, result)
+        .await
+        .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+    Ok(true)
+}
+
 // ── commands ─────────────────────────────────────────────────────────────────
 
 /// Read persisted onboarding state and detect installed integrations.
@@ -124,6 +147,7 @@ pub async fn check_onboarding_status() -> Result<OnboardingStatus, String> {
 
 /// Append the NodeSpace PATH export to `~/.zshrc` and/or `~/.bash_profile`
 /// (whichever exist). Idempotent — will not add the line if already present.
+/// Updates the `path_configured` flag in config.json.
 #[tauri::command]
 pub async fn configure_path() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
@@ -131,7 +155,9 @@ pub async fn configure_path() -> Result<(), String> {
     append_path_to_file(&home.join(".zshrc")).await?;
     append_path_to_file(&home.join(".bash_profile")).await?;
 
-    Ok(())
+    let mut cfg = read_config().await?;
+    cfg.integrations.path_configured = true;
+    write_config(&cfg).await
 }
 
 /// Install the NodeSpace skill into detected agents (delegates to skill_setup).
@@ -169,6 +195,41 @@ pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
         cli_warning: skill_setup::cli_warning(cli_on_path),
         error: None,
     })
+}
+
+/// Remove the NodeSpace PATH export from `~/.zshrc` and/or `~/.bash_profile`.
+/// Updates the `path_configured` flag in config.json.
+#[tauri::command]
+pub async fn remove_from_path() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    remove_path_from_file(&home.join(".zshrc")).await?;
+    remove_path_from_file(&home.join(".bash_profile")).await?;
+
+    let mut cfg = read_config().await?;
+    cfg.integrations.path_configured = false;
+    write_config(&cfg).await
+}
+
+/// Return live integration status (path + skill) without running any installer.
+#[tauri::command]
+pub async fn get_integrations_status() -> Result<OnboardingStatus, String> {
+    check_onboarding_status().await
+}
+
+/// Remove the NodeSpace skill files from all detected agent skill directories.
+#[tauri::command]
+pub async fn remove_skill() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    let skill_dir = home.join(".claude").join("skills").join("nodespace");
+    if skill_dir.exists() {
+        tokio::fs::remove_dir_all(&skill_dir)
+            .await
+            .map_err(|e| format!("Failed to remove skill directory: {e}"))?;
+    }
+
+    let mut cfg = read_config().await?;
+    cfg.integrations.skill_configured = false;
+    write_config(&cfg).await
 }
 
 /// Persist the onboarding completion state to `~/.nodespace/config.json`.

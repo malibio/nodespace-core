@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { loadSettings } from '$lib/stores/settings';
     import SettingsSidebar from './settings-sidebar.svelte';
     import DatabaseSettings from './sections/database-settings.svelte';
@@ -10,9 +10,24 @@
     import IntegrationsSettings from './sections/integrations-settings.svelte';
 
     let activeCategory = $state('database');
+    let unlistenNavigate: (() => void) | null = null;
 
-    onMount(() => {
+    onMount(async () => {
         loadSettings();
+
+        if (
+            typeof window !== 'undefined' &&
+            (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+        ) {
+            const { listen } = await import('@tauri-apps/api/event');
+            unlistenNavigate = await listen<string>('settings-navigate-to', (event) => {
+                activeCategory = event.payload;
+            });
+        }
+    });
+
+    onDestroy(() => {
+        unlistenNavigate?.();
     });
 </script>
 
