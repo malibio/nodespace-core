@@ -4,6 +4,7 @@
 //! Each function accepts typed inputs, coordinates service calls (collection resolution,
 //! OCC auto-fetch, lifecycle management, search post-filtering), and returns typed outputs.
 
+pub mod collection_ops;
 pub mod context_ops;
 pub mod node_ops;
 pub mod rel_ops;
@@ -20,6 +21,9 @@ use crate::services::NodeServiceError;
 pub enum OpsError {
     #[error("Not found: {id}")]
     NotFound { id: String },
+
+    #[error("Already exists: {id}")]
+    AlreadyExists { id: String },
 
     #[error("Version conflict on {node_id}: expected {expected}, got {actual}")]
     VersionConflict {
