@@ -80,8 +80,9 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // Bootstrap or restart the launchd agent.
     bootstrap_launchd_agent(&plist_path)?;
 
-    // Wait briefly for the daemon to come up.
-    let status = wait_for_daemon(&socket_path, Duration::from_secs(5)).await;
+    // Wait for the daemon to come up. On cold start the embedding model load
+    // takes 6–8 seconds before nodespaced binds the socket, so 5s is too short.
+    let status = wait_for_daemon(&socket_path, Duration::from_secs(30)).await;
     Ok(status)
 }
 

@@ -121,6 +121,18 @@ pub async fn chat_model_download(
                     },
                 );
             }
+            "ready" => {
+                #[derive(Serialize)]
+                struct ReadyEvent {
+                    model_id: String,
+                }
+                let _ = app.emit(
+                    agent_events::MODEL_DOWNLOAD_READY,
+                    &ReadyEvent {
+                        model_id: event.model_id,
+                    },
+                );
+            }
             "error" => {
                 let msg = event
                     .error_message
