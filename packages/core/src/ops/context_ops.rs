@@ -157,70 +157,19 @@ pub async fn build_workspace_context(
 impl WorkspaceContext {
     /// Format context as a compact string for injection into a system prompt.
     ///
-    /// `max_chars` is a rough character budget. If the formatted string exceeds
-    /// it, custom schemas are prioritized over core types and the output is
-    /// truncated with an ellipsis note.
+    /// Entity types are intentionally omitted: the model discovers type metadata
+    /// on-demand via `search_skills`, which returns `schema_metadata` for the
+    /// matched skill's scoped types (#1283). Injecting all types every turn
+    /// bloats the context window proportionally to the number of registered schemas
+    /// and makes `search_skills` redundant as a routing mechanism.
+    ///
+    /// `max_chars` is a rough character budget for collections and playbooks.
     pub fn format_for_prompt(&self, max_chars: usize) -> String {
         let mut out = String::new();
 
-        // Entity types section
-        if !self.entity_types.is_empty() {
-            out.push_str("ENTITY TYPES:\n");
-
-            // Sort: custom types first (more important for the user), then core
-            let mut sorted: Vec<&EntityTypeInfo> = self.entity_types.iter().collect();
-            sorted.sort_by_key(|e| e.is_core); // false < true, so custom first
-
-            for et in &sorted {
-                let core_tag = if et.is_core { " (core)" } else { "" };
-                let mut line = format!("- {}: {}{}", et.type_id, et.display_name, core_tag);
-
-                // Fields
-                if !et.fields.is_empty() {
-                    let fields_str: Vec<String> = et
-                        .fields
-                        .iter()
-                        .map(|f| {
-                            if let Some(vals) = &f.enum_values {
-                                format!("{}(enum: {})", f.name, vals.join("/"))
-                            } else {
-                                format!("{}({})", f.name, f.field_type)
-                            }
-                        })
-                        .collect();
-                    line.push_str(&format!(" -- fields: {}", fields_str.join(", ")));
-                }
-
-                // Relationships
-                if !et.relationships.is_empty() {
-                    let rels_str: Vec<String> = et
-                        .relationships
-                        .iter()
-                        .map(|r| format!("{} {}", r.name, r.target_type))
-                        .collect();
-                    line.push_str(&format!(" -- rels: {}", rels_str.join(", ")));
-                }
-
-                // Title template
-                if let Some(tmpl) = &et.title_template {
-                    line.push_str(&format!(" -- title: \"{}\"", tmpl));
-                }
-
-                line.push('\n');
-
-                // Budget check: if adding this line would exceed the budget,
-                // stop and add a truncation note.
-                if out.len() + line.len() > max_chars.saturating_sub(60) {
-                    out.push_str("  (... more types available via get_all_schemas)\n");
-                    break;
-                }
-                out.push_str(&line);
-            }
-        }
-
         // Collections section
         if !self.collections.is_empty() {
-            let section = format!("\nCOLLECTIONS: {}\n", self.collections.join(", "));
+            let section = format!("COLLECTIONS: {}\n", self.collections.join(", "));
             if out.len() + section.len() <= max_chars {
                 out.push_str(&section);
             }
@@ -322,13 +271,16 @@ mod tests {
     }
 
     #[test]
-    fn format_for_prompt_includes_all_sections() {
+    fn format_for_prompt_includes_collections_and_playbooks() {
         let ctx = sample_context();
         let output = ctx.format_for_prompt(4000);
 
-        assert!(output.contains("ENTITY TYPES:"));
-        assert!(output.contains("customer: Customer"));
-        assert!(output.contains("task: Task (core)"));
+        // Entity types are no longer injected (#1283 — on-demand via search_skills)
+        assert!(!output.contains("ENTITY TYPES:"));
+        assert!(!output.contains("customer: Customer"));
+        assert!(!output.contains("task: Task (core)"));
+
+        // Collections and playbooks are still injected
         assert!(output.contains("COLLECTIONS:"));
         assert!(output.contains("Projects"));
         assert!(output.contains("ACTIVE PLAYBOOKS:"));
@@ -336,41 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn format_for_prompt_shows_enum_values() {
+    fn format_for_prompt_excludes_entity_type_details() {
         let ctx = sample_context();
         let output = ctx.format_for_prompt(4000);
 
-        assert!(output.contains("status(enum: Active/Churned)"));
-        assert!(output.contains("company(text)"));
-    }
-
-    #[test]
-    fn format_for_prompt_shows_relationships() {
-        let ctx = sample_context();
-        let output = ctx.format_for_prompt(4000);
-
-        assert!(output.contains("rels: has invoice"));
-    }
-
-    #[test]
-    fn format_for_prompt_shows_title_template() {
-        let ctx = sample_context();
-        let output = ctx.format_for_prompt(4000);
-
-        assert!(output.contains("title: \"{company}\""));
-    }
-
-    #[test]
-    fn format_for_prompt_custom_types_before_core() {
-        let ctx = sample_context();
-        let output = ctx.format_for_prompt(4000);
-
-        let customer_pos = output.find("customer:").unwrap();
-        let task_pos = output.find("task:").unwrap();
-        assert!(
-            customer_pos < task_pos,
-            "Custom types should appear before core types"
-        );
+        // These details are now served on-demand via search_skills schema_metadata
+        assert!(!output.contains("status(enum:"));
+        assert!(!output.contains("company(text)"));
+        assert!(!output.contains("rels: has invoice"));
+        assert!(!output.contains("title: \"{company}\""));
     }
 
     #[test]
@@ -378,7 +304,7 @@ mod tests {
         let ctx = sample_context();
         // Very small budget — should truncate
         let output = ctx.format_for_prompt(100);
-        assert!(output.len() <= 200); // some slack for the truncation message
+        assert!(output.len() <= 200); // some slack for the truncation note
     }
 
     #[test]
@@ -390,5 +316,19 @@ mod tests {
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn format_for_prompt_collections_only() {
+        let ctx = WorkspaceContext {
+            entity_types: vec![],
+            collections: vec!["Projects".into(), "Clients".into()],
+            active_playbooks: vec![],
+        };
+        let output = ctx.format_for_prompt(4000);
+        assert!(output.contains("COLLECTIONS:"));
+        assert!(output.contains("Projects"));
+        assert!(output.contains("Clients"));
+        assert!(!output.contains("ACTIVE PLAYBOOKS:"));
     }
 }

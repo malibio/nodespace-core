@@ -38,10 +38,10 @@ pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - To find what nodes are connected to a node: use get_related_nodes with the node ID.\n\
     - To update a task status: search_nodes for the task by name, then use update_task_status with the real ID.\n\
     - To update a node's title or content: search_nodes for it by name, then use update_node with the real ID.\n\
-    - To create a new entity type: use create_schema (not create_node). If the type already appears in ENTITY TYPES above, the schema already exists — do not call create_schema again.\n\
+    - To create a new entity type: use create_schema (not create_node). If search_skills returned schema_metadata showing the type already exists, do not call create_schema again.\n\
     - To modify an existing entity type (add/remove fields, change title_template): use update_schema with the schema_id\n\
-    - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in ENTITY TYPES).\n\
-    - If ENTITY TYPES shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
+    - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in schema_metadata from search_skills).\n\
+    - If schema_metadata from search_skills shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
     - To connect nodes: use create_relationship with relationship names from the schemas above\n\
     - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON.";
 

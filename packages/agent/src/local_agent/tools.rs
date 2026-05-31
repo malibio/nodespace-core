@@ -1181,9 +1181,12 @@ impl GraphToolExecutor {
             }
         };
 
+        let ns = self.node_service()?;
+
         use nodespace_core::ops::skill_ops;
         let output = skill_ops::find_skills(
             emb,
+            &ns,
             skill_ops::FindSkillsInput {
                 query: params.query.clone(),
                 limit: Some(limit),
