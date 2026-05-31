@@ -59,7 +59,6 @@ mod tests {
 
     #[test]
     fn schema_creation_rules_non_empty() {
-        assert!(!SCHEMA_CREATION_RULES.is_empty());
         assert!(SCHEMA_CREATION_RULES.contains("NODE MODEL:"));
         assert!(SCHEMA_CREATION_RULES.contains("create_schema"));
         assert!(SCHEMA_CREATION_RULES.contains("create_node"));
@@ -67,7 +66,6 @@ mod tests {
 
     #[test]
     fn tool_strategy_rules_non_empty() {
-        assert!(!TOOL_STRATEGY_RULES.is_empty());
         assert!(TOOL_STRATEGY_RULES.contains("TOOL STRATEGY:"));
         assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search first"));
         assert!(TOOL_STRATEGY_RULES.contains("NEVER use placeholder IDs"));
