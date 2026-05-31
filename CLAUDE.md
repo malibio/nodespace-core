@@ -283,20 +283,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 After pushing, update the issue comment with a handoff summary and commit link. Do NOT use WIP commits for normal development — only intentional session handoffs.
 
-## Semantic Search
+## Documentation Search
 
-When NodeSpace is running (`bun run demo:tauri`), docs are searchable via MCP `search_semantic`:
+Documentation lives in `../nodespace-docs/` and is searchable via the NodeSpace CLI/daemon (skills-based interface, not HTTP MCP). Read the docs directly from the filesystem when you need architecture or component references — the `../nodespace-docs/` directory is always available.
 
-```json
-{
-  "name": "search_semantic",
-  "arguments": { "query": "how to add a new node type", "limit": 5, "include_markdown": 1 }
-}
-```
+To import or refresh docs into NodeSpace: `nodespace import dir ../nodespace-docs --auto-collection-routing`
 
-Collections: `Architecture:Core`, `Components`, `Business Logic`, `Development`, `Development:Process`, `Development:Standards`, `ADR`, `Lessons`, `Troubleshooting`. Add `"collection": "Business Logic"` to filter. Add `"include_archived": true` to include superseded docs.
-
-Refresh docs: `bun run scripts/import-docs.ts` (use `--dry-run` to preview).
 
 ## Repository Structure
 
@@ -309,7 +301,7 @@ nodespace-core/
 │   │   ├── src/                  # Frontend source (Svelte 5)
 │   │   ├── src-tauri/            # Tauri backend
 │   │   └── [configs]             # App-specific configurations
-│   ├── core/                     # Knowledge graph data layer (NodeService, ops/, MCP)
+│   ├── core/                     # Knowledge graph data layer (NodeService, ops/)
 │   ├── agent/                    # AI agent orchestration (ReAct loop, ACP client)
 │   ├── nlp-engine/               # LLM inference and embedding (llama.cpp)
 │   ├── dev-tools/                # Development utilities
