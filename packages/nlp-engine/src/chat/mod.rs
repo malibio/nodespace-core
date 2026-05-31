@@ -35,9 +35,9 @@ use llama_cpp_2::context::LlamaContext;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::model::params::LlamaModelParams;
 #[cfg(feature = "chat-service")]
-use llama_cpp_2::model::{AddBos, LlamaModel};
-#[cfg(feature = "chat-service")]
 use llama_cpp_2::model::ChatTemplateResult;
+#[cfg(feature = "chat-service")]
+use llama_cpp_2::model::{AddBos, LlamaModel};
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::openai::OpenAIChatTemplateParams;
 #[cfg(feature = "chat-service")]
@@ -133,8 +133,6 @@ impl ChatLlamaState {
 unsafe impl Send for ChatLlamaState {}
 #[cfg(feature = "chat-service")]
 unsafe impl Sync for ChatLlamaState {}
-
-
 
 impl ChatEngine {
     /// Create a new chat engine with the given configuration.
@@ -354,8 +352,6 @@ impl ChatEngine {
         let mut piece_decoder = encoding_rs::UTF_8.new_decoder();
         let mut completion_tokens: u32 = 0;
         let mut n_cur = tokens.len();
-        // Accumulated raw text fed to the OAI parser each iteration.
-        let mut accumulated = String::new();
 
         loop {
             if completion_tokens >= max_tokens {
@@ -398,13 +394,10 @@ impl ChatEngine {
                 }
             };
 
-            accumulated.push_str(&piece);
-
-            // Feed accumulated text to the OAI-compat parser (is_partial=true).
-            // The parser returns deltas only when it has complete content or calls.
-            match oai_parser.update(&accumulated, true) {
+            // Feed each token piece to the OAI-compat parser incrementally.
+            // update() takes only the new text added since the previous call.
+            match oai_parser.update(&piece, true) {
                 Ok(deltas) => {
-                    accumulated.clear();
                     for delta_json in deltas {
                         emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
                     }
@@ -426,16 +419,14 @@ impl ChatEngine {
             n_cur += 1;
         }
 
-        // Finalize: flush any remaining buffered text as is_partial=false.
-        if !accumulated.is_empty() {
-            match oai_parser.update(&accumulated, false) {
-                Ok(deltas) => {
-                    for delta_json in deltas {
-                        emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
-                    }
+        // Finalize: signal end-of-stream with empty string and is_partial=false.
+        match oai_parser.update("", false) {
+            Ok(deltas) => {
+                for delta_json in deltas {
+                    emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
                 }
-                Err(e) => tracing::warn!("OAI parser finalize error: {}", e),
             }
+            Err(e) => tracing::warn!("OAI parser finalize error: {}", e),
         }
 
         on_chunk(ChatChunk::Done);
