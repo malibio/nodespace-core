@@ -19,5 +19,8 @@ pub const LOCAL_AGENT_ERROR: &str = "local-agent://error";
 /// Model download progress update.
 pub const MODEL_DOWNLOAD_PROGRESS: &str = "model://download-progress";
 
+/// Model download completed successfully.
+pub const MODEL_DOWNLOAD_READY: &str = "model://download-ready";
+
 /// Model status change (loading, loaded, error).
 pub const MODEL_STATUS: &str = "model://status";
