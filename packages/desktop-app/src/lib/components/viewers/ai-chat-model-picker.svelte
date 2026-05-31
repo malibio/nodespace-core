@@ -121,10 +121,11 @@
     downloads = { ...downloads, [modelId]: { downloaded: 0, total: 0 } };
     try {
       await chatModelDownload(modelId);
-      await refresh();
+      // Success-path refresh is handled by the MODEL_DOWNLOAD_READY event listener.
     } catch (e) {
       log.error('Download failed', e);
       error = e instanceof Error ? e.message : String(e);
+      await refresh();
     } finally {
       const next = { ...downloads };
       delete next[modelId];
