@@ -131,9 +131,11 @@ pub async fn find_skills(
                 }
             })
             .take(if scoped_type_ids.is_empty() {
+                // Unscoped: cap to avoid returning all schemas for general-purpose skills.
                 MAX_UNSCOPED_SCHEMA_METADATA
             } else {
-                usize::MAX
+                // Scoped: return all explicitly requested type IDs.
+                scoped_type_ids.len()
             })
             .map(|s| {
                 let fields: Vec<Value> = s
