@@ -42,7 +42,7 @@ pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - To modify an existing entity type (add/remove fields, change title_template): use update_schema with the schema_id\n\
     - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in schema_metadata from search_skills).\n\
     - If schema_metadata from search_skills shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
-    - To connect nodes: use create_relationship with relationship names from the schemas above\n\
+    - To connect nodes: use create_relationship with relationship names from the schema_metadata returned by search_skills\n\
     - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON.";
 
 /// Node reference formatting rule.

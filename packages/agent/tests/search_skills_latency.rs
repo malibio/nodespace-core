@@ -629,9 +629,24 @@ async fn bench_search_skills_e2e_latency() {
         scenario2.runs.push(m);
     }
     eprintln!(
-        "  scenario 2: search_skills called in {}/{} runs",
+        "  scenario 2: search_skills called in {}/{} runs (target: >0)",
         scenario2_skills_called, N_RUNS
     );
+    // Architectural assertion: the system prompt no longer contains entity types,
+    // so search_skills is the only path to type metadata. Whether a specific model
+    // calls it for well-known concepts (invoice, campaign) depends on training data.
+    // The hard structural invariant — that search_skills RETURNS schema_metadata —
+    // is verified in `search_skills_response_includes_schema_metadata` below.
+    // A model-level regression (entity types back in the prompt) would cause
+    // search_skills_calls to stay at 0 consistently — use this counter to monitor.
+    if scenario2_skills_called == 0 {
+        eprintln!(
+            "NOTE: search_skills was never called in scenario 2 — \
+             the model relied on training-data knowledge rather than on-demand discovery. \
+             This is acceptable for well-known types. Verify entity types are NOT in the \
+             system prompt by checking context_ops::format_for_prompt (#1283)."
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Scenario 3: Multi-skill — cross-type request spanning search and creation
@@ -670,9 +685,17 @@ async fn bench_search_skills_e2e_latency() {
         scenario3.runs.push(m);
     }
     eprintln!(
-        "  scenario 3: search_skills called in {}/{} runs",
+        "  scenario 3: search_skills called in {}/{} runs (target: >0)",
         scenario3_skills_called, N_RUNS
     );
+    if scenario3_skills_called == 0 {
+        eprintln!(
+            "NOTE: search_skills was never called in scenario 3 — \
+             the model relied on training-data knowledge rather than on-demand discovery. \
+             This is acceptable for well-known types. Verify entity types are NOT in the \
+             system prompt by checking context_ops::format_for_prompt (#1283)."
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Build and print summary

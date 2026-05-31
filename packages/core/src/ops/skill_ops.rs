@@ -76,7 +76,13 @@ pub async fn find_skills(
         .map_err(|e| OpsError::Internal(format!("Skill search failed: {}", e)))?;
 
     // Fetch all schemas once; used to attach metadata to each matched skill.
-    let all_schemas = node_service.get_all_schemas().await.unwrap_or_default();
+    let all_schemas = node_service
+        .get_all_schemas()
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "find_skills: failed to fetch schemas for metadata attachment");
+        })
+        .unwrap_or_default();
 
     let total_results = skill_results.len();
     let mut skills = Vec::with_capacity(total_results);
