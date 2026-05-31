@@ -24,8 +24,9 @@ use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
-    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, NodeServiceImpl,
-    NodeServiceServer, SettingsServiceImpl, SettingsServiceServer,
+    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, LocalAgentServiceImpl,
+    LocalAgentServiceServer, NodeServiceImpl, NodeServiceServer, SettingsServiceImpl,
+    SettingsServiceServer,
 };
 use nodespace_nlp_engine::EmbeddingService;
 use tonic::transport::Server;
@@ -129,7 +130,8 @@ async fn serve_headless() -> Result<()> {
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings));
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -189,7 +191,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings));
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -210,6 +213,7 @@ struct ServiceBundle {
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
     settings: SettingsServiceImpl,
+    local_agent: LocalAgentServiceImpl,
     /// `None` when the NLP model is absent — the daemon starts without semantic
     /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
     /// is simply not registered in that case.
@@ -268,13 +272,15 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         capture_config_path,
     );
 
-    let import = ImportServiceImpl::new(node_service);
+    let import = ImportServiceImpl::new(node_service.clone());
+    let local_agent = LocalAgentServiceImpl::new(node_service);
 
     Ok(ServiceBundle {
         node_service_grpc,
         agent_session,
         import,
         settings,
+        local_agent,
         embeddings_service_grpc,
         embedding_state,
     })
