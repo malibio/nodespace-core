@@ -27,6 +27,11 @@ use super::OpsError;
 /// partially undo that by silently hiding the long tail.
 const SKILL_SEARCH_THRESHOLD: f32 = 0.0;
 
+/// Maximum schemas to include in `schema_metadata` when no `node_types` scope
+/// is set on the matched skill. Bounds token cost for general-purpose skills.
+/// Skills that declare an explicit `node_types` list are not capped.
+const MAX_UNSCOPED_SCHEMA_METADATA: usize = 5;
+
 /// Upper bound on `limit` requested by the caller.
 ///
 /// Skill libraries are small in practice (~8-20 seeded skills plus a handful
@@ -100,9 +105,11 @@ pub async fn find_skills(
             .unwrap_or(json!([]));
 
         // Attach schema metadata for entity types relevant to this skill.
-        // The skill's `node_types` property lists the type IDs in scope; if absent
-        // we include all non-core schemas so the model has enough context to form
-        // correct create_node / update_node calls without the global type list.
+        // The skill's `node_types` property lists the type IDs in scope.
+        // When absent, fall back to all custom (non-core) schemas, capped at
+        // MAX_UNSCOPED_SCHEMA_METADATA to bound token cost for general-purpose
+        // skills that haven't declared an explicit scope. Skills should set
+        // `node_types` to avoid this fallback as workspaces grow.
         let scoped_type_ids: Vec<String> = node
             .properties
             .get("node_types")
@@ -118,11 +125,15 @@ pub async fn find_skills(
             .iter()
             .filter(|s| {
                 if scoped_type_ids.is_empty() {
-                    // No explicit scope: include all custom (non-core) schemas.
                     !s.is_core
                 } else {
                     scoped_type_ids.contains(&s.id)
                 }
+            })
+            .take(if scoped_type_ids.is_empty() {
+                MAX_UNSCOPED_SCHEMA_METADATA
+            } else {
+                usize::MAX
             })
             .map(|s| {
                 let fields: Vec<Value> = s
