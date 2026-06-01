@@ -446,6 +446,32 @@ impl ChatEngine {
     }
 }
 
+/// Remove Gemma 4 special-token strings from a content string.
+///
+/// The PEG parser (`COMMON_CHAT_FORMAT_PEG_GEMMA4`) may emit residual special-token
+/// text as content before it identifies a complete tool-call boundary. Gemma 4 uses
+/// two special-token patterns:
+/// - `<|...|>` — symmetric delimiters e.g. `<|"|>` (quote token)
+/// - `<|...>` — asymmetric e.g. `<|tool_call>` (call start marker)
+/// - `<...|>` — asymmetric e.g. `<tool_call|>` (call end marker)
+///
+/// We strip all three by removing any substring that starts with `<|` or ends with `|>`.
+fn strip_gemma_special_tokens(s: &str) -> String {
+    // Known Gemma 4 special token strings to strip.
+    const SPECIAL: &[&str] = &[
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|tool_response>",
+        "<|/tool_response>",
+        "<|\"|>",
+    ];
+    let mut out = s.to_string();
+    for token in SPECIAL {
+        out = out.replace(token, "");
+    }
+    out
+}
+
 /// Parse an OpenAI-compat streaming delta JSON string and emit the appropriate
 /// `ChatChunk` events. Called once per delta returned by `ChatParseStateOaicompat::update`.
 ///
@@ -464,10 +490,13 @@ fn emit_oai_delta(
         return;
     };
 
-    // Plain text content
+    // Plain text content — strip any residual Gemma 4 special-token strings
+    // (e.g. "<|tool_call>", "<|"|>", "<tool_call|>") that the PEG parser may
+    // pass through as content before it recognises the full tool-call boundary.
     if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
-        if !content.is_empty() {
-            on_chunk(ChatChunk::Token(content.to_string()));
+        let cleaned = strip_gemma_special_tokens(content);
+        if !cleaned.is_empty() {
+            on_chunk(ChatChunk::Token(cleaned));
         }
     }
 
@@ -481,10 +510,9 @@ fn emit_oai_delta(
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
                 .unwrap_or("");
-            let args = function
-                .and_then(|f| f.get("arguments"))
-                .and_then(|a| a.as_str())
-                .unwrap_or("{}");
+            // Only present when the delta actually carries arguments — absent on
+            // name-only deltas (common in Mistral streaming where args arrive later).
+            let args: Option<&str> = function.and_then(|f| f.get("arguments")).and_then(|a| a.as_str());
 
             // First delta for this index includes the name → emit ToolCallStart
             if !name.is_empty() && !tool_call_ids.contains_key(&index) {
@@ -498,18 +526,18 @@ fn emit_oai_delta(
                     id: id.clone(),
                     name: name.to_string(),
                 });
-                if !args.is_empty() {
+                if let Some(a) = args.filter(|a| !a.is_empty()) {
                     on_chunk(ChatChunk::ToolCallArgs {
                         id,
-                        json: args.to_string(),
+                        json: a.to_string(),
                     });
                 }
             } else if let Some(id) = tool_call_ids.get(&index) {
                 // Subsequent arg deltas for the same call
-                if !args.is_empty() {
+                if let Some(a) = args.filter(|a| !a.is_empty()) {
                     on_chunk(ChatChunk::ToolCallArgs {
                         id: id.clone(),
-                        json: args.to_string(),
+                        json: a.to_string(),
                     });
                 }
             }
@@ -743,5 +771,22 @@ mod tests {
         };
         let result = ChatEngine::new(config);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_strip_gemma_special_tokens() {
+        assert_eq!(strip_gemma_special_tokens("hello"), "hello");
+        assert_eq!(strip_gemma_special_tokens("<|tool_call>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|\"|>"), "");
+        assert_eq!(strip_gemma_special_tokens("<tool_call|>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|tool_response>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|/tool_response>"), "");
+        assert_eq!(strip_gemma_special_tokens("hello<|tool_call>world"), "helloworld");
+        assert_eq!(
+            strip_gemma_special_tokens("<|tool_call>call:search<tool_call|>"),
+            "call:search"
+        );
+        // Unknown <|...|>-style tokens are left as-is (only known tokens stripped)
+        assert_eq!(strip_gemma_special_tokens("text<|unknown|>end"), "text<|unknown|>end");
     }
 }
