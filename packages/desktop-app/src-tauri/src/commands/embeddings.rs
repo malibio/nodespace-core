@@ -205,17 +205,25 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
     Ok(())
 }
 
-/// Get count of stale topics/roots
+/// Get count of stale topics/roots.
+///
+/// Degrades gracefully when the daemon does not serve the `EmbeddingsService`.
+/// `nodespaced-pro` omits the NLP/embedding stack (no llama-cpp, per
+/// nodespace-sync#10), so its gRPC server never registers `EmbeddingsService`
+/// and this call returns `Unimplemented`. With no embedding processor there is
+/// no embedding queue, so the honest stale count is zero. The status bar polls
+/// this every 5s — returning `Ok(0)` keeps it quiet instead of flooding the
+/// console with a recurring `GRPC_ERROR` (nodespace-sync#82). Any other gRPC
+/// failure still surfaces as an error.
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
     let mut client = grpc.embeddings_client().await;
 
-    let response = client
-        .get_stale_count(GetStaleCountRequest {})
-        .await
-        .map_err(|e| grpc_err(e.message()))?;
-
-    Ok(response.into_inner().count as usize)
+    match client.get_stale_count(GetStaleCountRequest {}).await {
+        Ok(response) => Ok(response.into_inner().count as usize),
+        Err(status) if status.code() == tonic::Code::Unimplemented => Ok(0),
+        Err(status) => Err(grpc_err(status.message())),
+    }
 }
 
 /// Error details for a failed batch embedding operation
