@@ -307,6 +307,8 @@ impl ChatEngine {
 
         // --- Extract model info before taking mutable borrow for context ---
         let eos_token = llama.model.token_eos();
+        // Additional stop sequences from the chat template (e.g. Gemma 4's "<end_of_turn>").
+        let additional_stops = tmpl_result.additional_stops.clone();
 
         // --- Prepare context and batch ---
         let ctx = llama.get_or_create_context()?;
@@ -394,6 +396,12 @@ impl ChatEngine {
                 }
             };
 
+            // Stop on template-defined stop sequences (e.g. Gemma 4's "<end_of_turn>").
+            if additional_stops.iter().any(|s| piece.contains(s.as_str())) {
+                tracing::debug!("Stop sequence detected in piece: {:?}", piece);
+                break;
+            }
+
             // Feed each token piece to the OAI-compat parser incrementally.
             // update() takes only the new text added since the previous call.
             match oai_parser.update(&piece, true) {
@@ -464,6 +472,10 @@ fn strip_gemma_special_tokens(s: &str) -> String {
         "<|tool_response>",
         "<|/tool_response>",
         "<|\"|>",
+        "<turn|>",
+        "<|turn>",
+        "<end_of_turn>",
+        "<start_of_turn>",
     ];
     let mut out = s.to_string();
     for token in SPECIAL {
@@ -512,7 +524,9 @@ fn emit_oai_delta(
                 .unwrap_or("");
             // Only present when the delta actually carries arguments — absent on
             // name-only deltas (common in Mistral streaming where args arrive later).
-            let args: Option<&str> = function.and_then(|f| f.get("arguments")).and_then(|a| a.as_str());
+            let args: Option<&str> = function
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str());
 
             // First delta for this index includes the name → emit ToolCallStart
             if !name.is_empty() && !tool_call_ids.contains_key(&index) {
@@ -781,12 +795,18 @@ mod tests {
         assert_eq!(strip_gemma_special_tokens("<tool_call|>"), "");
         assert_eq!(strip_gemma_special_tokens("<|tool_response>"), "");
         assert_eq!(strip_gemma_special_tokens("<|/tool_response>"), "");
-        assert_eq!(strip_gemma_special_tokens("hello<|tool_call>world"), "helloworld");
+        assert_eq!(
+            strip_gemma_special_tokens("hello<|tool_call>world"),
+            "helloworld"
+        );
         assert_eq!(
             strip_gemma_special_tokens("<|tool_call>call:search<tool_call|>"),
             "call:search"
         );
         // Unknown <|...|>-style tokens are left as-is (only known tokens stripped)
-        assert_eq!(strip_gemma_special_tokens("text<|unknown|>end"), "text<|unknown|>end");
+        assert_eq!(
+            strip_gemma_special_tokens("text<|unknown|>end"),
+            "text<|unknown|>end"
+        );
     }
 }
