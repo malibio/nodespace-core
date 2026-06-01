@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use nodespace_proto::nodespace::{
-    BatchQueueEmbeddingsRequest, GetStaleCountRequest, QueueEmbeddingRequest,
-    RegenerateEmbeddingRequest, SearchSemanticRequest, TriggerBatchEmbedRequest,
+    BatchQueueEmbeddingsRequest, GetStaleCountRequest, GetStaleCountResponse,
+    QueueEmbeddingRequest, RegenerateEmbeddingRequest, SearchSemanticRequest,
+    TriggerBatchEmbedRequest,
 };
 
 fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
@@ -205,17 +206,44 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
     Ok(())
 }
 
-/// Get count of stale topics/roots
+/// Map a `get_stale_count` gRPC result to the command's `Result<usize>`.
+///
+/// `Unimplemented` collapses to `Ok(0)`: the daemon serves no
+/// `EmbeddingsService` — `nodespaced-pro` omits the NLP/embedding stack
+/// (no llama-cpp, per nodespace-sync#10) and never registers it — so there
+/// is no embedding queue and zero is the honest count.
+///
+/// Note this arm intentionally collapses *any* `Unimplemented` for this
+/// RPC, including the (today non-existent) case where a **registered**
+/// `EmbeddingsService` leaves `get_stale_count` itself unimplemented at the
+/// method level. That's acceptable because the community daemon implements
+/// it; were that to change, the queue indicator would read zero rather than
+/// surface the gap. Every other status surfaces as an error so real
+/// failures still reach the UI.
+///
+/// Extracted as a pure fn (no `State`/network) so the
+/// `Unimplemented → Ok(0)` contract is unit-testable without a mock gRPC
+/// server.
+fn stale_count_from_result(
+    result: Result<tonic::Response<GetStaleCountResponse>, tonic::Status>,
+) -> Result<usize, CommandError> {
+    match result {
+        Ok(response) => Ok(response.into_inner().count as usize),
+        Err(status) if status.code() == tonic::Code::Unimplemented => Ok(0),
+        Err(status) => Err(grpc_err(status.message())),
+    }
+}
+
+/// Get count of stale topics/roots.
+///
+/// Degrades gracefully when the daemon serves no `EmbeddingsService` (e.g.
+/// `nodespaced-pro`): the status bar polls this every 5s, so an
+/// `Unimplemented` must not flood the console (nodespace-sync#82). See
+/// [`stale_count_from_result`] for the mapping rationale.
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
     let mut client = grpc.embeddings_client().await;
-
-    let response = client
-        .get_stale_count(GetStaleCountRequest {})
-        .await
-        .map_err(|e| grpc_err(e.message()))?;
-
-    Ok(response.into_inner().count as usize)
+    stale_count_from_result(client.get_stale_count(GetStaleCountRequest {}).await)
 }
 
 /// Error details for a failed batch embedding operation
@@ -293,5 +321,36 @@ mod tests {
         assert_eq!(params.threshold.unwrap(), 0.8);
         assert_eq!(params.limit.unwrap(), 50);
         assert!(params.exact.unwrap());
+    }
+
+    /// Regression guard for nodespace-sync#82: a daemon with no
+    /// `EmbeddingsService` returns `Unimplemented`, which must collapse to
+    /// a quiet `Ok(0)` rather than an error the 5s poll would flood.
+    #[test]
+    fn stale_count_unimplemented_maps_to_zero() {
+        let out =
+            stale_count_from_result(Err(tonic::Status::unimplemented("no EmbeddingsService")));
+        assert_eq!(out.expect("Unimplemented should map to Ok(0)"), 0);
+    }
+
+    /// A real count passes through unchanged.
+    #[test]
+    fn stale_count_ok_passes_through() {
+        let resp = tonic::Response::new(GetStaleCountResponse { count: 7 });
+        assert_eq!(
+            stale_count_from_result(Ok(resp)).expect("Ok response passes through"),
+            7
+        );
+    }
+
+    /// Any non-`Unimplemented` status still surfaces as an error so genuine
+    /// failures aren't silently swallowed as "zero queued".
+    #[test]
+    fn stale_count_other_status_is_error() {
+        let out = stale_count_from_result(Err(tonic::Status::unavailable("daemon down")));
+        assert!(
+            out.is_err(),
+            "non-Unimplemented status must surface as an error"
+        );
     }
 }
