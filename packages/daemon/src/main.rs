@@ -256,6 +256,9 @@ async fn build_services(
     let model_path = resolve_model_path();
 
     let embedding_state: Arc<RwLock<Option<EmbeddingReady>>> = Arc::new(RwLock::new(None));
+    // Separate handle for consumers that only need Arc<NodeEmbeddingService> (assembler, etc.)
+    let embedding_svc_state: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> =
+        Arc::new(RwLock::new(None));
 
     let node_service = Arc::new(node_service);
 
@@ -268,7 +271,7 @@ async fn build_services(
     let manager = Arc::new(PtySessionManager::new());
     let assembler = Arc::new(GraphContextAssembler::new(
         node_service.clone(),
-        None, // embedding not yet loaded; context assembly falls back to keyword search
+        embedding_svc_state.clone(),
     ));
     let settings = SettingsServiceImpl::with_default_path()
         .map_err(|e| anyhow::anyhow!("Failed to initialize SettingsService: {}", e))?;
@@ -291,10 +294,11 @@ async fn build_services(
     // Spawn background model-load task if a model file was found.
     let bg_task = model_path.map(|path| {
         let state = embedding_state.clone();
+        let svc_state = embedding_svc_state.clone();
         let store_clone = store.clone();
         let ns_clone = node_service.clone();
         tokio::spawn(async move {
-            load_embedding_model_bg(path, store_clone, ns_clone, state).await;
+            load_embedding_model_bg(path, store_clone, ns_clone, state, svc_state).await;
         })
     });
 
@@ -361,6 +365,7 @@ async fn load_embedding_model_bg(
     store: Arc<SqliteStore>,
     node_service: Arc<CoreNodeService>,
     state: Arc<RwLock<Option<EmbeddingReady>>>,
+    svc_state: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
 ) {
     tracing::info!(path = %model_path.display(), "Loading embedding model in background");
 
@@ -369,19 +374,24 @@ async fn load_embedding_model_bg(
         ..Default::default()
     };
 
-    let mut nlp = match EmbeddingService::new(config) {
-        Ok(e) => e,
-        Err(e) => {
+    // `EmbeddingService::new` + `initialize` are synchronous CPU/IO-bound operations
+    // (~6-8s). Use spawn_blocking so they don't park a tokio worker thread.
+    let nlp = match tokio::task::spawn_blocking(move || {
+        let mut svc = EmbeddingService::new(config).map_err(|e| {
             tracing::warn!(error = %e, "Failed to create NLP engine — semantic search disabled");
-            return;
-        }
+            e
+        })?;
+        svc.initialize().map_err(|e| {
+            tracing::warn!(error = %e, "Failed to load NLP model — semantic search disabled");
+            e
+        })?;
+        Ok::<_, nodespace_nlp_engine::EmbeddingError>(svc)
+    })
+    .await
+    {
+        Ok(Ok(svc)) => Arc::new(svc),
+        Ok(Err(_)) | Err(_) => return,
     };
-    // This is the slow step (~6-8s on cold start).
-    if let Err(e) = nlp.initialize() {
-        tracing::warn!(error = %e, "Failed to load NLP model — semantic search disabled");
-        return;
-    }
-    let nlp = Arc::new(nlp);
 
     let node_accessor: Arc<dyn NodeAccessor> = Arc::new((*node_service).clone());
     let behaviors = node_service.behaviors().clone();
@@ -405,6 +415,8 @@ async fn load_embedding_model_bg(
     // Process any nodes that became stale during the load window.
     processor.wake();
 
+    // Publish to both state handles atomically enough for practical purposes.
+    *svc_state.write().await = Some(embedding_service.clone());
     *state.write().await = Some(EmbeddingReady {
         embedding_service,
         processor,
