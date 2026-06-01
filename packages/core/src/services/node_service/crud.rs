@@ -454,7 +454,7 @@ impl NodeService {
                         created_id
                     );
                     #[cfg(feature = "nlp")]
-                    if let Some(ref waker) = self.embedding_waker {
+                    if let Some(waker) = self.embedding_waker.get() {
                         waker.wake();
                     }
                 }
@@ -902,7 +902,7 @@ impl NodeService {
                     &store,
                     &behaviors,
                     &node_id,
-                    embedding_waker.as_ref(),
+                    embedding_waker.get(),
                 )
                 .await;
             });

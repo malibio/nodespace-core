@@ -3,11 +3,16 @@
 //! Wraps `NodeEmbeddingService` and `EmbeddingProcessor`. The GPU drain
 //! protocol (`release_gpu_context`) is handled on daemon shutdown, not by
 //! any individual RPC caller.
+//!
+//! The embedding model loads asynchronously after the socket is bound. While
+//! loading, all RPCs return `UNAVAILABLE` with a descriptive message. Once
+//! loaded, they work normally without any client reconnect.
 
 use std::sync::Arc;
 
 use nodespace_core::models::EmbeddingConfig;
 use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeService};
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
@@ -20,23 +25,28 @@ use crate::nodespace::{
 };
 use crate::services::node_service::node_to_proto;
 
+/// Live embedding state once the model has finished loading.
+pub struct EmbeddingReady {
+    pub embedding_service: Arc<NodeEmbeddingService>,
+    pub processor: Arc<EmbeddingProcessor>,
+}
+
 pub struct EmbeddingsServiceImpl {
     node_service: Arc<NodeService>,
-    embedding_service: Arc<NodeEmbeddingService>,
-    processor: Arc<EmbeddingProcessor>,
+    /// `None` while the model is still loading; populated by the background task.
+    state: Arc<RwLock<Option<EmbeddingReady>>>,
 }
 
 impl EmbeddingsServiceImpl {
-    pub fn new(
-        node_service: Arc<NodeService>,
-        embedding_service: Arc<NodeEmbeddingService>,
-        processor: Arc<EmbeddingProcessor>,
-    ) -> Self {
+    pub fn new(node_service: Arc<NodeService>, state: Arc<RwLock<Option<EmbeddingReady>>>) -> Self {
         Self {
             node_service,
-            embedding_service,
-            processor,
+            state,
         }
+    }
+
+    fn unavailable() -> Status {
+        Status::unavailable("embedding model loading, please retry")
     }
 
     /// Shared implementation for stale-count queries used by both
@@ -58,9 +68,14 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         _request: Request<GetEmbeddingStatusRequest>,
     ) -> Result<Response<EmbeddingStatusResponse>, Status> {
-        let stale_count = self.stale_count_inner().await?;
+        let available = self.state.read().await.is_some();
+        let stale_count = if available {
+            self.stale_count_inner().await?
+        } else {
+            0
+        };
         Ok(Response::new(EmbeddingStatusResponse {
-            available: true,
+            available,
             stale_count,
         }))
     }
@@ -75,6 +90,9 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             return Err(Status::invalid_argument("query cannot be empty"));
         }
 
+        let guard = self.state.read().await;
+        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+
         let threshold = if req.threshold == 0.0 {
             None
         } else {
@@ -86,7 +104,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             req.limit as i64
         };
 
-        let query_embedding = self
+        let query_embedding = state
             .embedding_service
             .nlp_engine()
             .generate_embedding(&req.query)
@@ -114,6 +132,9 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
     ) -> Result<Response<RegenerateEmbeddingResponse>, Status> {
         let req = request.into_inner();
 
+        let guard = self.state.read().await;
+        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+
         let node = self
             .node_service
             .get_node(&req.node_id)
@@ -121,7 +142,8 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             .map_err(|e| Status::internal(format!("Failed to get node: {}", e)))?
             .ok_or_else(|| Status::not_found(format!("Node not found: {}", req.node_id)))?;
 
-        self.embedding_service
+        state
+            .embedding_service
             .queue_for_embedding(&node.id)
             .await
             .map_err(|e| Status::internal(format!("Failed to queue embedding: {}", e)))?;
@@ -135,6 +157,9 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
     ) -> Result<Response<QueueEmbeddingResponse>, Status> {
         let req = request.into_inner();
 
+        let guard = self.state.read().await;
+        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+
         let node = self
             .node_service
             .get_node(&req.node_id)
@@ -142,7 +167,8 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             .map_err(|e| Status::internal(format!("Failed to get node: {}", e)))?
             .ok_or_else(|| Status::not_found(format!("Node not found: {}", req.node_id)))?;
 
-        self.embedding_service
+        state
+            .embedding_service
             .queue_for_embedding(&node.id)
             .await
             .map_err(|e| Status::internal(format!("Failed to queue embedding: {}", e)))?;
@@ -154,7 +180,11 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         _request: Request<TriggerBatchEmbedRequest>,
     ) -> Result<Response<TriggerBatchEmbedResponse>, Status> {
-        self.processor
+        let guard = self.state.read().await;
+        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+
+        state
+            .processor
             .trigger_batch_embed()
             .map_err(|e| Status::internal(format!("Failed to trigger batch embed: {}", e)))?;
 
@@ -174,13 +204,17 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         request: Request<BatchQueueEmbeddingsRequest>,
     ) -> Result<Response<BatchQueueEmbeddingsResponse>, Status> {
         let req = request.into_inner();
+
+        let guard = self.state.read().await;
+        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+
         let mut success_count = 0i32;
         let mut failures = Vec::new();
 
         for node_id in req.node_ids {
             match self.node_service.get_node(&node_id).await {
                 Ok(Some(node)) => {
-                    match self.embedding_service.queue_for_embedding(&node.id).await {
+                    match state.embedding_service.queue_for_embedding(&node.id).await {
                         Ok(_) => success_count += 1,
                         Err(e) => failures.push(BatchEmbeddingFailure {
                             node_id: node_id.clone(),

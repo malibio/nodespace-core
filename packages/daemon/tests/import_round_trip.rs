@@ -41,7 +41,10 @@ async fn spawn_import_daemon() -> (
             .await
             .expect("failed to build NodeService"),
     );
-    let node_svc = NodeServiceImpl::new(Arc::clone(&node_service), None);
+    let node_svc = NodeServiceImpl::new(
+        Arc::clone(&node_service),
+        Arc::new(tokio::sync::RwLock::new(None)),
+    );
     let import_svc = ImportServiceImpl::new(Arc::clone(&node_service));
 
     let listener = TcpListener::bind("127.0.0.1:0")
