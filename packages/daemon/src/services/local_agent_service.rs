@@ -811,9 +811,9 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
 
 async fn build_workspace_context(
     node_service: &Arc<NodeService>,
-    query: Option<&str>,
+    _query: Option<&str>,
 ) -> Result<String, ()> {
-    let context = nodespace_core::ops::context_ops::build_workspace_context(node_service, query)
+    let context = nodespace_core::ops::context_ops::build_workspace_context(node_service)
         .await
         .map_err(|_| ())?;
     Ok(context.format_for_prompt(4000))

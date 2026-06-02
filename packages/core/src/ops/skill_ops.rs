@@ -7,9 +7,9 @@
 //! scan against the small skill embedding set instead of going through HNSW
 //! + post-filter — faster *and* exact when the candidate set is small.
 //!
-//! Issues #1051, #1130.
+//! Issues #1051, #1130, #1283.
 
-use crate::services::NodeEmbeddingService;
+use crate::services::{NodeEmbeddingService, NodeService};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -26,6 +26,11 @@ use super::OpsError;
 /// LLM judge confidence from the raw score; a non-zero floor here would
 /// partially undo that by silently hiding the long tail.
 const SKILL_SEARCH_THRESHOLD: f32 = 0.0;
+
+/// Maximum schemas to include in `schema_metadata` when no `node_types` scope
+/// is set on the matched skill. Bounds token cost for general-purpose skills.
+/// Skills that declare an explicit `node_types` list are not capped.
+const MAX_UNSCOPED_SCHEMA_METADATA: usize = 5;
 
 /// Upper bound on `limit` requested by the caller.
 ///
@@ -50,15 +55,22 @@ pub struct FindSkillsOutput {
     pub total_results: usize,
 }
 
-/// Search for skill nodes via semantic search and return flat results.
+/// Search for skill nodes via semantic search and return flat results with
+/// schema metadata for the matched skill's scoped types.
 ///
 /// Returns up to `limit` matches (default 3) with `id`, `name`, `description`,
-/// `confidence`, and `tools`. No filtering or bucketing — the caller (model
-/// or MCP client) inspects the raw confidence score and decides how to act.
-/// An empty `skills` array is a meaningful signal: "no skill is even loosely
-/// related to this query."
+/// `confidence`, `tools`, and `schema_metadata`. The `schema_metadata` field
+/// contains type IDs, field names, and enum values for entity types associated
+/// with the skill's `tool_whitelist` scope — giving the model exactly the schema
+/// context it needs for the current intent without injecting the full type list
+/// every turn (#1283).
+///
+/// No filtering or bucketing — the caller (model or MCP client) inspects the
+/// raw confidence score and decides how to act. An empty `skills` array is a
+/// meaningful signal: "no skill is even loosely related to this query."
 pub async fn find_skills(
     embedding_service: &Arc<NodeEmbeddingService>,
+    node_service: &Arc<NodeService>,
     input: FindSkillsInput,
 ) -> Result<FindSkillsOutput, OpsError> {
     let limit = input.limit.unwrap_or(3).min(MAX_SKILL_LIMIT);
@@ -67,6 +79,15 @@ pub async fn find_skills(
         .semantic_search_nodes_of_type(&input.query, "skill", limit, SKILL_SEARCH_THRESHOLD)
         .await
         .map_err(|e| OpsError::Internal(format!("Skill search failed: {}", e)))?;
+
+    // Fetch all schemas once; used to attach metadata to each matched skill.
+    let all_schemas = node_service
+        .get_all_schemas()
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "find_skills: failed to fetch schemas for metadata attachment");
+        })
+        .unwrap_or_default();
 
     let total_results = skill_results.len();
     let mut skills = Vec::with_capacity(total_results);
@@ -83,12 +104,84 @@ pub async fn find_skills(
             .cloned()
             .unwrap_or(json!([]));
 
+        // Attach schema metadata for entity types relevant to this skill.
+        // The skill's `node_types` property lists the type IDs in scope.
+        // When absent, fall back to all custom (non-core) schemas, capped at
+        // MAX_UNSCOPED_SCHEMA_METADATA to bound token cost for general-purpose
+        // skills that haven't declared an explicit scope. Skills should set
+        // `node_types` to avoid this fallback as workspaces grow.
+        let scoped_type_ids: Vec<String> = node
+            .properties
+            .get("node_types")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let schema_metadata: Vec<Value> = all_schemas
+            .iter()
+            .filter(|s| {
+                if scoped_type_ids.is_empty() {
+                    !s.is_core
+                } else {
+                    scoped_type_ids.contains(&s.id)
+                }
+            })
+            .take(if scoped_type_ids.is_empty() {
+                // Unscoped: cap to avoid returning all schemas for general-purpose skills.
+                MAX_UNSCOPED_SCHEMA_METADATA
+            } else {
+                // Scoped: return all explicitly requested type IDs.
+                scoped_type_ids.len()
+            })
+            .map(|s| {
+                let fields: Vec<Value> = s
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let mut field = json!({
+                            "name": f.name,
+                            "type": f.field_type,
+                        });
+                        // Include enum values so the model can use exact values in tool calls.
+                        if f.field_type == "enum" {
+                            let mut vals: Vec<String> = Vec::new();
+                            if let Some(core_vals) = &f.core_values {
+                                vals.extend(core_vals.iter().map(|v| v.value.clone()));
+                            }
+                            if let Some(user_vals) = &f.user_values {
+                                vals.extend(user_vals.iter().map(|v| v.value.clone()));
+                            }
+                            if !vals.is_empty() {
+                                field["enum_values"] = json!(vals);
+                            }
+                        }
+                        field
+                    })
+                    .collect();
+
+                let mut entry = json!({
+                    "type_id": s.id,
+                    "name": s.content,
+                    "fields": fields,
+                });
+                if let Some(tmpl) = &s.title_template {
+                    entry["title_template"] = json!(tmpl);
+                }
+                entry
+            })
+            .collect();
+
         skills.push(json!({
             "id": node.id,
             "name": node.content,
             "description": description,
             "confidence": confidence,
             "tools": tool_whitelist,
+            "schema_metadata": schema_metadata,
         }));
     }
 
