@@ -21,18 +21,17 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 
 /// Tool strategy guidance.
 ///
-/// The full "TOOL STRATEGY:" bulleted list. Anchored on the rule that the
-/// agent must always search before updating or fetching nodes — never invent
-/// placeholder IDs — but also covers how to choose between search_nodes,
-/// search_semantic, get_node, and get_related_nodes, plus the canonical
-/// create_node / create_schema / create_relationship usage patterns.
+/// Compressed "TOOL STRATEGY:" bulleted list. Covers the search-first mandate
+/// (never invent placeholder IDs), tool selection hints for search_nodes vs.
+/// search_semantic, and canonical create/update/connect patterns. Parameter-level
+/// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - Before any non-conversational action: call search_skills(query) to find a matching skill. Empty result = no skill, proceed with general tools. Skip for greetings/small talk.\n\
     - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
     - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
     - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-    - To update task status: search_nodes for it, then update_task_status with the real ID.\n\
+    - To update task status: search_nodes for it, then update_task_status with the real ID. To update node content: search_nodes first, then update_node with the real ID.\n\
     - To create a node: create_node(content, node_type). Pass 'properties' only if ENTITY TYPES shows fields. Include title_template fields in properties.\n\
     - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
     - To connect nodes: create_relationship with names from schemas above.\n\

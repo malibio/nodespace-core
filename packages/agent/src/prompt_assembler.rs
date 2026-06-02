@@ -299,7 +299,7 @@ impl PromptAssembler {
                     "RESPONSE RULES:\n\
                     - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
                     - After tool results: respond in natural language. Never paste raw JSON.\n\
-                    - {}.\n\
+                    - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
                     - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
                     - Empty results: say so. Do NOT retry the same query.\n\
@@ -362,7 +362,7 @@ mod tests {
             - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
             - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
             - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-            - To update task status: search_nodes for it, then update_task_status with the real ID.\n\
+            - To update task status: search_nodes for it, then update_task_status with the real ID. To update node content: search_nodes first, then update_node with the real ID.\n\
             - To create a node: create_node(content, node_type). Pass 'properties' only if ENTITY TYPES shows fields. Include title_template fields in properties.\n\
             - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
             - To connect nodes: create_relationship with names from schemas above.\n\
@@ -371,7 +371,7 @@ mod tests {
         let expected_response_rules = "RESPONSE RULES:\n\
             - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
             - After tool results: respond in natural language. Never paste raw JSON.\n\
-            - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks).\n\
+            - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
             - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
             - Empty results: say so. Do NOT retry the same query.\n\
