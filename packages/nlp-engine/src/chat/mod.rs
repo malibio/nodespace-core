@@ -80,6 +80,8 @@ struct ChatLlamaState {
     model_path: String,
     context_size: u32,
     n_threads: i32,
+    /// Tokens from the last decoded prompt, used to find the reusable prefix.
+    cached_prompt: Vec<llama_cpp_2::token::LlamaToken>,
 }
 
 #[cfg(feature = "chat-service")]
@@ -91,6 +93,7 @@ impl ChatLlamaState {
             model_path,
             context_size,
             n_threads,
+            cached_prompt: Vec::new(),
         }
     }
 
@@ -311,19 +314,67 @@ impl ChatEngine {
         let additional_stops = tmpl_result.additional_stops.clone();
 
         // --- Prepare context and batch ---
+        // Find the longest token prefix shared with the last decoded prompt.
+        // Any matching prefix is already in the KV cache — only the delta needs
+        // decoding, which eliminates redundant attention computation for the
+        // stable system prompt on every ReAct iteration.
+        //
+        // Compute prefix metrics before the context borrow so the borrow
+        // checker sees no overlap between `llama.cached_prompt` reads and the
+        // `&mut llama` taken by `get_or_create_context`.
+        let prefix_len = tokens
+            .iter()
+            .zip(llama.cached_prompt.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let has_reusable_prefix = prefix_len > 0 && prefix_len < tokens.len();
+
         let ctx = llama.get_or_create_context()?;
-        ctx.clear_kv_cache();
+
+        // Determine how many tokens to skip in the batch.  If the KV trim
+        // succeeds we decode only the delta; if it fails we fall back to a
+        // full decode so the batch and KV cache are never out of sync.
+        let decode_from = if has_reusable_prefix {
+            tracing::debug!(
+                "KV cache reuse: {} prefix tokens cached, decoding {} delta tokens",
+                prefix_len,
+                tokens.len() - prefix_len
+            );
+            match ctx.clear_kv_cache_seq(Some(0), Some(prefix_len as u32), None) {
+                Ok(true) => prefix_len,
+                // `false` means the backend (e.g. recurrent models) does not
+                // support partial removal — fall back to full decode so the
+                // KV cache and batch are never out of sync.
+                Ok(false) => {
+                    tracing::warn!(
+                        "KV cache partial trim returned false, falling back to full decode"
+                    );
+                    ctx.clear_kv_cache();
+                    0
+                }
+                Err(e) => {
+                    tracing::warn!("KV cache trim failed ({}), falling back to full decode", e);
+                    ctx.clear_kv_cache();
+                    0
+                }
+            }
+        } else {
+            // No reusable prefix (first call, or prompt changed entirely): full decode.
+            ctx.clear_kv_cache();
+            0
+        };
 
         let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(config_n_ctx as usize, 1);
         let last_idx = tokens.len() - 1;
-        for (i, &token) in tokens.iter().enumerate() {
-            let logits = i == last_idx; // Only need logits for the last token
+        for (i, &token) in tokens[decode_from..].iter().enumerate() {
+            let pos = (decode_from + i) as i32;
+            let logits = decode_from + i == last_idx;
             batch
-                .add(token, i as i32, &[0], logits)
+                .add(token, pos, &[0], logits)
                 .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
         }
 
-        // Decode the prompt
+        // Decode the prompt (or just the delta on subsequent calls)
         ctx.decode(&mut batch)
             .map_err(|e| ChatError::InferenceError(format!("Prompt decode failed: {}", e)))?;
 
@@ -354,6 +405,7 @@ impl ChatEngine {
         let mut piece_decoder = encoding_rs::UTF_8.new_decoder();
         let mut completion_tokens: u32 = 0;
         let mut n_cur = tokens.len();
+        let mut context_overflowed = false;
 
         loop {
             if completion_tokens >= max_tokens {
@@ -363,6 +415,7 @@ impl ChatEngine {
 
             if n_cur as u32 >= config_n_ctx {
                 on_chunk(ChatChunk::Error("Context window full".to_string()));
+                context_overflowed = true;
                 break;
             }
 
@@ -425,6 +478,15 @@ impl ChatEngine {
                 .map_err(|e| ChatError::InferenceError(format!("Decode failed: {}", e)))?;
 
             n_cur += 1;
+        }
+
+        // Store the full prompt token sequence so the next call can reuse the
+        // KV-cached prefix.  On context overflow the KV state is indeterminate,
+        // so we clear cached_prompt to force a full decode on the next call.
+        if context_overflowed {
+            llama.cached_prompt.clear();
+        } else {
+            llama.cached_prompt = tokens;
         }
 
         // Finalize: signal end-of-stream with empty string and is_partial=false.
