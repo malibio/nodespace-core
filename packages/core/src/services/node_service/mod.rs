@@ -719,9 +719,11 @@ pub struct NodeService {
     /// creating stale markers. This enables event-driven embedding processing
     /// without polling.
     ///
-    /// Use `set_embedding_waker()` to configure after processor is initialized.
+    /// Shared via `Arc` so it can be populated after `NodeService` is wrapped
+    /// in `Arc` (e.g. when the embedding model loads in the background).
     #[cfg(feature = "nlp")]
-    pub(crate) embedding_waker: Option<crate::services::EmbeddingWaker>,
+    pub(crate) embedding_waker:
+        std::sync::Arc<std::sync::OnceLock<crate::services::EmbeddingWaker>>,
 }
 
 impl Clone for NodeService {
@@ -733,6 +735,7 @@ impl Clone for NodeService {
             event_tx: self.event_tx.clone(),
             client_id: self.client_id.clone(),
             execution_context: self.execution_context.clone(),
+            // Share the same OnceLock so any clone can observe the waker once set.
             #[cfg(feature = "nlp")]
             embedding_waker: self.embedding_waker.clone(),
         }
@@ -850,7 +853,7 @@ impl NodeService {
             client_id: None,
             execution_context: None,
             #[cfg(feature = "nlp")]
-            embedding_waker: None,
+            embedding_waker: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
 
         Ok(service)

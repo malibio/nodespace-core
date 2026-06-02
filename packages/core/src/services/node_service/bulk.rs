@@ -413,7 +413,7 @@ impl NodeService {
                     tracing::debug!("Created {} stale embedding markers", count);
                     // Wake the embedding processor once for all new roots
                     #[cfg(feature = "nlp")]
-                    if let Some(ref waker) = self.embedding_waker {
+                    if let Some(waker) = self.embedding_waker.get() {
                         tracing::debug!(
                             "🔔 Waking embedding processor for {} bulk-imported roots",
                             count

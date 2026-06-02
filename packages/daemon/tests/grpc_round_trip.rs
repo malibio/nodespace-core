@@ -45,7 +45,7 @@ async fn spawn_test_daemon() -> (
             .await
             .expect("failed to build NodeService"),
     );
-    let service = NodeServiceImpl::new(node_service, None);
+    let service = NodeServiceImpl::new(node_service, Arc::new(tokio::sync::RwLock::new(None)));
 
     // Bind to an ephemeral port so parallel test runs don't collide on 50051.
     let listener = TcpListener::bind("127.0.0.1:0")

@@ -28,11 +28,14 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{
-    InsertPosition, InsertPositionOwned, NodeAccessor, NodeEmbeddingService,
-    NodeService as CoreNodeService, NodeServiceError,
+    InsertPosition, InsertPositionOwned, NodeAccessor, NodeService as CoreNodeService,
+    NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::RwLock;
 use tokio_stream::wrappers::ReceiverStream;
+
+use crate::services::embeddings_service::EmbeddingReady;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
@@ -58,22 +61,22 @@ use crate::nodespace::{
 
 /// gRPC adapter that owns shared handles to the core services.
 ///
-/// `NodeEmbeddingService` is optional because semantic search is gracefully
-/// disabled when the NLP engine fails to start (matches the tiered-init
-/// pattern in the Tauri shell).
+/// `embedding_state` is `None` while the model is loading or when the NLP
+/// engine is absent. Semantic search returns `UNAVAILABLE` in both cases.
 pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,
-    embedding_service: Option<Arc<NodeEmbeddingService>>,
+    /// Shared with EmbeddingsServiceImpl; populated by the background load task.
+    embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
 }
 
 impl NodeServiceImpl {
     pub fn new(
         node_service: Arc<CoreNodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
+        embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
     ) -> Self {
         Self {
             node_service,
-            embedding_service,
+            embedding_state,
         }
     }
 }
@@ -298,9 +301,11 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<NodeListResponse>, Status> {
         let req = request.into_inner();
 
-        let embedding_service = self.embedding_service.as_ref().ok_or_else(|| {
-            Status::unavailable("Embedding service not initialized — semantic search disabled")
-        })?;
+        let guard = self.embedding_state.read().await;
+        let embedding_service = guard
+            .as_ref()
+            .map(|r| &r.embedding_service)
+            .ok_or_else(|| Status::unavailable("embedding model loading, please retry"))?;
 
         if !req.semantic {
             tracing::debug!(
@@ -1541,7 +1546,10 @@ mod tests {
         let db_path = tmp.path().join("test.db");
         let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let core_svc = Arc::new(CoreNodeService::new(&mut store).await.unwrap());
-        let svc = Arc::new(NodeServiceImpl::new(core_svc, None));
+        let svc = Arc::new(NodeServiceImpl::new(
+            core_svc,
+            Arc::new(tokio::sync::RwLock::new(None)),
+        ));
         (svc, tmp)
     }
 
