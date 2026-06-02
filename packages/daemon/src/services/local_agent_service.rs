@@ -193,6 +193,9 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             })
             .await;
 
+        // No query at session creation — semantic schema retrieval is skipped.
+        // The first send_message call will inject relevant schemas once a query exists.
+        // read().clone() drops the lock before the async build call.
         let emb = self.inner.embedding_service.read().await.clone();
         if let Ok(ctx) = build_workspace_context(&self.inner.node_service, emb, None).await {
             service.set_session_context(&session_id, ctx).await;
@@ -214,9 +217,10 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // Clone Arc so we can release the RwLock before awaiting.
         let service = self.get_service().await;
 
-        // Refresh workspace context before the turn. Semantic retrieval layers
-        // on top of keyword matching: schemas similar to the message are injected
-        // even when the user doesn't name the type explicitly (#1300).
+        // Refresh workspace context before the turn. Schemas semantically similar
+        // to the message are injected even when the user doesn't name the type
+        // explicitly (e.g. "clients" → customer schema, #1300).
+        // read().clone() drops the RwLock before the async build call.
         let emb = self.inner.embedding_service.read().await.clone();
         if let Ok(ctx) =
             build_workspace_context(&self.inner.node_service, emb, Some(&message)).await

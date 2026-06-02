@@ -40,17 +40,26 @@ pub struct PlaybookInfo {
 // ---------------------------------------------------------------------------
 
 /// Similarity threshold for schema semantic search.
+///
+/// 0.4 is empirically chosen to suppress false matches from short or ambiguous
+/// queries while still catching clear synonyms (e.g. "clients" → `customer`).
+/// `skill_ops` uses 0.0 (no threshold) because that search is over a smaller,
+/// curated set of skill nodes; schemas are more numerous and noisier.
 const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.4;
 
-/// Maximum number of schemas to inject via semantic retrieval.
+/// Maximum number of schemas to inject per turn.
+///
+/// Keeps the injected context compact. Three schemas cover the common case of a
+/// query that spans a primary type plus one or two related types; more would
+/// bloat the prompt for marginal gain.
 const MAX_SEMANTIC_SCHEMAS: usize = 3;
 
 /// Build workspace context by querying collections and playbooks.
 ///
 /// When `embedding_service` and `query` are both provided, schema nodes
-/// semantically similar to the query are retrieved and injected alongside
-/// keyword-matched schemas. Falls back to keyword-only when the embedding
-/// service is unavailable (#1300).
+/// semantically similar to the query are retrieved and injected into the
+/// context. Falls back to schema-free context when the embedding service is
+/// unavailable or the query is empty (#1300).
 pub async fn build_workspace_context(
     node_service: &Arc<NodeService>,
     embedding_service: Option<&Arc<NodeEmbeddingService>>,
@@ -109,7 +118,7 @@ pub async fn build_workspace_context(
                     schemas
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "workspace_context: semantic schema search failed, falling back to keyword-only");
+                    tracing::warn!(error = %e, "workspace_context: semantic schema search failed, omitting schemas");
                     vec![]
                 }
             }
@@ -151,7 +160,7 @@ impl WorkspaceContext {
         // Relevant schemas section (query-matched via semantic retrieval, #1300)
         if !self.relevant_schemas.is_empty() {
             let header = "\nRELEVANT ENTITY TYPES:\n";
-            if out.len() + header.len() < max_chars {
+            if out.len() + header.len() <= max_chars {
                 out.push_str(header);
                 for schema in &self.relevant_schemas {
                     let field_names: Vec<&str> =
@@ -173,7 +182,7 @@ impl WorkspaceContext {
         // Playbooks section
         if !self.active_playbooks.is_empty() {
             let header = "\nACTIVE PLAYBOOKS:\n";
-            if out.len() + header.len() < max_chars {
+            if out.len() + header.len() <= max_chars {
                 out.push_str(header);
                 for pb in &self.active_playbooks {
                     let line = if pb.description.is_empty() {
@@ -289,9 +298,9 @@ mod tests {
     #[test]
     fn format_for_prompt_truncates_on_budget() {
         let ctx = sample_context();
-        // Very small budget — should truncate
+        // Very small budget — output is silently capped (no truncation note emitted)
         let output = ctx.format_for_prompt(100);
-        assert!(output.len() <= 200); // some slack for the truncation note
+        assert!(output.len() <= 100);
     }
 
     #[test]
