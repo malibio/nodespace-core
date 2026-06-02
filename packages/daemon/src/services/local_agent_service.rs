@@ -186,7 +186,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             })
             .await;
 
-        if let Ok(ctx) = build_workspace_context(&self.inner.node_service).await {
+        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, None).await {
             service.set_session_context(&session_id, ctx).await;
         }
 
@@ -206,8 +206,9 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // Clone Arc so we can release the RwLock before awaiting.
         let service = self.get_service().await;
 
-        // Refresh workspace context before the turn.
-        if let Ok(ctx) = build_workspace_context(&self.inner.node_service).await {
+        // Refresh workspace context before the turn, filtered to types
+        // relevant to the user's message.
+        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, Some(&message)).await {
             service.set_session_context(&session_id, ctx).await;
         }
 
@@ -807,9 +808,12 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
     }
 }
 
-async fn build_workspace_context(node_service: &Arc<NodeService>) -> Result<String, ()> {
-    let context = nodespace_core::ops::context_ops::build_workspace_context(node_service)
+async fn build_workspace_context(
+    node_service: &Arc<NodeService>,
+    query: Option<&str>,
+) -> Result<String, ()> {
+    let context = nodespace_core::ops::context_ops::build_workspace_context(node_service, query)
         .await
         .map_err(|_| ())?;
-    Ok(context.format_for_prompt(1500))
+    Ok(context.format_for_prompt(4000))
 }

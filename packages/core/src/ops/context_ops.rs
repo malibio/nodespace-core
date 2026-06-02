@@ -57,8 +57,15 @@ pub struct PlaybookInfo {
 // ---------------------------------------------------------------------------
 
 /// Build workspace context by querying schemas, collections, and playbooks.
+///
+/// `query` is the user's message for this turn. When provided, entity types
+/// are filtered to those relevant to the query (type_id or display_name
+/// mentioned) plus all core types. When absent, all types are included.
+/// This prevents the workspace context from growing unboundedly as users
+/// create custom schemas.
 pub async fn build_workspace_context(
     node_service: &Arc<NodeService>,
+    query: Option<&str>,
 ) -> Result<WorkspaceContext, OpsError> {
     // Fetch schemas (empty vec on error — fresh database is fine)
     let schemas = node_service.get_all_schemas().await.unwrap_or_default();
@@ -77,7 +84,7 @@ pub async fn build_workspace_context(
         .unwrap_or_default();
 
     // Convert schemas to EntityTypeInfo
-    let entity_types: Vec<EntityTypeInfo> = schemas
+    let all_entity_types: Vec<EntityTypeInfo> = schemas
         .into_iter()
         .map(|schema| {
             let fields: Vec<FieldInfo> = schema
@@ -128,6 +135,24 @@ pub async fn build_workspace_context(
             }
         })
         .collect();
+
+    // Filter entity types by query relevance.
+    // Core types are always included; custom types are included only when
+    // the query mentions their type_id or display_name (case-insensitive).
+    // Without a query, all types are included (session start, fallback).
+    let entity_types = if let Some(q) = query {
+        let q_lower = q.to_lowercase();
+        all_entity_types
+            .into_iter()
+            .filter(|et| {
+                et.is_core
+                    || q_lower.contains(&et.type_id.to_lowercase())
+                    || q_lower.contains(&et.display_name.to_lowercase())
+            })
+            .collect()
+    } else {
+        all_entity_types
+    };
 
     // Convert playbook nodes
     let active_playbooks: Vec<PlaybookInfo> = playbook_nodes
@@ -390,5 +415,92 @@ mod tests {
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.is_empty());
+    }
+
+    // ---- query-relevance filtering -----------------------------------------
+
+    fn make_entity(type_id: &str, display_name: &str, is_core: bool) -> EntityTypeInfo {
+        EntityTypeInfo {
+            type_id: type_id.into(),
+            display_name: display_name.into(),
+            is_core,
+            description: String::new(),
+            fields: vec![],
+            relationships: vec![],
+            title_template: None,
+        }
+    }
+
+    fn filter_types(entity_types: Vec<EntityTypeInfo>, query: Option<&str>) -> Vec<EntityTypeInfo> {
+        if let Some(q) = query {
+            let q_lower = q.to_lowercase();
+            entity_types
+                .into_iter()
+                .filter(|et| {
+                    et.is_core
+                        || q_lower.contains(&et.type_id.to_lowercase())
+                        || q_lower.contains(&et.display_name.to_lowercase())
+                })
+                .collect()
+        } else {
+            entity_types
+        }
+    }
+
+    #[test]
+    fn query_filter_core_types_always_included() {
+        let types = vec![
+            make_entity("task", "Task", true),
+            make_entity("customer", "Customer", false),
+        ];
+        // Query that doesn't mention customer
+        let filtered = filter_types(types, Some("show me all my tasks"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].type_id, "task");
+    }
+
+    #[test]
+    fn query_filter_custom_type_included_when_mentioned_by_id() {
+        let types = vec![
+            make_entity("task", "Task", true),
+            make_entity("customer", "Customer", false),
+            make_entity("invoice", "Invoice", false),
+        ];
+        let filtered = filter_types(types, Some("find my customers"));
+        assert!(filtered.iter().any(|et| et.type_id == "customer"));
+        assert!(!filtered.iter().any(|et| et.type_id == "invoice"));
+    }
+
+    #[test]
+    fn query_filter_custom_type_included_when_mentioned_by_display_name() {
+        let types = vec![
+            make_entity("task", "Task", true),
+            make_entity("inv-001", "Invoice", false),
+        ];
+        // Query mentions display name "Invoice"
+        let filtered = filter_types(types, Some("create an Invoice for this customer"));
+        assert!(filtered.iter().any(|et| et.type_id == "inv-001"));
+    }
+
+    #[test]
+    fn query_filter_none_returns_all_types() {
+        let types = vec![
+            make_entity("task", "Task", true),
+            make_entity("customer", "Customer", false),
+            make_entity("invoice", "Invoice", false),
+        ];
+        let count = types.len();
+        let filtered = filter_types(types, None);
+        assert_eq!(filtered.len(), count);
+    }
+
+    #[test]
+    fn query_filter_case_insensitive() {
+        let types = vec![
+            make_entity("task", "Task", true),
+            make_entity("Customer", "Customer", false),
+        ];
+        let filtered = filter_types(types, Some("CUSTOMER report"));
+        assert!(filtered.iter().any(|et| et.type_id == "Customer"));
     }
 }
