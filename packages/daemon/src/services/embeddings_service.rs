@@ -195,6 +195,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         _request: Request<GetStaleCountRequest>,
     ) -> Result<Response<GetStaleCountResponse>, Status> {
+        // No model required — queries the DB stale-embedding table directly.
         let count = self.stale_count_inner().await?;
         Ok(Response::new(GetStaleCountResponse { count }))
     }

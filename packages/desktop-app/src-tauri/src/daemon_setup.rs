@@ -80,8 +80,10 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // Bootstrap or restart the launchd agent.
     bootstrap_launchd_agent(&plist_path)?;
 
-    // Socket is bound within ~500ms of daemon start (embedding loads in background).
-    let status = wait_for_daemon(&socket_path, Duration::from_secs(2)).await;
+    // Socket binds within ~500ms of daemon start (embedding loads in background).
+    // 5s provides margin for slow-disk machines while being 6x better than the
+    // previous 30s that waited for the full embedding model load.
+    let status = wait_for_daemon(&socket_path, Duration::from_secs(5)).await;
     Ok(status)
 }
 

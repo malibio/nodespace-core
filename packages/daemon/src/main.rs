@@ -112,6 +112,7 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (bundle, _bg_task) = build_services(&db_path).await?;
 
     if let Some(parent) = sock.parent() {
@@ -164,6 +165,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (bundle, _bg_task) = build_services(&db_path).await?;
 
     if let Some(parent) = sock.parent() {
@@ -264,6 +266,9 @@ async fn build_services(
 
     let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_state.clone());
 
+    // EmbeddingsService is only registered when a model file exists at startup.
+    // If the model appears later (e.g. user downloads it), the endpoint is absent
+    // until daemon restart. This is intentional — not a regression from prior behavior.
     let embeddings_service_grpc = model_path
         .as_ref()
         .map(|_| EmbeddingsServiceImpl::new(node_service.clone(), embedding_state.clone()));
