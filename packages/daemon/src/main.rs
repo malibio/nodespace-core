@@ -294,7 +294,7 @@ async fn build_services(
     );
 
     let import = ImportServiceImpl::new(node_service.clone());
-    let local_agent = LocalAgentServiceImpl::new(node_service.clone());
+    let local_agent = LocalAgentServiceImpl::new(node_service.clone(), embedding_svc_state.clone());
 
     // Spawn background model-load task if a model file was found.
     let bg_task = model_path.map(|path| {
