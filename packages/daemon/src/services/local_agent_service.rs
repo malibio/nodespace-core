@@ -206,8 +206,9 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // Clone Arc so we can release the RwLock before awaiting.
         let service = self.get_service().await;
 
-        // Refresh workspace context before the turn, filtered to types
-        // relevant to the user's message.
+        // Refresh workspace context before the turn, filtered to types whose
+        // type_id or display_name the user's message explicitly mentions (exact
+        // keyword match; implicit references are a follow-up for semantic retrieval).
         if let Ok(ctx) = build_workspace_context(&self.inner.node_service, Some(&message)).await {
             service.set_session_context(&session_id, ctx).await;
         }
