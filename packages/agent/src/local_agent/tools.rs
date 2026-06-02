@@ -1182,9 +1182,12 @@ impl GraphToolExecutor {
             }
         };
 
+        let ns = self.node_service()?;
+
         use nodespace_core::ops::skill_ops;
         let output = skill_ops::find_skills(
             emb,
+            &ns,
             skill_ops::FindSkillsInput {
                 query: params.query.clone(),
                 limit: Some(limit),
@@ -1428,9 +1431,18 @@ impl AgentToolExecutor for GraphToolExecutor {
             }
         };
 
+        let ns = match &self.node_service {
+            Some(svc) => svc,
+            None => {
+                tracing::debug!("select_tools: no node service, using full tool list");
+                return all_tools;
+            }
+        };
+
         use nodespace_core::ops::skill_ops;
         let skill_result = skill_ops::find_skills(
             emb,
+            ns,
             skill_ops::FindSkillsInput {
                 query: query.to_string(),
                 limit: Some(3),
@@ -1471,9 +1483,7 @@ impl AgentToolExecutor for GraphToolExecutor {
         // Fall back to full list if no skill contributed any tools beyond baseline
         // (all matches were below the confidence threshold or had empty whitelists).
         if selected_names.len() <= BASELINE_TOOLS.len() {
-            tracing::debug!(
-                "select_tools: no confident skill matches, using full tool list"
-            );
+            tracing::debug!("select_tools: no confident skill matches, using full tool list");
             return all_tools;
         }
 

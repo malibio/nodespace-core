@@ -118,11 +118,11 @@ mod tests {
 
     #[test]
     fn fallback_system_prompt_includes_context() {
-        let ctx = "ENTITY TYPES:\n- customer: Customer\n";
+        let ctx = "COLLECTIONS: Projects, Clients\n";
         let prompt = fallback_system_prompt(ctx);
         assert!(prompt.contains("NodeSpace"));
-        assert!(prompt.contains("ENTITY TYPES:"));
-        assert!(prompt.contains("customer: Customer"));
+        assert!(prompt.contains("COLLECTIONS:"));
+        assert!(prompt.contains("Projects"));
         assert!(prompt.contains("TOOL STRATEGY:"));
         assert!(prompt.contains("RESPONSE RULES:"));
     }
@@ -138,26 +138,24 @@ mod tests {
 
     #[test]
     fn fallback_system_prompt_per_turn_refresh() {
-        // Simulate dynamic context being refreshed per turn
-        let workspace_context_1 =
-            "ENTITY TYPES:\n- task: Task (core) -- fields: status(enum: open/done)\n";
+        // Simulate dynamic context being refreshed per turn (collections + playbooks only)
+        let workspace_context_1 = "COLLECTIONS: Projects, Tasks\n";
         let prompt_1 = fallback_system_prompt(workspace_context_1);
 
         assert!(prompt_1.contains("NodeSpace"));
-        assert!(prompt_1.contains("ENTITY TYPES:"));
-        assert!(prompt_1.contains("task: Task"));
-        assert!(prompt_1.contains("status(enum: open/done)"));
+        assert!(prompt_1.contains("COLLECTIONS:"));
+        assert!(prompt_1.contains("Projects"));
 
-        // Simulate a new schema added and context refreshed
-        let workspace_context_2 = "ENTITY TYPES:\n\
-            - task: Task (core) -- fields: status(enum: open/done)\n\
-            - customer: Customer -- fields: name(text), email(text)\n";
+        // Entity type details are no longer injected (#1283)
+        assert!(!prompt_1.contains("ENTITY TYPES:"));
+
+        // Simulate playbooks added and context refreshed
+        let workspace_context_2 =
+            "COLLECTIONS: Projects\n\nACTIVE PLAYBOOKS:\n- \"Sprint Planning\"\n";
         let prompt_2 = fallback_system_prompt(workspace_context_2);
 
-        // Should include both old and new types
-        assert!(prompt_2.contains("task: Task"));
-        assert!(prompt_2.contains("customer: Customer"));
-        assert!(prompt_2.contains("email(text)"));
+        assert!(prompt_2.contains("Projects"));
+        assert!(prompt_2.contains("Sprint Planning"));
     }
 
     #[test]
