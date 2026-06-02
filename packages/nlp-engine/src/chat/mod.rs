@@ -341,7 +341,17 @@ impl ChatEngine {
                 tokens.len() - prefix_len
             );
             match ctx.clear_kv_cache_seq(Some(0), Some(prefix_len as u32), None) {
-                Ok(_) => prefix_len,
+                Ok(true) => prefix_len,
+                // `false` means the backend (e.g. recurrent models) does not
+                // support partial removal — fall back to full decode so the
+                // KV cache and batch are never out of sync.
+                Ok(false) => {
+                    tracing::warn!(
+                        "KV cache partial trim returned false, falling back to full decode"
+                    );
+                    ctx.clear_kv_cache();
+                    0
+                }
                 Err(e) => {
                     tracing::warn!("KV cache trim failed ({}), falling back to full decode", e);
                     ctx.clear_kv_cache();
