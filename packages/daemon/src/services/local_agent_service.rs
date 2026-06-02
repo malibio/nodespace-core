@@ -17,7 +17,7 @@ use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 use nodespace_agent::local_agent::tools::GraphToolExecutor;
-use nodespace_core::services::NodeService;
+use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -75,6 +75,9 @@ struct LocalAgentServiceInner {
     model_manager: Arc<CompositeModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
+    /// Embedding service for semantic schema retrieval (#1300). Populated
+    /// asynchronously after the embedding model loads; `None` until then.
+    embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -85,7 +88,10 @@ pub struct LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
-    pub fn new(node_service: Arc<NodeService>) -> Self {
+    pub fn new(
+        node_service: Arc<NodeService>,
+        embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
+    ) -> Self {
         let gguf =
             Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
         let ollama = Arc::new(OllamaModelManager::new());
@@ -97,6 +103,7 @@ impl LocalAgentServiceImpl {
                 model_manager,
                 node_service,
                 active_model_id: Mutex::new(None),
+                embedding_service,
             }),
         }
     }
@@ -186,7 +193,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             })
             .await;
 
-        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, None).await {
+        let emb = self.inner.embedding_service.read().await.clone();
+        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, emb, None).await {
             service.set_session_context(&session_id, ctx).await;
         }
 
@@ -206,10 +214,13 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // Clone Arc so we can release the RwLock before awaiting.
         let service = self.get_service().await;
 
-        // Refresh workspace context before the turn, filtered to types whose
-        // type_id or display_name the user's message explicitly mentions (exact
-        // keyword match; implicit references are a follow-up for semantic retrieval).
-        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, Some(&message)).await {
+        // Refresh workspace context before the turn. Semantic retrieval layers
+        // on top of keyword matching: schemas similar to the message are injected
+        // even when the user doesn't name the type explicitly (#1300).
+        let emb = self.inner.embedding_service.read().await.clone();
+        if let Ok(ctx) =
+            build_workspace_context(&self.inner.node_service, emb, Some(&message)).await
+        {
             service.set_session_context(&session_id, ctx).await;
         }
 
@@ -811,10 +822,15 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
 
 async fn build_workspace_context(
     node_service: &Arc<NodeService>,
-    _query: Option<&str>,
+    embedding_service: Option<Arc<NodeEmbeddingService>>,
+    query: Option<&str>,
 ) -> Result<String, ()> {
-    let context = nodespace_core::ops::context_ops::build_workspace_context(node_service)
-        .await
-        .map_err(|_| ())?;
+    let context = nodespace_core::ops::context_ops::build_workspace_context(
+        node_service,
+        embedding_service.as_ref(),
+        query,
+    )
+    .await
+    .map_err(|_| ())?;
     Ok(context.format_for_prompt(4000))
 }
