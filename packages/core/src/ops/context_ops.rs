@@ -4,10 +4,14 @@
 //! the database. The output is formatted as a token-efficient string suitable
 //! for injection into a small-model system prompt.
 //!
-//! Entity types are no longer included here — the model discovers type metadata
-//! on-demand via `search_skills` which returns `schema_metadata` per match (#1283).
+//! Entity types are no longer included here by default — the model discovers
+//! type metadata on-demand via `search_skills` which returns `schema_metadata`
+//! per match (#1283). When a query + embedding service are provided, schemas
+//! semantically relevant to the query are injected to cover implicit references
+//! (e.g. "track my clients" → `customer` schema) (#1300).
 
-use crate::services::{CollectionService, NodeService};
+use crate::models::SchemaNode;
+use crate::services::{CollectionService, NodeEmbeddingService, NodeService};
 use std::sync::Arc;
 
 use super::OpsError;
@@ -21,6 +25,8 @@ use super::OpsError;
 pub struct WorkspaceContext {
     pub collections: Vec<String>,
     pub active_playbooks: Vec<PlaybookInfo>,
+    /// Schemas semantically relevant to the current query (may be empty).
+    pub relevant_schemas: Vec<SchemaNode>,
 }
 
 /// An active playbook.
@@ -33,12 +39,31 @@ pub struct PlaybookInfo {
 // Builder
 // ---------------------------------------------------------------------------
 
+/// Similarity threshold for schema semantic search.
+///
+/// 0.4 is empirically chosen to suppress false matches from short or ambiguous
+/// queries while still catching clear synonyms (e.g. "clients" → `customer`).
+/// `skill_ops` uses 0.0 (no threshold) because that search is over a smaller,
+/// curated set of skill nodes; schemas are more numerous and noisier.
+const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.4;
+
+/// Maximum number of schemas to inject per turn.
+///
+/// Keeps the injected context compact. Three schemas cover the common case of a
+/// query that spans a primary type plus one or two related types; more would
+/// bloat the prompt for marginal gain.
+const MAX_SEMANTIC_SCHEMAS: usize = 3;
+
 /// Build workspace context by querying collections and playbooks.
 ///
-/// Entity schemas are intentionally excluded — the model discovers type
-/// metadata on-demand via `search_skills` (#1283).
+/// When `embedding_service` and `query` are both provided, schema nodes
+/// semantically similar to the query are retrieved and injected into the
+/// context. Falls back to schema-free context when the embedding service is
+/// unavailable or the query is empty (#1300).
 pub async fn build_workspace_context(
     node_service: &Arc<NodeService>,
+    embedding_service: Option<&Arc<NodeEmbeddingService>>,
+    query: Option<&str>,
 ) -> Result<WorkspaceContext, OpsError> {
     // Fetch collection names
     let collection_service = CollectionService::new(node_service.store(), node_service);
@@ -67,9 +92,44 @@ pub async fn build_workspace_context(
         })
         .collect();
 
+    // Semantic schema retrieval (#1300): find schemas relevant to the query.
+    // Only runs when both an embedding service and a non-empty query are present.
+    let relevant_schemas = match (embedding_service, query.filter(|q| !q.trim().is_empty())) {
+        (Some(emb), Some(q)) => {
+            match emb
+                .semantic_search_nodes_of_type(
+                    q,
+                    "schema",
+                    MAX_SEMANTIC_SCHEMAS,
+                    SCHEMA_SIMILARITY_THRESHOLD,
+                )
+                .await
+            {
+                Ok(results) => {
+                    let schemas: Vec<SchemaNode> = results
+                        .into_iter()
+                        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
+                        .collect();
+                    tracing::debug!(
+                        count = schemas.len(),
+                        query = q,
+                        "workspace_context: semantic schema retrieval"
+                    );
+                    schemas
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "workspace_context: semantic schema search failed, omitting schemas");
+                    vec![]
+                }
+            }
+        }
+        _ => vec![],
+    };
+
     Ok(WorkspaceContext {
         collections,
         active_playbooks,
+        relevant_schemas,
     })
 }
 
@@ -80,13 +140,12 @@ pub async fn build_workspace_context(
 impl WorkspaceContext {
     /// Format context as a compact string for injection into a system prompt.
     ///
-    /// Entity types are intentionally omitted: the model discovers type metadata
-    /// on-demand via `search_skills`, which returns `schema_metadata` for the
-    /// matched skill's scoped types (#1283). Injecting all types every turn
-    /// bloats the context window proportionally to the number of registered schemas
-    /// and makes `search_skills` redundant as a routing mechanism.
+    /// Semantically-relevant schemas are injected when present (retrieved via
+    /// vector similarity by `build_workspace_context` — covers implicit type
+    /// references like "clients" → `customer` schema, #1300). All other entity
+    /// types remain on-demand via `search_skills` (#1283).
     ///
-    /// `max_chars` is a rough character budget for collections and playbooks.
+    /// `max_chars` is a rough character budget for the combined output.
     pub fn format_for_prompt(&self, max_chars: usize) -> String {
         let mut out = String::new();
 
@@ -98,10 +157,32 @@ impl WorkspaceContext {
             }
         }
 
+        // Relevant schemas section (query-matched via semantic retrieval, #1300)
+        if !self.relevant_schemas.is_empty() {
+            let header = "\nRELEVANT ENTITY TYPES:\n";
+            if out.len() + header.len() <= max_chars {
+                out.push_str(header);
+                for schema in &self.relevant_schemas {
+                    let field_names: Vec<&str> =
+                        schema.fields.iter().map(|f| f.name.as_str()).collect();
+                    let fields_str = if field_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", field_names.join(", "))
+                    };
+                    let line = format!("- {}: {}{}\n", schema.id, schema.content, fields_str);
+                    if out.len() + line.len() > max_chars {
+                        break;
+                    }
+                    out.push_str(&line);
+                }
+            }
+        }
+
         // Playbooks section
         if !self.active_playbooks.is_empty() {
             let header = "\nACTIVE PLAYBOOKS:\n";
-            if out.len() + header.len() < max_chars {
+            if out.len() + header.len() <= max_chars {
                 out.push_str(header);
                 for pb in &self.active_playbooks {
                     let line = if pb.description.is_empty() {
@@ -136,6 +217,42 @@ mod tests {
                 name: "Task completion".into(),
                 description: "When task.status -> Done, evaluate project progress".into(),
             }],
+            relevant_schemas: vec![],
+        }
+    }
+
+    fn sample_schema(id: &str, display_name: &str, fields: &[&str]) -> crate::models::SchemaNode {
+        use crate::models::schema::SchemaField;
+        crate::models::SchemaNode {
+            id: id.to_string(),
+            content: display_name.to_string(),
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            is_core: false,
+            schema_version: 1,
+            description: String::new(),
+            fields: fields
+                .iter()
+                .map(|name| SchemaField {
+                    name: name.to_string(),
+                    field_type: "string".to_string(),
+                    protection: crate::models::schema::SchemaProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: None,
+                    extensible: None,
+                    default: None,
+                    description: None,
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                })
+                .collect(),
+            relationships: vec![],
+            title_template: None,
+            properties_header_summary_template: None,
         }
     }
 
@@ -144,24 +261,46 @@ mod tests {
         let ctx = sample_context();
         let output = ctx.format_for_prompt(4000);
 
-        // Entity types are no longer injected (#1283 — on-demand via search_skills)
-        assert!(!output.contains("ENTITY TYPES:"));
-        assert!(!output.contains("customer: Customer"));
-        assert!(!output.contains("task: Task (core)"));
-
         // Collections and playbooks are still injected
         assert!(output.contains("COLLECTIONS:"));
         assert!(output.contains("Projects"));
         assert!(output.contains("ACTIVE PLAYBOOKS:"));
         assert!(output.contains("Task completion"));
+
+        // No schemas when relevant_schemas is empty
+        assert!(!output.contains("RELEVANT ENTITY TYPES:"));
+    }
+
+    #[test]
+    fn format_for_prompt_includes_relevant_schemas() {
+        let mut ctx = sample_context();
+        ctx.relevant_schemas = vec![sample_schema("customer", "Customer", &["name", "email"])];
+        let output = ctx.format_for_prompt(4000);
+
+        assert!(output.contains("RELEVANT ENTITY TYPES:"));
+        assert!(output.contains("customer: Customer"));
+        assert!(output.contains("name, email"));
+    }
+
+    #[test]
+    fn format_for_prompt_schema_no_fields() {
+        let ctx = WorkspaceContext {
+            collections: vec![],
+            active_playbooks: vec![],
+            relevant_schemas: vec![sample_schema("invoice", "Invoice", &[])],
+        };
+        let output = ctx.format_for_prompt(4000);
+        assert!(output.contains("invoice: Invoice\n"));
+        // No parentheses when there are no fields
+        assert!(!output.contains("("));
     }
 
     #[test]
     fn format_for_prompt_truncates_on_budget() {
         let ctx = sample_context();
-        // Very small budget — should truncate
+        // Very small budget — output is silently capped (no truncation note emitted)
         let output = ctx.format_for_prompt(100);
-        assert!(output.len() <= 200); // some slack for the truncation note
+        assert!(output.len() <= 100);
     }
 
     #[test]
@@ -169,6 +308,7 @@ mod tests {
         let ctx = WorkspaceContext {
             collections: vec![],
             active_playbooks: vec![],
+            relevant_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.is_empty());
@@ -179,6 +319,7 @@ mod tests {
         let ctx = WorkspaceContext {
             collections: vec!["Projects".into(), "Clients".into()],
             active_playbooks: vec![],
+            relevant_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("COLLECTIONS:"));
