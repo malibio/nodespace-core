@@ -524,4 +524,17 @@ pub trait AgentToolExecutor: Send + Sync {
 
     /// Execute a tool by name with the given JSON arguments.
     async fn execute(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, ToolError>;
+
+    /// Select which tools to expose to the model for a specific user query.
+    ///
+    /// Default: returns all tools unchanged. Implementors that support
+    /// semantic skill lookup can override this to return only query-relevant
+    /// tools, reducing prompt token cost and improving model focus.
+    async fn select_tools(
+        &self,
+        _query: &str,
+        all_tools: Vec<ToolDefinition>,
+    ) -> Vec<ToolDefinition> {
+        all_tools
+    }
 }
