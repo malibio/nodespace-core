@@ -3,16 +3,13 @@
 use super::*;
 
 impl NodeService {
-    /// Set the embedding waker for event-driven processing (Issue #729)
+    /// Set the embedding waker for event-driven processing.
     ///
-    /// Call this after `EmbeddingProcessor` is initialized to enable
-    /// automatic wake-on-change for embedding processing.
-    ///
-    /// # Arguments
-    /// * `waker` - The waker handle from `EmbeddingProcessor::waker()`
+    /// Silently ignored if called more than once. Works on `Arc<NodeService>`
+    /// since the waker lock is shared via `Arc`.
     #[cfg(feature = "nlp")]
-    pub fn set_embedding_waker(&mut self, waker: crate::services::EmbeddingWaker) {
-        self.embedding_waker = Some(waker);
+    pub fn set_embedding_waker(&self, waker: crate::services::EmbeddingWaker) {
+        let _ = self.embedding_waker.set(waker);
     }
 
     /// Queue a node's root for embedding regeneration
@@ -99,12 +96,12 @@ impl NodeService {
             );
 
             // Wake the embedding processor (fire-and-forget)
-            if let Some(ref waker) = self.embedding_waker {
+            if let Some(waker) = self.embedding_waker.get() {
                 tracing::debug!("🔔 Waking embedding processor for root {}", root_id);
                 waker.wake();
             } else {
-                tracing::warn!(
-                    "⚠️ No embedding waker configured - root {} will not be processed automatically",
+                tracing::debug!(
+                    "Embedding waker not yet configured — root {} will be processed on next wake",
                     root_id
                 );
             }

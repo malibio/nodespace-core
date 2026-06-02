@@ -19,6 +19,7 @@ use nodespace_core::NodeService;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Default token budget when none is specified by the caller.
 const DEFAULT_TOKEN_BUDGET: u32 = 50_000;
@@ -206,7 +207,8 @@ struct CollectedRelationship {
 /// assembler before each agent session starts.
 pub struct GraphContextAssembler {
     node_service: Arc<NodeService>,
-    embedding_service: Option<Arc<NodeEmbeddingService>>,
+    /// Updated by the background embedding-load task once the model is ready.
+    embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
     seed_node_ids: Vec<String>,
     token_budget: u32,
     /// Root of the `packages/skill/shims/` directory. When set,
@@ -218,7 +220,7 @@ pub struct GraphContextAssembler {
 impl GraphContextAssembler {
     pub fn new(
         node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
+        embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
     ) -> Self {
         Self {
             node_service,
@@ -271,7 +273,8 @@ impl GraphContextAssembler {
 
         // --- Step 2: semantic expansion (best-effort) ---
         let seed_ids: HashSet<String> = seed_nodes.iter().map(|n| n.id.clone()).collect();
-        let semantic_neighbors = match &self.embedding_service {
+        let embedding_guard = self.embedding_service.read().await;
+        let semantic_neighbors = match embedding_guard.as_ref() {
             Some(embedding_service) => {
                 Self::find_semantic_neighbors(embedding_service, &seed_nodes, &seed_ids).await
             }
