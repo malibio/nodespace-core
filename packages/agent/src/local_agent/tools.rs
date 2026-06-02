@@ -1387,10 +1387,101 @@ impl GraphToolExecutor {
     }
 }
 
+/// Tools always passed to the model regardless of query content.
+///
+/// These cover the core read/discover path that every query may need:
+/// - `search_nodes` / `search_semantic` / `get_node`: basic retrieval
+/// - `search_skills`: lets the model discover narrower skill-specific tools
+const BASELINE_TOOLS: &[&str] = &[
+    "search_nodes",
+    "search_semantic",
+    "get_node",
+    "search_skills",
+];
+
+/// Minimum number of selected tools before falling back to the full list.
+///
+/// If skill search yields fewer than this many distinct tools (baseline +
+/// matched whitelists), the selection is considered too narrow and the full
+/// tool list is used instead. Prevents degenerate cases where all matched
+/// skills share the same tiny whitelist.
+const MIN_SELECTED_TOOLS: usize = 3;
+
 #[async_trait]
 impl AgentToolExecutor for GraphToolExecutor {
     async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
         Ok(all_tool_definitions())
+    }
+
+    async fn select_tools(
+        &self,
+        query: &str,
+        all_tools: Vec<ToolDefinition>,
+    ) -> Vec<ToolDefinition> {
+        let emb = match &self.embedding_service {
+            Some(svc) => svc,
+            None => {
+                tracing::debug!("select_tools: no embedding service, using full tool list");
+                return all_tools;
+            }
+        };
+
+        use nodespace_core::ops::skill_ops;
+        let skill_result = skill_ops::find_skills(
+            emb,
+            skill_ops::FindSkillsInput {
+                query: query.to_string(),
+                limit: Some(3),
+            },
+        )
+        .await;
+
+        let matched_skills = match skill_result {
+            Ok(output) => output.skills,
+            Err(e) => {
+                tracing::warn!(error = %e, "select_tools: skill search failed, using full tool list");
+                return all_tools;
+            }
+        };
+
+        // Collect tool names: baseline always-on + whitelists from matched skills
+        let mut selected_names: std::collections::HashSet<&str> =
+            BASELINE_TOOLS.iter().copied().collect();
+
+        for skill in &matched_skills {
+            if let Some(tools_arr) = skill.get("tools").and_then(|v| v.as_array()) {
+                for t in tools_arr {
+                    if let Some(name) = t.as_str() {
+                        selected_names.insert(name);
+                    }
+                }
+            }
+        }
+
+        // Fall back to full list if selection is too narrow
+        if selected_names.len() < MIN_SELECTED_TOOLS {
+            tracing::debug!(
+                selected = selected_names.len(),
+                min = MIN_SELECTED_TOOLS,
+                "select_tools: selection too narrow, using full tool list"
+            );
+            return all_tools;
+        }
+
+        // Filter all_tools to selected names, preserving original order
+        let selected: Vec<ToolDefinition> = all_tools
+            .into_iter()
+            .filter(|t| selected_names.contains(t.name.as_str()))
+            .collect();
+
+        tracing::info!(
+            query_preview = %query.chars().take(80).collect::<String>(),
+            selected_count = selected.len(),
+            selected_tools = %selected.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "),
+            "select_tools: scoped tool list for inference"
+        );
+
+        selected
     }
 
     async fn execute(&self, name: &str, args: Value) -> Result<ToolResult, ToolError> {
@@ -1884,6 +1975,38 @@ mod tests {
         assert!(names.contains(&"update_task_status"));
         assert!(names.contains(&"delete_node"));
         assert!(names.contains(&"create_nodes_from_markdown"));
+    }
+
+    // -- select_tools fallback (no embedding service) --
+
+    #[tokio::test]
+    async fn select_tools_no_embedding_service_returns_all() {
+        let executor = test_executor(); // no embedding_service
+        let all = all_tool_definitions();
+        let count_before = all.len();
+        let selected = executor
+            .select_tools("what did I write about embeddings?", all)
+            .await;
+        assert_eq!(
+            selected.len(),
+            count_before,
+            "Without embedding service, select_tools must return all tools unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_tools_baseline_tools_always_present() {
+        let executor = test_executor(); // no embedding_service → falls back to all
+        let all = all_tool_definitions();
+        let selected = executor.select_tools("search for billing info", all).await;
+        let names: Vec<&str> = selected.iter().map(|t| t.name.as_str()).collect();
+        for baseline in BASELINE_TOOLS {
+            assert!(
+                names.contains(baseline),
+                "Baseline tool '{}' must always be present in selected tools",
+                baseline
+            );
+        }
     }
 
     // -- Helper: node_uri / strip_node_uri round-trip --
