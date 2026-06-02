@@ -1,8 +1,10 @@
 /// Chat inference engine using llama.cpp.
 ///
 /// Provides streaming text generation from GGUF chat models with tool-call
-/// parsing for the Mistral raw format. Designed to coexist with the embedding
-/// service on the same GPU (validated in PoC with shared Metal backend).
+/// parsing via llama.cpp's native `ChatParseStateOaicompat` streaming parser.
+/// This handles all model families (Mistral, Gemma 4, etc.) natively at the
+/// C++ level without custom sentinel detection. Designed to coexist with the
+/// embedding service on the same GPU (validated in PoC with shared Metal backend).
 ///
 /// # Architecture
 ///
@@ -32,6 +34,8 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::model::params::LlamaModelParams;
+#[cfg(feature = "chat-service")]
+use llama_cpp_2::model::ChatTemplateResult;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::model::{AddBos, LlamaModel};
 #[cfg(feature = "chat-service")]
@@ -76,23 +80,20 @@ struct ChatLlamaState {
     model_path: String,
     context_size: u32,
     n_threads: i32,
-    /// Cached `[TOOL_CALLS]` control token id, resolved once at load time.
-    /// `None` if the model's vocab does not contain such a token (e.g. Gemma 4,
-    /// which emits tool calls as plain text rather than a control token).
-    tool_calls_token_id: Option<llama_cpp_2::token::LlamaToken>,
+    /// Tokens from the last decoded prompt, used to find the reusable prefix.
+    cached_prompt: Vec<llama_cpp_2::token::LlamaToken>,
 }
 
 #[cfg(feature = "chat-service")]
 impl ChatLlamaState {
     fn new(model: LlamaModel, model_path: String, context_size: u32, n_threads: i32) -> Self {
-        let tool_calls_token_id = detect_tool_calls_token(&model);
         Self {
             model,
             context: None,
             model_path,
             context_size,
             n_threads,
-            tool_calls_token_id,
+            cached_prompt: Vec::new(),
         }
     }
 
@@ -135,31 +136,6 @@ impl ChatLlamaState {
 unsafe impl Send for ChatLlamaState {}
 #[cfg(feature = "chat-service")]
 unsafe impl Sync for ChatLlamaState {}
-
-/// Find the model token id whose textual piece is exactly `[TOOL_CALLS]`.
-///
-/// Ministral 2512 emits this as a control token (typically id 9). At inference
-/// time we need the id so we can re-inject the sentinel text into the streaming
-/// parser even though `token_to_piece(..., special=false)` would strip it.
-/// Gemma 4 does not have such a control token — it streams the literal
-/// characters — and this returns `None` for that case.
-///
-/// Resolved once per model load; called from `ChatLlamaState::new`.
-#[cfg(feature = "chat-service")]
-fn detect_tool_calls_token(model: &LlamaModel) -> Option<llama_cpp_2::token::LlamaToken> {
-    let mut decoder = encoding_rs::UTF_8.new_decoder();
-    // The token is typically at a low ID in Mistral-family vocabularies, but
-    // scan the full vocab so we are not coupled to that assumption.
-    for id in 0..model.n_vocab() {
-        let token = llama_cpp_2::token::LlamaToken(id);
-        if let Ok(text) = model.token_to_piece(token, &mut decoder, true, None) {
-            if text.contains("[TOOL_CALLS]") {
-                return Some(token);
-            }
-        }
-    }
-    None
-}
 
 impl ChatEngine {
     /// Create a new chat engine with the given configuration.
@@ -305,7 +281,8 @@ impl ChatEngine {
         let llama = state_guard.as_mut().ok_or(ChatError::ModelNotLoaded)?;
 
         // --- Apply chat template ---
-        let prompt = Self::apply_chat_template(&llama.model, &messages, &tools)?;
+        let tmpl_result = Self::apply_chat_template(&llama.model, &messages, &tools)?;
+        let prompt = &tmpl_result.prompt;
         tracing::debug!(
             "Chat prompt ({} chars): {:?}",
             prompt.len(),
@@ -317,7 +294,7 @@ impl ChatEngine {
         // BOS where appropriate, and adding it again here would double-BOS.
         let tokens = llama
             .model
-            .str_to_token(&prompt, AddBos::Never)
+            .str_to_token(prompt, AddBos::Never)
             .map_err(|e| ChatError::TokenizationError(e.to_string()))?;
 
         let prompt_tokens = tokens.len() as u32;
@@ -333,21 +310,71 @@ impl ChatEngine {
 
         // --- Extract model info before taking mutable borrow for context ---
         let eos_token = llama.model.token_eos();
+        // Additional stop sequences from the chat template (e.g. Gemma 4's "<end_of_turn>").
+        let additional_stops = tmpl_result.additional_stops.clone();
 
         // --- Prepare context and batch ---
+        // Find the longest token prefix shared with the last decoded prompt.
+        // Any matching prefix is already in the KV cache — only the delta needs
+        // decoding, which eliminates redundant attention computation for the
+        // stable system prompt on every ReAct iteration.
+        //
+        // Compute prefix metrics before the context borrow so the borrow
+        // checker sees no overlap between `llama.cached_prompt` reads and the
+        // `&mut llama` taken by `get_or_create_context`.
+        let prefix_len = tokens
+            .iter()
+            .zip(llama.cached_prompt.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let has_reusable_prefix = prefix_len > 0 && prefix_len < tokens.len();
+
         let ctx = llama.get_or_create_context()?;
-        ctx.clear_kv_cache();
+
+        // Determine how many tokens to skip in the batch.  If the KV trim
+        // succeeds we decode only the delta; if it fails we fall back to a
+        // full decode so the batch and KV cache are never out of sync.
+        let decode_from = if has_reusable_prefix {
+            tracing::debug!(
+                "KV cache reuse: {} prefix tokens cached, decoding {} delta tokens",
+                prefix_len,
+                tokens.len() - prefix_len
+            );
+            match ctx.clear_kv_cache_seq(Some(0), Some(prefix_len as u32), None) {
+                Ok(true) => prefix_len,
+                // `false` means the backend (e.g. recurrent models) does not
+                // support partial removal — fall back to full decode so the
+                // KV cache and batch are never out of sync.
+                Ok(false) => {
+                    tracing::warn!(
+                        "KV cache partial trim returned false, falling back to full decode"
+                    );
+                    ctx.clear_kv_cache();
+                    0
+                }
+                Err(e) => {
+                    tracing::warn!("KV cache trim failed ({}), falling back to full decode", e);
+                    ctx.clear_kv_cache();
+                    0
+                }
+            }
+        } else {
+            // No reusable prefix (first call, or prompt changed entirely): full decode.
+            ctx.clear_kv_cache();
+            0
+        };
 
         let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(config_n_ctx as usize, 1);
         let last_idx = tokens.len() - 1;
-        for (i, &token) in tokens.iter().enumerate() {
-            let logits = i == last_idx; // Only need logits for the last token
+        for (i, &token) in tokens[decode_from..].iter().enumerate() {
+            let pos = (decode_from + i) as i32;
+            let logits = decode_from + i == last_idx;
             batch
-                .add(token, i as i32, &[0], logits)
+                .add(token, pos, &[0], logits)
                 .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
         }
 
-        // Decode the prompt
+        // Decode the prompt (or just the delta on subsequent calls)
         ctx.decode(&mut batch)
             .map_err(|e| ChatError::InferenceError(format!("Prompt decode failed: {}", e)))?;
 
@@ -357,18 +384,28 @@ impl ChatEngine {
             LlamaSampler::dist(0), // seed=0 for deterministic given temperature
         ]);
 
+        // --- Initialize llama.cpp's native streaming tool-call parser ---
+        // ChatParseStateOaicompat handles all model families (Mistral, Gemma 4,
+        // etc.) natively at the C++ level — no custom sentinel detection needed.
+        let mut oai_parser = tmpl_result.streaming_state_oaicompat().map_err(|e| {
+            ChatError::InferenceError(format!("Failed to init streaming parser: {}", e))
+        })?;
+
+        // Track tool call ids by index so ToolCallStart/Args pair correctly.
+        let mut tool_call_ids: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+
         // --- Token generation loop ---
         // Reborrow model and context separately to satisfy the borrow checker.
         // get_or_create_context() ensured the context exists, so we can safely
         // split the struct fields.
         let model_ref = &llama.model;
-        let tool_calls_token_id = llama.tool_calls_token_id;
         let ctx = llama.context.as_mut().expect("context was just created");
 
-        let mut streaming_parser = StreamingToolCallParser::new();
         let mut piece_decoder = encoding_rs::UTF_8.new_decoder();
         let mut completion_tokens: u32 = 0;
         let mut n_cur = tokens.len();
+        let mut context_overflowed = false;
 
         loop {
             if completion_tokens >= max_tokens {
@@ -378,6 +415,7 @@ impl ChatEngine {
 
             if n_cur as u32 >= config_n_ctx {
                 on_chunk(ChatChunk::Error("Context window full".to_string()));
+                context_overflowed = true;
                 break;
             }
 
@@ -393,32 +431,11 @@ impl ChatEngine {
 
             completion_tokens += 1;
 
-            // If this is the [TOOL_CALLS] control token, inject the sentinel
-            // text so the streaming parser can detect tool call mode.
-            if tool_calls_token_id == Some(new_token) {
-                let event = streaming_parser.feed("[TOOL_CALLS]");
-                match event {
-                    parser::StreamEvent::Buffering => {}
-                    parser::StreamEvent::TextToken(text) => on_chunk(ChatChunk::Token(text)),
-                    _ => {}
-                }
-                // Prepare batch for next token
-                batch.clear();
-                batch
-                    .add(new_token, n_cur as i32, &[0], true)
-                    .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
-                ctx.decode(&mut batch)
-                    .map_err(|e| ChatError::InferenceError(format!("Decode failed: {}", e)))?;
-                n_cur += 1;
-                continue;
-            }
-
-            // Convert token to text
-            let piece = match model_ref.token_to_piece(new_token, &mut piece_decoder, false, None) {
+            // Convert token to text (special=true so all tokens decode cleanly)
+            let piece = match model_ref.token_to_piece(new_token, &mut piece_decoder, true, None) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::warn!("Failed to decode token {}: {}", new_token.0, e);
-                    // Still need to prepare batch for next token even on decode failure
                     batch.clear();
                     batch
                         .add(new_token, n_cur as i32, &[0], true)
@@ -432,27 +449,23 @@ impl ChatEngine {
                 }
             };
 
-            // Feed into streaming parser
-            let event = streaming_parser.feed(&piece);
-            match event {
-                parser::StreamEvent::TextToken(text) => {
-                    on_chunk(ChatChunk::Token(text));
+            // Stop on template-defined stop sequences (e.g. Gemma 4's "<end_of_turn>").
+            if additional_stops.iter().any(|s| piece.contains(s.as_str())) {
+                tracing::debug!("Stop sequence detected in piece: {:?}", piece);
+                break;
+            }
+
+            // Feed each token piece to the OAI-compat parser incrementally.
+            // update() takes only the new text added since the previous call.
+            match oai_parser.update(&piece, true) {
+                Ok(deltas) => {
+                    for delta_json in deltas {
+                        emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
+                    }
                 }
-                parser::StreamEvent::Buffering => {
-                    // Parser is accumulating potential tool-call sentinel
+                Err(e) => {
+                    tracing::warn!("OAI parser update error: {}", e);
                 }
-                parser::StreamEvent::ToolCall(tc) => {
-                    let id = format!("tc_{}", uuid_v4_simple());
-                    on_chunk(ChatChunk::ToolCallStart {
-                        id: id.clone(),
-                        name: tc.name.clone(),
-                    });
-                    on_chunk(ChatChunk::ToolCallArgs {
-                        id,
-                        json: tc.args.to_string(),
-                    });
-                }
-                parser::StreamEvent::Finished(_) => break,
             }
 
             // Prepare batch for next token
@@ -467,29 +480,23 @@ impl ChatEngine {
             n_cur += 1;
         }
 
-        // Finalize streaming parser to extract any remaining tool calls
-        let parse_result = streaming_parser.finish();
-        match parse_result {
-            ParseResult::ToolCalls(calls) => {
-                for tc in calls {
-                    let id = format!("tc_{}", uuid_v4_simple());
-                    on_chunk(ChatChunk::ToolCallStart {
-                        id: id.clone(),
-                        name: tc.name.clone(),
-                    });
-                    on_chunk(ChatChunk::ToolCallArgs {
-                        id,
-                        json: tc.args.to_string(),
-                    });
+        // Store the full prompt token sequence so the next call can reuse the
+        // KV-cached prefix.  On context overflow the KV state is indeterminate,
+        // so we clear cached_prompt to force a full decode on the next call.
+        if context_overflowed {
+            llama.cached_prompt.clear();
+        } else {
+            llama.cached_prompt = tokens;
+        }
+
+        // Finalize: signal end-of-stream with empty string and is_partial=false.
+        match oai_parser.update("", false) {
+            Ok(deltas) => {
+                for delta_json in deltas {
+                    emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
                 }
             }
-            ParseResult::PlainText(_) => {
-                // All text was already emitted via TextToken events
-            }
-            ParseResult::Error(msg) => {
-                tracing::warn!("Tool-call parse error at end of stream: {}", msg);
-                on_chunk(ChatChunk::Error(format!("Tool-call parse error: {}", msg)));
-            }
+            Err(e) => tracing::warn!("OAI parser finalize error: {}", e),
         }
 
         on_chunk(ChatChunk::Done);
@@ -507,7 +514,114 @@ impl ChatEngine {
 
         Ok(usage)
     }
+}
 
+/// Remove Gemma 4 special-token strings from a content string.
+///
+/// The PEG parser (`COMMON_CHAT_FORMAT_PEG_GEMMA4`) may emit residual special-token
+/// text as content before it identifies a complete tool-call boundary. Gemma 4 uses
+/// two special-token patterns:
+/// - `<|...|>` — symmetric delimiters e.g. `<|"|>` (quote token)
+/// - `<|...>` — asymmetric e.g. `<|tool_call>` (call start marker)
+/// - `<...|>` — asymmetric e.g. `<tool_call|>` (call end marker)
+///
+/// We strip all three by removing any substring that starts with `<|` or ends with `|>`.
+fn strip_gemma_special_tokens(s: &str) -> String {
+    // Known Gemma 4 special token strings to strip.
+    const SPECIAL: &[&str] = &[
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|tool_response>",
+        "<|/tool_response>",
+        "<|\"|>",
+        "<turn|>",
+        "<|turn>",
+        "<end_of_turn>",
+        "<start_of_turn>",
+    ];
+    let mut out = s.to_string();
+    for token in SPECIAL {
+        out = out.replace(token, "");
+    }
+    out
+}
+
+/// Parse an OpenAI-compat streaming delta JSON string and emit the appropriate
+/// `ChatChunk` events. Called once per delta returned by `ChatParseStateOaicompat::update`.
+///
+/// Delta shape (subset we care about):
+/// - plain text: `{"role":"assistant","content":"hello"}`
+/// - tool call:  `{"role":"assistant","tool_calls":[{"index":0,"id":"...","type":"function",
+///                "function":{"name":"search_nodes","arguments":"{\"q\":1}"}}]}`
+#[cfg(feature = "chat-service")]
+fn emit_oai_delta(
+    delta_json: &str,
+    tool_call_ids: &mut std::collections::HashMap<u32, String>,
+    on_chunk: &(impl Fn(ChatChunk) + Send),
+) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(delta_json) else {
+        tracing::warn!("OAI delta is not valid JSON: {:?}", delta_json);
+        return;
+    };
+
+    // Plain text content — strip any residual Gemma 4 special-token strings
+    // (e.g. "<|tool_call>", "<|"|>", "<tool_call|>") that the PEG parser may
+    // pass through as content before it recognises the full tool-call boundary.
+    if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
+        let cleaned = strip_gemma_special_tokens(content);
+        if !cleaned.is_empty() {
+            on_chunk(ChatChunk::Token(cleaned));
+        }
+    }
+
+    // Tool calls array
+    if let Some(tool_calls) = v.get("tool_calls").and_then(|tc| tc.as_array()) {
+        for tc in tool_calls {
+            let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let function = tc.get("function");
+
+            let name = function
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            // Only present when the delta actually carries arguments — absent on
+            // name-only deltas (common in Mistral streaming where args arrive later).
+            let args: Option<&str> = function
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str());
+
+            // First delta for this index includes the name → emit ToolCallStart
+            if !name.is_empty() && !tool_call_ids.contains_key(&index) {
+                let id = tc
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("tc_{}", uuid_v4_simple()));
+                tool_call_ids.insert(index, id.clone());
+                on_chunk(ChatChunk::ToolCallStart {
+                    id: id.clone(),
+                    name: name.to_string(),
+                });
+                if let Some(a) = args.filter(|a| !a.is_empty()) {
+                    on_chunk(ChatChunk::ToolCallArgs {
+                        id,
+                        json: a.to_string(),
+                    });
+                }
+            } else if let Some(id) = tool_call_ids.get(&index) {
+                // Subsequent arg deltas for the same call
+                if let Some(a) = args.filter(|a| !a.is_empty()) {
+                    on_chunk(ChatChunk::ToolCallArgs {
+                        id: id.clone(),
+                        json: a.to_string(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl ChatEngine {
     /// Apply the model's built-in chat template to the messages.
     ///
     /// Routes through llama.cpp's OAI-compat Jinja machinery (`common_chat_*`),
@@ -516,12 +630,15 @@ impl ChatEngine {
     /// The simple `apply_chat_template` C API does not work for Gemma 4 — its
     /// chat template requires the full Jinja engine plus llama.cpp's chat
     /// specialization layer.
+    ///
+    /// Returns the full `ChatTemplateResult` so the caller can initialize
+    /// `ChatParseStateOaicompat` for streaming tool-call parsing.
     #[cfg(feature = "chat-service")]
     fn apply_chat_template(
         model: &LlamaModel,
         messages: &[ChatMessageInput],
         tools: &Option<Vec<ToolSpec>>,
-    ) -> Result<String> {
+    ) -> Result<ChatTemplateResult> {
         // Build OpenAI-format messages JSON. Tool-result messages carry
         // `tool_call_id`; the Jinja template handles family-specific wrapping
         // (Mistral [TOOL_RESULTS], Gemma 4 turn format, etc.).
@@ -595,18 +712,14 @@ impl ChatEngine {
             // at tokenization time avoids double-BOS.
             add_bos: false,
             add_eos: false,
-            // We want raw tokens out so our streaming parser can detect
-            // [TOOL_CALLS] sentinels itself.
-            parse_tool_calls: false,
+            // Enable llama.cpp's native tool-call parsing so ChatTemplateResult
+            // carries the chat_format + parser needed for ChatParseStateOaicompat.
+            parse_tool_calls: true,
         };
 
-        let result = model
+        model
             .apply_chat_template_oaicompat(&tmpl, &params)
-            .map_err(|e| {
-                ChatError::TemplateError(format!("Failed to apply chat template: {}", e))
-            })?;
-
-        Ok(result.prompt)
+            .map_err(|e| ChatError::TemplateError(format!("Failed to apply chat template: {}", e)))
     }
 
     /// Count the number of tokens in the given text.
@@ -734,5 +847,28 @@ mod tests {
         };
         let result = ChatEngine::new(config);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_strip_gemma_special_tokens() {
+        assert_eq!(strip_gemma_special_tokens("hello"), "hello");
+        assert_eq!(strip_gemma_special_tokens("<|tool_call>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|\"|>"), "");
+        assert_eq!(strip_gemma_special_tokens("<tool_call|>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|tool_response>"), "");
+        assert_eq!(strip_gemma_special_tokens("<|/tool_response>"), "");
+        assert_eq!(
+            strip_gemma_special_tokens("hello<|tool_call>world"),
+            "helloworld"
+        );
+        assert_eq!(
+            strip_gemma_special_tokens("<|tool_call>call:search<tool_call|>"),
+            "call:search"
+        );
+        // Unknown <|...|>-style tokens are left as-is (only known tokens stripped)
+        assert_eq!(
+            strip_gemma_special_tokens("text<|unknown|>end"),
+            "text<|unknown|>end"
+        );
     }
 }

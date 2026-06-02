@@ -297,16 +297,13 @@ impl PromptAssembler {
                 child_properties: None,
                 markdown_content: format!(
                     "RESPONSE RULES:\n\
-                    - When the user's intent is clear, call the tool immediately — do NOT describe your plan first.\n\
-                    - Do NOT narrate what you are about to do (\"I'll now create...\", \"Let me search...\", \"Next I will...\").\n\
-                    - Do NOT show intermediate reasoning or self-corrections before a tool call.\n\
-                    - After tool results: summarize in natural language. NEVER paste raw JSON as your response.\n\
+                    - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
+                    - After tool results: respond in natural language. Never paste raw JSON.\n\
                     - {}\n\
-                    - Enum values in tool calls: use exact schema values (\"done\", \"in_progress\"). In responses to user: use friendly labels (\"Done\", \"In Progress\").\n\
-                    - When listing nodes: **Title** (nodespace://id) — brief description\n\
-                    - When reporting search results: \"Found N nodes...\" then list top results\n\
-                    - If tool returns empty results: say so clearly. Do NOT retry the same query.\n\
-                    - Keep responses concise — under 3 sentences unless user asks for detail.",
+                    - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
+                    - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
+                    - Empty results: say so. Do NOT retry the same query.\n\
+                    - Keep responses under 3 sentences unless asked for detail.",
                     NODE_REFERENCE_FORMAT
                 ),
             },
@@ -317,9 +314,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
-                markdown_content: "TOOL CALL FORMAT:\n\
-                    - Pass arguments flat. Do NOT nest under \"properties\" or \"arguments\".\n\
-                    - Use the exact field names shown in the schema definitions above."
+                markdown_content: "TOOL CALL FORMAT: Pass arguments flat (not nested under \"properties\"/\"arguments\"). Use exact field names from the schema."
                         .to_string(),
             },
         ]
@@ -360,37 +355,27 @@ mod tests {
             .map(|s| (s.title.as_str(), s.markdown_content.as_str()))
             .collect();
 
-        let expected_tool_strategy = "NODE MODEL: Everything in NodeSpace is a node. Built-in types (task, text, date) are always available. Custom types (e.g. 'project', 'customer') require a schema node to exist first — the schema defines the type's fields and title template. Once a schema exists, create instances with create_node(node_type=<schema_id>). Use create_schema only to define a new type; use create_node to create data.\n\n\
+        let expected_tool_strategy = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\n\
             TOOL STRATEGY:\n\
-            - To discover whether a registered skill matches the user's intent: call search_skills with a natural-language query describing what you want to do. Returns up to N matches with name, description, confidence (0-1), and tools. Empty matches mean no skill is related — judge whether to respond directly, ask the user, or proceed with general tools. Skip for purely conversational replies (greetings, thanks, small talk).\n\
+            - Before any non-conversational action: call search_skills(query) to find a matching skill. Empty result = no skill, proceed with general tools. Skip for greetings/small talk.\n\
             - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
-            - To find nodes by exact title or keyword (when you know the name): use search_nodes with query=<keyword>. To filter by type (e.g. \"show all tasks\"), pass node_type=\"task\" with query=\"\". To filter by property (e.g. \"open tasks\"), pass filters={\"status\":\"open\"}.\n\
-            - To find nodes by meaning/topic (when the exact name is unknown): use search_semantic (natural language query)\n\
-            - search_semantic results are ordered by relevance. Each result has: id, title, score (0-1), snippet, and optionally markdown (full content).\n\
-            - search_semantic parameters: use 'collection' to scope to a namespace/folder, 'node_types' to filter by type (e.g. [\"task\"]), 'scope'='conversations' to search chat history, 'threshold' to tune precision (lower = broader recall), 'include_archived'=true to include archived content, 'exclude_collections' to suppress noisy collections, 'include_edges'=true to get relationship data with results, 'graph_boost'=true to rank well-connected nodes higher.\n\
-            - If a search_semantic result has a non-empty 'markdown' field, that IS the full document — summarize from it directly. Only call get_node for results that lack markdown.\n\
-            - To get full content for a known node ID: use get_node with format=markdown.\n\
-            - To find what nodes are connected to a node: use get_related_nodes with the node ID.\n\
-            - To update a task status: search_nodes for the task by name, then use update_task_status with the real ID.\n\
-            - To update a node's title or content: search_nodes for it by name, then use update_node with the real ID.\n\
-            - To create a new entity type: use create_schema (not create_node). If search_skills returned schema_metadata showing the type already exists, do not call create_schema again.\n\
-            - To modify an existing entity type (add/remove fields, change title_template): use update_schema with the schema_id\n\
-            - To create any node: use create_node with content=<name or text> and node_type. Pass 'properties' only if the schema has fields (shown in schema_metadata from search_skills).\n\
-            - If schema_metadata from search_skills shows a title template for the schema (e.g. title: \"{name} ({status})\"), include those template fields in 'properties' — the service composes the displayed title from them.\n\
-            - To connect nodes: use create_relationship with relationship names from the schema_metadata returned by search_skills\n\
-            - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON.";
+            - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
+            - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
+            - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
+            - To update task status: search_nodes for it, then update_task_status with the real ID. To update node content: search_nodes first, then update_node with the real ID.\n\
+            - To create a node: create_node(content, node_type). Pass 'properties' only if ENTITY TYPES shows fields. Include title_template fields in properties.\n\
+            - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
+            - To connect nodes: create_relationship with names from schemas above.\n\
+            - Tool arguments must be valid JSON. No comments (#) in JSON.";
 
         let expected_response_rules = "RESPONSE RULES:\n\
-            - When the user's intent is clear, call the tool immediately — do NOT describe your plan first.\n\
-            - Do NOT narrate what you are about to do (\"I'll now create...\", \"Let me search...\", \"Next I will...\").\n\
-            - Do NOT show intermediate reasoning or self-corrections before a tool call.\n\
-            - After tool results: summarize in natural language. NEVER paste raw JSON as your response.\n\
+            - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
+            - After tool results: respond in natural language. Never paste raw JSON.\n\
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
-            - Enum values in tool calls: use exact schema values (\"done\", \"in_progress\"). In responses to user: use friendly labels (\"Done\", \"In Progress\").\n\
-            - When listing nodes: **Title** (nodespace://id) — brief description\n\
-            - When reporting search results: \"Found N nodes...\" then list top results\n\
-            - If tool returns empty results: say so clearly. Do NOT retry the same query.\n\
-            - Keep responses concise — under 3 sentences unless user asks for detail.";
+            - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
+            - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
+            - Empty results: say so. Do NOT retry the same query.\n\
+            - Keep responses under 3 sentences unless asked for detail.";
 
         assert_eq!(
             by_title.get("Tool Strategy Guide").copied(),

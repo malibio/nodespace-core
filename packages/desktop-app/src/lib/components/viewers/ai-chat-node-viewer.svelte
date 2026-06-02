@@ -500,8 +500,8 @@
         const fetched = await backendAdapter.getNode(nodeId);
         if (fetched) {
           sharedNodeStore.setNode(fetched, {
-            type: 'database',
-            reason: 'ai-chat-viewer hydration fallback',
+            type: 'viewer',
+            viewerId: 'ai-chat-viewer-hydration',
           });
         }
       } catch (err) {

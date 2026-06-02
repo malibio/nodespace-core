@@ -15,6 +15,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { AGENT_EVENTS } from '$lib/types/agent-types';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import {
     chatModelList,
@@ -47,6 +48,7 @@
   // modelId -> {downloaded, total} while a download is in flight.
   let downloads = $state<Record<string, { downloaded: number; total: number }>>({});
   let unlistenProgress: UnlistenFn | null = null;
+  let unlistenReady: UnlistenFn | null = null;
 
   const visibleModels = $derived(models.filter((m) => m.backend === backend));
 
@@ -84,7 +86,7 @@
         model_id: string;
         bytes_downloaded: number;
         bytes_total: number;
-      }>('model://download-progress', (event) => {
+      }>(AGENT_EVENTS.MODEL_DOWNLOAD_PROGRESS, (event) => {
         const { model_id, bytes_downloaded, bytes_total } = event.payload;
         downloads = {
           ...downloads,
@@ -94,10 +96,24 @@
     } catch (e) {
       log.warn('Failed to listen for download progress', e);
     }
+    try {
+      unlistenReady = await listen<{ model_id: string }>(
+        AGENT_EVENTS.MODEL_DOWNLOAD_READY,
+        (event) => {
+          const next = { ...downloads };
+          delete next[event.payload.model_id];
+          downloads = next;
+          refresh();
+        }
+      );
+    } catch (e) {
+      log.warn('Failed to listen for download ready', e);
+    }
   });
 
   onDestroy(() => {
     unlistenProgress?.();
+    unlistenReady?.();
   });
 
   async function download(modelId: string) {
@@ -105,10 +121,11 @@
     downloads = { ...downloads, [modelId]: { downloaded: 0, total: 0 } };
     try {
       await chatModelDownload(modelId);
-      await refresh();
+      // Success-path refresh is handled by the MODEL_DOWNLOAD_READY event listener.
     } catch (e) {
       log.error('Download failed', e);
       error = e instanceof Error ? e.message : String(e);
+      await refresh();
     } finally {
       const next = { ...downloads };
       delete next[modelId];

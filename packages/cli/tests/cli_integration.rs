@@ -40,7 +40,7 @@ async fn spawn_test_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
             .await
             .expect("failed to build NodeService"),
     );
-    let service = NodeServiceImpl::new(node_service, None);
+    let service = NodeServiceImpl::new(node_service, Arc::new(tokio::sync::RwLock::new(None)));
 
     let listener = UnixListener::bind(&sock_path).expect("failed to bind test UDS socket");
     let incoming = UnixListenerStream::new(listener);

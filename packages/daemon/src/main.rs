@@ -21,13 +21,16 @@ use nodespace_agent::skill_pipeline::seed_skill_nodes;
 use nodespace_core::markdown::prepare_nodes_from_template;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
+use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
-    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, NodeServiceImpl,
-    NodeServiceServer, SettingsServiceImpl, SettingsServiceServer,
+    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, LocalAgentServiceImpl,
+    LocalAgentServiceServer, NodeServiceImpl, NodeServiceServer, SettingsServiceImpl,
+    SettingsServiceServer,
 };
 use nodespace_nlp_engine::EmbeddingService;
+use tokio::sync::RwLock;
 use tonic::transport::Server;
 
 #[cfg(unix)]
@@ -109,7 +112,8 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
-    let bundle = build_services(&db_path).await?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    let (bundle, _bg_task) = build_services(&db_path).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -129,7 +133,8 @@ async fn serve_headless() -> Result<()> {
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings));
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -160,7 +165,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
-    let bundle = build_services(&db_path).await?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    let (bundle, _bg_task) = build_services(&db_path).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -189,7 +195,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings));
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
@@ -210,16 +217,25 @@ struct ServiceBundle {
     agent_session: AgentSessionHandler,
     import: ImportServiceImpl,
     settings: SettingsServiceImpl,
-    /// `None` when the NLP model is absent — the daemon starts without semantic
-    /// search rather than refusing to run. The `EmbeddingsService` gRPC endpoint
-    /// is simply not registered in that case.
+    local_agent: LocalAgentServiceImpl,
+    /// Always registered — returns `UNAVAILABLE` while the model loads, then
+    /// serves normally. `None` only when no NLP model file exists at all.
     embeddings_service_grpc: Option<EmbeddingsServiceImpl>,
     /// Held so we can drain GPU resources after the server shuts down.
-    embedding_state: Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)>,
+    /// Populated by the background embedding-load task.
+    embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
 }
 
 /// Open the database and assemble the gRPC service implementations.
-async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
+///
+/// Phase 1 (this function): initialize NodeService, seed schemas, build all
+/// gRPC handlers — fast, ~100ms. The embedding model is NOT loaded here.
+///
+/// Phase 2 (background task returned alongside the bundle): load the NLP
+/// model and populate `embedding_state` once ready.
+async fn build_services(
+    db_path: &std::path::Path,
+) -> Result<(ServiceBundle, Option<tokio::task::JoinHandle<()>>)> {
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {
             format!("Failed to create database parent dir: {}", parent.display())
@@ -237,21 +253,30 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         .context("Failed to initialize NodeService")?;
 
     seed_agent_nodes(&mut node_service).await;
-    let embedding_state = build_embedding_state(&store, &mut node_service);
+
+    // Determine the model path now (cheap) — if absent, skip background task.
+    let model_path = resolve_model_path();
+
+    let embedding_state: Arc<RwLock<Option<EmbeddingReady>>> = Arc::new(RwLock::new(None));
+    // Separate handle for consumers that only need Arc<NodeEmbeddingService> (assembler, etc.)
+    let embedding_svc_state: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> =
+        Arc::new(RwLock::new(None));
+
     let node_service = Arc::new(node_service);
 
-    let embedding_service_opt = embedding_state.as_ref().map(|(svc, _)| svc.clone());
-    let node_service_grpc =
-        NodeServiceImpl::new(node_service.clone(), embedding_service_opt.clone());
+    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_state.clone());
 
-    let embeddings_service_grpc = embedding_state.as_ref().map(|(svc, proc)| {
-        EmbeddingsServiceImpl::new(node_service.clone(), svc.clone(), proc.clone())
-    });
+    // EmbeddingsService is only registered when a model file exists at startup.
+    // If the model appears later (e.g. user downloads it), the endpoint is absent
+    // until daemon restart. This is intentional — not a regression from prior behavior.
+    let embeddings_service_grpc = model_path
+        .as_ref()
+        .map(|_| EmbeddingsServiceImpl::new(node_service.clone(), embedding_state.clone()));
 
     let manager = Arc::new(PtySessionManager::new());
     let assembler = Arc::new(GraphContextAssembler::new(
         node_service.clone(),
-        embedding_service_opt,
+        embedding_svc_state.clone(),
     ));
     let settings = SettingsServiceImpl::with_default_path()
         .map_err(|e| anyhow::anyhow!("Failed to initialize SettingsService: {}", e))?;
@@ -268,16 +293,32 @@ async fn build_services(db_path: &std::path::Path) -> Result<ServiceBundle> {
         capture_config_path,
     );
 
-    let import = ImportServiceImpl::new(node_service);
+    let import = ImportServiceImpl::new(node_service.clone());
+    let local_agent = LocalAgentServiceImpl::new(node_service.clone());
 
-    Ok(ServiceBundle {
-        node_service_grpc,
-        agent_session,
-        import,
-        settings,
-        embeddings_service_grpc,
-        embedding_state,
-    })
+    // Spawn background model-load task if a model file was found.
+    let bg_task = model_path.map(|path| {
+        let state = embedding_state.clone();
+        let svc_state = embedding_svc_state.clone();
+        let store_clone = store.clone();
+        let ns_clone = node_service.clone();
+        tokio::spawn(async move {
+            load_embedding_model_bg(path, store_clone, ns_clone, state, svc_state).await;
+        })
+    });
+
+    Ok((
+        ServiceBundle {
+            node_service_grpc,
+            agent_session,
+            import,
+            settings,
+            local_agent,
+            embeddings_service_grpc,
+            embedding_state,
+        },
+        bg_task,
+    ))
 }
 
 /// Seed prompt and skill nodes on first launch. Idempotent — existing nodes are skipped.
@@ -303,53 +344,65 @@ async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
     }
 }
 
-/// Try to initialize NLP engine and embedding services. Non-fatal: returns
-/// `None` when the model is absent or fails to load.
-fn build_embedding_state(
-    store: &Arc<SqliteStore>,
-    node_service: &mut CoreNodeService,
-) -> Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)> {
-    let model_path = {
-        // Allow override via env var so CI and alternate deployments can redirect.
-        let p = if let Ok(custom) = std::env::var("NODESPACED_MODEL_PATH") {
-            std::path::PathBuf::from(custom)
-        } else {
-            let home = std::env::var("HOME").ok()?;
-            std::path::PathBuf::from(home)
-                .join(".nodespace")
-                .join("models")
-                .join("nomic-embed-text-v1.5.Q8_0.gguf")
-        };
-        if !p.exists() {
-            tracing::warn!(path = %p.display(), "NLP model not found — semantic search disabled");
-            return None;
-        }
-        p
+/// Resolve the NLP model path without loading it. Returns `None` when absent.
+fn resolve_model_path() -> Option<std::path::PathBuf> {
+    let p = if let Ok(custom) = std::env::var("NODESPACED_MODEL_PATH") {
+        std::path::PathBuf::from(custom)
+    } else {
+        let home = std::env::var("HOME").ok()?;
+        std::path::PathBuf::from(home)
+            .join(".nodespace")
+            .join("models")
+            .join("nomic-embed-text-v1.5.Q8_0.gguf")
     };
+    if !p.exists() {
+        tracing::warn!(path = %p.display(), "NLP model not found — semantic search disabled");
+        return None;
+    }
+    Some(p)
+}
+
+/// Background task: load the NLP model and populate `state` when done.
+///
+/// Non-fatal: logs errors and leaves `state` as `None` if anything fails.
+async fn load_embedding_model_bg(
+    model_path: std::path::PathBuf,
+    store: Arc<SqliteStore>,
+    node_service: Arc<CoreNodeService>,
+    state: Arc<RwLock<Option<EmbeddingReady>>>,
+    svc_state: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
+) {
+    tracing::info!(path = %model_path.display(), "Loading embedding model in background");
 
     let config = nodespace_nlp_engine::EmbeddingConfig {
         model_path: Some(model_path),
         ..Default::default()
     };
 
-    let mut nlp = match EmbeddingService::new(config) {
-        Ok(e) => e,
-        Err(e) => {
+    // `EmbeddingService::new` + `initialize` are synchronous CPU/IO-bound operations
+    // (~6-8s). Use spawn_blocking so they don't park a tokio worker thread.
+    let nlp = match tokio::task::spawn_blocking(move || {
+        let mut svc = EmbeddingService::new(config).map_err(|e| {
             tracing::warn!(error = %e, "Failed to create NLP engine — semantic search disabled");
-            return None;
-        }
+            e
+        })?;
+        svc.initialize().map_err(|e| {
+            tracing::warn!(error = %e, "Failed to load NLP model — semantic search disabled");
+            e
+        })?;
+        Ok::<_, nodespace_nlp_engine::EmbeddingError>(svc)
+    })
+    .await
+    {
+        Ok(Ok(svc)) => Arc::new(svc),
+        Ok(Err(_)) | Err(_) => return,
     };
-    if let Err(e) = nlp.initialize() {
-        tracing::warn!(error = %e, "Failed to load NLP model — semantic search disabled");
-        return None;
-    }
-    let nlp = Arc::new(nlp);
 
-    let node_accessor: Arc<dyn NodeAccessor> = Arc::new(node_service.clone());
+    let node_accessor: Arc<dyn NodeAccessor> = Arc::new((*node_service).clone());
     let behaviors = node_service.behaviors().clone();
     let embedding_service = Arc::new(NodeEmbeddingService::new(
         nlp,
-        store.clone(),
+        store,
         node_accessor,
         behaviors,
     ));
@@ -358,23 +411,33 @@ fn build_embedding_state(
         Ok(p) => Arc::new(p),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to init EmbeddingProcessor — semantic search disabled");
-            return None;
+            return;
         }
     };
+
+    // Wire up automatic wake-on-change now that the processor exists.
     node_service.set_embedding_waker(processor.waker());
+    // Process any nodes that became stale during the load window.
     processor.wake();
 
-    Some((embedding_service, processor))
+    // Publish to both state handles atomically enough for practical purposes.
+    *svc_state.write().await = Some(embedding_service.clone());
+    *state.write().await = Some(EmbeddingReady {
+        embedding_service,
+        processor,
+    });
+    tracing::info!("Embedding model loaded — semantic search now available");
 }
 
 /// GPU drain protocol: drop processor first (shuts down background task),
 /// then release the GPU context from the NLP engine.
-async fn drain_gpu(state: Option<(Arc<NodeEmbeddingService>, Arc<EmbeddingProcessor>)>) {
-    if let Some((svc, proc)) = state {
-        drop(proc);
+async fn drain_gpu(state: Arc<RwLock<Option<EmbeddingReady>>>) {
+    let ready = state.write().await.take();
+    if let Some(ready) = ready {
+        drop(ready.processor);
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         tracing::info!("Releasing GPU context...");
-        svc.nlp_engine().release_gpu_context();
+        ready.embedding_service.nlp_engine().release_gpu_context();
         tracing::info!("GPU context released");
     }
 }
