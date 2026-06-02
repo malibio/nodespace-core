@@ -13,6 +13,7 @@ use nodespace_core::schema::handle_create_schema;
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -1399,13 +1400,14 @@ const BASELINE_TOOLS: &[&str] = &[
     "search_skills",
 ];
 
-/// Minimum number of selected tools before falling back to the full list.
+/// Minimum confidence score for a skill match to contribute tools to the
+/// scoped set on the automated pre-filter path.
 ///
-/// If skill search yields fewer than this many distinct tools (baseline +
-/// matched whitelists), the selection is considered too narrow and the full
-/// tool list is used instead. Prevents degenerate cases where all matched
-/// skills share the same tiny whitelist.
-const MIN_SELECTED_TOOLS: usize = 3;
+/// Different from `SKILL_SEARCH_THRESHOLD` (0.0) used in the model-facing
+/// `search_skills` tool — there the model judges relevance from raw scores.
+/// Here we filter automatically, so a non-zero floor avoids injecting tools
+/// from loosely-related skills that would undermine the focus improvement.
+const SELECT_TOOLS_CONFIDENCE_THRESHOLD: f64 = 0.3;
 
 #[async_trait]
 impl AgentToolExecutor for GraphToolExecutor {
@@ -1444,11 +1446,19 @@ impl AgentToolExecutor for GraphToolExecutor {
             }
         };
 
-        // Collect tool names: baseline always-on + whitelists from matched skills
-        let mut selected_names: std::collections::HashSet<&str> =
-            BASELINE_TOOLS.iter().copied().collect();
+        // Collect tool names: baseline always-on + whitelists from skills that
+        // meet the confidence threshold. Low-confidence matches are excluded to
+        // avoid injecting irrelevant tools from loosely-related skills.
+        let mut selected_names: HashSet<&str> = BASELINE_TOOLS.iter().copied().collect();
 
         for skill in &matched_skills {
+            let confidence = skill
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            if confidence < SELECT_TOOLS_CONFIDENCE_THRESHOLD {
+                continue;
+            }
             if let Some(tools_arr) = skill.get("tools").and_then(|v| v.as_array()) {
                 for t in tools_arr {
                     if let Some(name) = t.as_str() {
@@ -1458,12 +1468,11 @@ impl AgentToolExecutor for GraphToolExecutor {
             }
         }
 
-        // Fall back to full list if selection is too narrow
-        if selected_names.len() < MIN_SELECTED_TOOLS {
+        // Fall back to full list if no skill contributed any tools beyond baseline
+        // (all matches were below the confidence threshold or had empty whitelists).
+        if selected_names.len() <= BASELINE_TOOLS.len() {
             tracing::debug!(
-                selected = selected_names.len(),
-                min = MIN_SELECTED_TOOLS,
-                "select_tools: selection too narrow, using full tool list"
+                "select_tools: no confident skill matches, using full tool list"
             );
             return all_tools;
         }
@@ -1474,7 +1483,7 @@ impl AgentToolExecutor for GraphToolExecutor {
             .filter(|t| selected_names.contains(t.name.as_str()))
             .collect();
 
-        tracing::info!(
+        tracing::debug!(
             query_preview = %query.chars().take(80).collect::<String>(),
             selected_count = selected.len(),
             selected_tools = %selected.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "),
