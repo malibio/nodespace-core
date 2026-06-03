@@ -12,14 +12,13 @@
     - native | ollama, with model   → message UI (chat input + streamed messages[]).
     - openai                        → disabled in the dropdown (no backend yet).
 
-  Per-node, no shared store: this viewer owns its OWN daemon session
-  (localAgentNewSession/localAgentSend/ensureModelReady + streaming events), keyed
-  off the node's provider/model. One inference engine in the daemon serves every
-  ai-chat node via independent sessions. Messages persist to node.properties.messages
-  with debounced flush + tool-result archival per ADR-028.
-
-  Follows the *NodeViewer pattern but does NOT wrap BaseNodeViewer because it
-  renders a chat conversation rather than a hierarchical node collection.
+  Node-as-message-queue architecture: the node is the single source of truth.
+  - Frontend only writes `updateNode` to append user messages.
+  - LocalAgentService in the daemon reacts to node changes and drives inference.
+  - Streaming tokens arrive via Tauri events (local-agent://chunk) and accumulate
+    in a local `streamingContent` buffer. The buffer is cleared when WatchNodes
+    delivers the completed assistant message.
+  - Typing indicator driven by `node.properties['ai-chat']['status'] === 'processing'`.
 -->
 
 <script lang="ts">
@@ -31,18 +30,10 @@
   import AiChatPtySession from './ai-chat-pty-session.svelte';
   import AiChatModelPicker from './ai-chat-model-picker.svelte';
   import type { DisplayMessage } from '$lib/components/chat/types';
-  import type {
-    ToolExecutionRecord,
-    StreamingChunk,
-    LocalAgentStatus,
-    AgentTurnResult,
-  } from '$lib/types/agent-types';
+  import type { StreamingChunk } from '$lib/types/agent-types';
   import { AGENT_EVENTS } from '$lib/types/agent-types';
   import {
-    localAgentNewSession,
-    localAgentSend,
-    localAgentCancel,
-    localAgentEndSession,
+    localAgentCancelTurn,
     ensureModelReady,
     ollamaAvailable,
   } from '$lib/services/tauri-commands';
@@ -59,7 +50,6 @@
   const PROVIDER_OPTIONS: {
     id: Provider;
     label: string;
-    /** Modes with no backend yet are always disabled in the dropdown. */
     unavailable?: boolean;
   }[] = [
     { id: 'native', label: 'Built-in model' },
@@ -78,35 +68,18 @@
 
   // --- State ---
   let messagesContainer: HTMLDivElement | undefined = $state();
-  let inMemoryMessages = $state<DisplayMessage[]>([]);
-  let isStreaming = $state(false);
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
-  let hasUnsavedChanges = $state(false);
+  /** In-flight token buffer. Cleared when WatchNodes delivers the completed message. */
+  let streamingContent = $state('');
   let sendError = $state<string | null>(null);
-  /** One-shot: persisted messages loaded once the node is first available. */
-  let initialLoadDone = $state(false);
-  /** True once the node is confirmed in the store (hydration complete). */
   let nodeReady = $state(false);
-
-  /** Discovered once on mount: is a local Ollama reachable? Gates the dropdown option. */
   let ollamaReady = $state(false);
-
-  /** This viewer's own daemon session id (Option 1: per-node, no shared store). */
-  let sessionId: string | null = null;
-  /** Set once the engine has been (re)installed for the current model. */
-  let modelPrepared = false;
   let eventUnlisteners: Array<() => void> = [];
 
-  /** Soft message cap -- show a nudge when conversation gets long */
   const SOFT_MESSAGE_CAP = 500;
-  const FLUSH_DEBOUNCE_MS = 7_000; // 7 seconds (within 5-10s range per spec)
 
   // --- Reactive node lookup ---
   const node = $derived(sharedNodeStore.getNode(nodeId));
 
-  // Properties may be flat { provider: 'native' } or namespaced { "ai-chat": { provider: 'native' } }.
-  // The backend normalizes to namespaced format on write, so prefer the ai-chat namespace,
-  // falling back to flat for fresh nodes that haven't been persisted yet.
   function getProp(props: Record<string, unknown> | undefined, key: string): unknown {
     if (!props) return undefined;
     const ns = props['ai-chat'] as Record<string, unknown> | undefined;
@@ -118,16 +91,58 @@
   const isMessageProvider = $derived(
     provider !== undefined && (MESSAGE_PROVIDERS as readonly string[]).includes(provider)
   );
-  const status = $derived((getProp(node?.properties, 'status') as string) ?? 'active');
-  const showMessageCap = $derived(inMemoryMessages.length >= SOFT_MESSAGE_CAP);
+  const lifecycleStatus = $derived((getProp(node?.properties, 'status') as string) ?? 'active');
 
-  /** Persist a provider mode change onto the node (placeholder → configured, or switch). */
+  /** True while the daemon is processing an inference turn for this node. */
+  const isProcessing = $derived(
+    (node?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'] === 'processing'
+  );
+
+  /** Messages from the persisted node, mapped to DisplayMessage for rendering. */
+  const persistedMessages = $derived((): DisplayMessage[] => {
+    const msgs = (node?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+    if (!Array.isArray(msgs)) return [];
+    return msgs
+      .filter((m: Record<string, unknown>) => {
+        const role = m['role'] as string;
+        return role === 'user' || role === 'assistant';
+      })
+      .map((m: Record<string, unknown>, idx: number) => ({
+        id: `persisted-${idx}-${m['timestamp'] ?? idx}`,
+        role: (m['role'] as DisplayMessage['role']) ?? 'user',
+        content: (m['content'] as string) ?? '',
+        toolExecutions: [],
+        timestamp: m['timestamp']
+          ? new Date(m['timestamp'] as string).getTime()
+          : Date.now(),
+      }));
+  });
+
+  /** All messages to display: persisted + optional streaming overlay. */
+  const displayMessages = $derived((): DisplayMessage[] => {
+    const base = persistedMessages();
+    if (!streamingContent) return base;
+    // Append a live assistant message for the in-flight tokens.
+    return [
+      ...base,
+      {
+        id: 'streaming',
+        role: 'assistant' as const,
+        content: streamingContent,
+        toolExecutions: [],
+        timestamp: Date.now(),
+      },
+    ];
+  });
+
+  const showMessageCap = $derived(persistedMessages().length >= SOFT_MESSAGE_CAP);
+
+  /** Persist a provider mode change onto the node. */
   function selectProvider(p: Provider): void {
     if (p === provider) return;
     const current = sharedNodeStore.getNode(nodeId);
     const existingProps = current?.properties ?? {};
     const existingNs = (existingProps['ai-chat'] as Record<string, unknown>) ?? {};
-    // Switching mode drops any model chosen for the previous mode.
     const nsWithoutModel = Object.fromEntries(
       Object.entries(existingNs).filter(([k]) => k !== 'model')
     );
@@ -136,144 +151,12 @@
       { properties: { ...existingProps, 'ai-chat': { ...nsWithoutModel, provider: p } } },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
-    // A model from a previous mode is no longer valid; force a fresh session.
-    teardownSession();
   }
 
   function onProviderChange(e: Event): void {
     const value = (e.currentTarget as HTMLSelectElement).value as Provider;
     selectProvider(value);
   }
-
-  // --- Load messages from persisted node properties ---
-  function loadMessagesFromNode(): void {
-    if (!node) return;
-    const persisted = getProp(node.properties, 'messages');
-    if (!Array.isArray(persisted)) {
-      inMemoryMessages = [];
-      return;
-    }
-    inMemoryMessages = persisted.map((m: Record<string, unknown>, idx: number) => {
-      const role = (m.role as string) ?? 'user';
-      // For tool_call messages, map to assistant role with tool executions
-      if (role === 'tool_call') {
-        const toolExec: ToolExecutionRecord = {
-          tool_call_id: `tc-${idx}`,
-          name: (m.tool as string) ?? 'unknown',
-          args: m.args ?? {},
-          result: m.result_summary ?? null,
-          is_error: m.status === 'error',
-          duration_ms: (m.duration_ms as number) ?? 0,
-        };
-        return {
-          id: `persisted-${idx}`,
-          role: 'assistant' as const,
-          content: '',
-          toolExecutions: [toolExec],
-          timestamp: m.timestamp ? new Date(m.timestamp as string).getTime() : Date.now(),
-        };
-      }
-      return {
-        id: `persisted-${idx}`,
-        role: role as DisplayMessage['role'],
-        content: (m.content as string) ?? '',
-        toolExecutions: [],
-        timestamp: m.timestamp ? new Date(m.timestamp as string).getTime() : Date.now(),
-      };
-    });
-  }
-
-  // --- Write buffering: archive tool results and debounced flush ---
-
-  /** Convert DisplayMessage[] back to the persisted messages format,
-   *  nulling full tool results (only result_summary kept). */
-  function archiveMessages(msgs: DisplayMessage[]): Record<string, unknown>[] {
-    const archived: Record<string, unknown>[] = [];
-    for (const msg of msgs) {
-      if (msg.toolExecutions.length > 0) {
-        for (const te of msg.toolExecutions) {
-          archived.push({
-            role: 'tool_call',
-            tool: te.name,
-            args: te.args,
-            status: te.is_error ? 'error' : 'completed',
-            result_summary:
-              typeof te.result === 'string'
-                ? te.result
-                : te.result != null
-                  ? JSON.stringify(te.result).slice(0, 200)
-                  : null,
-            result: null, // Nulled at write time per ADR-028
-            duration_ms: te.duration_ms,
-            timestamp: new Date(msg.timestamp).toISOString(),
-          });
-        }
-        // If the assistant message also had text content, emit it separately
-        if (msg.content) {
-          archived.push({
-            role: 'assistant',
-            content: msg.content,
-            timestamp: new Date(msg.timestamp).toISOString(),
-          });
-        }
-      } else {
-        archived.push({
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date(msg.timestamp).toISOString(),
-        });
-      }
-    }
-    return archived;
-  }
-
-  function scheduleFlush(): void {
-    if (flushTimer) clearTimeout(flushTimer);
-    hasUnsavedChanges = true;
-    flushTimer = setTimeout(() => flushToStore(), FLUSH_DEBOUNCE_MS);
-  }
-
-  function flushToStore(): void {
-    if (!node || !hasUnsavedChanges) return;
-    if (flushTimer) {
-      clearTimeout(flushTimer);
-      flushTimer = null;
-    }
-    try {
-      const archivedMessages = archiveMessages(inMemoryMessages);
-      const existingNs = (node.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
-      sharedNodeStore.updateNode(
-        nodeId,
-        {
-          properties: {
-            ...node.properties,
-            'ai-chat': {
-              ...existingNs,
-              messages: archivedMessages,
-              last_active: new Date().toISOString(),
-              context_tokens: estimateTokens(inMemoryMessages),
-            },
-          },
-        },
-        { type: 'viewer', viewerId: 'ai-chat-viewer' }
-      );
-      hasUnsavedChanges = false;
-      log.debug('Flushed messages to store', { messageCount: archivedMessages.length });
-    } catch (err) {
-      log.error('Failed to flush messages', err);
-    }
-  }
-
-  /** Rough token estimate: ~4 chars per token */
-  function estimateTokens(msgs: DisplayMessage[]): number {
-    let chars = 0;
-    for (const m of msgs) {
-      chars += m.content.length;
-    }
-    return Math.ceil(chars / 4);
-  }
-
-  // --- Per-node send/stream (Option 1: own daemon session, no shared store) ---
 
   function isTauri(): boolean {
     return (
@@ -282,221 +165,76 @@
     );
   }
 
-  function generateId(): string {
-    return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  }
-
   function cleanupListeners(): void {
     for (const unlisten of eventUnlisteners) unlisten();
     eventUnlisteners = [];
   }
 
-  /** Drop this viewer's daemon session (on mode/model switch or destroy). */
-  function teardownSession(): void {
-    // Cancel any in-flight generation before tearing the session down.
-    if (isStreaming && sessionId && isTauri()) {
-      localAgentCancel(sessionId).catch((err) => {
-        log.warn('Failed to cancel agent generation', { error: String(err) });
-      });
-    }
-    cleanupListeners();
-    if (sessionId && isTauri()) {
-      localAgentEndSession(sessionId).catch((err) => {
-        log.warn('Failed to end local session', { error: String(err) });
-      });
-    }
-    sessionId = null;
-    modelPrepared = false;
-  }
-
   /**
-   * Ensure the node's model is downloaded + loaded and we hold a live session for
-   * it. Streams download/load progress into a transient assistant message that is
-   * removed once the model is ready. Returns false (with sendError set) on failure.
+   * Send a user message: append it to the node's ai-chat messages via updateNode.
+   * The daemon reacts to the NodeUpdated event and drives inference.
+   * Model must be loaded first via ensureModelReady.
    */
-  async function ensureSession(modelId: string): Promise<boolean> {
-    const { listen } = await import('@tauri-apps/api/event');
-
-    // Transient progress placeholder while the model prepares.
-    const progressMessage: DisplayMessage = {
-      id: generateId(),
-      role: 'assistant',
-      content: 'Preparing model...',
-      toolExecutions: [],
-      timestamp: Date.now(),
-    };
-    inMemoryMessages = [...inMemoryMessages, progressMessage];
-
-    // Re-render the placeholder by id (order-independent — it is removed by id too).
-    const renderProgress = (content: string): void => {
-      progressMessage.content = content;
-      inMemoryMessages = inMemoryMessages.map((m) =>
-        m.id === progressMessage.id ? { ...progressMessage } : m
-      );
-    };
-
-    interface DownloadProgress {
-      bytes_downloaded: number;
-      bytes_total: number;
-      speed_bps: number;
-    }
-    const unlistenDownload = await listen<DownloadProgress>(
-      AGENT_EVENTS.MODEL_DOWNLOAD_PROGRESS,
-      (event) => {
-        const { bytes_downloaded, bytes_total, speed_bps } = event.payload;
-        const pct = Math.round((bytes_downloaded / bytes_total) * 100);
-        const mbDown = (bytes_downloaded / 1_000_000).toFixed(0);
-        const mbTotal = (bytes_total / 1_000_000).toFixed(0);
-        let eta = '';
-        if (speed_bps > 0) {
-          const remainingSec = Math.ceil((bytes_total - bytes_downloaded) / speed_bps);
-          eta =
-            remainingSec < 60
-              ? ` — ~${remainingSec}s remaining`
-              : ` — ~${Math.ceil(remainingSec / 60)} min remaining`;
-        }
-        renderProgress(`Downloading model for first use... ${mbDown}/${mbTotal} MB (${pct}%)${eta}`);
-        statusBar.show(`Downloading model... ${mbDown}/${mbTotal} MB${eta}`, pct);
-      }
-    );
-
-    interface ModelStatusEvent {
-      status: string;
-    }
-    const unlistenStatus = await listen<ModelStatusEvent>(AGENT_EVENTS.MODEL_STATUS, (event) => {
-      const { status: s } = event.payload;
-      if (s === 'loading') {
-        renderProgress('Loading model... this may take a moment on first use.');
-        statusBar.show('Loading model...');
-      } else if (s === 'ready') {
-        statusBar.success('Model ready');
-      }
-    });
-
-    try {
-      statusBar.show(`Preparing ${modelId}...`);
-      const engineSwapped = await ensureModelReady(modelId);
-
-      // Create a session if the engine was (re-)installed (which drops all
-      // existing sessions) or we don't hold one yet.
-      if (engineSwapped || !sessionId || !modelPrepared) {
-        if (sessionId && engineSwapped) {
-          // Old session is dead after an engine swap.
-          localAgentEndSession(sessionId).catch(() => {});
-        }
-        sessionId = await localAgentNewSession(modelId, nodeId);
-        modelPrepared = true;
-        log.info('Session ready', { sessionId, modelId, engineSwapped });
-      }
-      return true;
-    } catch (err) {
-      const msg =
-        typeof err === 'string'
-          ? err
-          : err instanceof Error
-            ? err.message
-            : ((err as Record<string, unknown>)?.message as string) ?? JSON.stringify(err);
-      log.error('Model preparation failed', { modelId, error: msg, raw: err });
-      sendError = msg;
-      statusBar.error(`Model error: ${msg}`);
-      return false;
-    } finally {
-      unlistenDownload();
-      unlistenStatus();
-      // Remove the transient progress placeholder.
-      inMemoryMessages = inMemoryMessages.filter((m) => m.id !== progressMessage.id);
-    }
-  }
-
   async function handleSend(content: string): Promise<void> {
     const trimmed = content.trim();
-    if (!trimmed || isStreaming || !model) return;
+    if (!trimmed || isProcessing || !model) return;
 
     sendError = null;
 
-    const userMsg: DisplayMessage = {
-      id: generateId(),
-      role: 'user',
-      content: trimmed,
-      toolExecutions: [],
-      timestamp: Date.now(),
-    };
-    inMemoryMessages = [...inMemoryMessages, userMsg];
-    scheduleFlush();
-    await scrollToBottom();
-
     if (!isTauri()) {
-      // Browser dev: the daemon session API isn't bridged. Surface, don't crash.
-      sendError = 'Sending requires the desktop app (the daemon session API is unavailable in the browser).';
+      sendError = 'Sending requires the desktop app (daemon not available in the browser).';
       return;
     }
 
-    isStreaming = true;
+    // Ensure the model is loaded before the first message.
     try {
-      if (!(await ensureSession(model))) return;
-      if (!sessionId) return;
-
-      // Assistant placeholder, filled by streaming chunks then the final turn.
-      const assistantMessage: DisplayMessage = {
-        id: generateId(),
-        role: 'assistant',
-        content: '',
-        toolExecutions: [],
-        timestamp: Date.now(),
-      };
-      inMemoryMessages = [...inMemoryMessages, assistantMessage];
-
-      const { listen } = await import('@tauri-apps/api/event');
-
-      const unlistenChunk = await listen<StreamingChunk>(
-        AGENT_EVENTS.LOCAL_AGENT_CHUNK,
-        (event) => {
-          const chunk = event.payload;
-          if (chunk.type === 'token') {
-            assistantMessage.content += chunk.text;
-            inMemoryMessages = [...inMemoryMessages.slice(0, -1), { ...assistantMessage }];
-          }
-        }
-      );
-      eventUnlisteners.push(unlistenChunk);
-
-      const unlistenStatus = await listen<LocalAgentStatus>(
-        AGENT_EVENTS.LOCAL_AGENT_STATUS,
-        (event) => log.debug('Agent status update', { status: event.payload })
-      );
-      eventUnlisteners.push(unlistenStatus);
-
-      const unlistenError = await listen<string>(AGENT_EVENTS.LOCAL_AGENT_ERROR, (event) => {
-        log.error('Agent error', { error: event.payload });
-        sendError = event.payload;
-      });
-      eventUnlisteners.push(unlistenError);
-
-      const result: AgentTurnResult = await localAgentSend(sessionId, trimmed);
-
-      const finalMessage: DisplayMessage = {
-        ...assistantMessage,
-        content: result.response || assistantMessage.content,
-        toolExecutions: result.tool_calls_made,
-      };
-      inMemoryMessages = [...inMemoryMessages.slice(0, -1), finalMessage];
-      scheduleFlush();
-
-      log.debug('Agent turn complete', {
-        messageId: finalMessage.id,
-        toolCalls: result.tool_calls_made.length,
-      });
+      await ensureModelReady(model);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown agent error';
-      log.error('Agent send error', { error: errorMsg });
-      sendError = errorMsg;
-      // Reset session so the next send gets a fresh one rather than reusing a broken session.
-      sessionId = null;
-      modelPrepared = false;
-    } finally {
-      cleanupListeners();
-      isStreaming = false;
-      await scrollToBottom();
+      const msg =
+        err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
+      sendError = msg;
+      statusBar.error(`Model error: ${msg}`);
+      return;
+    }
+
+    // Append user message to node — daemon will react and start inference.
+    const current = sharedNodeStore.getNode(nodeId);
+    if (!current) {
+      sendError = 'Node not found';
+      return;
+    }
+
+    const existingNs = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
+    const existingMessages = Array.isArray(existingNs['messages']) ? existingNs['messages'] : [];
+    const newMessage = {
+      role: 'user',
+      content: trimmed,
+      timestamp: new Date().toISOString(),
+    };
+
+    sharedNodeStore.updateNode(
+      nodeId,
+      {
+        properties: {
+          ...current.properties,
+          'ai-chat': {
+            ...existingNs,
+            messages: [...existingMessages, newMessage],
+          },
+        },
+      },
+      { type: 'viewer', viewerId: 'ai-chat-viewer' }
+    );
+
+    await scrollToBottom();
+  }
+
+  async function handleCancel(): Promise<void> {
+    if (!isProcessing) return;
+    try {
+      await localAgentCancelTurn(nodeId);
+    } catch (err) {
+      log.warn('Failed to cancel turn', { error: String(err) });
     }
   }
 
@@ -513,10 +251,6 @@
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
     try {
-      // Hydration fallback: the viewer assumes the node is in sharedNodeStore, but
-      // a node opened directly (e.g. after reload, before the tree has loaded it)
-      // may be absent. Fetch it by id so the dispatcher always has properties to
-      // route on — the root cause class behind the original "picker does nothing".
       if (!sharedNodeStore.getNode(nodeId)) {
         try {
           const fetched = await backendAdapter.getNode(nodeId);
@@ -531,10 +265,6 @@
         }
       }
 
-      if (node) {
-        loadMessagesFromNode();
-        initialLoadDone = true;
-      }
       if (node?.content) onTitleChange?.(node.content);
 
       if (isTauri()) {
@@ -543,6 +273,38 @@
         } catch (err) {
           log.debug('Ollama availability check failed', { error: String(err) });
         }
+
+        // Subscribe to streaming token events for this node.
+        const { listen } = await import('@tauri-apps/api/event');
+
+        const unlistenChunk = await listen<StreamingChunk & { node_id?: string }>(
+          AGENT_EVENTS.LOCAL_AGENT_CHUNK,
+          (event) => {
+            const chunk = event.payload;
+            // Filter to only this node's events.
+            if (chunk.node_id && chunk.node_id !== nodeId) return;
+
+            if (chunk.type === 'token') {
+              streamingContent += chunk.text ?? '';
+              scrollToBottom();
+            } else if (chunk.type === 'done') {
+              // WatchNodes will deliver the completed assistant message.
+              // Clear the streaming buffer — but wait one tick to avoid flash.
+              tick().then(() => { streamingContent = ''; });
+            } else if (chunk.type === 'error') {
+              sendError = (chunk as unknown as { error_message?: string }).error_message ?? 'Inference error';
+              streamingContent = '';
+            }
+          }
+        );
+        eventUnlisteners.push(unlistenChunk);
+
+        const unlistenError = await listen<string>(AGENT_EVENTS.LOCAL_AGENT_ERROR, (event) => {
+          log.error('Agent error', { error: event.payload });
+          sendError = event.payload;
+          streamingContent = '';
+        });
+        eventUnlisteners.push(unlistenError);
       }
     } finally {
       nodeReady = true;
@@ -550,29 +312,29 @@
   });
 
   onDestroy(() => {
-    if (hasUnsavedChanges) flushToStore();
-    if (flushTimer) clearTimeout(flushTimer);
-    teardownSession();
+    cleanupListeners();
   });
 
   // Auto-scroll as messages stream/append.
   $effect(() => {
-    void inMemoryMessages.length;
+    void displayMessages().length;
     scrollToBottom();
   });
 
-  // The viewer assumes its node is in sharedNodeStore. If it wasn't at mount (the
-  // hydration fallback fetches it asynchronously), load the persisted messages
-  // once the node first becomes available — guarded so a live conversation is
-  // never reloaded out from under the user.
+  // Clear streaming buffer when WatchNodes delivers a completed assistant message
+  // (the node now has the message persisted, so the overlay is no longer needed).
   $effect(() => {
-    if (node && !initialLoadDone) {
-      loadMessagesFromNode();
-      initialLoadDone = true;
+    if (!isProcessing && streamingContent) {
+      // Check if the last persisted message is from the assistant — means the
+      // daemon wrote the completed message, so we can clear the buffer.
+      const msgs = persistedMessages();
+      if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+        streamingContent = '';
+      }
     }
   });
 
-  // Update title when node content changes
+  // Update title when node content changes.
   $effect(() => {
     if (node?.content) onTitleChange?.(node.content);
   });
@@ -587,26 +349,12 @@
         {#if model}
           <span class="meta-badge meta-model">{model}</span>
         {/if}
-        <span class="meta-badge" class:meta-archived={status === 'archived'}>
-          {status}
+        <span class="meta-badge" class:meta-archived={lifecycleStatus === 'archived'}>
+          {lifecycleStatus}
         </span>
       </div>
     </div>
     <div class="chat-viewer-header-right">
-      {#if hasUnsavedChanges}
-        <span class="save-indicator" title="Unsaved changes (auto-saving...)">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            width="14"
-            height="14"
-          >
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        </span>
-      {/if}
       <select
         class="provider-select"
         aria-label="Conversation provider"
@@ -635,7 +383,6 @@
       <p class="provider-prompt-text">Loading…</p>
     </div>
   {:else if provider === undefined}
-    <!-- Placeholder: prompt to pick a mode from the dropdown above. -->
     <div class="provider-prompt">
       <p class="provider-prompt-text">Choose how this conversation is powered</p>
       <p class="provider-prompt-hint">
@@ -643,10 +390,8 @@
       </p>
     </div>
   {:else if provider === 'pty'}
-    <!-- Mode 2d: embedded terminal IS the viewer. -->
     <AiChatPtySession {nodeId} />
   {:else if isMessageProvider && !model}
-    <!-- native | ollama, no model chosen yet → model picker. -->
     <AiChatModelPicker
       {nodeId}
       provider={provider as 'native' | 'ollama'}
@@ -662,14 +407,13 @@
       }}
     />
   {:else if isMessageProvider}
-    <!-- Modes 2a/2b/2c with a model: message UI. -->
     <div
       class="chat-viewer-messages"
       bind:this={messagesContainer}
       role="list"
       aria-label="Chat conversation"
     >
-      {#if inMemoryMessages.length === 0}
+      {#if displayMessages().length === 0}
         <div class="empty-conversation">
           <div class="empty-conversation-icon">
             <svg
@@ -687,23 +431,26 @@
           <p class="empty-conversation-hint">Type a message below to begin</p>
         </div>
       {:else}
-        {#each inMemoryMessages as message (message.id)}
+        {#each displayMessages() as message (message.id)}
           <ChatMessage {message} />
         {/each}
       {/if}
 
-      {#if isStreaming}
+      {#if isProcessing}
         <div class="typing-indicator" aria-label="AI is thinking">
           <span class="typing-dot"></span>
           <span class="typing-dot"></span>
           <span class="typing-dot"></span>
+          <button class="cancel-turn-btn" onclick={handleCancel} aria-label="Cancel response">
+            Stop
+          </button>
         </div>
       {/if}
 
       {#if showMessageCap}
         <div class="message-cap-nudge" role="alert">
           <p>
-            This conversation has {inMemoryMessages.length} messages. Consider starting a new chat for
+            This conversation has {persistedMessages().length} messages. Consider starting a new chat for
             better performance.
           </p>
         </div>
@@ -714,11 +461,11 @@
       <div class="send-error" role="alert">{sendError}</div>
     {/if}
 
-    {#if status !== 'archived'}
+    {#if lifecycleStatus !== 'archived'}
       <ChatInput
         onSend={handleSend}
-        disabled={isStreaming}
-        placeholder={isStreaming ? 'AI is responding...' : 'Type a message...'}
+        disabled={isProcessing}
+        placeholder={isProcessing ? 'AI is responding...' : 'Type a message...'}
       />
     {:else}
       <div class="archived-notice">This conversation is archived and read-only.</div>
@@ -833,23 +580,6 @@
     color: hsl(var(--muted-foreground));
   }
 
-  .save-indicator {
-    display: flex;
-    align-items: center;
-    color: hsl(var(--muted-foreground));
-    animation: pulse-save 1.5s ease-in-out infinite;
-  }
-
-  @keyframes pulse-save {
-    0%,
-    100% {
-      opacity: 0.4;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
-
   .chat-viewer-messages {
     flex: 1;
     overflow-y: auto;
@@ -905,6 +635,22 @@
 
   .typing-dot:nth-child(3) {
     animation-delay: 0.3s;
+  }
+
+  .cancel-turn-btn {
+    margin-left: 0.5rem;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    background: transparent;
+    border: 1px solid hsl(var(--muted-foreground) / 0.4);
+    border-radius: 0.25rem;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+  }
+
+  .cancel-turn-btn:hover {
+    border-color: hsl(var(--destructive));
+    color: hsl(var(--destructive));
   }
 
   @keyframes typing-bounce {

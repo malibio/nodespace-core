@@ -280,9 +280,15 @@ pub fn run() {
                             // we hand `grpc_client` to managed state —
                             // ProClient rides the same h2 connection.
                             let channel = grpc_client.channel().await;
-                            app_handle.manage(grpc_client);
+                            app_handle.manage(grpc_client.clone());
                             tracing::info!("gRPC client connected to nodespaced");
                             watcher::spawn(app_handle.clone(), session_token);
+                            // Subscribe to token stream for ai-chat node inference events.
+                            commands::local_agent::start_token_stream_subscription(
+                                app_handle.clone(),
+                                grpc_client,
+                            )
+                            .await;
 
                             // Pro capability probe: a single
                             // WatchSyncStatus call on the same channel.
@@ -439,13 +445,9 @@ pub fn run() {
             commands::settings::reset_database_to_default,
             commands::settings::get_capture_settings,
             commands::settings::update_capture_settings,
-            // Local agent commands (Issue #1008)
+            // Local agent commands
             commands::local_agent::local_agent_status,
-            commands::local_agent::local_agent_new_session,
-            commands::local_agent::local_agent_send,
-            commands::local_agent::local_agent_cancel,
-            commands::local_agent::local_agent_end_session,
-            commands::local_agent::local_agent_get_sessions,
+            commands::local_agent::local_agent_cancel_turn,
             commands::local_agent::ensure_model_ready,
             commands::local_agent::list_local_models,
             // Chat model management commands (Issue #1008)

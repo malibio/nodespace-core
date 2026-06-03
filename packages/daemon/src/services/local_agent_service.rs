@@ -1,10 +1,16 @@
-//! tonic `LocalAgentService` implementation.
+//! tonic `LocalAgentService` implementation — node-as-message-queue architecture.
 //!
-//! Wraps the agent-crate `LocalAgentService` (ReAct loop + llama.cpp
-//! inference) and `CompositeModelManager` so they run in the daemon process
-//! rather than the Tauri process. GPU context, model lifecycle, and session
-//! state all live here; the Tauri app becomes a thin gRPC proxy.
+//! The daemon watches for `NodeUpdated`/`NodeCreated` events on `ai-chat` nodes.
+//! When the last message in `properties['ai-chat']['messages']` has `role: 'user'`
+//! and `status != 'processing'`, it triggers an inference turn in-process.
+//!
+//! Streaming tokens are broadcast to any connected `SubscribeTokenStream` client
+//! (the Tauri process), which translates them to Tauri events for the frontend.
+//!
+//! Session IPC (StartSession, SendMessage, EndSession) is removed. The node
+//! is the sole source of truth for conversation state.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,22 +23,22 @@ use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 use nodespace_agent::local_agent::tools::GraphToolExecutor;
+use nodespace_core::models::{NodeFilter, NodeUpdate};
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
     local_agent_service_server::LocalAgentService as GrpcLocalAgentService, AgentChunk,
-    CancelGenerationRequest, CancelGenerationResponse, CancelModelDownloadRequest,
-    CancelModelDownloadResponse, DeleteModelRequest, DeleteModelResponse, DownloadModelRequest,
-    EndLocalSessionRequest, EndLocalSessionResponse, EnsureModelReadyRequest,
-    GetLocalStatusRequest, GetSessionsRequest, GetSessionsResponse, GetSystemRamRequest,
-    GetSystemRamResponse, ListModelsRequest, ListModelsResponse, LoadModelRequest,
-    LoadModelResponse, LocalAgentStatusResponse, LocalSessionInfo, ModelEntry,
-    ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
-    RecommendedModelRequest, RecommendedModelResponse, SendLocalMessageRequest,
-    StartLocalSessionRequest, StartLocalSessionResponse, UnloadModelRequest, UnloadModelResponse,
+    CancelModelDownloadRequest, CancelModelDownloadResponse, CancelTurnRequest, CancelTurnResponse,
+    DeleteModelRequest, DeleteModelResponse, DownloadModelRequest, EnsureModelReadyRequest,
+    GetLocalStatusRequest, GetSystemRamRequest, GetSystemRamResponse, ListModelsRequest,
+    ListModelsResponse, LoadModelRequest, LoadModelResponse, LocalAgentStatusResponse,
+    ModelEntry, ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
+    RecommendedModelRequest, RecommendedModelResponse, SubscribeTokenStreamRequest,
+    UnloadModelRequest, UnloadModelResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -68,16 +74,19 @@ impl ChatInferenceEngine for NoOpInferenceEngine {
 
 type AgentService = Arc<LocalAgentService<dyn ChatInferenceEngine, dyn AgentToolExecutor>>;
 
+/// Cancellation tokens keyed by node_id for in-progress turns.
+type TurnTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
+
 struct LocalAgentServiceInner {
-    /// Wrapped in `RwLock<Arc<...>>` so we can swap the service on engine
-    /// replacement while `send_message` callers hold only an `Arc` clone.
     service: RwLock<AgentService>,
     model_manager: Arc<CompositeModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
-    /// Embedding service for semantic schema retrieval (#1300). Populated
-    /// asynchronously after the embedding model loads; `None` until then.
     embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
+    /// Broadcast channel for streaming tokens → all SubscribeTokenStream clients.
+    token_tx: broadcast::Sender<AgentChunk>,
+    /// Cancellation tokens keyed by node_id.
+    turn_tokens: TurnTokens,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -97,6 +106,9 @@ impl LocalAgentServiceImpl {
         let ollama = Arc::new(OllamaModelManager::new());
         let model_manager = Arc::new(CompositeModelManager::new(gguf, ollama));
 
+        // Channel capacity: enough headroom for burst token output (~256 tokens per broadcast).
+        let (token_tx, _) = broadcast::channel(512);
+
         Self {
             inner: Arc::new(LocalAgentServiceInner {
                 service: RwLock::new(Arc::new(Self::build_noop_service(node_service.clone()))),
@@ -104,6 +116,8 @@ impl LocalAgentServiceImpl {
                 node_service,
                 active_model_id: Mutex::new(None),
                 embedding_service,
+                token_tx,
+                turn_tokens: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -119,7 +133,6 @@ impl LocalAgentServiceImpl {
         LocalAgentService::new(engine, executor)
     }
 
-    /// Clone the service Arc so callers can release the lock before awaiting.
     async fn get_service(&self) -> AgentService {
         self.inner.service.read().await.clone()
     }
@@ -146,7 +159,6 @@ impl LocalAgentServiceImpl {
         *guard = new_service;
     }
 
-    /// Replace the engine only if the given model_id differs from the active one.
     async fn replace_engine_if_changed(
         &self,
         model_id: &str,
@@ -163,13 +175,405 @@ impl LocalAgentServiceImpl {
         true
     }
 
-    /// Reset the inference engine to NoOp. Called during daemon shutdown.
     pub async fn reset_to_noop_engine(&self) {
         let mut guard = self.inner.service.write().await;
         *guard = Arc::new(Self::build_noop_service(self.inner.node_service.clone()));
         drop(guard);
         *self.inner.active_model_id.lock().await = None;
         tracing::debug!("LocalAgentServiceImpl: inference engine reset to NoOp");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Event watcher — subscribes to NodeService and reacts to ai-chat changes
+    // ---------------------------------------------------------------------------
+
+    /// Spawn a background task that subscribes to the NodeService event bus and
+    /// handles ai-chat node changes. Call once from the daemon startup after
+    /// `LocalAgentServiceImpl::new`.
+    ///
+    /// Also scans for nodes stuck in `status: 'processing'` at startup (daemon
+    /// restart recovery) and retries those turns.
+    pub fn start_event_watcher(&self) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            // Recovery pass: find any ai-chat nodes stuck in processing.
+            this.recover_stuck_turns().await;
+
+            let mut rx = this.inner.node_service.subscribe_to_events();
+            loop {
+                match rx.recv().await {
+                    Ok(envelope) => {
+                        let (node_id, node_type) = match &envelope.event {
+                            nodespace_core::db::events::DomainEvent::NodeCreated {
+                                node_id,
+                                node_type,
+                            } => (node_id.clone(), node_type.clone()),
+                            nodespace_core::db::events::DomainEvent::NodeUpdated {
+                                node_id,
+                                node_type,
+                                ..
+                            } => (node_id.clone(), node_type.clone()),
+                            _ => continue,
+                        };
+
+                        if node_type != "ai-chat" {
+                            continue;
+                        }
+
+                        let this2 = this.clone();
+                        tokio::spawn(async move {
+                            this2.maybe_handle_ai_chat_node(&node_id).await;
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            skipped,
+                            "LocalAgentService event watcher lagged; some ai-chat events dropped"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::info!("LocalAgentService event watcher: channel closed, stopping");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Check the node and start an inference turn if appropriate.
+    async fn maybe_handle_ai_chat_node(&self, node_id: &str) {
+        let node = match self.inner.node_service.get_node(node_id).await {
+            Ok(Some(n)) => n,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(node_id, error = %e, "failed to fetch ai-chat node");
+                return;
+            }
+        };
+
+        let ai_chat = match node.properties.get("ai-chat") {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Already processing — skip.
+        if ai_chat.get("status").and_then(|v| v.as_str()) == Some("processing") {
+            return;
+        }
+
+        // Check that the last message is from the user.
+        let messages = match ai_chat.get("messages").and_then(|v| v.as_array()) {
+            Some(m) if !m.is_empty() => m,
+            _ => return,
+        };
+        let last = &messages[messages.len() - 1];
+        if last.get("role").and_then(|v| v.as_str()) != Some("user") {
+            return;
+        }
+
+        // Check if a turn is already running for this node (race between event
+        // delivery and turn start for the same node).
+        {
+            let tokens = self.inner.turn_tokens.lock().await;
+            if tokens.contains_key(node_id) {
+                return;
+            }
+        }
+
+        tracing::info!(node_id, "ai-chat turn triggered");
+        self.run_ai_chat_turn(node_id.to_string()).await;
+    }
+
+    /// Execute a full inference turn for the given ai-chat node.
+    async fn run_ai_chat_turn(&self, node_id: String) {
+        let cancel = CancellationToken::new();
+        self.inner
+            .turn_tokens
+            .lock()
+            .await
+            .insert(node_id.clone(), cancel.clone());
+
+        // Write status: 'processing'
+        if let Err(e) = self
+            .write_ai_chat_status(&node_id, "processing", None)
+            .await
+        {
+            tracing::warn!(node_id, error = %e, "failed to set ai-chat status to processing");
+            self.inner.turn_tokens.lock().await.remove(&node_id);
+            return;
+        }
+
+        // Load history from node.
+        let history = load_node_history(&self.inner.node_service, &node_id).await;
+        if history.is_empty() {
+            tracing::warn!(node_id, "ai-chat history empty — skipping turn");
+            let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+            self.inner.turn_tokens.lock().await.remove(&node_id);
+            return;
+        }
+
+        // Separate the user message (last) from the prior history.
+        let user_message = match history.last() {
+            Some(m) if m.role == Role::User => m.content.clone(),
+            _ => {
+                tracing::warn!(node_id, "ai-chat last message is not from user — skipping");
+                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+                self.inner.turn_tokens.lock().await.remove(&node_id);
+                return;
+            }
+        };
+        let prior_history: Vec<ChatMessage> = history[..history.len() - 1].to_vec();
+
+        let service = self.get_service().await;
+
+        // Create an ephemeral session seeded with prior history.
+        let session_id = service.create_session(None, prior_history).await;
+
+        // Refresh workspace context.
+        let emb = self.inner.embedding_service.read().await.clone();
+        if let Ok(ctx) =
+            build_workspace_context(&self.inner.node_service, emb, Some(&user_message)).await
+        {
+            service.set_session_context(&session_id, ctx).await;
+        }
+
+        let token_tx = self.inner.token_tx.clone();
+        let node_id2 = node_id.clone();
+
+        let send_result = service
+            .send_message(
+                &session_id,
+                &user_message,
+                move |_status: LocalAgentStatus| {},
+                move |chunk: StreamingChunk| {
+                    if !matches!(chunk, StreamingChunk::Done { .. }) {
+                        let mut proto = streaming_chunk_to_proto(chunk);
+                        proto.node_id = Some(node_id2.clone());
+                        // Ignore send errors — no subscribers connected is fine.
+                        let _ = token_tx.send(proto);
+                    }
+                },
+            )
+            .await;
+
+        // End the ephemeral session.
+        service.end_session(&session_id).await;
+
+        match send_result {
+            Ok(turn_result) => {
+                // Emit done chunk to subscribers.
+                let _ = self.inner.token_tx.send(AgentChunk {
+                    chunk_type: "done".to_string(),
+                    prompt_tokens: Some(turn_result.usage.prompt_tokens as i32),
+                    completion_tokens: Some(turn_result.usage.completion_tokens as i32),
+                    node_id: Some(node_id.clone()),
+                    ..Default::default()
+                });
+
+                // Append assistant message to node.
+                let assistant_content = service
+                    .get_session(&session_id)
+                    .await
+                    .and_then(|s| {
+                        s.messages
+                            .into_iter()
+                            .rev()
+                            .find(|m| m.role == Role::Assistant)
+                            .map(|m| m.content)
+                    })
+                    .unwrap_or_else(|| turn_result.response.clone());
+
+                if let Err(e) = self
+                    .append_assistant_message(&node_id, &assistant_content)
+                    .await
+                {
+                    tracing::warn!(node_id, error = %e, "failed to append assistant message");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(node_id, error = %e, "inference turn failed");
+                let _ = self.inner.token_tx.send(AgentChunk {
+                    chunk_type: "error".to_string(),
+                    error_message: Some(e.to_string()),
+                    node_id: Some(node_id.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Write status: 'idle'
+        if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+            tracing::warn!(node_id, error = %e, "failed to set ai-chat status to idle");
+        }
+
+        self.inner.turn_tokens.lock().await.remove(&node_id);
+        tracing::info!(node_id, "ai-chat turn complete");
+    }
+
+    /// Scan for ai-chat nodes stuck in `status: 'processing'` at daemon startup
+    /// and retry their turns (handles daemon restart mid-turn).
+    async fn recover_stuck_turns(&self) {
+        let filter = NodeFilter::new().with_node_type("ai-chat".to_string());
+
+        let nodes = match self.inner.node_service.query_nodes(filter).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "recovery scan failed");
+                return;
+            }
+        };
+
+        for node in nodes {
+            let ai_chat = match node.properties.get("ai-chat") {
+                Some(v) => v,
+                None => continue,
+            };
+            if ai_chat.get("status").and_then(|v| v.as_str()) != Some("processing") {
+                continue;
+            }
+            // Verify last message is from user before retrying.
+            let is_trailing_user = ai_chat
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .and_then(|msgs| msgs.last())
+                .and_then(|m| m.get("role"))
+                .and_then(|v| v.as_str())
+                == Some("user");
+
+            if is_trailing_user {
+                tracing::info!(node_id = %node.id, "recovering stuck ai-chat turn");
+                let this = self.clone();
+                let nid = node.id.clone();
+                tokio::spawn(async move {
+                    this.run_ai_chat_turn(nid).await;
+                });
+            } else {
+                // Stuck in processing but no trailing user message — reset to idle.
+                let _ = self.write_ai_chat_status(&node.id, "idle", None).await;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Node write helpers
+    // ---------------------------------------------------------------------------
+
+    /// Write `properties['ai-chat']['status']` to the node.
+    /// Retries once on version conflict (optimistic concurrency).
+    async fn write_ai_chat_status(
+        &self,
+        node_id: &str,
+        status: &str,
+        model: Option<&str>,
+    ) -> Result<(), String> {
+        for attempt in 0..2 {
+            let node = self
+                .inner
+                .node_service
+                .get_node(node_id)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("node {node_id} not found"))?;
+
+            let mut ai_chat = node
+                .properties
+                .get("ai-chat")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            ai_chat["status"] = serde_json::Value::String(status.to_string());
+            if let Some(m) = model {
+                ai_chat["model"] = serde_json::Value::String(m.to_string());
+            }
+
+            let mut props = node.properties.clone();
+            props["ai-chat"] = ai_chat;
+
+            let update = NodeUpdate::new().with_properties(props);
+            match self
+                .inner
+                .node_service
+                .update_node(node_id, node.version, update)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if attempt == 0 => {
+                    tracing::debug!(
+                        node_id,
+                        error = %e,
+                        "version conflict writing ai-chat status, retrying"
+                    );
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        unreachable!()
+    }
+
+    /// Append an assistant message to `properties['ai-chat']['messages']`.
+    /// Retries once on version conflict.
+    async fn append_assistant_message(
+        &self,
+        node_id: &str,
+        content: &str,
+    ) -> Result<(), String> {
+        for attempt in 0..2 {
+            let node = self
+                .inner
+                .node_service
+                .get_node(node_id)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("node {node_id} not found"))?;
+
+            let mut ai_chat = node
+                .properties
+                .get("ai-chat")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let messages = ai_chat
+                .get_mut("messages")
+                .and_then(|v| v.as_array_mut());
+
+            let timestamp = chrono::Utc::now().to_rfc3339();
+            let new_msg = serde_json::json!({
+                "role": "assistant",
+                "content": content,
+                "timestamp": timestamp
+            });
+
+            if let Some(msgs) = messages {
+                msgs.push(new_msg);
+            } else {
+                ai_chat["messages"] = serde_json::json!([new_msg]);
+            }
+
+            // Set status to idle here too (atomic with message append).
+            ai_chat["status"] = serde_json::Value::String("idle".to_string());
+
+            let mut props = node.properties.clone();
+            props["ai-chat"] = ai_chat;
+
+            let update = NodeUpdate::new().with_properties(props);
+            match self
+                .inner
+                .node_service
+                .update_node(node_id, node.version, update)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if attempt == 0 => {
+                    tracing::debug!(
+                        node_id,
+                        error = %e,
+                        "version conflict appending assistant message, retrying"
+                    );
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        unreachable!()
     }
 }
 
@@ -179,199 +583,61 @@ impl LocalAgentServiceImpl {
 
 #[tonic::async_trait]
 impl GrpcLocalAgentService for LocalAgentServiceImpl {
-    async fn start_session(
+    type SubscribeTokenStreamStream = ReceiverStream<Result<AgentChunk, Status>>;
+
+    async fn subscribe_token_stream(
         &self,
-        request: Request<StartLocalSessionRequest>,
-    ) -> Result<Response<StartLocalSessionResponse>, Status> {
-        let req = request.into_inner();
-        let service = self.get_service().await;
-
-        // Seed history from the node's persisted ai-chat.messages if node_id provided.
-        let history = if let Some(node_id) = req.node_id.as_deref().filter(|s| !s.is_empty()) {
-            load_node_history(&self.inner.node_service, node_id).await
-        } else {
-            vec![]
-        };
-
-        let session_id = service
-            .create_session(
-                if req.model_id.is_empty() {
-                    None
-                } else {
-                    Some(req.model_id)
-                },
-                history,
-            )
-            .await;
-
-        // No query at session creation — semantic schema retrieval is skipped.
-        // The first send_message call will inject relevant schemas once a query exists.
-        // read().clone() drops the lock before the async build call.
-        let emb = self.inner.embedding_service.read().await.clone();
-        if let Ok(ctx) = build_workspace_context(&self.inner.node_service, emb, None).await {
-            service.set_session_context(&session_id, ctx).await;
-        }
-
-        Ok(Response::new(StartLocalSessionResponse { session_id }))
-    }
-
-    type SendMessageStream = ReceiverStream<Result<AgentChunk, Status>>;
-
-    async fn send_message(
-        &self,
-        request: Request<SendLocalMessageRequest>,
-    ) -> Result<Response<Self::SendMessageStream>, Status> {
-        let req = request.into_inner();
-        let session_id = req.session_id.clone();
-        let message = req.message;
-
-        // Clone Arc so we can release the RwLock before awaiting.
-        let service = self.get_service().await;
-
-        // Refresh workspace context before the turn. Schemas semantically similar
-        // to the message are injected even when the user doesn't name the type
-        // explicitly (e.g. "clients" → customer schema, #1300).
-        // read().clone() drops the RwLock before the async build call.
-        let emb = self.inner.embedding_service.read().await.clone();
-        if let Ok(ctx) =
-            build_workspace_context(&self.inner.node_service, emb, Some(&message)).await
-        {
-            service.set_session_context(&session_id, ctx).await;
-        }
-
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentChunk, Status>>(64);
-
-        // Drive the agent turn inline (not spawned) so the gRPC stream starts
-        // filling before this handler returns. The callbacks push into an
-        // unbounded channel; a forward task drains it into the bounded `tx`.
-        let (chunk_tx, mut chunk_rx) =
-            tokio::sync::mpsc::unbounded_channel::<Result<AgentChunk, Status>>();
-        let chunk_tx2 = chunk_tx.clone();
-
-        let session_id2 = session_id.clone();
-        let service_result = service
-            .send_message(
-                &session_id,
-                &message,
-                move |_status: LocalAgentStatus| {
-                    let _ = _status;
-                },
-                move |chunk: StreamingChunk| {
-                    // Filter Done — the agent loop emits it, but we send our own
-                    // done chunk below with authoritative token counts from the
-                    // turn result, avoiding a duplicate done event on the stream.
-                    if !matches!(chunk, StreamingChunk::Done { .. }) {
-                        let _ = chunk_tx.send(Ok(streaming_chunk_to_proto(chunk)));
-                    }
-                },
-            )
-            .await;
-
-        match service_result {
-            Ok(turn_result) => {
-                let _ = chunk_tx2.send(Ok(AgentChunk {
-                    chunk_type: "done".to_string(),
-                    prompt_tokens: Some(turn_result.usage.prompt_tokens as i32),
-                    completion_tokens: Some(turn_result.usage.completion_tokens as i32),
-                    ..Default::default()
-                }));
-            }
-            Err(e) => {
-                let _ = chunk_tx2.send(Ok(AgentChunk {
-                    chunk_type: "error".to_string(),
-                    error_message: Some(e.to_string()),
-                    ..Default::default()
-                }));
-            }
-        }
+        _request: Request<SubscribeTokenStreamRequest>,
+    ) -> Result<Response<Self::SubscribeTokenStreamStream>, Status> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentChunk, Status>>(128);
+        let mut broadcast_rx = self.inner.token_tx.subscribe();
 
         tokio::spawn(async move {
-            while let Some(item) = chunk_rx.recv().await {
-                if tx.send(item).await.is_err() {
-                    break;
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(chunk) => {
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(n, "SubscribeTokenStream subscriber lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
-            tracing::debug!(session_id = %session_id2, "Agent chunk stream closed");
+            tracing::debug!("SubscribeTokenStream: client disconnected");
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
+    async fn cancel_turn(
+        &self,
+        request: Request<CancelTurnRequest>,
+    ) -> Result<Response<CancelTurnResponse>, Status> {
+        let node_id = request.into_inner().node_id;
+        let tokens = self.inner.turn_tokens.lock().await;
+        if let Some(token) = tokens.get(&node_id) {
+            token.cancel();
+            tracing::info!(node_id, "ai-chat turn cancelled");
+        }
+        Ok(Response::new(CancelTurnResponse {}))
+    }
+
     async fn get_status(
         &self,
-        request: Request<GetLocalStatusRequest>,
+        _request: Request<GetLocalStatusRequest>,
     ) -> Result<Response<LocalAgentStatusResponse>, Status> {
-        let req = request.into_inner();
-        let service = self.get_service().await;
-
-        let sessions = service.get_sessions().await;
-        let status = if let Some(session_id) = req.session_id {
-            sessions
-                .into_iter()
-                .find(|(id, _)| *id == session_id)
-                .map(|(_, s)| s)
-                .unwrap_or(LocalAgentStatus::Idle)
+        let tokens = self.inner.turn_tokens.lock().await;
+        let status = if tokens.is_empty() {
+            LocalAgentStatus::Idle
         } else {
-            sessions
-                .into_iter()
-                .last()
-                .map(|(_, s)| s)
-                .unwrap_or(LocalAgentStatus::Idle)
+            LocalAgentStatus::Streaming
         };
-
         let status_json = serde_json::to_string(&status)
             .map_err(|e| Status::internal(format!("Failed to serialize status: {e}")))?;
-
         Ok(Response::new(LocalAgentStatusResponse { status_json }))
-    }
-
-    async fn cancel_generation(
-        &self,
-        request: Request<CancelGenerationRequest>,
-    ) -> Result<Response<CancelGenerationResponse>, Status> {
-        let req = request.into_inner();
-        self.get_service().await.cancel(&req.session_id).await;
-        tracing::info!(session_id = %req.session_id, "Local agent generation cancelled");
-        Ok(Response::new(CancelGenerationResponse {}))
-    }
-
-    async fn end_session(
-        &self,
-        request: Request<EndLocalSessionRequest>,
-    ) -> Result<Response<EndLocalSessionResponse>, Status> {
-        let req = request.into_inner();
-        self.get_service().await.end_session(&req.session_id).await;
-        tracing::info!(session_id = %req.session_id, "Local agent session ended");
-        Ok(Response::new(EndLocalSessionResponse {}))
-    }
-
-    async fn get_sessions(
-        &self,
-        _request: Request<GetSessionsRequest>,
-    ) -> Result<Response<GetSessionsResponse>, Status> {
-        let service = self.get_service().await;
-        let pairs = service.get_sessions().await;
-
-        let mut sessions = Vec::with_capacity(pairs.len());
-        for (id, status) in &pairs {
-            let status_json = serde_json::to_string(status)
-                .map_err(|e| Status::internal(format!("Failed to serialize status: {e}")))?;
-
-            let (model_id, created_at) = if let Some(sess) = service.get_session(id).await {
-                (sess.model_id, sess.created_at.to_rfc3339())
-            } else {
-                (None, String::new())
-            };
-
-            sessions.push(LocalSessionInfo {
-                session_id: id.clone(),
-                model_id,
-                created_at,
-                status_json,
-            });
-        }
-
-        Ok(Response::new(GetSessionsResponse { sessions }))
     }
 
     type EnsureModelReadyStream = ReceiverStream<Result<ModelLoadProgressEvent, Status>>;
@@ -439,7 +705,6 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let model_id_clone = model_id.clone();
         let manager = self.inner.model_manager.clone();
 
-        // Register progress callbacks for both GGUF and Ollama backends.
         let tx_gguf = tx.clone();
         let mid_gguf = model_id.clone();
         manager
@@ -579,7 +844,6 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
-    /// Drive the full model-load sequence and return the resulting events.
     async fn load_model_and_collect_events(&self, model_id: &str) -> Vec<ModelLoadProgressEvent> {
         use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
         use nodespace_agent::local_agent::ollama_inference::OllamaInferenceEngine;
@@ -587,7 +851,6 @@ impl LocalAgentServiceImpl {
 
         let mut events = Vec::new();
 
-        // --- Check model catalog ---
         let models = match self.inner.model_manager.list().await {
             Ok(m) => m,
             Err(e) => {
@@ -614,7 +877,6 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        // --- Ollama fast path ---
         if CompositeModelManager::is_ollama(model_id) {
             let ollama_name = CompositeModelManager::strip_ollama_prefix(model_id).to_string();
 
@@ -657,11 +919,6 @@ impl LocalAgentServiceImpl {
             return events;
         }
 
-        // --- GGUF path ---
-
-        // Check in-memory active engine first: catalog `Loaded` status is
-        // persisted and may survive a daemon restart without the engine being
-        // in memory. `active_model_id` reflects the running engine.
         {
             let active = self.inner.active_model_id.lock().await;
             if active.as_deref() == Some(model_id) {
@@ -677,8 +934,6 @@ impl LocalAgentServiceImpl {
         }
 
         match &model.status {
-            // Catalog says loaded but engine is not active (e.g. after restart):
-            // fall through to re-load.
             ModelStatus::Loaded | ModelStatus::Ready => {}
             ModelStatus::NotDownloaded | ModelStatus::Error { .. } => {
                 events.push(ModelLoadProgressEvent {
@@ -772,7 +1027,6 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        // Update catalog status only after llama.cpp context is live.
         if let Err(e) = self.inner.model_manager.load(model_id).await {
             events.push(ModelLoadProgressEvent {
                 event_type: "error".to_string(),
@@ -835,21 +1089,15 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
     }
 }
 
-/// Load persisted conversation history from an ai-chat node's properties.
-///
-/// Reads `properties["ai-chat"]["messages"]` and converts each entry to a
-/// `ChatMessage` so the new session resumes where the user left off. Entries
-/// with `role == "tool_call"` are skipped — they are internal records that
-/// would confuse the inference engine.
 async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
     let node = match node_service.get_node(node_id).await {
         Ok(Some(n)) => n,
         Ok(None) => {
-            tracing::warn!(node_id, "ai-chat node not found for history seeding");
+            tracing::warn!(node_id, "ai-chat node not found for history");
             return vec![];
         }
         Err(e) => {
-            tracing::error!(node_id, error = %e, "failed to load ai-chat node for history seeding");
+            tracing::error!(node_id, error = %e, "failed to load ai-chat node for history");
             return vec![];
         }
     };
@@ -871,7 +1119,7 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
             let role = match role_str {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
-                _ => return None, // skip tool_call and unknown roles
+                _ => return None,
             };
             let content = m.get("content")?.as_str()?.to_string();
             Some(ChatMessage {
