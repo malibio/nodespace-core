@@ -43,7 +43,8 @@ import { conflictNotifications, type ConflictNotification } from '$lib/stores/co
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
   'deleted-node': 'The node you edited was deleted by another pane',
-  'child-transfer-failure': "Changes couldn't be saved. Please try again."
+  'child-transfer-failure': "Changes couldn't be saved. Please try again.",
+  'write-failure': "Your change couldn't be saved. Please check your connection."
 };
 
 const log = createLogger('SharedNodeStore');
@@ -652,6 +653,7 @@ export class SharedNodeStore {
    */
   static resetInstance(): void {
     SharedNodeStore.instance = null;
+    PersistenceCoordinator.resetInstance();
   }
 
   // ========================================================================
@@ -1249,8 +1251,14 @@ export class SharedNodeStore {
               // Operation was cancelled by a newer operation - this is expected
               return;
             }
-            // Real errors are logged by PersistenceCoordinator
-            // Re-throw would create unhandled rejection, so we silently handle
+            // OCC errors are already handled inside the persistence closure (rollback + notification)
+            if (isVersionConflict(err)) return;
+            // Surface non-OCC write failures visibly so users know their change didn't save
+            conflictNotifications.add({
+              nodeId,
+              message: CONFLICT_MESSAGE['write-failure'],
+              conflictType: 'write-failure'
+            });
           });
         }
       }
@@ -1317,11 +1325,16 @@ export class SharedNodeStore {
     // branch taken.
     const isFocused = focusManager.editingNodeId === node.id;
     const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
-    if (
-      source.type === 'database' &&
-      existingNode &&
-      (isFocused || hasPending)
-    ) {
+    const isDatabaseSource = source.type === 'database';
+    // IMPORTANT: `isFocused || hasPending` MUST be extracted into a variable.
+    // The Svelte compiler's strict_equals transform drops parentheses from
+    // inline boolean expressions involving reactive reads, turning
+    // `isDatabaseSource && existingNode && (isFocused || hasPending)` into
+    // `isDatabaseSource && existingNode && isFocused || hasPending` at runtime.
+    // With || having lower precedence than &&, `|| hasPending` would fire the
+    // guard for any pending node regardless of source type.
+    const isActivelyEdited = isFocused || hasPending;
+    if (isDatabaseSource && existingNode && isActivelyEdited) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +
           `(focused=${isFocused}, pending=${hasPending})`
@@ -1457,7 +1470,14 @@ export class SharedNodeStore {
                   // database broadcast for this node can be classified as
                   // an own-echo (see `isPlausibleOwnEcho`).
                   this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
-                  await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
+                  const updatedFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
+                  // Sync the backend-assigned version into the local node so the next
+                  // OCC uses a fresh version rather than the now-stale pre-update value.
+                  const latestNode = this.nodes.get(nodeId);
+                  if (latestNode && updatedFromBackend) {
+                    latestNode.version = updatedFromBackend.version;
+                    this.nodes.set(nodeId, latestNode);
+                  }
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
                   const errorMessage =
@@ -1569,8 +1589,12 @@ export class SharedNodeStore {
             // Operation was cancelled by a newer operation - this is expected
             return;
           }
-          // Real errors are logged by PersistenceCoordinator
-          // Re-throw would create unhandled rejection, so we silently handle
+          // Surface non-OCC write failures visibly so users know their change didn't save
+          conflictNotifications.add({
+            nodeId,
+            message: CONFLICT_MESSAGE['write-failure'],
+            conflictType: 'write-failure'
+          });
         });
       }
     }
