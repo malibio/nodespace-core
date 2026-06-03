@@ -32,9 +32,11 @@
   let {
     nodeId,
     provider,
+    onSelect,
   }: {
     nodeId: string;
     provider: 'native' | 'ollama';
+    onSelect?: (_id: string) => void;
   } = $props();
 
   const backend = $derived(provider === 'ollama' ? 'ollama' : 'gguf');
@@ -79,8 +81,13 @@
     }
   }
 
+  const isTauri =
+    typeof window !== 'undefined' &&
+    ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+
   onMount(async () => {
     await refresh();
+    if (!isTauri) return;
     try {
       unlistenProgress = await listen<{
         model_id: string;
@@ -145,12 +152,23 @@
     }
   }
 
-  /** Select a ready model: persist provider + model so the parent shows the chat UI. */
+  /** Select a ready model: notify parent or update store directly. */
   function selectModel(modelId: string) {
+    if (onSelect) {
+      onSelect(modelId);
+      return;
+    }
     const current = sharedNodeStore.getNode(nodeId);
+    const existingProps = current?.properties ?? {};
+    const existingNs = (existingProps['ai-chat'] as Record<string, unknown>) ?? {};
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: { ...current?.properties, provider, model: modelId, status: 'active' } },
+      {
+        properties: {
+          ...existingProps,
+          'ai-chat': { ...existingNs, provider, model: modelId, status: 'active' },
+        },
+      },
       { type: 'viewer', viewerId: 'ai-chat-model-picker' }
     );
   }
@@ -178,6 +196,10 @@
     <p class="model-picker-status">Loading models…</p>
   {:else if error}
     <div class="error-banner" role="alert">{error}</div>
+  {:else if !isTauri}
+    <p class="model-picker-status">
+      Built-in model management requires the desktop app. Use the Tauri dev build (<code>bun run dev:tauri</code>) to download and run local models.
+    </p>
   {:else if visibleModels.length === 0}
     <p class="model-picker-status">
       {#if provider === 'ollama'}

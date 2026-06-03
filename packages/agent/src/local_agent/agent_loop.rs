@@ -697,12 +697,16 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
     ///
     /// Returns the session ID. If a model_id is provided, it is recorded
     /// in the session metadata.
-    pub async fn create_session(&self, model_id: Option<String>) -> String {
+    pub async fn create_session(
+        &self,
+        model_id: Option<String>,
+        history: Vec<ChatMessage>,
+    ) -> String {
         let session_id = uuid::Uuid::new_v4().to_string();
         let session = AgentSession {
             id: session_id.clone(),
             model_id,
-            messages: Vec::new(),
+            messages: history,
             status: LocalAgentStatus::Idle,
             created_at: chrono::Utc::now(),
             tool_executions: Vec::new(),
@@ -1417,8 +1421,8 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let service = LocalAgentService::new(engine, executor);
 
-        let id1 = service.create_session(Some("model-a".into())).await;
-        let id2 = service.create_session(None).await;
+        let id1 = service.create_session(Some("model-a".into()), vec![]).await;
+        let id2 = service.create_session(None, vec![]).await;
 
         let sessions = service.get_sessions().await;
         assert_eq!(sessions.len(), 2);
@@ -1436,7 +1440,7 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let service = LocalAgentService::new(engine, executor);
 
-        let id = service.create_session(None).await;
+        let id = service.create_session(None, vec![]).await;
         assert!(service.get_session(&id).await.is_some());
 
         service.end_session(&id).await;
@@ -1450,7 +1454,7 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let service = LocalAgentService::new(engine, executor);
 
-        let id = service.create_session(None).await;
+        let id = service.create_session(None, vec![]).await;
         let result = service
             .send_message(
                 &id,
@@ -1487,7 +1491,7 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let service = LocalAgentService::new(engine, executor);
 
-        let id = service.create_session(None).await;
+        let id = service.create_session(None, vec![]).await;
 
         // Cancel should not panic even if nothing is in progress
         service.cancel(&id).await;
@@ -1696,7 +1700,9 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let service = LocalAgentService::new(engine, executor);
 
-        let id = service.create_session(Some("test-model".into())).await;
+        let id = service
+            .create_session(Some("test-model".into()), vec![])
+            .await;
 
         // send_message should fail because FailingEngine errors
         let user_msg = "Trigger an inference error and confirm the GitHub session survives intact";
@@ -2070,8 +2076,8 @@ mod tests {
         let service = LocalAgentService::new(engine, executor);
 
         // Create two independent sessions
-        let id_a = service.create_session(Some("model-a".into())).await;
-        let id_b = service.create_session(Some("model-b".into())).await;
+        let id_a = service.create_session(Some("model-a".into()), vec![]).await;
+        let id_b = service.create_session(Some("model-b".into()), vec![]).await;
 
         assert_ne!(id_a, id_b, "Session IDs should be unique");
 

@@ -245,15 +245,25 @@ async function handleRequest(req: Request): Promise<Response> {
     const clientId = url.searchParams.get('clientId') ?? crypto.randomUUID();
     let clientRef: SseClient;
 
+    let heartbeatTimer: ReturnType<typeof setInterval>;
     const stream = new ReadableStream({
       start(controller) {
         clientRef = { id: clientId, controller };
         sseClients.add(clientRef);
-        // Send initial keep-alive comment
         controller.enqueue(new TextEncoder().encode(': connected\n\n'));
+        // Keepalive every 15s — prevents Bun's idle timeout from closing the stream
+        heartbeatTimer = setInterval(() => {
+          try {
+            controller.enqueue(new TextEncoder().encode(': ping\n\n'));
+          } catch {
+            sseClients.delete(clientRef);
+            clearInterval(heartbeatTimer);
+          }
+        }, 15_000);
       },
       cancel() {
         sseClients.delete(clientRef);
+        clearInterval(heartbeatTimer);
       }
     });
 
@@ -657,6 +667,7 @@ startWatchBridge();
 
 const server = Bun.serve({
   port: PORT,
+  idleTimeout: 0,
   fetch: handleRequest,
   error(err: Error) {
     console.error('[dev-proxy] Unhandled error:', err);

@@ -85,6 +85,8 @@
   let sendError = $state<string | null>(null);
   /** One-shot: persisted messages loaded once the node is first available. */
   let initialLoadDone = $state(false);
+  /** True once the node is confirmed in the store (hydration complete). */
+  let nodeReady = $state(false);
 
   /** Discovered once on mount: is a local Ollama reachable? Gates the dropdown option. */
   let ollamaReady = $state(false);
@@ -101,25 +103,37 @@
 
   // --- Reactive node lookup ---
   const node = $derived(sharedNodeStore.getNode(nodeId));
-  // Undefined = placeholder (a fresh `/ai-chat` node before a mode is chosen).
-  const provider = $derived(node?.properties?.provider as Provider | undefined);
-  const model = $derived((node?.properties?.model as string) ?? '');
+
+  // Properties may be flat { provider: 'native' } or namespaced { "ai-chat": { provider: 'native' } }.
+  // The backend normalizes to namespaced format on write, so prefer the ai-chat namespace,
+  // falling back to flat for fresh nodes that haven't been persisted yet.
+  function getProp(props: Record<string, unknown> | undefined, key: string): unknown {
+    if (!props) return undefined;
+    const ns = props['ai-chat'] as Record<string, unknown> | undefined;
+    return ns?.[key] ?? props[key];
+  }
+
+  const provider = $derived(getProp(node?.properties, 'provider') as Provider | undefined);
+  const model = $derived((getProp(node?.properties, 'model') as string) ?? '');
   const isMessageProvider = $derived(
     provider !== undefined && (MESSAGE_PROVIDERS as readonly string[]).includes(provider)
   );
-  const status = $derived((node?.properties?.status as string) ?? 'active');
+  const status = $derived((getProp(node?.properties, 'status') as string) ?? 'active');
   const showMessageCap = $derived(inMemoryMessages.length >= SOFT_MESSAGE_CAP);
 
   /** Persist a provider mode change onto the node (placeholder → configured, or switch). */
   function selectProvider(p: Provider): void {
     if (p === provider) return;
     const current = sharedNodeStore.getNode(nodeId);
+    const existingProps = current?.properties ?? {};
+    const existingNs = (existingProps['ai-chat'] as Record<string, unknown>) ?? {};
     // Switching mode drops any model chosen for the previous mode.
-    const nextProps = { ...current?.properties, provider: p };
-    delete (nextProps as Record<string, unknown>).model;
+    const nsWithoutModel = Object.fromEntries(
+      Object.entries(existingNs).filter(([k]) => k !== 'model')
+    );
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: nextProps },
+      { properties: { ...existingProps, 'ai-chat': { ...nsWithoutModel, provider: p } } },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
     // A model from a previous mode is no longer valid; force a fresh session.
@@ -134,7 +148,7 @@
   // --- Load messages from persisted node properties ---
   function loadMessagesFromNode(): void {
     if (!node) return;
-    const persisted = node.properties?.messages;
+    const persisted = getProp(node.properties, 'messages');
     if (!Array.isArray(persisted)) {
       inMemoryMessages = [];
       return;
@@ -227,14 +241,18 @@
     }
     try {
       const archivedMessages = archiveMessages(inMemoryMessages);
+      const existingNs = (node.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
       sharedNodeStore.updateNode(
         nodeId,
         {
           properties: {
             ...node.properties,
-            messages: archivedMessages,
-            last_active: new Date().toISOString(),
-            context_tokens: estimateTokens(inMemoryMessages),
+            'ai-chat': {
+              ...existingNs,
+              messages: archivedMessages,
+              last_active: new Date().toISOString(),
+              context_tokens: estimateTokens(inMemoryMessages),
+            },
           },
         },
         { type: 'viewer', viewerId: 'ai-chat-viewer' }
@@ -366,7 +384,7 @@
           // Old session is dead after an engine swap.
           localAgentEndSession(sessionId).catch(() => {});
         }
-        sessionId = await localAgentNewSession(modelId);
+        sessionId = await localAgentNewSession(modelId, nodeId);
         modelPrepared = true;
         log.info('Session ready', { sessionId, modelId, engineSwapped });
       }
@@ -472,6 +490,9 @@
       const errorMsg = err instanceof Error ? err.message : 'Unknown agent error';
       log.error('Agent send error', { error: errorMsg });
       sendError = errorMsg;
+      // Reset session so the next send gets a fresh one rather than reusing a broken session.
+      sessionId = null;
+      modelPrepared = false;
     } finally {
       cleanupListeners();
       isStreaming = false;
@@ -508,6 +529,7 @@
         log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
       }
     }
+    nodeReady = true;
 
     if (node) {
       loadMessagesFromNode();
@@ -605,7 +627,11 @@
     </div>
   </div>
 
-  {#if provider === undefined}
+  {#if !nodeReady}
+    <div class="provider-prompt">
+      <p class="provider-prompt-text">Loading…</p>
+    </div>
+  {:else if provider === undefined}
     <!-- Placeholder: prompt to pick a mode from the dropdown above. -->
     <div class="provider-prompt">
       <p class="provider-prompt-text">Choose how this conversation is powered</p>
@@ -618,7 +644,20 @@
     <AiChatPtySession {nodeId} />
   {:else if isMessageProvider && !model}
     <!-- native | ollama, no model chosen yet → model picker. -->
-    <AiChatModelPicker {nodeId} provider={provider as 'native' | 'ollama'} />
+    <AiChatModelPicker
+      {nodeId}
+      provider={provider as 'native' | 'ollama'}
+      onSelect={(modelId) => {
+        const current = node ?? sharedNodeStore.getNode(nodeId);
+        if (!current) return;
+        const existingNs = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
+        sharedNodeStore.updateNode(
+          nodeId,
+          { properties: { ...current.properties, 'ai-chat': { ...existingNs, provider, model: modelId, status: 'active' } } },
+          { type: 'viewer', viewerId: 'ai-chat-viewer' }
+        );
+      }}
+    />
   {:else if isMessageProvider}
     <!-- Modes 2a/2b/2c with a model: message UI. -->
     <div

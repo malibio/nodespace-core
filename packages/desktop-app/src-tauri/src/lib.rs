@@ -264,8 +264,17 @@ pub fn run() {
                         }
                     }
 
-                    // Connect gRPC client over UDS.
-                    match crate::services::GrpcClient::connect().await {
+                    // Connect gRPC client over UDS. Retry briefly in case the
+                    // daemon socket came up just after wait_for_daemon returned.
+                    let grpc_result = {
+                        let mut result = crate::services::GrpcClient::connect().await;
+                        if result.is_err() {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            result = crate::services::GrpcClient::connect().await;
+                        }
+                        result
+                    };
+                    match grpc_result {
                         Ok(grpc_client) => {
                             // Snapshot the underlying channel before
                             // we hand `grpc_client` to managed state —

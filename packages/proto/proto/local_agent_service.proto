@@ -34,6 +34,9 @@ message StartLocalSessionRequest {
   // Model ID to associate with this session (e.g. "ollama:llama3.2" or
   // "ministral-3b-instruct-2410-q4_k_m.gguf").
   string model_id = 1;
+  // Optional node ID — if provided, the daemon fetches the node's persisted
+  // ai-chat.messages and seeds the session history so the conversation resumes.
+  optional string node_id = 2;
 }
 
 message StartLocalSessionResponse {

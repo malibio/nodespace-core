@@ -67,44 +67,56 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/** Mock model catalog (used when Tauri is not available). */
+/** Mock model catalog (used when Tauri is not available). Matches daemon catalog IDs. */
 function createMockModels(): ModelInfo[] {
   return [
     {
-      id: 'ministral-8b-q4',
+      id: 'ministral-3b-q4km',
       family: 'ministral',
-      name: 'Ministral 8B (Q4)',
-      filename: 'ministral-8b-instruct-2410-q4_k_m.gguf',
-      size_bytes: 4_920_000_000,
+      name: 'Ministral 3B Instruct Q4_K_M',
+      filename: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
+      size_bytes: 2_147_023_008,
       quantization: 'Q4_K_M',
-      url: 'https://huggingface.co/ministral/ministral-8b-instruct-2410-GGUF',
-      sha256: 'abc123',
-      status: { status: 'not_downloaded' },
-      min_memory_gb: 16,
-    },
-    {
-      id: 'ministral-3b-q4',
-      family: 'ministral',
-      name: 'Ministral 3B (Q4)',
-      filename: 'ministral-3b-instruct-q4_k_m.gguf',
-      size_bytes: 1_800_000_000,
-      quantization: 'Q4_K_M',
-      url: 'https://huggingface.co/ministral/ministral-3b-instruct-GGUF',
-      sha256: 'def456',
+      url: '',
+      sha256: '',
       status: { status: 'not_downloaded' },
       min_memory_gb: 8,
     },
     {
-      id: 'ministral-8b-q8',
+      id: 'ministral-8b-q4km',
       family: 'ministral',
-      name: 'Ministral 8B (Q8)',
-      filename: 'ministral-8b-instruct-2410-q8_0.gguf',
-      size_bytes: 8_540_000_000,
-      quantization: 'Q8_0',
-      url: 'https://huggingface.co/ministral/ministral-8b-instruct-2410-GGUF',
-      sha256: 'ghi789',
+      name: 'Ministral 8B Instruct Q4_K_M',
+      filename: 'Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
+      size_bytes: 5_198_911_904,
+      quantization: 'Q4_K_M',
+      url: '',
+      sha256: '',
       status: { status: 'not_downloaded' },
       min_memory_gb: 16,
+    },
+    {
+      id: 'gemma-4-e4b-q4km',
+      family: 'gemma4',
+      name: 'Gemma 4 E4B Instruct Q4_K_M',
+      filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
+      size_bytes: 5_335_289_824,
+      quantization: 'Q4_K_M',
+      url: '',
+      sha256: '',
+      status: { status: 'not_downloaded' },
+      min_memory_gb: 16,
+    },
+    {
+      id: 'gemma-4-31b-q4km',
+      family: 'gemma4',
+      name: 'Gemma 4 31B Instruct Q4_K_M',
+      filename: 'gemma-4-31B-it-Q4_K_M.gguf',
+      size_bytes: 18_687_061_792,
+      quantization: 'Q4_K_M',
+      url: '',
+      sha256: '',
+      status: { status: 'not_downloaded' },
+      min_memory_gb: 24,
     },
   ];
 }
@@ -197,7 +209,10 @@ class ModelStore {
     }
 
     const model = this.models[modelIndex];
-    if (model.status.status !== 'not_downloaded') {
+    if (
+      model.status.status !== 'not_downloaded' &&
+      model.status.status !== 'error'
+    ) {
       log.warn('Model already downloaded or downloading', {
         modelId,
         status: model.status.status,

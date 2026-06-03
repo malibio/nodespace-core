@@ -24,7 +24,6 @@ use crate::constants::DAEMON_SOCKET_RELATIVE;
 const LAUNCH_AGENT_LABEL: &str = "app.nodespace.daemon";
 const DAEMON_BIN_DIR: &str = ".nodespace/bin";
 const DAEMON_LOG_DIR: &str = ".nodespace/logs";
-const DAEMON_DB_DIR: &str = ".nodespace/database";
 const PLIST_FILENAME: &str = "app.nodespace.daemon.plist";
 const DAEMON_BINARY_NAME: &str = "nodespaced";
 const CLI_BINARY_NAME: &str = "nodespace";
@@ -66,9 +65,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     tokio::fs::create_dir_all(&log_dir)
         .await
         .context("Failed to create ~/.nodespace/logs")?;
-    tokio::fs::create_dir_all(home.join(DAEMON_DB_DIR))
-        .await
-        .context("Failed to create ~/.nodespace/database")?;
+    // ~/.nodespace itself is created implicitly by bin/log dirs above.
 
     // Extract sidecar binaries from the .app bundle if missing or outdated.
     extract_sidecar_if_changed(app, DAEMON_BINARY_NAME, &bin_dir).await?;
@@ -80,10 +77,9 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // Bootstrap or restart the launchd agent.
     bootstrap_launchd_agent(&plist_path)?;
 
-    // Socket binds within ~500ms of daemon start (embedding loads in background).
-    // 5s provides margin for slow-disk machines while being 6x better than the
-    // previous 30s that waited for the full embedding model load.
-    let status = wait_for_daemon(&socket_path, Duration::from_secs(5)).await;
+    // The daemon loads the embedding model before binding the socket (~9s on M2 Pro).
+    // 30s covers cold-start model load on slower machines.
+    let status = wait_for_daemon(&socket_path, Duration::from_secs(30)).await;
     Ok(status)
 }
 
@@ -210,7 +206,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
     let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
-    let db_path = format!("{}/{}/nodespace", home_str, DAEMON_DB_DIR);
+    let db_path = format!("{}/.nodespace/daemon-db", home_str);
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
 
