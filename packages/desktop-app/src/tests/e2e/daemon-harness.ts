@@ -249,13 +249,19 @@ export class DaemonTestHarness {
       }
     });
 
-    daemonProc.on('error', (err) => {
-      throw new Error(`Failed to start nodespaced: ${err.message}`);
+    // Store spawn errors so waitForSocket can surface them as clear messages
+    // rather than silent timeouts.
+    let daemonSpawnError: Error | undefined;
+    daemonProc.on('error', (err: Error) => {
+      daemonSpawnError = err;
     });
 
     // Wait for daemon socket
     try {
       await waitForSocket(socketPath, timeoutMs);
+      if (daemonSpawnError !== undefined) {
+        throw new Error(`nodespaced spawn failed: ${daemonSpawnError.message}`);
+      }
     } catch (err) {
       daemonProc.kill();
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -281,14 +287,17 @@ export class DaemonTestHarness {
       }
     });
 
-    proxyProc.on('error', (err) => {
-      daemonProc.kill();
-      throw new Error(`Failed to start dev-proxy: ${err.message}`);
+    let proxySpawnError: Error | undefined;
+    proxyProc.on('error', (err: Error) => {
+      proxySpawnError = err;
     });
 
     // Wait for proxy HTTP health
     try {
       await waitForHttp(`http://localhost:${proxyPort}/health`, timeoutMs);
+      if (proxySpawnError !== undefined) {
+        throw new Error(`dev-proxy spawn failed: ${proxySpawnError.message}`);
+      }
     } catch (err) {
       proxyProc.kill();
       daemonProc.kill();

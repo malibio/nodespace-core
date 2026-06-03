@@ -21,13 +21,18 @@ afterAll(async () => {
 /**
  * Subscribe to the SSE stream and wait for the first event matching `predicate`.
  * Uses fetch streaming — works in Node.js and Bun without extra packages.
+ *
+ * `onConnected` is called once the server sends the initial `: connected` comment,
+ * guaranteeing the subscription is registered before any writes fire.
+ *
  * Rejects after `timeoutMs` if no matching event arrives.
  */
 async function waitForEvent(
   sseUrl: string,
   predicate: (event: Record<string, unknown>) => boolean,
-  timeoutMs = 5000
+  opts: { timeoutMs?: number; onConnected?: () => Promise<void> } = {}
 ): Promise<Record<string, unknown>> {
+  const { timeoutMs = 5000, onConnected } = opts;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -47,6 +52,7 @@ async function waitForEvent(
   const decoder = new TextDecoder();
   let buf = '';
   let found: Record<string, unknown> | null = null;
+  let connectedFired = false;
   const reader = response.body.getReader();
 
   try {
@@ -58,6 +64,14 @@ async function waitForEvent(
       buf = lines.pop() ?? '';
 
       for (const line of lines) {
+        // Fire onConnected once the server acknowledges the SSE connection.
+        // This guarantees writes happen only after the subscription is registered.
+        if (!connectedFired && line.trim() === ': connected' && onConnected) {
+          connectedFired = true;
+          onConnected().catch(() => undefined);
+          continue;
+        }
+
         if (!line.startsWith('data:')) continue;
         const raw = line.slice(5).trim();
         if (!raw) continue;
@@ -96,12 +110,18 @@ describe('WatchNodes SSE stream', () => {
   it('delivers nodeCreated event when a node is written', async () => {
     const id = crypto.randomUUID();
 
+    // Pass onConnected so the write fires only after the SSE subscription is
+    // confirmed — prevents a race where createNode completes before the server
+    // has registered this client in sseClients.
     const eventPromise = waitForEvent(
       h.sseUrl,
-      (ev) => ev.type === 'nodeCreated' && ev.nodeId === id
+      (ev) => ev.type === 'nodeCreated' && ev.nodeId === id,
+      {
+        onConnected: () =>
+          h.adapter.createNode({ id, nodeType: 'text', content: 'watched create' })
+            .then(() => undefined)
+      }
     );
-
-    await h.adapter.createNode({ id, nodeType: 'text', content: 'watched create' });
 
     const event = await eventPromise;
     expect(event.type).toBe('nodeCreated');
@@ -114,10 +134,13 @@ describe('WatchNodes SSE stream', () => {
 
     const eventPromise = waitForEvent(
       h.sseUrl,
-      (ev) => ev.type === 'nodeUpdated' && ev.nodeId === id
+      (ev) => ev.type === 'nodeUpdated' && ev.nodeId === id,
+      {
+        onConnected: () =>
+          h.adapter.updateNode(id, 1, { content: 'after update' })
+            .then(() => undefined)
+      }
     );
-
-    await h.adapter.updateNode(id, 1, { content: 'after update' });
 
     const event = await eventPromise;
     expect(event.type).toBe('nodeUpdated');
@@ -130,10 +153,13 @@ describe('WatchNodes SSE stream', () => {
 
     const eventPromise = waitForEvent(
       h.sseUrl,
-      (ev) => ev.type === 'nodeDeleted' && ev.nodeId === id
+      (ev) => ev.type === 'nodeDeleted' && ev.nodeId === id,
+      {
+        onConnected: () =>
+          h.adapter.deleteNode(id, 1)
+            .then(() => undefined)
+      }
     );
-
-    await h.adapter.deleteNode(id, 1);
 
     const event = await eventPromise;
     expect(event.type).toBe('nodeDeleted');
