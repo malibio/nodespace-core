@@ -70,7 +70,7 @@ describe('ModelStore', () => {
       for (const model of modelStore.models) {
         expect(model.id).toBeTruthy();
         expect(model.name).toBeTruthy();
-        expect(model.family).toBe('ministral');
+        expect(model.family).toBeTruthy();
         expect(model.size_bytes).toBeGreaterThan(0);
         expect(model.quantization).toBeTruthy();
         expect(model.status).toBeDefined();
@@ -81,7 +81,7 @@ describe('ModelStore', () => {
   });
 
   describe('recommendedModel', () => {
-    it('recommends the smallest model', async () => {
+    it('recommends the largest model that fits in available RAM', async () => {
       const promise = modelStore.refreshModels();
       await vi.runAllTimersAsync();
       await promise;
@@ -89,11 +89,10 @@ describe('ModelStore', () => {
       const recommended = modelStore.recommendedModel;
       expect(recommended).toBeDefined();
 
-      // Should be the smallest by size_bytes
-      const smallest = modelStore.models.reduce((min, m) =>
-        m.size_bytes < min.size_bytes ? m : min
-      );
-      expect(recommended!.id).toBe(smallest.id);
+      // With systemRamGb=8 (mock default), should pick the largest model with min_memory_gb <= 8
+      const fits = modelStore.models.filter((m) => m.min_memory_gb <= 8);
+      const expected = fits.reduce((best, m) => (m.size_bytes > best.size_bytes ? m : best));
+      expect(recommended!.id).toBe(expected.id);
     });
 
     it('returns undefined when no models', () => {

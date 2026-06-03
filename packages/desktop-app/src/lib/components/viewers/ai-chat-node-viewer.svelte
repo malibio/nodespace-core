@@ -512,37 +512,40 @@
   onMount(async () => {
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
-    // Hydration fallback: the viewer assumes the node is in sharedNodeStore, but
-    // a node opened directly (e.g. after reload, before the tree has loaded it)
-    // may be absent. Fetch it by id so the dispatcher always has properties to
-    // route on — the root cause class behind the original "picker does nothing".
-    if (!sharedNodeStore.getNode(nodeId)) {
-      try {
-        const fetched = await backendAdapter.getNode(nodeId);
-        if (fetched) {
-          sharedNodeStore.setNode(fetched, {
-            type: 'viewer',
-            viewerId: 'ai-chat-viewer-hydration',
-          });
+    try {
+      // Hydration fallback: the viewer assumes the node is in sharedNodeStore, but
+      // a node opened directly (e.g. after reload, before the tree has loaded it)
+      // may be absent. Fetch it by id so the dispatcher always has properties to
+      // route on — the root cause class behind the original "picker does nothing".
+      if (!sharedNodeStore.getNode(nodeId)) {
+        try {
+          const fetched = await backendAdapter.getNode(nodeId);
+          if (fetched) {
+            sharedNodeStore.setNode(fetched, {
+              type: 'viewer',
+              viewerId: 'ai-chat-viewer-hydration',
+            });
+          }
+        } catch (err) {
+          log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
         }
-      } catch (err) {
-        log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
       }
-    }
-    nodeReady = true;
 
-    if (node) {
-      loadMessagesFromNode();
-      initialLoadDone = true;
-    }
-    if (node?.content) onTitleChange?.(node.content);
-
-    if (isTauri()) {
-      try {
-        ollamaReady = await ollamaAvailable();
-      } catch (err) {
-        log.debug('Ollama availability check failed', { error: String(err) });
+      if (node) {
+        loadMessagesFromNode();
+        initialLoadDone = true;
       }
+      if (node?.content) onTitleChange?.(node.content);
+
+      if (isTauri()) {
+        try {
+          ollamaReady = await ollamaAvailable();
+        } catch (err) {
+          log.debug('Ollama availability check failed', { error: String(err) });
+        }
+      }
+    } finally {
+      nodeReady = true;
     }
   });
 

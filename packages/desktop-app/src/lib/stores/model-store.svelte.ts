@@ -139,15 +139,17 @@ class ModelStore {
     );
   }
 
-  /** Recommend the best model based on available RAM. */
+  /** Recommend the largest model that fits within available system RAM. */
   get recommendedModel(): ModelInfo | undefined {
     const available = this.models.filter(
       (m) => m.status.status === 'not_downloaded' || m.status.status === 'ready'
     );
-    if (available.length === 0) return this.models[0];
-    return available.reduce((smallest, m) =>
-      m.size_bytes < smallest.size_bytes ? m : smallest
-    );
+    const candidates = available.length > 0 ? available : this.models;
+    if (candidates.length === 0) return undefined;
+    const ram = this.systemRamGb;
+    const fits = ram > 0 ? candidates.filter((m) => m.min_memory_gb <= ram) : candidates;
+    const pool = fits.length > 0 ? fits : candidates;
+    return pool.reduce((best, m) => (m.size_bytes > best.size_bytes ? m : best));
   }
 
   /** The currently loaded model. */
