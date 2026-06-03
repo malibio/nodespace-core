@@ -287,8 +287,7 @@ pub fn run() {
                             commands::local_agent::start_token_stream_subscription(
                                 app_handle.clone(),
                                 grpc_client,
-                            )
-                            .await;
+                            );
 
                             // Pro capability probe: a single
                             // WatchSyncStatus call on the same channel.

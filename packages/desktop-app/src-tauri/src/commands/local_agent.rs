@@ -34,12 +34,13 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
 /// This runs as a background task. All inference token events (for all ai-chat
 /// nodes) are forwarded to the frontend as Tauri events on `local-agent://chunk`.
 /// The `node_id` field on each chunk tells the frontend which node is streaming.
-pub async fn start_token_stream_subscription(app: AppHandle, grpc: GrpcClient) {
+pub fn start_token_stream_subscription(app: AppHandle, grpc: GrpcClient) {
     tokio::spawn(async move {
         loop {
             match try_subscribe(&app, &grpc).await {
                 Ok(()) => {
-                    tracing::info!("Token stream subscription ended; reconnecting");
+                    tracing::info!("Token stream subscription ended; reconnecting in 2s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Token stream subscription failed; reconnecting in 2s");

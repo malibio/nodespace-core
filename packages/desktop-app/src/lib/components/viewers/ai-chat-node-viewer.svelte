@@ -99,7 +99,7 @@
   );
 
   /** Messages from the persisted node, mapped to DisplayMessage for rendering. */
-  const persistedMessages = $derived((): DisplayMessage[] => {
+  const persistedMessages: DisplayMessage[] = $derived.by(() => {
     const msgs = (node?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
     if (!Array.isArray(msgs)) return [];
     return msgs
@@ -119,12 +119,11 @@
   });
 
   /** All messages to display: persisted + optional streaming overlay. */
-  const displayMessages = $derived((): DisplayMessage[] => {
-    const base = persistedMessages();
-    if (!streamingContent) return base;
+  const displayMessages: DisplayMessage[] = $derived.by(() => {
+    if (!streamingContent) return persistedMessages;
     // Append a live assistant message for the in-flight tokens.
     return [
-      ...base,
+      ...persistedMessages,
       {
         id: 'streaming',
         role: 'assistant' as const,
@@ -135,7 +134,7 @@
     ];
   });
 
-  const showMessageCap = $derived(persistedMessages().length >= SOFT_MESSAGE_CAP);
+  const showMessageCap = $derived(persistedMessages.length >= SOFT_MESSAGE_CAP);
 
   /** Persist a provider mode change onto the node. */
   function selectProvider(p: Provider): void {
@@ -317,7 +316,7 @@
 
   // Auto-scroll as messages stream/append.
   $effect(() => {
-    void displayMessages().length;
+    void displayMessages.length;
     scrollToBottom();
   });
 
@@ -327,7 +326,7 @@
     if (!isProcessing && streamingContent) {
       // Check if the last persisted message is from the assistant — means the
       // daemon wrote the completed message, so we can clear the buffer.
-      const msgs = persistedMessages();
+      const msgs = persistedMessages;
       if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
         streamingContent = '';
       }
@@ -413,7 +412,7 @@
       role="list"
       aria-label="Chat conversation"
     >
-      {#if displayMessages().length === 0}
+      {#if displayMessages.length === 0}
         <div class="empty-conversation">
           <div class="empty-conversation-icon">
             <svg
@@ -431,7 +430,7 @@
           <p class="empty-conversation-hint">Type a message below to begin</p>
         </div>
       {:else}
-        {#each displayMessages() as message (message.id)}
+        {#each displayMessages as message (message.id)}
           <ChatMessage {message} />
         {/each}
       {/if}
@@ -450,7 +449,7 @@
       {#if showMessageCap}
         <div class="message-cap-nudge" role="alert">
           <p>
-            This conversation has {persistedMessages().length} messages. Consider starting a new chat for
+            This conversation has {persistedMessages.length} messages. Consider starting a new chat for
             better performance.
           </p>
         </div>

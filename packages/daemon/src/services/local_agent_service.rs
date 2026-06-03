@@ -26,8 +26,8 @@ use nodespace_agent::local_agent::tools::GraphToolExecutor;
 use nodespace_core::models::{NodeFilter, NodeUpdate};
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tokio_util::sync::CancellationToken;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
@@ -35,8 +35,8 @@ use crate::nodespace::{
     CancelModelDownloadRequest, CancelModelDownloadResponse, CancelTurnRequest, CancelTurnResponse,
     DeleteModelRequest, DeleteModelResponse, DownloadModelRequest, EnsureModelReadyRequest,
     GetLocalStatusRequest, GetSystemRamRequest, GetSystemRamResponse, ListModelsRequest,
-    ListModelsResponse, LoadModelRequest, LoadModelResponse, LocalAgentStatusResponse,
-    ModelEntry, ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
+    ListModelsResponse, LoadModelRequest, LoadModelResponse, LocalAgentStatusResponse, ModelEntry,
+    ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
     RecommendedModelRequest, RecommendedModelResponse, SubscribeTokenStreamRequest,
     UnloadModelRequest, UnloadModelResponse,
 };
@@ -271,28 +271,25 @@ impl LocalAgentServiceImpl {
             return;
         }
 
-        // Check if a turn is already running for this node (race between event
-        // delivery and turn start for the same node).
-        {
-            let tokens = self.inner.turn_tokens.lock().await;
+        // Atomically check-and-insert the cancellation token to prevent duplicate
+        // turns when NodeCreated and NodeUpdated arrive in close succession.
+        let cancel = {
+            let mut tokens = self.inner.turn_tokens.lock().await;
             if tokens.contains_key(node_id) {
                 return;
             }
-        }
+            let cancel = CancellationToken::new();
+            tokens.insert(node_id.to_string(), cancel.clone());
+            cancel
+        };
 
         tracing::info!(node_id, "ai-chat turn triggered");
-        self.run_ai_chat_turn(node_id.to_string()).await;
+        self.run_ai_chat_turn(node_id.to_string(), cancel).await;
     }
 
     /// Execute a full inference turn for the given ai-chat node.
-    async fn run_ai_chat_turn(&self, node_id: String) {
-        let cancel = CancellationToken::new();
-        self.inner
-            .turn_tokens
-            .lock()
-            .await
-            .insert(node_id.clone(), cancel.clone());
-
+    /// `cancel` is already stored in `turn_tokens` by the caller.
+    async fn run_ai_chat_turn(&self, node_id: String, cancel: CancellationToken) {
         // Write status: 'processing'
         if let Err(e) = self
             .write_ai_chat_status(&node_id, "processing", None)
@@ -340,37 +337,67 @@ impl LocalAgentServiceImpl {
         let token_tx = self.inner.token_tx.clone();
         let node_id2 = node_id.clone();
 
-        let send_result = service
-            .send_message(
-                &session_id,
-                &user_message,
-                move |_status: LocalAgentStatus| {},
-                move |chunk: StreamingChunk| {
-                    if !matches!(chunk, StreamingChunk::Done { .. }) {
-                        let mut proto = streaming_chunk_to_proto(chunk);
-                        proto.node_id = Some(node_id2.clone());
-                        // Ignore send errors — no subscribers connected is fine.
-                        let _ = token_tx.send(proto);
+        let send_fut = service.send_message(
+            &session_id,
+            &user_message,
+            move |_status: LocalAgentStatus| {},
+            move |chunk: StreamingChunk| {
+                if !matches!(chunk, StreamingChunk::Done { .. }) {
+                    let mut proto = streaming_chunk_to_proto(chunk);
+                    proto.node_id = Some(node_id2.clone());
+                    // Ignore send errors — no subscribers connected is fine.
+                    let _ = token_tx.send(proto);
+                }
+            },
+        );
+
+        // Race inference against the cancellation token.
+        // `needs_idle_reset`: append_assistant_message sets status: idle on success,
+        // so only cancelled/failed paths need an explicit reset.
+        let needs_idle_reset;
+
+        let turn_result = tokio::select! {
+            result = send_fut => {
+                match result {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::warn!(node_id, error = %e, "inference turn failed");
+                        let _ = self.inner.token_tx.send(AgentChunk {
+                            chunk_type: "error".to_string(),
+                            error_message: Some(e.to_string()),
+                            node_id: Some(node_id.clone()),
+                            ..Default::default()
+                        });
+                        None
                     }
-                },
-            )
-            .await;
+                }
+            },
+            () = cancel.cancelled() => {
+                tracing::info!(node_id, "ai-chat turn cancelled");
+                let _ = self.inner.token_tx.send(AgentChunk {
+                    chunk_type: "cancelled".to_string(),
+                    node_id: Some(node_id.clone()),
+                    ..Default::default()
+                });
+                None
+            }
+        };
 
         // End the ephemeral session.
         service.end_session(&session_id).await;
 
-        match send_result {
-            Ok(turn_result) => {
+        match turn_result {
+            Some(result) => {
                 // Emit done chunk to subscribers.
                 let _ = self.inner.token_tx.send(AgentChunk {
                     chunk_type: "done".to_string(),
-                    prompt_tokens: Some(turn_result.usage.prompt_tokens as i32),
-                    completion_tokens: Some(turn_result.usage.completion_tokens as i32),
+                    prompt_tokens: Some(result.usage.prompt_tokens as i32),
+                    completion_tokens: Some(result.usage.completion_tokens as i32),
                     node_id: Some(node_id.clone()),
                     ..Default::default()
                 });
 
-                // Append assistant message to node.
+                // Append assistant message; also atomically sets status: idle.
                 let assistant_content = service
                     .get_session(&session_id)
                     .await
@@ -381,29 +408,29 @@ impl LocalAgentServiceImpl {
                             .find(|m| m.role == Role::Assistant)
                             .map(|m| m.content)
                     })
-                    .unwrap_or_else(|| turn_result.response.clone());
+                    .unwrap_or_else(|| result.response.clone());
 
-                if let Err(e) = self
+                match self
                     .append_assistant_message(&node_id, &assistant_content)
                     .await
                 {
-                    tracing::warn!(node_id, error = %e, "failed to append assistant message");
+                    Ok(()) => needs_idle_reset = false,
+                    Err(e) => {
+                        tracing::warn!(node_id, error = %e, "failed to append assistant message");
+                        needs_idle_reset = true;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::warn!(node_id, error = %e, "inference turn failed");
-                let _ = self.inner.token_tx.send(AgentChunk {
-                    chunk_type: "error".to_string(),
-                    error_message: Some(e.to_string()),
-                    node_id: Some(node_id.clone()),
-                    ..Default::default()
-                });
+            None => {
+                // Cancelled — or inference error (send_message returned Err).
+                needs_idle_reset = true;
             }
         }
 
-        // Write status: 'idle'
-        if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
-            tracing::warn!(node_id, error = %e, "failed to set ai-chat status to idle");
+        if needs_idle_reset {
+            if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
+            }
         }
 
         self.inner.turn_tokens.lock().await.remove(&node_id);
@@ -442,10 +469,19 @@ impl LocalAgentServiceImpl {
 
             if is_trailing_user {
                 tracing::info!(node_id = %node.id, "recovering stuck ai-chat turn");
+                let cancel = {
+                    let mut tokens = self.inner.turn_tokens.lock().await;
+                    if tokens.contains_key(&node.id) {
+                        continue;
+                    }
+                    let cancel = CancellationToken::new();
+                    tokens.insert(node.id.clone(), cancel.clone());
+                    cancel
+                };
                 let this = self.clone();
                 let nid = node.id.clone();
                 tokio::spawn(async move {
-                    this.run_ai_chat_turn(nid).await;
+                    this.run_ai_chat_turn(nid, cancel).await;
                 });
             } else {
                 // Stuck in processing but no trailing user message — reset to idle.
@@ -512,11 +548,7 @@ impl LocalAgentServiceImpl {
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
     /// Retries once on version conflict.
-    async fn append_assistant_message(
-        &self,
-        node_id: &str,
-        content: &str,
-    ) -> Result<(), String> {
+    async fn append_assistant_message(&self, node_id: &str, content: &str) -> Result<(), String> {
         for attempt in 0..2 {
             let node = self
                 .inner
@@ -532,9 +564,7 @@ impl LocalAgentServiceImpl {
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
 
-            let messages = ai_chat
-                .get_mut("messages")
-                .and_then(|v| v.as_array_mut());
+            let messages = ai_chat.get_mut("messages").and_then(|v| v.as_array_mut());
 
             let timestamp = chrono::Utc::now().to_rfc3339();
             let new_msg = serde_json::json!({
