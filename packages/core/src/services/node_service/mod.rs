@@ -1232,6 +1232,12 @@ impl NodeService {
     ///
     pub fn begin_batch_emit(&self) -> BatchEmitGuard {
         let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
+        // Nested batch guards are not supported: the outer guard's buffered events
+        // would be silently discarded when the inner guard resets the state.
+        debug_assert!(
+            matches!(*state, BatchState::Immediate),
+            "begin_batch_emit called while a batch is already active"
+        );
         *state = BatchState::Batching(HashMap::new());
         drop(state);
         BatchEmitGuard {
@@ -1245,6 +1251,9 @@ impl NodeService {
     /// Internal helper for emitting events after successful operations.
     /// Wraps the event in an EventEnvelope with this instance's client_id
     /// and execution_context as metadata.
+    ///
+    /// Routes through `batch_state`: when a `BatchEmitGuard` is active, the event
+    /// is buffered (last-write-wins per node_id) instead of broadcast immediately.
     pub(crate) fn emit_event(&self, event: DomainEvent) {
         use crate::db::events::{EventEnvelope, EventMetadata};
         let envelope = EventEnvelope {
@@ -1254,7 +1263,22 @@ impl NodeService {
                 playbook_context: self.execution_context.clone(),
             },
         };
-        let _ = self.event_tx.send(envelope);
+        let node_id = match &envelope.event {
+            DomainEvent::NodeCreated { node_id, .. } => Some(node_id.clone()),
+            DomainEvent::NodeUpdated { node_id, .. } => Some(node_id.clone()),
+            DomainEvent::NodeDeleted { id, .. } => Some(id.clone()),
+            // Relationship events are not node-keyed; always broadcast immediately.
+            _ => None,
+        };
+        let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
+        match (&mut *state, node_id) {
+            (BatchState::Batching(buf), Some(id)) => {
+                buf.insert(id, envelope);
+            }
+            _ => {
+                let _ = self.event_tx.send(envelope);
+            }
+        }
     }
 
     // =========================================================================
