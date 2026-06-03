@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::broadcast;
 
 // Sub-module declarations
@@ -431,6 +431,38 @@ pub struct CreateNodeParams {
 /// the current state, not historical events.
 const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
 
+/// Internal state shared between the store notifier closure and `BatchEmitGuard`.
+///
+/// `Immediate` — every event is broadcast as it arrives (default).
+/// `Batching` — events accumulate in the map; last-write-wins per node_id.
+pub(crate) enum BatchState {
+    Immediate,
+    Batching(HashMap<String, crate::db::events::EventEnvelope>),
+}
+
+/// RAII guard returned by `NodeService::begin_batch_emit`.
+///
+/// While this guard is live, domain events emitted by the store notifier are
+/// coalesced per node (last-write-wins) instead of broadcast individually.
+/// On `Drop` the accumulated events are flushed to the broadcast channel —
+/// at most one event per node.
+pub struct BatchEmitGuard {
+    state: Arc<Mutex<BatchState>>,
+    tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+}
+
+impl Drop for BatchEmitGuard {
+    fn drop(&mut self) {
+        let mut lock = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::mem::replace(&mut *lock, BatchState::Immediate);
+        if let BatchState::Batching(buf) = prev {
+            for envelope in buf.into_values() {
+                let _ = self.tx.send(envelope);
+            }
+        }
+    }
+}
+
 /// Check if a string matches date node format: YYYY-MM-DD
 ///
 /// Valid examples: "2025-10-13", "2024-01-01"
@@ -699,6 +731,13 @@ pub struct NodeService {
     /// Issue #995: Changed from DomainEvent to EventEnvelope
     pub(crate) event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
 
+    /// Shared batch state for coalescing events during bulk operations.
+    ///
+    /// When `BatchState::Batching`, the store notifier accumulates events instead
+    /// of broadcasting immediately. `begin_batch_emit()` activates batching and
+    /// returns a `BatchEmitGuard` that flushes on drop.
+    pub(crate) batch_state: Arc<Mutex<BatchState>>,
+
     /// Optional client identifier for event source tracking (Issue #665)
     ///
     /// When set, all emitted events will include this client_id as source_client_id
@@ -733,6 +772,7 @@ impl Clone for NodeService {
             behaviors: self.behaviors.clone(),
             migration_registry: self.migration_registry.clone(),
             event_tx: self.event_tx.clone(),
+            batch_state: self.batch_state.clone(),
             client_id: self.client_id.clone(),
             execution_context: self.execution_context.clone(),
             // Share the same OnceLock so any clone can observe the waker once set.
@@ -779,14 +819,19 @@ impl NodeService {
         // Initialize broadcast channel for domain events (Issue #995: EventEnvelope)
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
+        // Shared batch state — Immediate by default; swapped to Batching during bulk ops.
+        let batch_state: Arc<Mutex<BatchState>> = Arc::new(Mutex::new(BatchState::Immediate));
+
         // Register store-level notifier for automatic domain event emission (Issue #718)
         // This callback converts StoreChange notifications to EventEnvelopes.
         // Must be set BEFORE seed_core_schemas so schema seeding also emits events.
         //
         // Issue #724: Events now send only node_id (not full payload) for efficiency.
         // Issue #995: Events wrapped in EventEnvelope with metadata.
+        // Issue #1306: Batch mode coalesces events per node during bulk operations.
         {
             let tx = event_tx.clone();
+            let batch_state_ref = Arc::clone(&batch_state);
             let notifier = Arc::new(move |change: StoreChange| {
                 use crate::db::events::{EventEnvelope, EventMetadata};
 
@@ -827,8 +872,17 @@ impl NodeService {
                     },
                 };
 
-                // Send to broadcast channel (ignore if no subscribers).
-                let _ = tx.send(envelope);
+                // Issue #1306: In batch mode, accumulate last-write-wins per node.
+                // In immediate mode (default), broadcast directly.
+                let mut state = batch_state_ref.lock().unwrap_or_else(|e| e.into_inner());
+                match &mut *state {
+                    BatchState::Immediate => {
+                        let _ = tx.send(envelope);
+                    }
+                    BatchState::Batching(buf) => {
+                        buf.insert(change.node.id.clone(), envelope);
+                    }
+                }
             });
 
             // Get mutable reference to store to set notifier
@@ -850,6 +904,7 @@ impl NodeService {
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
             migration_registry: Arc::new(migration_registry),
             event_tx,
+            batch_state,
             client_id: None,
             execution_context: None,
             #[cfg(feature = "nlp")]
@@ -1161,6 +1216,28 @@ impl NodeService {
     /// in `EventEnvelope` with metadata (source_client_id, playbook_context).
     pub fn subscribe_to_events(&self) -> broadcast::Receiver<crate::db::events::EventEnvelope> {
         self.event_tx.subscribe()
+    }
+
+    /// Begin batched event emission for bulk operations (Issue #1306).
+    ///
+    /// While the returned `BatchEmitGuard` is live, domain events from the store
+    /// notifier are coalesced per node (last-write-wins) instead of being broadcast
+    /// individually. When the guard drops, one event per modified node is flushed to
+    /// the broadcast channel.
+    ///
+    /// Use this around any bulk operation that touches many nodes in a short window
+    /// (e.g. embedding updates, batch imports, collection rebuilds). Single writes
+    /// and ai-chat turn completions should NOT use this — they rely on immediate
+    /// emission.
+    ///
+    pub fn begin_batch_emit(&self) -> BatchEmitGuard {
+        let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
+        *state = BatchState::Batching(HashMap::new());
+        drop(state);
+        BatchEmitGuard {
+            state: Arc::clone(&self.batch_state),
+            tx: self.event_tx.clone(),
+        }
     }
 
     /// Emit a domain event to all subscribers (Issue #995: wraps in EventEnvelope)
@@ -3341,5 +3418,164 @@ mod tests {
         let result = service.delete_node("nonexistent-id", 1).await.unwrap();
         assert!(!result.existed);
         assert_eq!(result.deleted_count, 0);
+    }
+
+    // =========================================================================
+    // Issue #1306: BatchEmitGuard — batched event emission tests
+    // =========================================================================
+
+    /// Single `update_node` (non-bulk) must still emit immediately — no guard involved.
+    #[tokio::test]
+    async fn batch_emit_single_update_is_immediate() {
+        let (service, _temp) = create_test_service().await;
+        let mut rx = service.subscribe_to_events();
+
+        let id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "hello".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        // Drain create event
+        let _ = rx.try_recv();
+
+        let update = crate::models::NodeUpdate::new().with_content("updated".to_string());
+        service.update_node_unchecked(&id, update).await.unwrap();
+
+        // Event must arrive immediately (no guard active)
+        assert!(
+            rx.try_recv().is_ok(),
+            "single update_node must emit an event immediately"
+        );
+    }
+
+    /// `bulk_update` via `BatchEmitGuard` must deliver exactly one event per node,
+    /// not one per write.
+    #[tokio::test]
+    async fn batch_emit_bulk_update_coalesces_per_node() {
+        let (service, _temp) = create_test_service().await;
+
+        // Create two nodes
+        let id1 = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "node 1".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        let id2 = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "node 2".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        // Subscribe after creates so we only see update events
+        let mut rx = service.subscribe_to_events();
+
+        let updates = vec![
+            (
+                id1.clone(),
+                crate::models::NodeUpdate::new().with_content("updated 1".to_string()),
+            ),
+            (
+                id2.clone(),
+                crate::models::NodeUpdate::new().with_content("updated 2".to_string()),
+            ),
+        ];
+
+        service.bulk_update(updates).await.unwrap();
+
+        // Collect all events that arrived
+        let mut events = Vec::new();
+        while let Ok(env) = rx.try_recv() {
+            events.push(env);
+        }
+
+        // Exactly two events — one per node, not one per write
+        assert_eq!(
+            events.len(),
+            2,
+            "bulk_update must emit exactly one event per updated node, got {}",
+            events.len()
+        );
+
+        let node_ids: Vec<_> = events
+            .iter()
+            .map(|e| match &e.event {
+                DomainEvent::NodeUpdated { node_id, .. } => node_id.clone(),
+                other => panic!("unexpected event: {:?}", other),
+            })
+            .collect();
+
+        assert!(node_ids.contains(&id1));
+        assert!(node_ids.contains(&id2));
+    }
+
+    /// Guard drops → batch mode resets to Immediate; subsequent single writes broadcast
+    /// without buffering.
+    #[tokio::test]
+    async fn batch_emit_guard_drop_restores_immediate_mode() {
+        let (service, _temp) = create_test_service().await;
+
+        let id = service
+            .create_node(Node::new("text".to_string(), "node".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        // Activate and immediately drop the guard
+        {
+            let _guard = service.begin_batch_emit();
+        }
+
+        // Subscribe after guard is dropped
+        let mut rx = service.subscribe_to_events();
+
+        let update = crate::models::NodeUpdate::new().with_content("after guard".to_string());
+        service.update_node_unchecked(&id, update).await.unwrap();
+
+        assert!(
+            rx.try_recv().is_ok(),
+            "after guard drop, updates must emit immediately again"
+        );
+    }
+
+    /// Events buffered while the guard is live must NOT be visible to subscribers
+    /// until the guard drops.
+    #[tokio::test]
+    async fn batch_emit_events_not_visible_until_flush() {
+        let (service, _temp) = create_test_service().await;
+
+        let id = service
+            .create_node(Node::new("text".to_string(), "node".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        let mut rx = service.subscribe_to_events();
+
+        let guard = service.begin_batch_emit();
+
+        let update = crate::models::NodeUpdate::new().with_content("buffered".to_string());
+        service.update_node_unchecked(&id, update).await.unwrap();
+
+        // No event visible yet
+        assert!(
+            rx.try_recv().is_err(),
+            "event must not be visible before guard drops"
+        );
+
+        // Drop guard → flush
+        drop(guard);
+
+        assert!(
+            rx.try_recv().is_ok(),
+            "event must be visible after guard drops"
+        );
     }
 }

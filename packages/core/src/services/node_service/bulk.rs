@@ -531,7 +531,7 @@ impl NodeService {
             }
         }
 
-        // Step 3: All validations passed - perform atomic bulk update
+        // Step 3: All validations passed - perform atomic bulk update.
         self.store.bulk_update(updates.clone()).await.map_err(|e| {
             NodeServiceError::bulk_operation_failed(format!(
                 "Failed to execute bulk update transaction: {}",
@@ -539,7 +539,19 @@ impl NodeService {
             ))
         })?;
 
-        // NOTE: NodeUpdated events are now automatically emitted by store notifier (Issue #718)
+        // Issue #1306: Emit one NodeUpdated event per updated node.
+        // `store.bulk_update` runs a single SQL transaction without per-row notify calls,
+        // so we emit explicitly here rather than relying on the store notifier.
+        for (id, _) in &updates {
+            self.emit_event(DomainEvent::NodeUpdated {
+                node_id: id.clone(),
+                node_type: existing_nodes
+                    .get(id)
+                    .map(|n| n.node_type.clone())
+                    .unwrap_or_default(),
+                changed_properties: vec![],
+            });
+        }
 
         Ok(())
     }
@@ -578,8 +590,9 @@ impl NodeService {
             return Ok(());
         }
 
-        // Delete nodes one by one using SqliteStore
-        // SQLite handles atomicity within each delete operation
+        // Coalesce delete events: one event per node regardless of cascade writes
+        // (Issue #1306).
+        let _batch = self.begin_batch_emit();
         for id in &ids {
             self.store
                 .delete_node(id, self.client_id.clone())
@@ -590,9 +603,8 @@ impl NodeService {
                         id, e
                     ))
                 })?;
-
-            // NOTE: NodeDeleted event is now automatically emitted by store notifier (Issue #718)
         }
+        // _batch drops here → one flush per deleted node
 
         Ok(())
     }
