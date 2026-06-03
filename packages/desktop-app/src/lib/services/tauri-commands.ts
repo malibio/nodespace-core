@@ -39,9 +39,9 @@ export async function localAgentStatus(): Promise<LocalAgentStatus> {
  * Create a new local agent conversation session.
  * @returns Session ID
  */
-export async function localAgentNewSession(modelId: string): Promise<string> {
+export async function localAgentNewSession(modelId: string, nodeId?: string): Promise<string> {
   if (!isTauri()) return `mock-session-${Date.now()}`;
-  return invoke<string>('local_agent_new_session', { modelId });
+  return invoke<string>('local_agent_new_session', { modelId, nodeId });
 }
 
 /**

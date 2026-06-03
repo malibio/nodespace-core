@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
-    AgentToolExecutor, ChatInferenceEngine, InferenceError, InferenceUsage, LocalAgentStatus,
-    ModelManager, ModelStatus, StreamingChunk,
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceError, InferenceUsage,
+    LocalAgentStatus, ModelManager, ModelStatus, Role, StreamingChunk,
 };
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
@@ -185,12 +185,23 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
     ) -> Result<Response<StartLocalSessionResponse>, Status> {
         let req = request.into_inner();
         let service = self.get_service().await;
+
+        // Seed history from the node's persisted ai-chat.messages if node_id provided.
+        let history = if let Some(node_id) = req.node_id.as_deref().filter(|s| !s.is_empty()) {
+            load_node_history(&self.inner.node_service, node_id).await
+        } else {
+            vec![]
+        };
+
         let session_id = service
-            .create_session(if req.model_id.is_empty() {
-                None
-            } else {
-                Some(req.model_id)
-            })
+            .create_session(
+                if req.model_id.is_empty() {
+                    None
+                } else {
+                    Some(req.model_id)
+                },
+                history,
+            )
             .await;
 
         // No query at session creation — semantic schema retrieval is skipped.
@@ -822,6 +833,48 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
             ..Default::default()
         },
     }
+}
+
+/// Load persisted conversation history from an ai-chat node's properties.
+///
+/// Reads `properties["ai-chat"]["messages"]` and converts each entry to a
+/// `ChatMessage` so the new session resumes where the user left off. Entries
+/// with `role == "tool_call"` are skipped — they are internal records that
+/// would confuse the inference engine.
+async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
+    let node = match node_service.get_node(node_id).await {
+        Ok(Some(n)) => n,
+        _ => return vec![],
+    };
+
+    let messages = node
+        .properties
+        .get("ai-chat")
+        .and_then(|ns| ns.get("messages"))
+        .and_then(|v| v.as_array());
+
+    let Some(messages) = messages else {
+        return vec![];
+    };
+
+    messages
+        .iter()
+        .filter_map(|m| {
+            let role_str = m.get("role")?.as_str()?;
+            let role = match role_str {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                _ => return None, // skip tool_call and unknown roles
+            };
+            let content = m.get("content")?.as_str().unwrap_or("").to_string();
+            Some(ChatMessage {
+                role,
+                content,
+                tool_call_id: None,
+                name: None,
+            })
+        })
+        .collect()
 }
 
 async fn build_workspace_context(

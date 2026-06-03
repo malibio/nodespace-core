@@ -50,11 +50,12 @@ pub async fn local_agent_status(
 #[tauri::command]
 pub async fn local_agent_new_session(
     model_id: String,
+    node_id: Option<String>,
     grpc: State<'_, GrpcClient>,
 ) -> Result<String, CommandError> {
     let mut client = grpc.local_agent_client().await;
     let resp = client
-        .start_session(StartLocalSessionRequest { model_id })
+        .start_session(StartLocalSessionRequest { model_id, node_id })
         .await
         .map_err(|e| grpc_err(e.message()))?;
     Ok(resp.into_inner().session_id)
@@ -100,18 +101,16 @@ pub async fn local_agent_send(
                 if let Some(text) = chunk.token_text {
                     response_text.push_str(&text);
                     #[derive(Serialize)]
-                    struct TokenChunk {
-                        #[serde(rename = "Token")]
-                        token: TokenInner,
-                    }
-                    #[derive(Serialize)]
-                    struct TokenInner {
+                    struct TokenChunk<'a> {
+                        #[serde(rename = "type")]
+                        chunk_type: &'a str,
                         text: String,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
                         &TokenChunk {
-                            token: TokenInner { text },
+                            chunk_type: "token",
+                            text,
                         },
                     );
                 }
@@ -130,21 +129,19 @@ pub async fn local_agent_send(
                             name: name.clone(),
                         },
                     );
-                    // Also emit as chunk for compatibility
                     #[derive(Serialize)]
-                    struct ToolStartChunk {
-                        #[serde(rename = "ToolCallStart")]
-                        tool_call_start: ToolStartInner,
-                    }
-                    #[derive(Serialize)]
-                    struct ToolStartInner {
+                    struct ToolStartChunk<'a> {
+                        #[serde(rename = "type")]
+                        chunk_type: &'a str,
                         id: String,
                         name: String,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
                         &ToolStartChunk {
-                            tool_call_start: ToolStartInner { id, name },
+                            chunk_type: "tool_call_start",
+                            id,
+                            name,
                         },
                     );
                 }
@@ -152,19 +149,18 @@ pub async fn local_agent_send(
             "tool_call_args" => {
                 if let (Some(id), Some(args_json)) = (chunk.tool_call_id, chunk.tool_args_json) {
                     #[derive(Serialize)]
-                    struct ToolArgsChunk {
-                        #[serde(rename = "ToolCallArgs")]
-                        tool_call_args: ToolArgsInner,
-                    }
-                    #[derive(Serialize)]
-                    struct ToolArgsInner {
+                    struct ToolArgsChunk<'a> {
+                        #[serde(rename = "type")]
+                        chunk_type: &'a str,
                         id: String,
                         args_json: String,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
                         &ToolArgsChunk {
-                            tool_call_args: ToolArgsInner { id, args_json },
+                            chunk_type: "tool_call_args",
+                            id,
+                            args_json,
                         },
                     );
                 }

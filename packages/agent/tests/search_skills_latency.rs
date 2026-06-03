@@ -581,7 +581,7 @@ async fn bench_search_skills_e2e_latency() {
     eprintln!("--- Scenario 1: Conversational ---");
     for i in 0..N_RUNS {
         let service = LocalAgentService::new(engine.clone(), executor.clone());
-        let sid = service.create_session(None).await;
+        let sid = service.create_session(None, vec![]).await;
         let m = measure_turn(
             &service,
             &sid,
@@ -617,7 +617,7 @@ async fn bench_search_skills_e2e_latency() {
     let mut scenario2_skills_called = 0usize;
     for i in 0..N_RUNS {
         let service = LocalAgentService::new(engine.clone(), executor.clone());
-        let sid = service.create_session(None).await;
+        let sid = service.create_session(None, vec![]).await;
         let m = measure_turn(&service, &sid, "Show me all overdue invoices.").await;
         eprintln!(
             "  run {:2}: {}ms  prompt={} completion={}  search_skills={} downstream={}",
@@ -668,7 +668,7 @@ async fn bench_search_skills_e2e_latency() {
     let mut scenario3_skills_called = 0usize;
     for i in 0..N_RUNS {
         let service = LocalAgentService::new(engine.clone(), executor.clone());
-        let sid = service.create_session(None).await;
+        let sid = service.create_session(None, vec![]).await;
         let m = measure_turn(
             &service,
             &sid,
@@ -854,7 +854,7 @@ async fn bench_streaming_chunks_are_buffered() {
 
     let executor: Arc<dyn AgentToolExecutor> = Arc::new(BenchToolExecutor);
     let service = LocalAgentService::new(engine, executor);
-    let sid = service.create_session(None).await;
+    let sid = service.create_session(None, vec![]).await;
 
     service
         .send_message(
