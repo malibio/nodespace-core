@@ -264,6 +264,9 @@ export default [
         global: 'readonly', // Node.js global for tests
         globalThis: 'readonly',
         process: 'readonly',
+        __dirname: 'readonly', // Node.js CommonJS global (available via Bun/Vitest)
+        __filename: 'readonly',
+        Buffer: 'readonly', // Node.js Buffer global
         vi: 'readonly', // Vitest
         describe: 'readonly', // Vitest
         it: 'readonly', // Vitest
