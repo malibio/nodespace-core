@@ -8,7 +8,7 @@ export interface ConflictNotification {
   id: string;
   nodeId: string;
   message: string;
-  conflictType: 'version-mismatch' | 'deleted-node' | 'child-transfer-failure';
+  conflictType: 'version-mismatch' | 'deleted-node' | 'child-transfer-failure' | 'write-failure';
   createdAt: number;
 }
 
