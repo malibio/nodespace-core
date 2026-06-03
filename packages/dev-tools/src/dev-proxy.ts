@@ -282,16 +282,18 @@ async function handleRequest(req: Request): Promise<Response> {
   if (method === 'POST' && pathname === '/api/nodes') {
     try {
       const body = await req.json() as Record<string, unknown>;
-      const request = {
+      // Optional proto string fields (parentId, collection, lifecycleStatus) must be
+      // omitted entirely for the "unset" case — sending '' is treated as Some("") by
+      // the Rust side and triggers validation errors (empty parent lookup, empty path).
+      const request: Record<string, unknown> = {
         nodeType: body.nodeType ?? '',
         content: body.content ?? '',
-        parentId: body.parentId ?? '',
-        insertAfterNodeId: body.insertAfterNodeId ?? '',
         properties: body.properties ? JSON.stringify(body.properties) : '',
-        collection: '',
-        lifecycleStatus: '',
         id: body.id ?? ''
       };
+      if (body.parentId && body.parentId !== '') request.parentId = body.parentId;
+      if (body.collection && body.collection !== '') request.collection = body.collection;
+      if (body.lifecycleStatus && body.lifecycleStatus !== '') request.lifecycleStatus = body.lifecycleStatus;
       const res = await call<typeof request, { nodeId: string }>(
         (nodeClient as unknown as Record<string, Function>).createNode,
         request
@@ -325,16 +327,17 @@ async function handleRequest(req: Request): Promise<Response> {
     const nodeId = decodeURIComponent(getNodeMatch[1]);
     try {
       const body = await req.json() as Record<string, unknown>;
-      const request = {
+      // Optional proto fields must be omitted (not '') for the "no change" case.
+      const request: Record<string, unknown> = {
         nodeId,
-        version: body.version ?? null,
-        nodeType: body.nodeType ?? '',
-        content: body.content !== undefined ? String(body.content) : null,
-        properties: body.properties !== undefined ? JSON.stringify(body.properties) : null,
-        addToCollection: body.addToCollection ?? '',
-        removeFromCollection: body.removeFromCollection ?? '',
-        lifecycleStatus: body.lifecycleStatus ?? ''
+        version: body.version ?? null
       };
+      if (body.nodeType && body.nodeType !== '') request.nodeType = body.nodeType;
+      if (body.content !== undefined) request.content = String(body.content);
+      if (body.properties !== undefined) request.properties = JSON.stringify(body.properties);
+      if (body.addToCollection && body.addToCollection !== '') request.addToCollection = body.addToCollection;
+      if (body.removeFromCollection && body.removeFromCollection !== '') request.removeFromCollection = body.removeFromCollection;
+      if (body.lifecycleStatus && body.lifecycleStatus !== '') request.lifecycleStatus = body.lifecycleStatus;
       const res = await call<typeof request, { nodeData?: ProtoNodeData }>(
         (nodeClient as unknown as Record<string, Function>).updateNode,
         request
