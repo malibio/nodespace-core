@@ -12,11 +12,8 @@ describe('Tauri System Commands - API Surface', () => {
   describe('Non-node command exports', () => {
     it('should export local agent functions', () => {
       expect(typeof tauriCommands.localAgentStatus).toBe('function');
-      expect(typeof tauriCommands.localAgentNewSession).toBe('function');
-      expect(typeof tauriCommands.localAgentSend).toBe('function');
-      expect(typeof tauriCommands.localAgentCancel).toBe('function');
-      expect(typeof tauriCommands.localAgentEndSession).toBe('function');
-      expect(typeof tauriCommands.localAgentGetSessions).toBe('function');
+      expect(typeof tauriCommands.localAgentCancelTurn).toBe('function');
+      expect(typeof tauriCommands.ensureModelReady).toBe('function');
     });
 
     it('should export chat model functions', () => {
