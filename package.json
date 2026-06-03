@@ -21,6 +21,7 @@
     "test:db:watch": "bun run --cwd packages/desktop-app test:db:watch",
     "test:coverage": "bun run --cwd packages/desktop-app test:coverage",
     "test:skill": "bun run --cwd packages/skill test",
+    "test:e2e": "bun run --cwd packages/desktop-app test:e2e",
     "test:all": "bun run test && bun run test:skill && bun run rust:test",
     "test:all:db": "bun run test:db && bun run test:skill && bun run rust:test",
     "check": "bun run --cwd packages/desktop-app check",
