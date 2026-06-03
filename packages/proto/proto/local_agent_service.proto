@@ -8,12 +8,13 @@ package nodespace;
 // Clients can start sessions, send messages (receiving token stream responses),
 // query agent/model status, manage models, and cancel in-progress generation.
 service LocalAgentService {
-  rpc StartSession(StartLocalSessionRequest)     returns (StartLocalSessionResponse);
-  rpc SendMessage(SendLocalMessageRequest)       returns (stream AgentChunk);
+  // Node-driven chat: subscribe once to receive all token-stream events from
+  // any ai-chat node inference turn. Replaces per-message SendMessage/StartSession
+  // IPC — the daemon now drives inference in response to NodeUpdated events.
+  rpc SubscribeTokenStream(SubscribeTokenStreamRequest) returns (stream AgentChunk);
+  // Cancel an in-progress inference turn for a given node.
+  rpc CancelTurn(CancelTurnRequest)              returns (CancelTurnResponse);
   rpc GetStatus(GetLocalStatusRequest)           returns (LocalAgentStatusResponse);
-  rpc CancelGeneration(CancelGenerationRequest)  returns (CancelGenerationResponse);
-  rpc EndSession(EndLocalSessionRequest)         returns (EndLocalSessionResponse);
-  rpc GetSessions(GetSessionsRequest)            returns (GetSessionsResponse);
   rpc EnsureModelReady(EnsureModelReadyRequest)  returns (stream ModelLoadProgressEvent);
   rpc ListModels(ListModelsRequest)              returns (ListModelsResponse);
   rpc DownloadModel(DownloadModelRequest)        returns (stream ModelLoadProgressEvent);
@@ -27,31 +28,13 @@ service LocalAgentService {
 }
 
 // ---------------------------------------------------------------------------
-// StartSession
+// SubscribeTokenStream — long-lived server-streaming token delivery
 // ---------------------------------------------------------------------------
 
-message StartLocalSessionRequest {
-  // Model ID to associate with this session (e.g. "ollama:llama3.2" or
-  // "ministral-3b-instruct-2410-q4_k_m.gguf").
-  string model_id = 1;
-  // Optional node ID — if provided, the daemon fetches the node's persisted
-  // ai-chat.messages and seeds the session history so the conversation resumes.
-  optional string node_id = 2;
-}
-
-message StartLocalSessionResponse {
-  // UUID assigned to the new session.
-  string session_id = 1;
-}
-
-// ---------------------------------------------------------------------------
-// SendMessage — server-streaming token output
-// ---------------------------------------------------------------------------
-
-message SendLocalMessageRequest {
-  string session_id = 1;
-  string message = 2;
-}
+// Subscribe to all inference token events from the daemon.
+// The Tauri process opens one subscription on startup; the daemon pushes
+// AgentChunk events for every ai-chat node turn as they happen.
+message SubscribeTokenStreamRequest {}
 
 // AgentChunk is one event in a streaming agent response.
 //
@@ -78,6 +61,9 @@ message AgentChunk {
 
   // Populated for chunk_type == "error"
   optional string error_message = 8;
+
+  // The ai-chat node this chunk belongs to (populated on all chunks).
+  optional string node_id = 9;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,43 +82,15 @@ message LocalAgentStatusResponse {
 }
 
 // ---------------------------------------------------------------------------
-// CancelGeneration
+// CancelTurn
 // ---------------------------------------------------------------------------
 
-message CancelGenerationRequest {
-  string session_id = 1;
+message CancelTurnRequest {
+  // The ai-chat node whose in-progress turn should be cancelled.
+  string node_id = 1;
 }
 
-message CancelGenerationResponse {}
-
-// ---------------------------------------------------------------------------
-// EndSession
-// ---------------------------------------------------------------------------
-
-message EndLocalSessionRequest {
-  string session_id = 1;
-}
-
-message EndLocalSessionResponse {}
-
-// ---------------------------------------------------------------------------
-// GetSessions
-// ---------------------------------------------------------------------------
-
-message GetSessionsRequest {}
-
-message LocalSessionInfo {
-  string session_id = 1;
-  optional string model_id = 2;
-  // ISO-8601 timestamp when the session was created.
-  string created_at = 3;
-  // Serialized LocalAgentStatus (JSON).
-  string status_json = 4;
-}
-
-message GetSessionsResponse {
-  repeated LocalSessionInfo sessions = 1;
-}
+message CancelTurnResponse {}
 
 // ---------------------------------------------------------------------------
 // EnsureModelReady — server-streaming model load/download progress

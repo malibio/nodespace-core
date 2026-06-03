@@ -1,19 +1,16 @@
-//! Tauri commands for the local agent — thin gRPC proxy to LocalAgentService.
+//! Tauri commands for the local agent — model management and token stream subscription.
 //!
-//! All session management, model loading, and inference now run in the
-//! `nodespaced` daemon. These handlers forward Tauri IPC calls over gRPC and
-//! re-emit streaming events to the frontend via Tauri channels.
-//!
-//! Issue #1137
+//! Session IPC (StartSession, SendMessage, EndSession) has been removed.
+//! The daemon now drives inference in response to ai-chat node changes.
+//! The Tauri process subscribes once to `SubscribeTokenStream` and forwards
+//! token events to the frontend via Tauri events.
 
 use crate::agent_events;
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
-use crate::types::{AgentSession, AgentTurnResult, InferenceUsage, LocalAgentStatus};
 use nodespace_proto::nodespace::{
-    CancelGenerationRequest, EndLocalSessionRequest, EnsureModelReadyRequest,
-    GetLocalStatusRequest, GetSessionsRequest, ListModelsRequest, SendLocalMessageRequest,
-    StartLocalSessionRequest,
+    CancelTurnRequest, EnsureModelReadyRequest, GetLocalStatusRequest, ListModelsRequest,
+    SubscribeTokenStreamRequest,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -29,88 +26,58 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
 }
 
 // ---------------------------------------------------------------------------
-// Session management
+// Token stream subscription (called once from app setup)
 // ---------------------------------------------------------------------------
 
-/// Get the current status of the local agent.
-#[tauri::command]
-pub async fn local_agent_status(
-    grpc: State<'_, GrpcClient>,
-) -> Result<LocalAgentStatus, CommandError> {
-    let mut client = grpc.local_agent_client().await;
-    let resp = client
-        .get_status(GetLocalStatusRequest { session_id: None })
-        .await
-        .map_err(|e| grpc_err(e.message()))?;
-    serde_json::from_str(&resp.into_inner().status_json)
-        .map_err(|e| grpc_err(format!("Failed to deserialize status: {e}")))
+/// Open a long-lived gRPC subscription to token events from the daemon.
+///
+/// This runs as a background task. All inference token events (for all ai-chat
+/// nodes) are forwarded to the frontend as Tauri events on `local-agent://chunk`.
+/// The `node_id` field on each chunk tells the frontend which node is streaming.
+pub fn start_token_stream_subscription(app: AppHandle, grpc: GrpcClient) {
+    tokio::spawn(async move {
+        loop {
+            match try_subscribe(&app, &grpc).await {
+                Ok(()) => {
+                    tracing::info!("Token stream subscription ended; reconnecting in 2s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Token stream subscription failed; reconnecting in 2s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    });
 }
 
-/// Create a new local agent conversation session.
-#[tauri::command]
-pub async fn local_agent_new_session(
-    model_id: String,
-    node_id: Option<String>,
-    grpc: State<'_, GrpcClient>,
-) -> Result<String, CommandError> {
-    let mut client = grpc.local_agent_client().await;
-    let resp = client
-        .start_session(StartLocalSessionRequest { model_id, node_id })
-        .await
-        .map_err(|e| grpc_err(e.message()))?;
-    Ok(resp.into_inner().session_id)
-}
-
-/// Send a user message to a local agent session.
-///
-/// Streams `AgentChunk` events from the daemon, translating them into
-/// Tauri events on `local-agent://chunk`, `local-agent://status`, and
-/// `local-agent://tool` so the frontend receives the same events as before.
-///
-/// Returns the final `AgentTurnResult` when the turn completes.
-#[tauri::command]
-pub async fn local_agent_send(
-    session_id: String,
-    message: String,
-    app: AppHandle,
-    grpc: State<'_, GrpcClient>,
-) -> Result<AgentTurnResult, CommandError> {
+async fn try_subscribe(app: &AppHandle, grpc: &GrpcClient) -> Result<(), String> {
     let mut client = grpc.local_agent_client().await;
     let mut stream = client
-        .send_message(SendLocalMessageRequest {
-            session_id: session_id.clone(),
-            message,
-        })
+        .subscribe_token_stream(SubscribeTokenStreamRequest {})
         .await
-        .map_err(|e| grpc_err(e.message()))?
+        .map_err(|e| e.message().to_string())?
         .into_inner();
 
-    let mut response_text = String::new();
-    let mut prompt_tokens = 0u32;
-    let mut completion_tokens = 0u32;
-
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| {
-            let msg = e.message().to_string();
-            let _ = app.emit(agent_events::LOCAL_AGENT_ERROR, &msg);
-            grpc_err(msg)
-        })?;
+        let chunk = chunk_result.map_err(|e| e.message().to_string())?;
 
         match chunk.chunk_type.as_str() {
             "token" => {
                 if let Some(text) = chunk.token_text {
-                    response_text.push_str(&text);
                     #[derive(Serialize)]
                     struct TokenChunk<'a> {
                         #[serde(rename = "type")]
                         chunk_type: &'a str,
                         text: String,
+                        node_id: Option<String>,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
                         &TokenChunk {
                             chunk_type: "token",
                             text,
+                            node_id: chunk.node_id,
                         },
                     );
                 }
@@ -121,12 +88,14 @@ pub async fn local_agent_send(
                     struct ToolEvent {
                         id: String,
                         name: String,
+                        node_id: Option<String>,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_TOOL,
                         &ToolEvent {
                             id: id.clone(),
                             name: name.clone(),
+                            node_id: chunk.node_id.clone(),
                         },
                     );
                     #[derive(Serialize)]
@@ -135,6 +104,7 @@ pub async fn local_agent_send(
                         chunk_type: &'a str,
                         id: String,
                         name: String,
+                        node_id: Option<String>,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
@@ -142,6 +112,7 @@ pub async fn local_agent_send(
                             chunk_type: "tool_call_start",
                             id,
                             name,
+                            node_id: chunk.node_id,
                         },
                     );
                 }
@@ -154,6 +125,7 @@ pub async fn local_agent_send(
                         chunk_type: &'a str,
                         id: String,
                         args_json: String,
+                        node_id: Option<String>,
                     }
                     let _ = app.emit(
                         agent_events::LOCAL_AGENT_CHUNK,
@@ -161,103 +133,79 @@ pub async fn local_agent_send(
                             chunk_type: "tool_call_args",
                             id,
                             args_json,
+                            node_id: chunk.node_id,
                         },
                     );
                 }
             }
             "done" => {
-                prompt_tokens = chunk.prompt_tokens.unwrap_or(0) as u32;
-                completion_tokens = chunk.completion_tokens.unwrap_or(0) as u32;
+                #[derive(Serialize)]
+                struct DoneChunk<'a> {
+                    #[serde(rename = "type")]
+                    chunk_type: &'a str,
+                    prompt_tokens: i32,
+                    completion_tokens: i32,
+                    node_id: Option<String>,
+                }
+                let _ = app.emit(
+                    agent_events::LOCAL_AGENT_CHUNK,
+                    &DoneChunk {
+                        chunk_type: "done",
+                        prompt_tokens: chunk.prompt_tokens.unwrap_or(0),
+                        completion_tokens: chunk.completion_tokens.unwrap_or(0),
+                        node_id: chunk.node_id,
+                    },
+                );
             }
             "error" => {
                 let msg = chunk
                     .error_message
                     .unwrap_or_else(|| "Unknown error".to_string());
                 let _ = app.emit(agent_events::LOCAL_AGENT_ERROR, &msg);
-                return Err(grpc_err(msg));
             }
             _ => {}
         }
     }
 
-    Ok(AgentTurnResult {
-        response: response_text,
-        tool_calls_made: vec![],
-        usage: InferenceUsage {
-            prompt_tokens,
-            completion_tokens,
-        },
-    })
+    Ok(())
 }
 
-/// Cancel an in-progress generation for the given session.
+// ---------------------------------------------------------------------------
+// Turn management
+// ---------------------------------------------------------------------------
+
+/// Cancel an in-progress inference turn for a given ai-chat node.
 #[tauri::command]
-pub async fn local_agent_cancel(
-    session_id: String,
+pub async fn local_agent_cancel_turn(
+    node_id: String,
     grpc: State<'_, GrpcClient>,
 ) -> Result<(), CommandError> {
     let mut client = grpc.local_agent_client().await;
     client
-        .cancel_generation(CancelGenerationRequest { session_id })
+        .cancel_turn(CancelTurnRequest { node_id })
         .await
         .map_err(|e| grpc_err(e.message()))?;
     Ok(())
 }
 
-/// End and remove a session.
+/// Get the current status of the local agent.
 #[tauri::command]
-pub async fn local_agent_end_session(
-    session_id: String,
+pub async fn local_agent_status(
     grpc: State<'_, GrpcClient>,
-) -> Result<(), CommandError> {
-    let mut client = grpc.local_agent_client().await;
-    client
-        .end_session(EndLocalSessionRequest { session_id })
-        .await
-        .map_err(|e| grpc_err(e.message()))?;
-    Ok(())
-}
-
-/// Get all active agent sessions.
-#[tauri::command]
-pub async fn local_agent_get_sessions(
-    grpc: State<'_, GrpcClient>,
-) -> Result<Vec<AgentSession>, CommandError> {
+) -> Result<crate::types::LocalAgentStatus, CommandError> {
     let mut client = grpc.local_agent_client().await;
     let resp = client
-        .get_sessions(GetSessionsRequest {})
+        .get_status(GetLocalStatusRequest { session_id: None })
         .await
-        .map_err(|e| grpc_err(e.message()))?
-        .into_inner();
-
-    let mut sessions = Vec::new();
-    for info in resp.sessions {
-        let status: LocalAgentStatus =
-            serde_json::from_str(&info.status_json).unwrap_or(LocalAgentStatus::Idle);
-        let created_at = info
-            .created_at
-            .parse()
-            .unwrap_or_else(|_| chrono::Utc::now());
-
-        sessions.push(AgentSession {
-            id: info.session_id,
-            model_id: info.model_id,
-            messages: vec![],
-            status,
-            created_at,
-            tool_executions: vec![],
-            dynamic_context: None,
-            system_prompt_override: None,
-        });
-    }
-    Ok(sessions)
+        .map_err(|e| grpc_err(e.message()))?;
+    serde_json::from_str(&resp.into_inner().status_json)
+        .map_err(|e| grpc_err(format!("Failed to deserialize status: {e}")))
 }
 
 // ---------------------------------------------------------------------------
 // Model loading
 // ---------------------------------------------------------------------------
 
-/// Payload for `model://status` events.
 #[derive(Debug, Clone, Serialize)]
 struct ModelStatusEvent {
     model_id: String,
@@ -265,7 +213,6 @@ struct ModelStatusEvent {
     message: Option<String>,
 }
 
-/// Payload for `model://download-progress` events.
 #[derive(Debug, Clone, Serialize)]
 struct DownloadProgressEvent {
     model_id: String,
@@ -274,11 +221,6 @@ struct DownloadProgressEvent {
 }
 
 /// Ensure a model is downloaded, loaded, and the inference engine is ready.
-///
-/// Streams `ModelLoadProgressEvent` from the daemon and translates them into
-/// Tauri events so the frontend sees the same status updates as before.
-///
-/// Returns `true` if the inference engine was (re-)installed.
 #[tauri::command]
 pub async fn ensure_model_ready(
     model_id: String,

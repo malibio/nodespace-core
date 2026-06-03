@@ -15,6 +15,7 @@ tonic = "0.12"
 prost = "0.13"
 nodespace-proto = { workspace = true }
 tokio = { workspace = true }
+tokio-util = "0.7"
 tokio-stream = "0.1"
 async-stream = "0.3"
 anyhow = { workspace = true }

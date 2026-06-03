@@ -4,12 +4,7 @@
  * Node-CRUD operations were removed in C1a (#1251); use backendAdapter directly.
  */
 
-import type {
-  AcpAgentInfo,
-  AgentSession,
-  AgentTurnResult,
-  LocalAgentStatus
-} from '$lib/types/agent-types';
+import type { AcpAgentInfo, LocalAgentStatus } from '$lib/types/agent-types';
 import { invoke } from '@tauri-apps/api/core';
 
 // ============================================================================
@@ -36,52 +31,11 @@ export async function localAgentStatus(): Promise<LocalAgentStatus> {
 }
 
 /**
- * Create a new local agent conversation session.
- * @returns Session ID
+ * Cancel an in-progress inference turn for a given ai-chat node.
  */
-export async function localAgentNewSession(modelId: string, nodeId?: string): Promise<string> {
-  if (!isTauri()) return `mock-session-${Date.now()}`;
-  return invoke<string>('local_agent_new_session', { modelId, nodeId });
-}
-
-/**
- * Send a user message and run one agent turn.
- * Streaming chunks are delivered via Tauri events (local-agent://chunk).
- * @returns Final turn result when generation completes.
- */
-export async function localAgentSend(sessionId: string, message: string): Promise<AgentTurnResult> {
-  if (!isTauri()) {
-    return {
-      response: 'Mock response (Tauri not available)',
-      tool_calls_made: [],
-      usage: { prompt_tokens: 0, completion_tokens: 0 }
-    };
-  }
-  return invoke<AgentTurnResult>('local_agent_send', { sessionId, message });
-}
-
-/**
- * Cancel an in-progress generation for the given session.
- */
-export async function localAgentCancel(sessionId: string): Promise<void> {
+export async function localAgentCancelTurn(nodeId: string): Promise<void> {
   if (!isTauri()) return;
-  return invoke<void>('local_agent_cancel', { sessionId });
-}
-
-/**
- * End a local agent session, freeing all resources.
- */
-export async function localAgentEndSession(sessionId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('local_agent_end_session', { sessionId });
-}
-
-/**
- * Get all active local agent sessions.
- */
-export async function localAgentGetSessions(): Promise<AgentSession[]> {
-  if (!isTauri()) return [];
-  return invoke<AgentSession[]>('local_agent_get_sessions');
+  return invoke<void>('local_agent_cancel_turn', { nodeId });
 }
 
 // ============================================================================

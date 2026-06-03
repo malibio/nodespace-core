@@ -37,6 +37,7 @@ struct GrpcClientInner {
 ///
 /// `Channel` is cheap to clone (it is an `Arc` internally). Commands clone
 /// clients per call since tonic's generated methods take `&mut self`.
+#[derive(Clone)]
 pub struct GrpcClient {
     inner: Arc<RwLock<GrpcClientInner>>,
 }
