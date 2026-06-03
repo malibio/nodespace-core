@@ -844,7 +844,14 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
 async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
     let node = match node_service.get_node(node_id).await {
         Ok(Some(n)) => n,
-        _ => return vec![],
+        Ok(None) => {
+            tracing::warn!(node_id, "ai-chat node not found for history seeding");
+            return vec![];
+        }
+        Err(e) => {
+            tracing::error!(node_id, error = %e, "failed to load ai-chat node for history seeding");
+            return vec![];
+        }
     };
 
     let messages = node
@@ -866,7 +873,7 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
                 "assistant" => Role::Assistant,
                 _ => return None, // skip tool_call and unknown roles
             };
-            let content = m.get("content")?.as_str().unwrap_or("").to_string();
+            let content = m.get("content")?.as_str()?.to_string();
             Some(ChatMessage {
                 role,
                 content,
