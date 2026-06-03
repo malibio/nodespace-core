@@ -1589,6 +1589,8 @@ export class SharedNodeStore {
             // Operation was cancelled by a newer operation - this is expected
             return;
           }
+          // OCC errors are already handled inside the persistence closure (rollback + notification)
+          if (isVersionConflict(err)) return;
           // Surface non-OCC write failures visibly so users know their change didn't save
           conflictNotifications.add({
             nodeId,

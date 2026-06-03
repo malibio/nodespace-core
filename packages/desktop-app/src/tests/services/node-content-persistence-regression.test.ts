@@ -100,8 +100,10 @@ describe('Node content persistence regression (#1307)', () => {
 
     await store.flushAllPendingSaves(3000);
 
-    // PersistenceCoordinator debounces and coalesces rapid edits; the final
-    // content must be what the backend received regardless of call count.
+    // PersistenceCoordinator debounces and coalesces rapid edits into a single
+    // backend call. The exact call count is non-deterministic (could be 1 or 3
+    // depending on timer resolution), so we assert only that it was called at
+    // all and that the final write carried the last content.
     expect(updateSpy).toHaveBeenCalled();
     const lastCall = updateSpy.mock.calls[updateSpy.mock.calls.length - 1];
     expect(lastCall[2].content).toBe('Edit 3 — final');
