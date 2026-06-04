@@ -19,6 +19,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PROTO_PATH = path.resolve(__dirname, '../../proto/proto/node_service.proto');
+const AGENT_PROTO_PATH = path.resolve(__dirname, '../../proto/proto/local_agent_service.proto');
 const PORT = parseInt(process.env.DEV_PROXY_PORT ?? '3001', 10);
 
 // ============================================================================
@@ -39,9 +40,23 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   oneofs: true
 });
 
+const agentPackageDefinition = protoLoader.loadSync(AGENT_PROTO_PATH, {
+  keepCase: false,
+  longs: String,
+  enums: String,
+  defaults: true,
+  oneofs: true
+});
+
 const proto = grpc.loadPackageDefinition(packageDefinition) as unknown as {
   nodespace: {
     NodeService: grpc.ServiceClientConstructor;
+  };
+};
+
+const agentProto = grpc.loadPackageDefinition(agentPackageDefinition) as unknown as {
+  nodespace: {
+    LocalAgentService: grpc.ServiceClientConstructor;
   };
 };
 
@@ -50,11 +65,25 @@ const nodeClient = new proto.nodespace.NodeService(
   address,
   grpc.credentials.createInsecure()
 );
+const agentClient = new agentProto.nodespace.LocalAgentService(
+  address,
+  grpc.credentials.createInsecure()
+);
 
-// Promisify a unary gRPC call
+// Promisify a unary gRPC call on nodeClient
 function call<TReq, TRes>(method: Function, request: TReq): Promise<TRes> {
   return new Promise((resolve, reject) => {
     method.call(nodeClient, request, (err: grpc.ServiceError | null, res: TRes) => {
+      if (err) reject(err);
+      else resolve(res);
+    });
+  });
+}
+
+// Promisify a unary gRPC call on agentClient
+function agentCall<TReq, TRes>(method: Function, request: TReq): Promise<TRes> {
+  return new Promise((resolve, reject) => {
+    method.call(agentClient, request, (err: grpc.ServiceError | null, res: TRes) => {
       if (err) reject(err);
       else resolve(res);
     });
@@ -638,6 +667,173 @@ async function handleRequest(req: Request): Promise<Response> {
         { collectionId }
       );
       return json((res.nodes ?? []).map(nodeDataToApiNode));
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // LocalAgentService — model management routes
+  // -------------------------------------------------------------------------
+
+  // GET /api/agent/models
+  if (method === 'GET' && pathname === '/api/agent/models') {
+    try {
+      const res = await agentCall<Record<string, never>, { models: Array<Record<string, unknown>> }>(
+        (agentClient as unknown as Record<string, Function>).listModels,
+        {}
+      );
+      const models = (res.models ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        backend: m.backend,
+        status: m.statusJson ? JSON.parse(m.statusJson as string) : { status: 'not_downloaded' },
+        sizeBytes: parseInt(String(m.sizeBytes ?? '0'), 10),
+        quantization: m.quantization ?? '',
+        minMemoryGb: Number(m.minMemoryGb ?? 0),
+      }));
+      return json(models);
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/agent/models/:id/download
+  const modelDownloadMatch = pathname.match(/^\/api\/agent\/models\/([^/]+)\/download$/);
+  if (method === 'POST' && modelDownloadMatch) {
+    const modelId = decodeURIComponent(modelDownloadMatch[1]);
+    try {
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).downloadModel,
+        { modelId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // DELETE /api/agent/models/:id
+  const modelDeleteMatch = pathname.match(/^\/api\/agent\/models\/([^/]+)$/);
+  if (method === 'DELETE' && modelDeleteMatch) {
+    const modelId = decodeURIComponent(modelDeleteMatch[1]);
+    try {
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).deleteModel,
+        { modelId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/agent/models/:id/load
+  const modelLoadMatch = pathname.match(/^\/api\/agent\/models\/([^/]+)\/load$/);
+  if (method === 'POST' && modelLoadMatch) {
+    const modelId = decodeURIComponent(modelLoadMatch[1]);
+    try {
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).loadModel,
+        { modelId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/agent/models/unload
+  if (method === 'POST' && pathname === '/api/agent/models/unload') {
+    try {
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).unloadModel,
+        {}
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // DELETE /api/agent/models/:id/download  (cancel)
+  const modelCancelMatch = pathname.match(/^\/api\/agent\/models\/([^/]+)\/download$/);
+  if (method === 'DELETE' && modelCancelMatch) {
+    const modelId = decodeURIComponent(modelCancelMatch[1]);
+    try {
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).cancelModelDownload,
+        { modelId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // GET /api/agent/recommended-model
+  if (method === 'GET' && pathname === '/api/agent/recommended-model') {
+    try {
+      const res = await agentCall<Record<string, never>, { modelId: string }>(
+        (agentClient as unknown as Record<string, Function>).recommendedModel,
+        {}
+      );
+      return json({ modelId: res.modelId });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // GET /api/agent/system-ram
+  if (method === 'GET' && pathname === '/api/agent/system-ram') {
+    try {
+      const res = await agentCall<Record<string, never>, { ramBytes: string }>(
+        (agentClient as unknown as Record<string, Function>).getSystemRam,
+        {}
+      );
+      const ramBytes = parseInt(res.ramBytes ?? '0', 10);
+      return json({ ramGb: Math.floor(ramBytes / (1024 ** 3)) });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // GET /api/agent/ollama-available
+  if (method === 'GET' && pathname === '/api/agent/ollama-available') {
+    try {
+      const res = await agentCall<Record<string, never>, { available: boolean }>(
+        (agentClient as unknown as Record<string, Function>).ollamaAvailable,
+        {}
+      );
+      return json({ available: res.available });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/agent/ensure-model-ready
+  if (method === 'POST' && pathname === '/api/agent/ensure-model-ready') {
+    try {
+      const body = await req.json() as { modelId: string };
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).ensureModelReady,
+        { modelId: body.modelId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/agent/cancel-turn
+  if (method === 'POST' && pathname === '/api/agent/cancel-turn') {
+    try {
+      const body = await req.json() as { nodeId: string };
+      await agentCall(
+        (agentClient as unknown as Record<string, Function>).cancelTurn,
+        { nodeId: body.nodeId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
     } catch (err) {
       return grpcError(err as grpc.ServiceError);
     }

@@ -51,6 +51,7 @@
   let downloads = $state<Record<string, { downloaded: number; total: number }>>({});
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenReady: UnlistenFn | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const visibleModels = $derived(models.filter((m) => m.backend === backend));
 
@@ -87,40 +88,47 @@
 
   onMount(async () => {
     await refresh();
-    if (!isTauri) return;
-    try {
-      unlistenProgress = await listen<{
-        model_id: string;
-        bytes_downloaded: number;
-        bytes_total: number;
-      }>(AGENT_EVENTS.MODEL_DOWNLOAD_PROGRESS, (event) => {
-        const { model_id, bytes_downloaded, bytes_total } = event.payload;
-        downloads = {
-          ...downloads,
-          [model_id]: { downloaded: bytes_downloaded, total: bytes_total },
-        };
-      });
-    } catch (e) {
-      log.warn('Failed to listen for download progress', e);
-    }
-    try {
-      unlistenReady = await listen<{ model_id: string }>(
-        AGENT_EVENTS.MODEL_DOWNLOAD_READY,
-        (event) => {
-          const next = { ...downloads };
-          delete next[event.payload.model_id];
-          downloads = next;
-          refresh();
-        }
-      );
-    } catch (e) {
-      log.warn('Failed to listen for download ready', e);
+    if (isTauri) {
+      try {
+        unlistenProgress = await listen<{
+          model_id: string;
+          bytes_downloaded: number;
+          bytes_total: number;
+        }>(AGENT_EVENTS.MODEL_DOWNLOAD_PROGRESS, (event) => {
+          const { model_id, bytes_downloaded, bytes_total } = event.payload;
+          downloads = {
+            ...downloads,
+            [model_id]: { downloaded: bytes_downloaded, total: bytes_total },
+          };
+        });
+      } catch (e) {
+        log.warn('Failed to listen for download progress', e);
+      }
+      try {
+        unlistenReady = await listen<{ model_id: string }>(
+          AGENT_EVENTS.MODEL_DOWNLOAD_READY,
+          (event) => {
+            const next = { ...downloads };
+            delete next[event.payload.model_id];
+            downloads = next;
+            refresh();
+          }
+        );
+      } catch (e) {
+        log.warn('Failed to listen for download ready', e);
+      }
+    } else {
+      // Browser: poll for download completion since Tauri events aren't available.
+      pollTimer = setInterval(() => {
+        if (Object.keys(downloads).length > 0) refresh();
+      }, 2000);
     }
   });
 
   onDestroy(() => {
     unlistenProgress?.();
     unlistenReady?.();
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   async function download(modelId: string) {
@@ -196,10 +204,6 @@
     <p class="model-picker-status">Loading models…</p>
   {:else if error}
     <div class="error-banner" role="alert">{error}</div>
-  {:else if !isTauri}
-    <p class="model-picker-status">
-      Built-in model management requires the desktop app. Use the Tauri dev build (<code>bun run dev:tauri</code>) to download and run local models.
-    </p>
   {:else if visibleModels.length === 0}
     <p class="model-picker-status">
       {#if provider === 'ollama'}
