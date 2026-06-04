@@ -2,6 +2,10 @@
  * Tauri System Commands — non-node Tauri IPC wrappers.
  *
  * Node-CRUD operations were removed in C1a (#1251); use backendAdapter directly.
+ *
+ * In browser/proxy mode, model management and agent commands are forwarded to
+ * the dev-proxy's /api/agent/* routes, which translate them to gRPC calls on
+ * LocalAgentService. PTY commands remain Tauri-only (native process required).
  */
 
 import type { AcpAgentInfo, LocalAgentStatus } from '$lib/types/agent-types';
@@ -18,28 +22,46 @@ function isTauri(): boolean {
   );
 }
 
+const PROXY_BASE = 'http://localhost:3001';
+
+async function proxyGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${PROXY_BASE}${path}`);
+  if (!res.ok) throw new Error(`Proxy ${path} failed: ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function proxyPost<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${PROXY_BASE}${path}`, {
+    method: 'POST',
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`Proxy ${path} failed: ${res.status}`);
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+async function proxyDelete(path: string): Promise<void> {
+  const res = await fetch(`${PROXY_BASE}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Proxy DELETE ${path} failed: ${res.status}`);
+}
+
 // ============================================================================
-// Local Agent Commands (Issue #1008)
+// Local Agent Commands
 // ============================================================================
 
-/**
- * Get the current local agent status.
- */
 export async function localAgentStatus(): Promise<LocalAgentStatus> {
   if (!isTauri()) return { status: 'idle' };
   return invoke<LocalAgentStatus>('local_agent_status');
 }
 
-/**
- * Cancel an in-progress inference turn for a given ai-chat node.
- */
 export async function localAgentCancelTurn(nodeId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('local_agent_cancel_turn', { nodeId });
+  if (isTauri()) return invoke<void>('local_agent_cancel_turn', { nodeId });
+  return proxyPost('/api/agent/cancel-turn', { nodeId });
 }
 
 // ============================================================================
-// Chat Model Management Commands (Issue #1008)
+// Chat Model Management Commands
 // ============================================================================
 
 /** Lifecycle status of a catalog model (tagged union from the daemon). */
@@ -63,87 +85,58 @@ export interface ChatModelEntry {
   minMemoryGb: number;
 }
 
-/**
- * List all models in the local catalog (built-in GGUF + Ollama when running).
- */
 export async function chatModelList(): Promise<ChatModelEntry[]> {
-  if (!isTauri()) return [];
-  return invoke<ChatModelEntry[]>('chat_model_list');
+  if (isTauri()) return invoke<ChatModelEntry[]>('chat_model_list');
+  return proxyGet<ChatModelEntry[]>('/api/agent/models');
 }
 
-/**
- * Get the recommended model ID based on system RAM.
- */
 export async function chatModelRecommended(): Promise<string> {
-  if (!isTauri()) return 'ministral-3b-q4km';
-  return invoke<string>('chat_model_recommended');
+  if (isTauri()) return invoke<string>('chat_model_recommended');
+  const res = await proxyGet<{ modelId: string }>('/api/agent/recommended-model');
+  return res.modelId;
 }
 
-/**
- * Download a model. Progress events are emitted via model://download-progress.
- */
 export async function chatModelDownload(modelId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('chat_model_download', { modelId });
+  if (isTauri()) return invoke<void>('chat_model_download', { modelId });
+  return proxyPost(`/api/agent/models/${encodeURIComponent(modelId)}/download`);
 }
 
-/**
- * Cancel an in-progress model download.
- */
 export async function chatModelCancelDownload(modelId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('chat_model_cancel_download', { modelId });
+  if (isTauri()) return invoke<void>('chat_model_cancel_download', { modelId });
+  return proxyDelete(`/api/agent/models/${encodeURIComponent(modelId)}/download`);
 }
 
-/**
- * Delete a downloaded model from disk.
- */
 export async function chatModelDelete(modelId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('chat_model_delete', { modelId });
+  if (isTauri()) return invoke<void>('chat_model_delete', { modelId });
+  return proxyDelete(`/api/agent/models/${encodeURIComponent(modelId)}`);
 }
 
-/**
- * Load a downloaded model into memory for inference.
- */
 export async function chatModelLoad(modelId: string): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('chat_model_load', { modelId });
+  if (isTauri()) return invoke<void>('chat_model_load', { modelId });
+  return proxyPost(`/api/agent/models/${encodeURIComponent(modelId)}/load`);
 }
 
-/**
- * Unload the currently loaded model, freeing resources.
- */
 export async function chatModelUnload(): Promise<void> {
-  if (!isTauri()) return;
-  return invoke<void>('chat_model_unload');
+  if (isTauri()) return invoke<void>('chat_model_unload');
+  return proxyPost('/api/agent/models/unload');
 }
 
-/** Return total system RAM in GiB (rounded down). Returns 0 outside Tauri. */
-export function getSystemRamGb(): Promise<number> {
-  if (!isTauri()) return Promise.resolve(0);
-  return invoke<number>('get_system_ram_gb');
+export async function getSystemRamGb(): Promise<number> {
+  if (isTauri()) return invoke<number>('get_system_ram_gb');
+  const res = await proxyGet<{ ramGb: number }>('/api/agent/system-ram');
+  return res.ramGb;
 }
 
-/**
- * Whether a local Ollama server is reachable (pings its API with a short
- * timeout). Used to gray out the Ollama provider mode when unavailable.
- * Returns false outside Tauri.
- */
-export function ollamaAvailable(): Promise<boolean> {
-  if (!isTauri()) return Promise.resolve(false);
-  return invoke<boolean>('ollama_available');
+export async function ollamaAvailable(): Promise<boolean> {
+  if (isTauri()) return invoke<boolean>('ollama_available');
+  const res = await proxyGet<{ available: boolean }>('/api/agent/ollama-available');
+  return res.available;
 }
 
-/**
- * Ensure a model is downloaded, loaded, and the inference engine is ready.
- * Handles full lifecycle: download → load → engine swap.
- * Emits model://status and model://download-progress events during the process.
- */
-/** Returns true if the engine was (re-)installed and sessions were dropped. */
 export async function ensureModelReady(modelId: string): Promise<boolean> {
-  if (!isTauri()) return false;
-  return invoke<boolean>('ensure_model_ready', { modelId });
+  if (isTauri()) return invoke<boolean>('ensure_model_ready', { modelId });
+  await proxyPost('/api/agent/ensure-model-ready', { modelId });
+  return false;
 }
 
 // ============================================================================
