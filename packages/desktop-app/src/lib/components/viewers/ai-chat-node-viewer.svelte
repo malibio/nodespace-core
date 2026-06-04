@@ -253,20 +253,22 @@
 
     let hydrationSucceeded = false;
     try {
-      if (!sharedNodeStore.getNode(nodeId)) {
-        try {
-          const fetched = await backendAdapter.getNode(nodeId);
-          if (fetched) {
-            sharedNodeStore.setNode(fetched, {
-              type: 'database',
-              reason: 'hydration',
-            }, true);
-          } else {
-            log.warn('ai-chat node not found in backend', { nodeId });
-          }
-        } catch (err) {
-          log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
+      // Always re-fetch from DB on mount — don't rely on the store's cached
+      // version. The skip-while-editing guard may have blocked WatchNodes
+      // updates in a previous navigation, leaving the store with a stale
+      // OCC version that causes VERSION_CONFLICT on the next send.
+      try {
+        const fetched = await backendAdapter.getNode(nodeId);
+        if (fetched) {
+          sharedNodeStore.setNode(fetched, {
+            type: 'database',
+            reason: 'hydration',
+          }, true);
+        } else {
+          log.warn('ai-chat node not found in backend', { nodeId });
         }
+      } catch (err) {
+        log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
       }
 
       // Only mark ready if the node is actually in the store — interactive
