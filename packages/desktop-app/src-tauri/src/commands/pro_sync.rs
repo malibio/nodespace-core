@@ -62,7 +62,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
         let stream = match client.watch_sync_status(WatchSyncStatusRequest {}).await {
             Ok(resp) => resp.into_inner(),
             Err(e) => {
-                tracing::warn!(error = %e, "sync-status subscribe failed");
+                tracing::debug!(error = %e, "sync-status subscribe failed");
                 STREAM_SPAWNED.store(false, Ordering::SeqCst);
                 emit_disconnected(&app_handle, format!("sync-status subscribe failed: {e}"));
                 return;
