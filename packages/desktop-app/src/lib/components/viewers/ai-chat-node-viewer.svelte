@@ -197,6 +197,9 @@
       timestamp: new Date().toISOString(),
     };
 
+    // Set status:'processing' optimistically so the typing indicator and Stop
+    // button appear immediately — before the daemon's own status write arrives
+    // via WatchNodes (which can take hundreds of ms).
     sharedNodeStore.updateNode(
       nodeId,
       {
@@ -205,6 +208,7 @@
           'ai-chat': {
             ...existingNs,
             messages: [...existingMessages, newMessage],
+            status: 'processing',
           },
         },
       },
