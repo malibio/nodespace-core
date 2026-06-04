@@ -57,9 +57,24 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
   try {
     const node = await backendAdapter.getNode(nodeId);
     if (node) {
-      // Normalize node data to type-specific format (e.g., TaskNode with flat status)
       const normalizedNode = normalizeNodeData(node);
-      // Use database source with domain-event reason to indicate external change
+
+      // Guard: never overwrite an ai-chat node with a snapshot that has fewer
+      // messages than the current store. This prevents a stale echo (arriving
+      // after hasPending clears) from wiping an optimistically-appended user
+      // message before the daemon's next write delivers the assistant reply.
+      const currentNode = sharedNodeStore.getNode(nodeId);
+      if (currentNode?.nodeType === 'ai-chat') {
+        const currentMsgs = (currentNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+        const fetchedMsgs = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+        const currentCount = Array.isArray(currentMsgs) ? currentMsgs.length : 0;
+        const fetchedCount = Array.isArray(fetchedMsgs) ? fetchedMsgs.length : 0;
+        if (fetchedCount < currentCount) {
+          log.debug(`${eventType}: skipping stale ai-chat snapshot (fetched ${fetchedCount} msgs < current ${currentCount} msgs)`, nodeId);
+          return;
+        }
+      }
+
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
       log.debug(`${eventType}: updated store for node`, nodeId);
     } else {
@@ -112,7 +127,6 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
     await listen<NodeEventData>('node:updated', (event) => {
       log.debug(`Node updated: ${event.payload.id}`);
-      // Issue #724: Only fetch if node is already in the store (visible to user)
       if (sharedNodeStore.hasNode(event.payload.id)) {
         fetchAndUpdateNode(event.payload.id, 'node:updated');
       } else {
