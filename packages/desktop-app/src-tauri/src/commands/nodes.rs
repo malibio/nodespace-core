@@ -42,7 +42,10 @@ pub struct ChildMoveInput {
 pub enum InsertPositionInput {
     Beginning,
     End,
-    After { sibling_id: String },
+    After {
+        #[serde(rename = "siblingId")]
+        sibling_id: String,
+    },
 }
 
 impl InsertPositionInput {
