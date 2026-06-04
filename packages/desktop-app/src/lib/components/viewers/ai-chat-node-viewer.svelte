@@ -212,11 +212,15 @@
     );
 
     // Ensure the model is loaded (non-blocking — daemon also ensures this before inference).
+    // Only surface errors that aren't transient "not loaded yet" states; the daemon
+    // will load the model itself before running inference regardless.
     ensureModelReady(model).catch((err) => {
       const msg =
         err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
-      sendError = msg;
-      statusBar.error(`Model error: ${msg}`);
+      if (!msg.toLowerCase().includes('no model loaded') && !msg.toLowerCase().includes('not loaded')) {
+        sendError = msg;
+        statusBar.error(`Model error: ${msg}`);
+      }
     });
 
     await scrollToBottom();
@@ -250,9 +254,9 @@
           const fetched = await backendAdapter.getNode(nodeId);
           if (fetched) {
             sharedNodeStore.setNode(fetched, {
-              type: 'viewer',
-              viewerId: 'ai-chat-viewer-hydration',
-            });
+              type: 'database',
+              reason: 'hydration',
+            }, true);
           } else {
             log.warn('ai-chat node not found in backend', { nodeId });
           }
