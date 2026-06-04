@@ -291,17 +291,10 @@ impl LocalAgentServiceImpl {
 
     /// Execute a full inference turn for the given ai-chat node.
     /// `cancel` is already stored in `turn_tokens` by the caller.
+    /// The caller is responsible for having already set status: processing
+    /// before triggering this turn — writing it again here would re-emit a
+    /// nodeUpdated event and cause a re-entry loop.
     async fn run_ai_chat_turn(&self, node_id: String, cancel: CancellationToken) {
-        // Write status: 'processing'
-        if let Err(e) = self
-            .write_ai_chat_status(&node_id, "processing", None)
-            .await
-        {
-            tracing::warn!(node_id, error = %e, "failed to set ai-chat status to processing");
-            self.inner.turn_tokens.lock().await.remove(&node_id);
-            return;
-        }
-
         // Load history from node.
         let history = load_node_history(&self.inner.node_service, &node_id).await;
         if history.is_empty() {
