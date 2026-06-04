@@ -12,7 +12,7 @@ set -e
 # ── Constants ──────────────────────────────────────────────────────────────────
 INSTALL_DIR="$HOME/.nodespace/bin"
 LOG_DIR="$HOME/.nodespace/logs"
-DB_PATH="$HOME/.nodespace/database/nodespace"
+DB_PATH="$HOME/.nodespace/database/nodespace.db"
 SOCKET_PATH="$HOME/.nodespace/daemon.sock"
 GITHUB_API="https://api.github.com/repos/NodeSpaceAI/nodespace-core/releases/latest"
 GITHUB_DL="https://github.com/NodeSpaceAI/nodespace-core/releases/download"

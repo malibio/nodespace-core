@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 ///
 /// Honors `NODESPACED_DB_PATH` if set so integration tests and alternate
 /// deployments can redirect storage without recompiling; otherwise defaults
-/// to `$HOME/.nodespace/daemon-db`.
+/// to `$HOME/.nodespace/database/nodespace.db`.
 pub fn resolve_db_path() -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("NODESPACED_DB_PATH") {
         return Ok(PathBuf::from(custom));
@@ -26,7 +26,7 @@ pub fn resolve_db_path() -> Result<PathBuf> {
     let home = std::env::var("HOME").context(
         "Cannot determine database path: $HOME is unset and NODESPACED_DB_PATH not provided",
     )?;
-    Ok(PathBuf::from(home).join(".nodespace").join("daemon-db"))
+    Ok(PathBuf::from(home).join(".nodespace").join("database").join("nodespace.db"))
 }
 
 // Re-export proto types from the lightweight nodespace-proto crate so existing
