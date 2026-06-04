@@ -207,7 +207,11 @@ message GetRootsRequest {
 message NodeListResponse {
   repeated NodeData nodes = 1;
   int32 count = 2;
-  string collection_id = 3; // empty string when not filtered by collection
+  // Echoes the collection filter from the request (response-level metadata).
+  // Empty string when the request was not filtered by collection.
+  // Distinct from the per-node NodeData.collection_id fields that were removed:
+  // this is a single filter-echo on the response envelope, not per-node membership data.
+  string collection_id = 3;
 }
 
 // ---------------------------------------------------------------------------

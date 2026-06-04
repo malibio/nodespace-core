@@ -1543,7 +1543,9 @@ mod tests {
             .await
             .unwrap();
 
-        // Both nodes should be in a collection and have lifecycle_status=archived
+        // ops-layer output struct carries collection_id directly (not the wire response,
+        // which no longer exposes per-node collection_id; see NodeData proto).
+        // This assertion tests the ops layer's own return contract, not the wire format.
         assert!(
             ops_output.collection_id.is_some(),
             "ops must populate collection_id"
