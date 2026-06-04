@@ -249,6 +249,7 @@
   onMount(async () => {
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
+    let hydrationSucceeded = false;
     try {
       if (!sharedNodeStore.getNode(nodeId)) {
         try {
@@ -258,11 +259,23 @@
               type: 'viewer',
               viewerId: 'ai-chat-viewer-hydration',
             });
+          } else {
+            log.warn('ai-chat node not found in backend', { nodeId });
           }
         } catch (err) {
           log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
         }
       }
+
+      // Only mark ready if the node is actually in the store — interactive
+      // elements (provider select, model picker) call updateNode which silently
+      // drops writes for non-existent nodes.
+      if (!sharedNodeStore.getNode(nodeId)) {
+        log.error('Node still not in store after hydration, staying in loading state', { nodeId });
+        return;
+      }
+
+      hydrationSucceeded = true;
 
       if (node?.content) onTitleChange?.(node.content);
 
@@ -306,7 +319,7 @@
         eventUnlisteners.push(unlistenError);
       }
     } finally {
-      nodeReady = true;
+      if (hydrationSucceeded) nodeReady = true;
     }
   });
 
@@ -336,6 +349,14 @@
   // Update title when node content changes.
   $effect(() => {
     if (node?.content) onTitleChange?.(node.content);
+  });
+
+  // If onMount couldn't mark nodeReady (node wasn't in store yet), watch for the
+  // node to arrive via WatchNodes and complete setup reactively — no tab reopen needed.
+  $effect(() => {
+    if (!nodeReady && node) {
+      nodeReady = true;
+    }
   });
 </script>
 
@@ -395,12 +416,15 @@
       {nodeId}
       provider={provider as 'native' | 'ollama'}
       onSelect={(modelId) => {
-        const current = node ?? sharedNodeStore.getNode(nodeId);
+        // Always read the latest in-memory state — `selectProvider` may have
+        // written to the store moments before this fires and `node` ($derived)
+        // may not have re-evaluated yet in this non-reactive callback context.
+        const current = sharedNodeStore.getNode(nodeId);
         if (!current) return;
         const existingNs = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
         sharedNodeStore.updateNode(
           nodeId,
-          { properties: { ...current.properties, 'ai-chat': { ...existingNs, provider, model: modelId, status: 'active' } } },
+          { properties: { ...current.properties, 'ai-chat': { ...existingNs, provider: provider ?? 'native', model: modelId, status: 'active' } } },
           { type: 'viewer', viewerId: 'ai-chat-viewer' }
         );
       }}
