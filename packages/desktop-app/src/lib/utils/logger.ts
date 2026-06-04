@@ -47,9 +47,16 @@ const isProd =
   (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production');
 
 // Default log level based on environment
-// Production: only show warnings and errors (clean console)
-// Development: show all logs including debug
-const DEFAULT_LEVEL: LogLevel = isProd ? 'warn' : 'debug';
+// Production: only warn/error
+// Development: warn/error by default; set localStorage.debug='*' to enable debug
+const _storedLevel =
+  typeof localStorage !== 'undefined' ? localStorage.getItem('nodespace:logLevel') : null;
+const DEFAULT_LEVEL: LogLevel = isProd
+  ? 'warn'
+  : (_storedLevel as LogLevel | null) ??
+    (typeof localStorage !== 'undefined' && localStorage.getItem('nodespace:debug')
+      ? 'debug'
+      : 'warn');
 
 /**
  * Logger class with environment-aware configuration.

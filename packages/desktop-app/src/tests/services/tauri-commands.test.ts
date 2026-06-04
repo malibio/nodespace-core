@@ -5,7 +5,7 @@
  * Node-CRUD functions were removed; use backend-adapter directly.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as tauriCommands from '$lib/services/tauri-commands';
 
 describe('Tauri System Commands - API Surface', () => {
@@ -56,6 +56,18 @@ describe('Tauri System Commands - API Surface', () => {
   });
 
   describe('Non-Tauri fallbacks (outside desktop)', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([]),
+      }));
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
     it('localAgentStatus returns idle outside Tauri', async () => {
       const result = await tauriCommands.localAgentStatus();
       expect(result).toEqual({ status: 'idle' });
