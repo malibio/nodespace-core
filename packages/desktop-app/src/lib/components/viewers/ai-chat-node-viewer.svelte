@@ -180,11 +180,6 @@
 
     sendError = null;
 
-    if (!isTauri()) {
-      sendError = 'Sending requires the desktop app (daemon not available in the browser).';
-      return;
-    }
-
     // Ensure the model is loaded before the first message.
     try {
       await ensureModelReady(model);
