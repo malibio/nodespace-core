@@ -32,12 +32,12 @@
   import type { DisplayMessage } from '$lib/components/chat/types';
   import type { StreamingChunk } from '$lib/types/agent-types';
   import { AGENT_EVENTS } from '$lib/types/agent-types';
+  import type { AiChatNode, AiChatProvider } from '$lib/types/ai-chat-node';
   import {
     localAgentCancelTurn,
     ensureModelReady,
     ollamaAvailable,
   } from '$lib/services/tauri-commands';
-  import { backendAdapter } from '$lib/services/backend-adapter';
   import { statusBar } from '$lib/stores/status-bar';
   import { createLogger } from '$lib/utils/logger';
 
@@ -45,7 +45,7 @@
 
   /** Provider modes that render the message UI (ADR-034 modes 2a/2b/2c). */
   const MESSAGE_PROVIDERS = ['native', 'ollama', 'openai'] as const;
-  type Provider = (typeof MESSAGE_PROVIDERS)[number] | 'pty';
+  type Provider = AiChatProvider;
 
   const PROVIDER_OPTIONS: {
     id: Provider;
@@ -78,43 +78,30 @@
   const SOFT_MESSAGE_CAP = 500;
 
   // --- Reactive node lookup ---
-  const node = $derived(sharedNodeStore.getNode(nodeId));
+  const node = $derived(sharedNodeStore.getNode(nodeId) as AiChatNode | undefined);
 
-  function getProp(props: Record<string, unknown> | undefined, key: string): unknown {
-    if (!props) return undefined;
-    const ns = props['ai-chat'] as Record<string, unknown> | undefined;
-    return ns?.[key] ?? props[key];
-  }
-
-  const provider = $derived(getProp(node?.properties, 'provider') as Provider | undefined);
-  const model = $derived((getProp(node?.properties, 'model') as string) ?? '');
+  const provider = $derived(node?.provider);
+  const model = $derived(node?.model ?? '');
   const isMessageProvider = $derived(
     provider !== undefined && (MESSAGE_PROVIDERS as readonly string[]).includes(provider)
   );
-  const lifecycleStatus = $derived((getProp(node?.properties, 'status') as string) ?? 'active');
+  const lifecycleStatus = $derived(node?.lifecycleStatus ?? 'active');
 
   /** True while the daemon is processing an inference turn for this node. */
-  const isProcessing = $derived(
-    (node?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'] === 'processing'
-  );
+  const isProcessing = $derived(node?.status === 'processing');
 
   /** Messages from the persisted node, mapped to DisplayMessage for rendering. */
   const persistedMessages: DisplayMessage[] = $derived.by(() => {
-    const msgs = (node?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+    const msgs = node?.messages;
     if (!Array.isArray(msgs)) return [];
     return msgs
-      .filter((m: Record<string, unknown>) => {
-        const role = m['role'] as string;
-        return role === 'user' || role === 'assistant';
-      })
-      .map((m: Record<string, unknown>, idx: number) => ({
-        id: `persisted-${idx}-${m['timestamp'] ?? idx}`,
-        role: (m['role'] as DisplayMessage['role']) ?? 'user',
-        content: (m['content'] as string) ?? '',
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m, idx) => ({
+        id: `persisted-${idx}-${m.timestamp ?? idx}`,
+        role: m.role as DisplayMessage['role'],
+        content: m.content ?? '',
         toolExecutions: [],
-        timestamp: m['timestamp']
-          ? new Date(m['timestamp'] as string).getTime()
-          : Date.now(),
+        timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
       }));
   });
 
@@ -139,15 +126,9 @@
   /** Persist a provider mode change onto the node. */
   function selectProvider(p: Provider): void {
     if (p === provider) return;
-    const current = sharedNodeStore.getNode(nodeId);
-    const existingProps = current?.properties ?? {};
-    const existingNs = (existingProps['ai-chat'] as Record<string, unknown>) ?? {};
-    const nsWithoutModel = Object.fromEntries(
-      Object.entries(existingNs).filter(([k]) => k !== 'model')
-    );
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: { ...existingProps, 'ai-chat': { ...nsWithoutModel, provider: p } } },
+      { properties: { provider: p } },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
   }
@@ -189,43 +170,38 @@
       return;
     }
 
-    const existingNs = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
-    const existingMessages = Array.isArray(existingNs['messages']) ? existingNs['messages'] : [];
+    const existingMessages = Array.isArray((current as AiChatNode).messages) ? (current as AiChatNode).messages : [];
     const newMessage = {
-      role: 'user',
+      role: 'user' as const,
       content: trimmed,
       timestamp: new Date().toISOString(),
     };
 
-    // Set status:'processing' optimistically so the typing indicator and Stop
-    // button appear immediately — before the daemon's own status write arrives
-    // via WatchNodes (which can take hundreds of ms).
+    // Ensure the model is loaded before writing status:processing to the node.
+    // The daemon starts inference immediately on NodeUpdated, so the model must
+    // be in memory before the write triggers the event.
+    try {
+      await ensureModelReady(model);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
+      sendError = msg;
+      statusBar.error(`Model error: ${msg}`);
+      return;
+    }
+
+    // Set status:'processing' so the typing indicator appears and the daemon
+    // picks up the turn via NodeUpdated. Model is guaranteed loaded above.
     sharedNodeStore.updateNode(
       nodeId,
       {
         properties: {
-          ...current.properties,
-          'ai-chat': {
-            ...existingNs,
-            messages: [...existingMessages, newMessage],
-            status: 'processing',
-          },
+          messages: [...existingMessages, newMessage],
+          status: 'processing',
         },
       },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
-
-    // Ensure the model is loaded (non-blocking — daemon also ensures this before inference).
-    // Only surface errors that aren't transient "not loaded yet" states; the daemon
-    // will load the model itself before running inference regardless.
-    ensureModelReady(model).catch((err) => {
-      const msg =
-        err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
-      if (!msg.toLowerCase().includes('no model loaded') && !msg.toLowerCase().includes('not loaded')) {
-        sendError = msg;
-        statusBar.error(`Model error: ${msg}`);
-      }
-    });
 
     await scrollToBottom();
   }
@@ -248,40 +224,26 @@
 
   // --- Lifecycle ---
 
+  let destroyed = false;
+
   onMount(async () => {
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
     let hydrationSucceeded = false;
     try {
-      // Always re-fetch from DB on mount — don't rely on the store's cached
-      // version. The skip-while-editing guard may have blocked WatchNodes
-      // updates in a previous navigation, leaving the store with a stale
-      // OCC version that causes VERSION_CONFLICT on the next send.
-      try {
-        const fetched = await backendAdapter.getNode(nodeId);
-        if (fetched) {
-          sharedNodeStore.setNode(fetched, {
-            type: 'database',
-            reason: 'hydration',
-          }, true);
-        } else {
-          log.warn('ai-chat node not found in backend', { nodeId });
-        }
-      } catch (err) {
-        log.warn('Failed to hydrate ai-chat node by id', { nodeId, error: String(err) });
-      }
-
-      // Only mark ready if the node is actually in the store — interactive
-      // elements (provider select, model picker) call updateNode which silently
-      // drops writes for non-existent nodes.
+      // ai-chat nodes are always in the store by the time the viewer mounts —
+      // base-node-viewer's loadChildrenForParent puts them there with the current
+      // DB version. A separate re-fetch here would race with WatchNodes updates
+      // and overwrite the store with a stale version, causing OCC conflicts on send.
       if (!sharedNodeStore.getNode(nodeId)) {
-        log.error('Node still not in store after hydration, staying in loading state', { nodeId });
+        log.debug('Node not in store on mount, will become ready via WatchNodes', { nodeId });
         return;
       }
 
       hydrationSucceeded = true;
 
-      if (node?.content) onTitleChange?.(node.content);
+      const currentNode = sharedNodeStore.getNode(nodeId);
+      if (currentNode?.content) onTitleChange?.(currentNode.content);
 
       if (isTauri()) {
         try {
@@ -290,12 +252,15 @@
           log.debug('Ollama availability check failed', { error: String(err) });
         }
 
+        if (destroyed) return;
+
         // Subscribe to streaming token events for this node.
         const { listen } = await import('@tauri-apps/api/event');
 
         const unlistenChunk = await listen<StreamingChunk & { node_id?: string }>(
           AGENT_EVENTS.LOCAL_AGENT_CHUNK,
           (event) => {
+            if (destroyed) return;
             const chunk = event.payload;
             // Filter to only this node's events.
             if (chunk.node_id && chunk.node_id !== nodeId) return;
@@ -304,65 +269,11 @@
               streamingContent += chunk.text ?? '';
               scrollToBottom();
             } else if (chunk.type === 'done') {
-              // Keep streamingContent visible until the persisted assistant message
-              // is confirmed in the store — this prevents a blank flash between
-              // "streaming done" and "WatchNodes delivers the completed node".
-              // The $effect at line ~388 will clear streamingContent once
-              // persistedMessages includes the assistant reply.
-              //
-              // Optimistically set status:idle so the typing indicator and Stop
-              // button disappear immediately.
-              const current = sharedNodeStore.getNode(nodeId);
-              if (current) {
-                const ns = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
-                sharedNodeStore.setNode(
-                  { ...current, properties: { ...current.properties, 'ai-chat': { ...ns, status: 'idle' } } },
-                  { type: 'database', reason: 'domain-event' },
-                  true
-                );
-              }
-              // Fetch the final node state from the DB. The daemon writes the
-              // assistant message after sending the done chunk; poll until the
-              // message count increases, giving up after 3s, then clear buffer.
-              void (async () => {
-                const startMsgs = (sharedNodeStore.getNode(nodeId)?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-                const before = Array.isArray(startMsgs) ? startMsgs.length : 0;
-                let found = false;
-                for (let i = 0; i < 6; i++) {
-                  await new Promise<void>((r) => setTimeout(r, 500));
-                  try {
-                    const fetched = await backendAdapter.getNode(nodeId);
-                    if (fetched) {
-                      const msgs = (fetched.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-                      if (Array.isArray(msgs) && msgs.length > before) {
-                        sharedNodeStore.setNode(fetched, { type: 'database', reason: 'domain-event' }, true);
-                        log.info('done: fetched completed node with assistant message', { nodeId, msgCount: msgs.length });
-                        found = true;
-                        break;
-                      }
-                    }
-                  } catch (e) {
-                    log.warn('done: failed to fetch completed node', { nodeId, error: String(e) });
-                  }
-                }
-                // If WatchNodes never delivered the update and the poll timed out,
-                // clear the streaming buffer so the UI isn't stuck showing stale text.
-                if (!found) {
-                  streamingContent = '';
-                  log.warn('done: poll timed out waiting for assistant message', { nodeId });
-                }
-              })();
+              // Streaming complete. Clear the buffer — WatchNodes will deliver
+              // the persisted assistant message reactively via the broadcast event.
+              streamingContent = '';
             } else if (chunk.type === 'cancelled') {
               streamingContent = '';
-              const current = sharedNodeStore.getNode(nodeId);
-              if (current) {
-                const ns = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
-                sharedNodeStore.setNode(
-                  { ...current, properties: { ...current.properties, 'ai-chat': { ...ns, status: 'idle' } } },
-                  { type: 'database', reason: 'domain-event' },
-                  true
-                );
-              }
             } else if (chunk.type === 'error') {
               sendError = (chunk as unknown as { error_message?: string }).error_message ?? 'Inference error';
               streamingContent = '';
@@ -372,6 +283,7 @@
         eventUnlisteners.push(unlistenChunk);
 
         const unlistenError = await listen<string>(AGENT_EVENTS.LOCAL_AGENT_ERROR, (event) => {
+          if (destroyed) return;
           log.error('Agent error', { error: event.payload });
           sendError = event.payload;
           streamingContent = '';
@@ -384,6 +296,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     cleanupListeners();
   });
 
@@ -391,19 +304,6 @@
   $effect(() => {
     void displayMessages.length;
     scrollToBottom();
-  });
-
-  // Clear streaming buffer when WatchNodes delivers a completed assistant message
-  // (the node now has the message persisted, so the overlay is no longer needed).
-  $effect(() => {
-    if (!isProcessing && streamingContent) {
-      // Check if the last persisted message is from the assistant — means the
-      // daemon wrote the completed message, so we can clear the buffer.
-      const msgs = persistedMessages;
-      if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
-        streamingContent = '';
-      }
-    }
   });
 
   // Update title when node content changes.
@@ -476,15 +376,9 @@
       {nodeId}
       provider={provider as 'native' | 'ollama'}
       onSelect={(modelId) => {
-        // Always read the latest in-memory state — `selectProvider` may have
-        // written to the store moments before this fires and `node` ($derived)
-        // may not have re-evaluated yet in this non-reactive callback context.
-        const current = sharedNodeStore.getNode(nodeId);
-        if (!current) return;
-        const existingNs = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
         sharedNodeStore.updateNode(
           nodeId,
-          { properties: { ...current.properties, 'ai-chat': { ...existingNs, provider: provider ?? 'native', model: modelId, status: 'active' } } },
+          { properties: { provider: provider ?? 'native', model: modelId, status: 'active' } },
           { type: 'viewer', viewerId: 'ai-chat-viewer' }
         );
       }}

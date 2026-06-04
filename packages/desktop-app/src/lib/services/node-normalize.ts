@@ -1,5 +1,6 @@
 import type { Node } from '$lib/types/node';
 import { nodeToTaskNode } from '$lib/types/task-node';
+import { nodeToAiChatNode } from '$lib/types/ai-chat-node';
 
 /**
  * Normalize raw node data from a sync boundary (Tauri domain events or SSE) to the
@@ -12,6 +13,8 @@ export function normalizeNodeData(nodeData: Node): Node {
   if (nodeData.nodeType === 'task') {
     return nodeToTaskNode(nodeData) as unknown as Node;
   }
-  // Add other type-specific conversions here as needed (e.g., SchemaNode)
+  if (nodeData.nodeType === 'ai-chat') {
+    return nodeToAiChatNode(nodeData) as unknown as Node;
+  }
   return nodeData;
 }

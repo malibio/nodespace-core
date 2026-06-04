@@ -234,7 +234,7 @@ describe('TauriSyncListener', () => {
 			});
 		});
 
-		it('should NOT fetch node:updated if node not in store', async () => {
+		it('should fetch node:updated even if node not yet in store', async () => {
 			const testNode = createTestNode('node1');
 			registerMockNode(testNode);
 
@@ -243,9 +243,9 @@ describe('TauriSyncListener', () => {
 
 			emitTauriEvent('node:updated', { id: 'node1' });
 
-			// Should NOT fetch since node is not in store
+			// Should fetch and add to store (daemon may update ai-chat nodes not yet loaded)
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			expect(sharedNodeStore.hasNode('node1')).toBe(false);
+			expect(sharedNodeStore.hasNode('node1')).toBe(true);
 		});
 
 		it('should delete node on node:deleted event', async () => {
