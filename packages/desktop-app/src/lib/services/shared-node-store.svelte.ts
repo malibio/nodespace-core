@@ -166,15 +166,33 @@ class SimplePersistenceCoordinator {
         reject(error instanceof Error ? error : new Error(String(error)));
       } finally {
         this.pendingOperations.delete(nodeId);
-        this.executingOperations.delete(nodeId);
 
-        // Check if there's a queued operation for this node (e.g., DELETE queued during UPDATE)
+        // Check for a queued operation BEFORE clearing executingOperations so
+        // that hasPending() returns true with no gap. A WatchNodes setNode
+        // arriving between "execution done" and "queued op re-scheduled" would
+        // otherwise see hasPending=false and clobber the optimistic store.
         const queued = this.queuedOperations.get(nodeId);
         if (queued) {
           this.queuedOperations.delete(nodeId);
+          // Re-register in pendingOperations immediately so hasPending() stays
+          // true until persist() takes over when the setTimeout fires.
+          const placeholderPromise = Promise.resolve();
+          this.pendingOperations.set(nodeId, {
+            nodeId,
+            operation: queued.operation,
+            resolve: () => {},
+            reject: () => {},
+            promise: placeholderPromise,
+            timeoutId: setTimeout(() => {}, 0),
+          });
           coordLog.debug(
-            `[op#${opId}] executing queued operation for ${shortNodeId} (mode=${queued.options.mode})`
+            `[op#${opId}] queued operation re-registered as pending for ${shortNodeId} (mode=${queued.options.mode})`
           );
+        }
+
+        this.executingOperations.delete(nodeId);
+
+        if (queued) {
           // Execute the queued operation - use setTimeout to avoid stack overflow
           // CRITICAL: Use the QUEUED operation, not the original one
           setTimeout(() => {

@@ -74,6 +74,13 @@ export class PatternState {
   private _plugin = $state<PluginDefinition | null>(null);
 
   /**
+   * Cached plain boolean: whether the plugin's pattern allows reversion.
+   * Stored outside the reactive system to avoid proxy-wrapping of the boolean
+   * value under Svelte 5 / vite-plugin-svelte v6 compiled modules.
+   */
+  private _pluginCanRevert: boolean = false;
+
+  /**
    * Create a new PatternState with explicit creation source
    *
    * @param source - How the node was created
@@ -83,6 +90,7 @@ export class PatternState {
     this._creationSource = source;
     if (plugin) {
       this._plugin = plugin;
+      this._pluginCanRevert = plugin.pattern?.canRevert === true;
     }
   }
 
@@ -117,14 +125,9 @@ export class PatternState {
    * removed from content (cleanContent pattern).
    */
   get canRevert(): boolean {
-    // Plugin-owned pattern behavior determines reversion capability
-    if (this._plugin?.pattern) {
-      const source = this._creationSource;
-      return (source === 'pattern' || source === 'inherited') && this._plugin.pattern.canRevert === true;
-    }
-
-    // No plugin set - cannot revert
-    return false;
+    const source = this._creationSource;
+    if (source !== 'pattern' && source !== 'inherited') return false;
+    return this._pluginCanRevert;
   }
 
   /**
@@ -164,6 +167,7 @@ export class PatternState {
   recordPluginPatternMatch(plugin: PluginDefinition): void {
     this._creationSource = 'pattern';
     this._plugin = plugin;
+    this._pluginCanRevert = plugin.pattern?.canRevert === true;
   }
 
   /**
@@ -200,6 +204,7 @@ export class PatternState {
   resetToUser(): void {
     this._creationSource = 'user';
     this._plugin = null;
+    this._pluginCanRevert = false;
   }
 
   /**
@@ -216,10 +221,12 @@ export class PatternState {
     if (this._creationSource === 'user') {
       this._creationSource = 'pattern';
       this._plugin = plugin;
+      this._pluginCanRevert = plugin.pattern?.canRevert === true;
     }
     // For 'inherited' source, just store the plugin for reversion detection
     else if (this._creationSource === 'inherited') {
       this._plugin = plugin;
+      this._pluginCanRevert = plugin.pattern?.canRevert === true;
     }
   }
 
