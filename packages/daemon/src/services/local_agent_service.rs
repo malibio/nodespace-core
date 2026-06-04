@@ -256,8 +256,10 @@ impl LocalAgentServiceImpl {
             None => return,
         };
 
-        // Already processing — skip.
-        if ai_chat.get("status").and_then(|v| v.as_str()) == Some("processing") {
+        // Only trigger when the frontend has set status: processing, signalling
+        // it wants an inference turn. Any other status (idle, error) is not
+        // actionable here.
+        if ai_chat.get("status").and_then(|v| v.as_str()) != Some("processing") {
             return;
         }
 
