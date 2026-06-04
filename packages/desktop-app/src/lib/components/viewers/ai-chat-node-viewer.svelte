@@ -304,10 +304,11 @@
               streamingContent += chunk.text ?? '';
               scrollToBottom();
             } else if (chunk.type === 'done') {
-              // Clear the streaming buffer and optimistically mark the node idle.
-              // WatchNodes will arrive shortly with the persisted assistant message
-              // and overwrite the store; this just ensures the typing indicator and
-              // Stop button disappear immediately rather than waiting for the event.
+              // Clear the streaming buffer immediately so the typing indicator
+              // and Stop button disappear. Then fetch the completed node from the
+              // DB to ensure the assistant message renders even if WatchNodes
+              // drops the final node:updated event (observed in Tauri: broadcast
+              // channel lag or stream reconnection can lose the event).
               streamingContent = '';
               const current = sharedNodeStore.getNode(nodeId);
               if (current) {
@@ -318,6 +319,29 @@
                   true
                 );
               }
+              // Fetch the final node state from the DB. The daemon writes the
+              // assistant message after sending the done chunk; poll until the
+              // message count increases, giving up after 3s.
+              void (async () => {
+                const startMsgs = (sharedNodeStore.getNode(nodeId)?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+                const before = Array.isArray(startMsgs) ? startMsgs.length : 0;
+                for (let i = 0; i < 6; i++) {
+                  await new Promise<void>((r) => setTimeout(r, 500));
+                  try {
+                    const fetched = await backendAdapter.getNode(nodeId);
+                    if (fetched) {
+                      const msgs = (fetched.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+                      if (Array.isArray(msgs) && msgs.length > before) {
+                        sharedNodeStore.setNode(fetched, { type: 'database', reason: 'domain-event' }, true);
+                        log.info('done: fetched completed node with assistant message', { nodeId, msgCount: msgs.length });
+                        break;
+                      }
+                    }
+                  } catch (e) {
+                    log.warn('done: failed to fetch completed node', { nodeId, error: String(e) });
+                  }
+                }
+              })();
             } else if (chunk.type === 'cancelled') {
               streamingContent = '';
               const current = sharedNodeStore.getNode(nodeId);
