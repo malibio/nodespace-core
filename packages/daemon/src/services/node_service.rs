@@ -90,7 +90,6 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let properties = parse_properties(&req.properties).map_err(properties_error)?;
-        let parent_id_opt = req.parent_id;
 
         use crate::nodespace::create_node_request::Position as CreatePos;
         let position = match req.position {
@@ -104,7 +103,7 @@ impl GrpcNodeService for NodeServiceImpl {
             id: req.id,
             node_type: req.node_type,
             content: req.content,
-            parent_id: parent_id_opt.clone(),
+            parent_id: req.parent_id,
             position,
             properties,
             collection: req.collection,
