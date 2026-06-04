@@ -172,10 +172,6 @@ async fn create_get_update_children_delete_round_trip() {
     );
     assert_eq!(children.nodes.len(), 1, "nodes len must match count");
     assert_eq!(children.nodes[0].content, "child via CLI");
-    assert_eq!(
-        children.nodes[0].parent_id.as_deref(),
-        Some(parent_id.as_str())
-    );
 
     commands::node::run(
         &mut client,

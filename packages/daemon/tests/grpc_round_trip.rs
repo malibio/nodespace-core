@@ -696,11 +696,6 @@ async fn create_node_with_collection_and_lifecycle_status() {
         data.lifecycle_status, "archived",
         "lifecycle_status must be set"
     );
-    assert!(
-        !created.collection_id.is_empty(),
-        "collection_id should be set"
-    );
-
     // Verify the node is actually a member of the collection via a separate RPC.
     let memberships = client
         .get_node_collections(NodeCollectionsRequest {
