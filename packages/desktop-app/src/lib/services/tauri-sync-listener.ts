@@ -67,16 +67,18 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
       if (currentNode?.nodeType === 'ai-chat') {
         const currentMsgs = (currentNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
         const fetchedMsgs = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+        const fetchedStatus = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'];
         const currentCount = Array.isArray(currentMsgs) ? currentMsgs.length : 0;
         const fetchedCount = Array.isArray(fetchedMsgs) ? fetchedMsgs.length : 0;
+        log.info(`${eventType}: ai-chat node fetch complete`, { nodeId, fetchedCount, currentCount, fetchedStatus });
         if (fetchedCount < currentCount) {
-          log.debug(`${eventType}: skipping stale ai-chat snapshot (fetched ${fetchedCount} msgs < current ${currentCount} msgs)`, nodeId);
+          log.warn(`${eventType}: skipping stale ai-chat snapshot (fetched ${fetchedCount} msgs < current ${currentCount} msgs)`, nodeId);
           return;
         }
       }
 
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
-      log.debug(`${eventType}: updated store for node`, nodeId);
+      log.info(`${eventType}: store updated for node`, nodeId);
     } else {
       log.warn(`${eventType}: node not found`, nodeId);
     }
@@ -126,11 +128,13 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<NodeEventData>('node:updated', (event) => {
-      log.debug(`Node updated: ${event.payload.id}`);
-      if (sharedNodeStore.hasNode(event.payload.id)) {
-        fetchAndUpdateNode(event.payload.id, 'node:updated');
+      const nodeId = event.payload.id;
+      const inStore = sharedNodeStore.hasNode(nodeId);
+      log.info(`node:updated received`, { nodeId, inStore });
+      if (inStore) {
+        fetchAndUpdateNode(nodeId, 'node:updated');
       } else {
-        log.debug('Node not in store, skipping fetch:', event.payload.id);
+        log.warn('node:updated: node not in store, skipping fetch', nodeId);
       }
     });
 

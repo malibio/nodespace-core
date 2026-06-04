@@ -1386,6 +1386,11 @@ export class SharedNodeStore {
     // N+1 ahead (after writing the assistant reply), so the next user send
     // hits an OCC conflict. Always accept daemon updates for ai-chat.
     const isAiChatNode = node.nodeType === 'ai-chat';
+    if (isAiChatNode && isDatabaseSource) {
+      const msgs = (node.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
+      const status = (node.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'];
+      log.info(`setNode: accepting ai-chat database update`, { nodeId: node.id, msgCount: Array.isArray(msgs) ? msgs.length : 0, status, hasPending, isFocused });
+    }
     if (isDatabaseSource && existingNode && isActivelyEdited && !isAiChatNode) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +

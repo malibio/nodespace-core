@@ -157,6 +157,21 @@ async fn try_subscribe(app: &AppHandle, grpc: &GrpcClient) -> Result<(), String>
                     },
                 );
             }
+            "cancelled" => {
+                #[derive(Serialize)]
+                struct CancelledChunk<'a> {
+                    #[serde(rename = "type")]
+                    chunk_type: &'a str,
+                    node_id: Option<String>,
+                }
+                let _ = app.emit(
+                    agent_events::LOCAL_AGENT_CHUNK,
+                    &CancelledChunk {
+                        chunk_type: "cancelled",
+                        node_id: chunk.node_id,
+                    },
+                );
+            }
             "error" => {
                 let msg = chunk
                     .error_message

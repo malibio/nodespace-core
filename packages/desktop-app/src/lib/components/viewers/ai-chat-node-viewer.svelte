@@ -304,9 +304,31 @@
               streamingContent += chunk.text ?? '';
               scrollToBottom();
             } else if (chunk.type === 'done') {
-              // Do NOT clear streamingContent here. The $effect below clears it
-              // once WatchNodes delivers the persisted assistant message. Clearing
-              // here races against WatchNodes delivery and causes a visible flash.
+              // Clear the streaming buffer and optimistically mark the node idle.
+              // WatchNodes will arrive shortly with the persisted assistant message
+              // and overwrite the store; this just ensures the typing indicator and
+              // Stop button disappear immediately rather than waiting for the event.
+              streamingContent = '';
+              const current = sharedNodeStore.getNode(nodeId);
+              if (current) {
+                const ns = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
+                sharedNodeStore.setNode(
+                  { ...current, properties: { ...current.properties, 'ai-chat': { ...ns, status: 'idle' } } },
+                  { type: 'database', reason: 'domain-event' },
+                  true
+                );
+              }
+            } else if (chunk.type === 'cancelled') {
+              streamingContent = '';
+              const current = sharedNodeStore.getNode(nodeId);
+              if (current) {
+                const ns = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
+                sharedNodeStore.setNode(
+                  { ...current, properties: { ...current.properties, 'ai-chat': { ...ns, status: 'idle' } } },
+                  { type: 'database', reason: 'domain-event' },
+                  true
+                );
+              }
             } else if (chunk.type === 'error') {
               sendError = (chunk as unknown as { error_message?: string }).error_message ?? 'Inference error';
               streamingContent = '';
