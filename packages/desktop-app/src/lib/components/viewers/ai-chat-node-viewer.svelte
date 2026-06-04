@@ -294,9 +294,9 @@
               streamingContent += chunk.text ?? '';
               scrollToBottom();
             } else if (chunk.type === 'done') {
-              // WatchNodes will deliver the completed assistant message.
-              // Clear the streaming buffer — but wait one tick to avoid flash.
-              tick().then(() => { streamingContent = ''; });
+              // Do NOT clear streamingContent here. The $effect below clears it
+              // once WatchNodes delivers the persisted assistant message. Clearing
+              // here races against WatchNodes delivery and causes a visible flash.
             } else if (chunk.type === 'error') {
               sendError = (chunk as unknown as { error_message?: string }).error_message ?? 'Inference error';
               streamingContent = '';
