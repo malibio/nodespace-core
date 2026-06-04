@@ -26,7 +26,10 @@ pub fn resolve_db_path() -> Result<PathBuf> {
     let home = std::env::var("HOME").context(
         "Cannot determine database path: $HOME is unset and NODESPACED_DB_PATH not provided",
     )?;
-    Ok(PathBuf::from(home).join(".nodespace").join("database").join("nodespace.db"))
+    Ok(PathBuf::from(home)
+        .join(".nodespace")
+        .join("database")
+        .join("nodespace.db"))
 }
 
 // Re-export proto types from the lightweight nodespace-proto crate so existing

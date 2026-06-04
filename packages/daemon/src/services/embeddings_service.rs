@@ -119,7 +119,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         let mut nodes = Vec::with_capacity(search_results.len());
         for result in search_results {
             if let Ok(Some(node)) = store.get_node(&result.node_id).await {
-                nodes.push(node_to_proto(node, None, None));
+                nodes.push(node_to_proto(node));
             }
         }
 

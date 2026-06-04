@@ -63,16 +63,10 @@ pub fn print_node_list(response: &NodeListResponse, json: bool) -> Result<()> {
 fn write_human_node(node: &NodeData) {
     println!("id:              {}", node.id);
     println!("type:            {}", node.node_type);
-    if let Some(parent) = &node.parent_id {
-        println!("parent:          {}", parent);
-    }
     println!("version:         {}", node.version);
     println!("lifecycle:       {}", node.lifecycle_status);
     println!("created_at:      {}", node.created_at);
     println!("modified_at:     {}", node.modified_at);
-    if !node.collection_id.is_empty() {
-        println!("collection_id:   {}", node.collection_id);
-    }
     if !node.properties.is_empty() && node.properties != "{}" {
         println!("properties:      {}", node.properties);
     }
@@ -99,13 +93,11 @@ pub(crate) fn node_to_json(node: &NodeData) -> serde_json::Value {
         "id": node.id,
         "node_type": node.node_type,
         "content": node.content,
-        "parent_id": node.parent_id,
         "properties": properties,
         "version": node.version,
         "lifecycle_status": node.lifecycle_status,
         "created_at": node.created_at,
         "modified_at": node.modified_at,
-        "collection_id": node.collection_id,
     })
 }
 
@@ -118,13 +110,11 @@ mod tests {
             id: "abc-123".into(),
             node_type: "text".into(),
             content: "hello".into(),
-            parent_id: Some("parent-id".into()),
             properties: r#"{"foo":"bar","n":42}"#.into(),
             version: 7,
             lifecycle_status: "active".into(),
             created_at: "2026-05-17T12:00:00Z".into(),
             modified_at: "2026-05-17T12:00:01Z".into(),
-            collection_id: "hr:policy".into(),
         }
     }
 
@@ -138,8 +128,6 @@ mod tests {
         assert_eq!(json["properties"]["n"], 42);
         assert_eq!(json["id"], "abc-123");
         assert_eq!(json["version"], 7);
-        assert_eq!(json["parent_id"], "parent-id");
-        assert_eq!(json["collection_id"], "hr:policy");
     }
 
     #[test]

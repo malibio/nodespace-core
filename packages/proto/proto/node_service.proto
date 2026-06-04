@@ -77,13 +77,14 @@ service NodeService {
 // ---------------------------------------------------------------------------
 
 // NodeData is the canonical wire representation of a node.
+// Hierarchy (parent_id) and collection membership (collection_id) are
+// relationship-derived; query via GetChildren / GetNodeCollections.
 message NodeData {
   string id = 1;
   string node_type = 2;
   string content = 3;
-  // parent_id is unset for root nodes. Use optional so callers can
-  // distinguish "no parent" (root) from an empty-string parent_id.
-  optional string parent_id = 4;
+  reserved 4, 10;
+  reserved "parent_id", "collection_id";
   // properties is a JSON-encoded object matching the serde_json::Value shape
   // used by the ops layer. We encode as a string rather than google.protobuf.Struct
   // to avoid the well-known-types dependency and because schema validation
@@ -93,7 +94,6 @@ message NodeData {
   string lifecycle_status = 7; // "active" | "archived" | "deleted"
   string created_at = 8;       // RFC 3339 timestamp
   string modified_at = 9;      // RFC 3339 timestamp
-  string collection_id = 10;   // empty string when not in a collection
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +132,8 @@ message CreateNodeRequest {
 message NodeResponse {
   string node_id = 1;
   string node_type = 2;
-  string parent_id = 3;
-  string collection_id = 4;
+  reserved 3, 4;
+  reserved "parent_id", "collection_id";
   NodeData node_data = 5;
 }
 
@@ -207,7 +207,11 @@ message GetRootsRequest {
 message NodeListResponse {
   repeated NodeData nodes = 1;
   int32 count = 2;
-  string collection_id = 3; // empty string when not filtered by collection
+  // Echoes the collection filter from the request (response-level metadata).
+  // Empty string when the request was not filtered by collection.
+  // Distinct from the per-node NodeData.collection_id fields that were removed:
+  // this is a single filter-echo on the response envelope, not per-node membership data.
+  string collection_id = 3;
 }
 
 // ---------------------------------------------------------------------------
