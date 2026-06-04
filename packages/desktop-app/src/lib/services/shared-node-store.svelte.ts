@@ -1379,7 +1379,14 @@ export class SharedNodeStore {
     // With || having lower precedence than &&, `|| hasPending` would fire the
     // guard for any pending node regardless of source type.
     const isActivelyEdited = isFocused || hasPending;
-    if (isDatabaseSource && existingNode && isActivelyEdited) {
+    // ai-chat nodes are never "typed into" — the messages array is written
+    // programmatically via updateNode, and the daemon appends assistant
+    // replies autonomously. Skipping daemon broadcasts here causes version
+    // drift: the store stays at the user-send version while the daemon is
+    // N+1 ahead (after writing the assistant reply), so the next user send
+    // hits an OCC conflict. Always accept daemon updates for ai-chat.
+    const isAiChatNode = node.nodeType === 'ai-chat';
+    if (isDatabaseSource && existingNode && isActivelyEdited && !isAiChatNode) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +
           `(focused=${isFocused}, pending=${hasPending})`
