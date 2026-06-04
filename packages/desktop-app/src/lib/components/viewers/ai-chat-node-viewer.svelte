@@ -304,12 +304,14 @@
               streamingContent += chunk.text ?? '';
               scrollToBottom();
             } else if (chunk.type === 'done') {
-              // Clear the streaming buffer immediately so the typing indicator
-              // and Stop button disappear. Then fetch the completed node from the
-              // DB to ensure the assistant message renders even if WatchNodes
-              // drops the final node:updated event (observed in Tauri: broadcast
-              // channel lag or stream reconnection can lose the event).
-              streamingContent = '';
+              // Keep streamingContent visible until the persisted assistant message
+              // is confirmed in the store — this prevents a blank flash between
+              // "streaming done" and "WatchNodes delivers the completed node".
+              // The $effect at line ~388 will clear streamingContent once
+              // persistedMessages includes the assistant reply.
+              //
+              // Optimistically set status:idle so the typing indicator and Stop
+              // button disappear immediately.
               const current = sharedNodeStore.getNode(nodeId);
               if (current) {
                 const ns = (current.properties?.['ai-chat'] as Record<string, unknown>) ?? {};
@@ -321,10 +323,11 @@
               }
               // Fetch the final node state from the DB. The daemon writes the
               // assistant message after sending the done chunk; poll until the
-              // message count increases, giving up after 3s.
+              // message count increases, giving up after 3s, then clear buffer.
               void (async () => {
                 const startMsgs = (sharedNodeStore.getNode(nodeId)?.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
                 const before = Array.isArray(startMsgs) ? startMsgs.length : 0;
+                let found = false;
                 for (let i = 0; i < 6; i++) {
                   await new Promise<void>((r) => setTimeout(r, 500));
                   try {
@@ -334,12 +337,19 @@
                       if (Array.isArray(msgs) && msgs.length > before) {
                         sharedNodeStore.setNode(fetched, { type: 'database', reason: 'domain-event' }, true);
                         log.info('done: fetched completed node with assistant message', { nodeId, msgCount: msgs.length });
+                        found = true;
                         break;
                       }
                     }
                   } catch (e) {
                     log.warn('done: failed to fetch completed node', { nodeId, error: String(e) });
                   }
+                }
+                // If WatchNodes never delivered the update and the poll timed out,
+                // clear the streaming buffer so the UI isn't stuck showing stale text.
+                if (!found) {
+                  streamingContent = '';
+                  log.warn('done: poll timed out waiting for assistant message', { nodeId });
                 }
               })();
             } else if (chunk.type === 'cancelled') {
