@@ -54,13 +54,19 @@ export interface StreamingError {
 	readonly message: string;
 }
 
+/** The inference turn was cancelled by the user. */
+export interface StreamingCancelled {
+	readonly type: 'cancelled';
+}
+
 /** A single chunk emitted during streaming inference. */
 export type StreamingChunk =
 	| StreamingToken
 	| StreamingToolCallStart
 	| StreamingToolCallArgs
 	| StreamingDone
-	| StreamingError;
+	| StreamingError
+	| StreamingCancelled;
 
 /** Model is known but not yet downloaded. */
 export interface ModelStatusNotDownloaded {
