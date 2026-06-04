@@ -180,18 +180,9 @@
 
     sendError = null;
 
-    // Ensure the model is loaded before the first message.
-    try {
-      await ensureModelReady(model);
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
-      sendError = msg;
-      statusBar.error(`Model error: ${msg}`);
-      return;
-    }
-
-    // Append user message to node — daemon will react and start inference.
+    // Append the user message immediately (synchronous, before any await) so the
+    // optimistic store update fires while still in a Svelte reactive context.
+    // The daemon handles model loading internally before starting inference.
     const current = sharedNodeStore.getNode(nodeId);
     if (!current) {
       sendError = 'Node not found';
@@ -219,6 +210,14 @@
       },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
+
+    // Ensure the model is loaded (non-blocking — daemon also ensures this before inference).
+    ensureModelReady(model).catch((err) => {
+      const msg =
+        err instanceof Error ? err.message : ((err as Record<string, unknown>)?.message as string) ?? String(err);
+      sendError = msg;
+      statusBar.error(`Model error: ${msg}`);
+    });
 
     await scrollToBottom();
   }

@@ -472,9 +472,12 @@ interface ActiveBatch {
 export class SharedNodeStore {
   private static instance: SharedNodeStore | null = null;
 
-  // Core state - using Svelte 5 $state for automatic reactivity.
-  // Key-specific .get() accesses inside $derived are tracked by Svelte's reactive Map proxy.
-  nodes = $state(new Map<string, Node>());
+  // Core node storage. Map mutations (set/delete) are NOT intercepted by Svelte's reactive
+  // proxy (Map.prototype !== object_prototype, so proxy() returns it unwrapped). We use a
+  // separate $state version counter that increments on every mutation; getNode() reads it to
+  // register a reactive dependency, so $derived consumers re-run on any store change.
+  nodes = new Map<string, Node>();
+  private nodesVersion = $state(0);
 
   // Track which nodes have been persisted to database
   // Avoids querying database on every update to check existence
@@ -735,10 +738,31 @@ export class SharedNodeStore {
   // Core Node Operations
   // ========================================================================
 
+  /** Set a node and bump the reactive version counter so $derived consumers re-run. */
+  private nodesSet(nodeId: string, node: Node): void {
+    this.nodes.set(nodeId, node);
+    this.nodesVersion++;
+  }
+
+  /** Delete a node and bump the reactive version counter. */
+  private nodesDelete(nodeId: string): void {
+    this.nodes.delete(nodeId);
+    this.nodesVersion++;
+  }
+
+  /** Clear all nodes and bump the reactive version counter. */
+  private nodesClear(): void {
+    this.nodes.clear();
+    this.nodesVersion++;
+  }
+
   /**
    * Get a node by ID
    */
   getNode(nodeId: string): Node | undefined {
+    // Read nodesVersion to register a reactive dependency — any nodes.set/delete
+    // increments this, causing $derived consumers to re-run.
+    void this.nodesVersion;
     return this.nodes.get(nodeId);
   }
 
@@ -746,6 +770,7 @@ export class SharedNodeStore {
    * Get all nodes (returns reactive Map)
    */
   getAllNodes(): Map<string, Node> {
+    void this.nodesVersion;
     return this.nodes;
   }
 
@@ -807,6 +832,7 @@ export class SharedNodeStore {
    * Check if a node exists
    */
   hasNode(nodeId: string): boolean {
+    void this.nodesVersion;
     return this.nodes.has(nodeId);
   }
 
@@ -814,6 +840,7 @@ export class SharedNodeStore {
    * Get node count
    */
   getNodeCount(): number {
+    void this.nodesVersion;
     return this.nodes.size;
   }
 
@@ -918,7 +945,7 @@ export class SharedNodeStore {
         modifiedAt: new Date().toISOString()
       };
 
-      this.nodes.set(nodeId, updatedNode);
+      this.nodesSet(nodeId, updatedNode);
       this.versions.set(nodeId, update.version!);
 
       // Track pending update for potential rollback
@@ -1114,7 +1141,7 @@ export class SharedNodeStore {
                       if (updatedNodeFromBackend.title !== undefined) {
                         localNode.title = updatedNodeFromBackend.title;
                       }
-                      this.nodes.set(nodeId, localNode);
+                      this.nodesSet(nodeId, localNode);
                       // Notify subscribers if title changed (e.g. title_template recomputed)
                       if (titleChanged) {
                         this.notifySubscribers(nodeId, localNode, source);
@@ -1180,7 +1207,7 @@ export class SharedNodeStore {
                     const localNode = this.nodes.get(nodeId);
                     if (localNode) {
                       localNode.version = createdNode.version;
-                      this.nodes.set(nodeId, localNode); // Update local node with backend version
+                      this.nodesSet(nodeId, localNode); // Update local node with backend version
                     }
                   }
 
@@ -1232,7 +1259,7 @@ export class SharedNodeStore {
                   const currentNode = occError.conflictData.current_node;
                   if (currentNode) {
                     // Hydrate directly from the authoritative node returned by daemon
-                    this.nodes.set(nodeId, currentNode);
+                    this.nodesSet(nodeId, currentNode);
                     this.versions.set(nodeId, currentNode.version ?? 1);
                     this.persistedNodeIds.add(nodeId);
                     this.pendingUpdates.delete(nodeId);
@@ -1385,7 +1412,7 @@ export class SharedNodeStore {
       return;
     }
 
-    this.nodes.set(node.id, node);
+    this.nodesSet(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
     // A non-guarded setNode means the local store has caught up with the
     // server (either the user blurred, persistence settled, or the node is
@@ -1494,7 +1521,7 @@ export class SharedNodeStore {
                   const latestNode = this.nodes.get(nodeId);
                   if (latestNode && updatedFromBackend) {
                     latestNode.version = updatedFromBackend.version;
-                    this.nodes.set(nodeId, latestNode);
+                    this.nodesSet(nodeId, latestNode);
                   }
                 } catch (updateError) {
                   // If UPDATE fails because node doesn't exist, try CREATE instead
@@ -1566,7 +1593,7 @@ export class SharedNodeStore {
                   const latestLocalNode = this.nodes.get(nodeId);
                   if (latestLocalNode) {
                     latestLocalNode.version = createdNode.version;
-                    this.nodes.set(nodeId, latestLocalNode);
+                    this.nodesSet(nodeId, latestLocalNode);
                   }
                 }
               }
@@ -1654,7 +1681,7 @@ export class SharedNodeStore {
         hasHierarchyChanges = true;
       }
 
-      this.nodes.set(node.id, node);
+      this.nodesSet(node.id, node);
       this.versions.set(node.id, this.getNextVersion(node.id));
 
       // Defer notification - collect for batch
@@ -1706,7 +1733,7 @@ export class SharedNodeStore {
 
     const node = this.nodes.get(nodeId);
     if (node) {
-      this.nodes.delete(nodeId);
+      this.nodesDelete(nodeId);
       this.versions.delete(nodeId);
       this.pendingUpdates.delete(nodeId);
       this.persistedNodeIds.delete(nodeId); // Remove from tracking set
@@ -1824,7 +1851,7 @@ export class SharedNodeStore {
     // Update local node optimistically
     // Cast is safe: existingNode.nodeType === 'task' is verified above
     const updatedNode = { ...existingNode, ...localChanges } as unknown as Node;
-    this.nodes.set(nodeId, updatedNode);
+    this.nodesSet(nodeId, updatedNode);
     this.notifySubscribers(nodeId, updatedNode, source);
 
     // Capture handle to catch cancellation errors
@@ -1860,7 +1887,7 @@ export class SharedNodeStore {
             if (updatedTaskNode.content !== undefined) {
               localNode.content = updatedTaskNode.content;
             }
-            this.nodes.set(nodeId, localNode);
+            this.nodesSet(nodeId, localNode);
           }
         } catch (dbError) {
           const error = dbError instanceof Error ? dbError : new Error(String(dbError));
@@ -1875,7 +1902,7 @@ export class SharedNodeStore {
           this.trackErrorIfTesting(error);
 
           // Rollback the optimistic update
-          this.nodes.set(nodeId, existingNode);
+          this.nodesSet(nodeId, existingNode);
           this.notifySubscribers(nodeId, existingNode, source);
 
           // If this is an OCC error, hydrate from authoritative current_node and notify
@@ -1888,7 +1915,7 @@ export class SharedNodeStore {
 
             const currentNode = occError.conflictData.current_node;
             if (currentNode) {
-              this.nodes.set(nodeId, currentNode);
+              this.nodesSet(nodeId, currentNode);
               this.versions.set(nodeId, currentNode.version ?? 1);
               this.persistedNodeIds.add(nodeId);
               this.pendingUpdates.delete(nodeId);
@@ -1929,7 +1956,7 @@ export class SharedNodeStore {
    * Clear all nodes (for testing)
    */
   clearAll(): void {
-    this.nodes.clear();
+    this.nodesClear();
     this.versions.clear();
     this.pendingUpdates.clear();
     this.persistedNodeIds.clear();
@@ -2338,7 +2365,7 @@ export class SharedNodeStore {
 
       if (serverNode) {
         // Replace in-memory node with server state
-        this.nodes.set(nodeId, serverNode);
+        this.nodesSet(nodeId, serverNode);
 
         // Sync version to match server
         this.versions.set(nodeId, serverNode.version ?? 1);
@@ -2553,7 +2580,7 @@ export class SharedNodeStore {
         if (!mentionedIn.some(ref => ref.id === containerRef.id)) {
           mentionedIn.push(containerRef);
           const updatedTarget = { ...targetNode, mentionedIn };
-          this.nodes.set(targetId, updatedTarget);
+          this.nodesSet(targetId, updatedTarget);
           this.notifySubscribers(targetId, updatedTarget, { type: 'database', reason: 'mention-added' });
           log.debug(`Added ${containerRef.id} to mentionedIn of ${targetId}`);
         }
@@ -2571,7 +2598,7 @@ export class SharedNodeStore {
         // Only update if actually changed
         if (mentionedIn.length !== targetNode.mentionedIn.length) {
           const updatedTarget = { ...targetNode, mentionedIn };
-          this.nodes.set(targetId, updatedTarget);
+          this.nodesSet(targetId, updatedTarget);
           this.notifySubscribers(targetId, updatedTarget, { type: 'database', reason: 'mention-removed' });
           log.debug(`Removed ${containerRef.id} from mentionedIn of ${targetId}`);
         }
@@ -2813,7 +2840,7 @@ export class SharedNodeStore {
     const currentNode = this.nodes.get(nodeId);
     if (currentNode) {
       const updatedNode = { ...currentNode, ...changes };
-      this.nodes.set(nodeId, updatedNode);
+      this.nodesSet(nodeId, updatedNode);
 
       // Notify subscribers of optimistic update
       this.notifySubscribers(nodeId, updatedNode, { type: 'viewer', viewerId: 'batch' });
@@ -3008,7 +3035,7 @@ export class SharedNodeStore {
             const localNode = this.nodes.get(nodeId);
             if (localNode && updatedNodeFromBackend) {
               localNode.version = updatedNodeFromBackend.version;
-              this.nodes.set(nodeId, localNode);
+              this.nodesSet(nodeId, localNode);
             }
           } else {
             // Try CREATE, but handle race condition where old path persisted first
@@ -3035,7 +3062,7 @@ export class SharedNodeStore {
                 const latestLocalNode = this.nodes.get(nodeId);
                 if (latestLocalNode) {
                   latestLocalNode.version = createdNode.version;
-                  this.nodes.set(nodeId, latestLocalNode);
+                  this.nodesSet(nodeId, latestLocalNode);
                 }
               }
             } catch (createError) {
@@ -3066,7 +3093,7 @@ export class SharedNodeStore {
                 const localNode = this.nodes.get(nodeId);
                 if (localNode && updatedNodeFromBackend) {
                   localNode.version = updatedNodeFromBackend.version;
-                  this.nodes.set(nodeId, localNode);
+                  this.nodesSet(nodeId, localNode);
                 }
               } else {
                 throw createError;
@@ -3137,8 +3164,9 @@ export class SharedNodeStore {
     // Clear current nodes and restore from snapshot
     this.nodes.clear();
     for (const [nodeId, node] of snapshotMap) {
-      this.nodes.set(nodeId, node);
+      this.nodes.set(nodeId, node);  // use direct Map.set — nodesClear below bumps version
     }
+    this.nodesVersion++;
 
     // Notify all subscribers about the restore
     this.notifyAllSubscribers();
@@ -3210,7 +3238,7 @@ export class SharedNodeStore {
    * @internal
    */
   __resetForTesting(): void {
-    this.nodes.clear();
+    this.nodesClear();
     this.persistedNodeIds.clear();
     this.subscriptions.clear();
     this.wildcardSubscriptions.clear();
