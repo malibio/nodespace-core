@@ -90,6 +90,18 @@ function agentCall<TReq, TRes>(method: Function, request: TReq): Promise<TRes> {
   });
 }
 
+// Consume a server-streaming gRPC call, resolving when stream ends.
+// Rejects on error events; resolves with all collected events on stream end.
+function agentStream<TReq, TEvent>(method: Function, request: TReq): Promise<TEvent[]> {
+  return new Promise((resolve, reject) => {
+    const stream = method.call(agentClient, request) as grpc.ClientReadableStream<TEvent>;
+    const events: TEvent[] = [];
+    stream.on('data', (evt: TEvent) => events.push(evt));
+    stream.on('error', (err: grpc.ServiceError) => reject(err));
+    stream.on('end', () => resolve(events));
+  });
+}
+
 // ============================================================================
 // SSE broadcast
 // ============================================================================
@@ -703,7 +715,7 @@ async function handleRequest(req: Request): Promise<Response> {
   if (method === 'POST' && modelDownloadMatch) {
     const modelId = decodeURIComponent(modelDownloadMatch[1]);
     try {
-      await agentCall(
+      await agentStream(
         (agentClient as unknown as Record<string, Function>).downloadModel,
         { modelId }
       );
@@ -815,7 +827,7 @@ async function handleRequest(req: Request): Promise<Response> {
   if (method === 'POST' && pathname === '/api/agent/ensure-model-ready') {
     try {
       const body = await req.json() as { modelId: string };
-      await agentCall(
+      await agentStream(
         (agentClient as unknown as Record<string, Function>).ensureModelReady,
         { modelId: body.modelId }
       );
