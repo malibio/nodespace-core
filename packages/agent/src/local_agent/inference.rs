@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nodespace_nlp_engine::chat::{ChatChunk, ChatConfig, ChatEngine, ChatMessageInput, ToolSpec};
+use nodespace_nlp_engine::chat::{
+    ChatChunk, ChatConfig, ChatEngine, ChatMessageInput, ToolCallInput, ToolSpec,
+};
 
 use crate::agent_types::{
     ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
@@ -75,6 +77,15 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
                 },
                 content: m.content.clone(),
                 call_id: m.tool_call_id.clone(),
+                tool_calls: m
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCallInput {
+                        id: tc.id.clone(),
+                        name: tc.function_name.clone(),
+                        arguments: tc.arguments_json.clone(),
+                    })
+                    .collect(),
             })
             .collect();
 

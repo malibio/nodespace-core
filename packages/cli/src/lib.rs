@@ -9,7 +9,9 @@ pub mod terminal;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nodespace_daemon::{AgentSessionServiceClient, ImportServiceClient, NodeServiceClient};
+use nodespace_daemon::{
+    AgentSessionServiceClient, ImportServiceClient, LocalAgentServiceClient, NodeServiceClient,
+};
 use tonic::transport::Channel;
 
 #[derive(Parser, Debug)]
@@ -41,6 +43,11 @@ pub enum Command {
     Node {
         #[command(subcommand)]
         action: commands::node::NodeAction,
+    },
+    /// Manage the local inference model (list, load, recommended).
+    Model {
+        #[command(subcommand)]
+        action: commands::model::ModelAction,
     },
     /// Semantic search across the knowledge graph.
     Search(commands::search::SearchArgs),
@@ -149,6 +156,23 @@ pub async fn connect_session(sock: &std::path::Path) -> Result<AgentSessionServi
         })
 }
 
+/// Connect a LocalAgentServiceClient to the daemon.
+#[cfg(unix)]
+pub async fn connect_local_agent(
+    sock: &std::path::Path,
+) -> Result<LocalAgentServiceClient<Channel>> {
+    uds_channel(sock)
+        .await
+        .map(LocalAgentServiceClient::new)
+        .with_context(|| {
+            format!(
+                "Could not connect to nodespaced at {}.\n\
+                 Is the daemon running? Start it with `nodespaced` in another terminal.",
+                sock.display()
+            )
+        })
+}
+
 /// Top-level dispatch — wired by `main.rs` and reused by integration tests.
 #[cfg(unix)]
 pub async fn run(cli: Cli) -> Result<()> {
@@ -159,6 +183,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Node { action } => {
             let mut client = connect(&sock).await?;
             commands::node::run(&mut client, action, json).await
+        }
+        Command::Model { action } => {
+            let mut client = connect_local_agent(&sock).await?;
+            commands::model::run(&mut client, action, json).await
         }
         Command::Search(args) => {
             let mut client = connect(&sock).await?;

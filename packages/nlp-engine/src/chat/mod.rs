@@ -23,7 +23,9 @@ pub mod types;
 
 pub use error::{ChatError, Result};
 pub use parser::{parse_tool_calls, ParseResult, ParsedToolCall, StreamingToolCallParser};
-pub use types::{ChatChunk, ChatConfig, ChatMessageInput, ChatUsage, LoadedModelInfo, ToolSpec};
+pub use types::{
+    ChatChunk, ChatConfig, ChatMessageInput, ChatUsage, LoadedModelInfo, ToolCallInput, ToolSpec,
+};
 
 #[cfg(feature = "chat-service")]
 use crate::embedding::{get_or_init_backend, register_atexit_handler};
@@ -379,7 +381,16 @@ impl ChatEngine {
             .map_err(|e| ChatError::InferenceError(format!("Prompt decode failed: {}", e)))?;
 
         // --- Sampling setup ---
+        // A repetition penalty runs first so it reshapes the logits before the
+        // temperature softens them. Without it, small models at near-greedy
+        // temperature (0.1) fall into degenerate loops — repeating a closing
+        // phrase like "I'm ready to help you. What would you like to do next?"
+        // until they exhaust max_tokens (a ~100s hang that never emits the
+        // <end_of_turn> stop token). penalty_last_n=256 covers the recent
+        // window; repeat=1.3 is firm enough to escape a loop without distorting
+        // normal prose. Frequency/presence penalties stay disabled (0.0).
         let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(256, 1.3, 0.0, 0.0),
             LlamaSampler::temp(temperature),
             LlamaSampler::dist(0), // seed=0 for deterministic given temperature
         ]);
@@ -538,12 +549,66 @@ fn strip_gemma_special_tokens(s: &str) -> String {
         "<|turn>",
         "<end_of_turn>",
         "<start_of_turn>",
+        "<|channel>",
+        "<channel|>",
     ];
     let mut out = s.to_string();
     for token in SPECIAL {
         out = out.replace(token, "");
     }
     out
+}
+
+/// Convert one `ChatMessageInput` into an OpenAI-format message value for the
+/// Jinja chat template.
+///
+/// Pure and model-independent so it can be unit-tested without a loaded model.
+/// Two shapings here are load-bearing for the Gemma 4 template — emitting the
+/// wrong shape makes `apply_chat_template` fail with llama.cpp `ffi error -3`,
+/// aborting the whole turn:
+/// - A tool-call assistant turn carries `content: null` (OpenAI convention)
+///   when it has no text, never `""`.
+/// - Each tool call's `arguments` must be a valid JSON *object* string; any
+///   non-object (empty, malformed) is normalized to `"{}"`.
+fn chat_message_to_oai_value(msg: &ChatMessageInput) -> serde_json::Value {
+    if msg.role == "tool" {
+        serde_json::json!({
+            "role": "tool",
+            "tool_call_id": msg.call_id.as_deref().unwrap_or("unknown"),
+            "content": msg.content,
+        })
+    } else if msg.role == "assistant" && !msg.tool_calls.is_empty() {
+        let tool_calls: Vec<serde_json::Value> = msg
+            .tool_calls
+            .iter()
+            .map(|tc| {
+                let arguments = match serde_json::from_str::<serde_json::Value>(&tc.arguments) {
+                    Ok(v) if v.is_object() => tc.arguments.clone(),
+                    _ => "{}".to_string(),
+                };
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": { "name": tc.name, "arguments": arguments }
+                })
+            })
+            .collect();
+        let content: serde_json::Value = if msg.content.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(msg.content.clone())
+        };
+        serde_json::json!({
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+        })
+    } else {
+        serde_json::json!({
+            "role": msg.role,
+            "content": msg.content,
+        })
+    }
 }
 
 /// Parse an OpenAI-compat streaming delta JSON string and emit the appropriate
@@ -642,23 +707,8 @@ impl ChatEngine {
         // Build OpenAI-format messages JSON. Tool-result messages carry
         // `tool_call_id`; the Jinja template handles family-specific wrapping
         // (Mistral [TOOL_RESULTS], Gemma 4 turn format, etc.).
-        let messages_value: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|msg| {
-                if msg.role == "tool" {
-                    serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": msg.call_id.as_deref().unwrap_or("unknown"),
-                        "content": msg.content,
-                    })
-                } else {
-                    serde_json::json!({
-                        "role": msg.role,
-                        "content": msg.content,
-                    })
-                }
-            })
-            .collect();
+        let messages_value: Vec<serde_json::Value> =
+            messages.iter().map(chat_message_to_oai_value).collect();
 
         let messages_json = serde_json::to_string(&messages_value)
             .map_err(|e| ChatError::TemplateError(format!("Message JSON error: {}", e)))?;
@@ -870,5 +920,85 @@ mod tests {
             strip_gemma_special_tokens("text<|unknown|>end"),
             "text<|unknown|>end"
         );
+    }
+
+    fn msg(role: &str, content: &str) -> ChatMessageInput {
+        ChatMessageInput {
+            role: role.to_string(),
+            content: content.to_string(),
+            call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oai_value_plain_message_passes_through() {
+        let v = chat_message_to_oai_value(&msg("user", "hi"));
+        assert_eq!(v["role"], "user");
+        assert_eq!(v["content"], "hi");
+        assert!(v.get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn oai_value_tool_call_turn_empty_content_is_null() {
+        // The load-bearing shape: empty content on a tool-call turn must emit
+        // `null`, not `""` — else Gemma's template fails (ffi error -3).
+        let mut m = msg("assistant", "");
+        m.tool_calls = vec![ToolCallInput {
+            id: "tc_1".into(),
+            name: "search_nodes".into(),
+            arguments: r#"{"query":"x"}"#.into(),
+        }];
+        let v = chat_message_to_oai_value(&m);
+        assert!(
+            v["content"].is_null(),
+            "empty content must serialize to null"
+        );
+        assert_eq!(v["tool_calls"][0]["function"]["name"], "search_nodes");
+        assert_eq!(
+            v["tool_calls"][0]["function"]["arguments"],
+            r#"{"query":"x"}"#
+        );
+    }
+
+    #[test]
+    fn oai_value_tool_call_turn_keeps_real_content() {
+        let mut m = msg("assistant", "Let me check.");
+        m.tool_calls = vec![ToolCallInput {
+            id: "tc_1".into(),
+            name: "get_node".into(),
+            arguments: r#"{"id":"abc"}"#.into(),
+        }];
+        let v = chat_message_to_oai_value(&m);
+        assert_eq!(v["content"], "Let me check.");
+    }
+
+    #[test]
+    fn oai_value_normalizes_non_object_arguments_to_empty_object() {
+        // Empty / malformed / non-object arguments are normalized to "{}" so the
+        // template never receives invalid JSON.
+        for bad in ["", "not json", "[1,2]", "\"str\"", "42"] {
+            let mut m = msg("assistant", "");
+            m.tool_calls = vec![ToolCallInput {
+                id: "tc_1".into(),
+                name: "create_schema".into(),
+                arguments: bad.into(),
+            }];
+            let v = chat_message_to_oai_value(&m);
+            assert_eq!(
+                v["tool_calls"][0]["function"]["arguments"], "{}",
+                "non-object arguments {bad:?} should normalize to {{}}"
+            );
+        }
+    }
+
+    #[test]
+    fn oai_value_tool_result_carries_call_id() {
+        let mut m = msg("tool", "result text");
+        m.call_id = Some("tc_1".into());
+        let v = chat_message_to_oai_value(&m);
+        assert_eq!(v["role"], "tool");
+        assert_eq!(v["tool_call_id"], "tc_1");
+        assert_eq!(v["content"], "result text");
     }
 }

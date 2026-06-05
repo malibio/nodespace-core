@@ -146,12 +146,10 @@ async fn test_ollama_inference_generate() {
 
     let engine = OllamaInferenceEngine::new(model_name.clone());
     let request = InferenceRequest {
-        messages: vec![ChatMessage {
-            role: Role::User,
-            content: "Reply with exactly the word 'pong'. No other text.".to_string(),
-            tool_call_id: None,
-            name: None,
-        }],
+        messages: vec![ChatMessage::text(
+            Role::User,
+            "Reply with exactly the word 'pong'. No other text.",
+        )],
         tools: None,
         temperature: Some(0.0),
         max_tokens: Some(10),
@@ -211,12 +209,10 @@ async fn test_ollama_inference_with_tools() {
     };
 
     let request = InferenceRequest {
-        messages: vec![ChatMessage {
-            role: Role::User,
-            content: "What's the weather in London?".to_string(),
-            tool_call_id: None,
-            name: None,
-        }],
+        messages: vec![ChatMessage::text(
+            Role::User,
+            "What's the weather in London?",
+        )],
         tools: Some(vec![tool]),
         temperature: Some(0.0),
         max_tokens: Some(100),
@@ -489,18 +485,8 @@ async fn run_skill_inference(
 
     let request = InferenceRequest {
         messages: vec![
-            ChatMessage {
-                role: Role::System,
-                content: system,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: Role::User,
-                content: user_message.to_string(),
-                tool_call_id: None,
-                name: None,
-            },
+            ChatMessage::text(Role::System, system),
+            ChatMessage::text(Role::User, user_message.to_string()),
         ],
         tools: Some(tools),
         temperature: Some(0.0),

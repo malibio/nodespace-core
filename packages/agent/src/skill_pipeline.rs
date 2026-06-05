@@ -40,7 +40,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
 
 When answering questions about stored knowledge:
 
-SEARCH FIRST: Always call search_semantic with a natural language query. Results are ordered by relevance — the first result is the best match.
+SEARCH FIRST: When the user is looking for information or wants to act on a specific node, call search_semantic with a natural language query. Results are ordered by relevance — the first result is the best match. Skip search for conversational messages or capability questions.
 
 RESULT STRUCTURE: Each result contains:
 - id: node ID (use this for follow-up get_node calls)
@@ -98,6 +98,8 @@ LISTING BY TYPE OR PROPERTY: To list all nodes of a type or filtered by a proper
             markdown_content: r#"# Schema Creation Guidance
 
 When creating a schema:
+
+ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "Invoice", do not also create "Customer" or "Product"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.
 
 FIELDS: Only define type-specific fields. Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field. EXCEPTION: if you use a 'name' placeholder in title_template (e.g. "{name} ({status})"), you MUST define 'name' as a text field so title generation works. A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
 

@@ -138,9 +138,15 @@ impl LocalAgentServiceImpl {
     }
 
     async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
+        // Wire the embedding service into the tool executor so the agent can run
+        // search_semantic and so select_tools can skill-route (both need
+        // embeddings). It's populated in the background after model load; if it
+        // isn't ready yet the executor degrades to None and skill routing falls
+        // back to the full tool list until the next engine swap.
+        let embedding_service = self.inner.embedding_service.read().await.clone();
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(self.inner.node_service.clone()),
-            embedding_service: None,
+            embedding_service,
         });
 
         let prompt_assembler = Some(Arc::new(
@@ -1147,12 +1153,7 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
                 _ => return None,
             };
             let content = m.get("content")?.as_str()?.to_string();
-            Some(ChatMessage {
-                role,
-                content,
-                tool_call_id: None,
-                name: None,
-            })
+            Some(ChatMessage::text(role, content))
         })
         .collect()
 }

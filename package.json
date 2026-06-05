@@ -29,6 +29,7 @@
     "tauri:dev": "bun run dev:tauri",
     "tauri:build": "cd packages/desktop-app && bun run tauri:build",
     "install:all": "bun install",
+    "chat": "bun run scripts/aichat.ts",
     "build:sidecars": "bun run scripts/build-sidecars.ts",
     "download:models": "bun run scripts/download-models.ts",
     "download:models:bundle": "bun run scripts/download-models.ts --bundle",
