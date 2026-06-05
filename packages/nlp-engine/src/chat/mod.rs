@@ -316,12 +316,14 @@ impl ChatEngine {
         // specialized format (e.g. COMMON_CHAT_FORMAT_PEG_GEMMA4=3). When tools are
         // provided this is a routing failure — tool calls will be emitted as plain text
         // and never parsed. Warn so the failure is visible without a debug build.
-        if tmpl_result.chat_format == 0 && tools.as_ref().is_some_and(|t| !t.is_empty()) {
-            tracing::warn!(
-                "chat_format=0 (CONTENT_ONLY) with {} tools — specialized template detection \
-                 may have failed; tool calls will not be parsed",
-                tools.as_ref().map_or(0, |t| t.len()),
-            );
+        if let Some(active_tools) = tools.as_ref().filter(|t| !t.is_empty()) {
+            if tmpl_result.chat_format == 0 {
+                tracing::warn!(
+                    "chat_format=0 (CONTENT_ONLY) with {} tools — specialized template \
+                     detection may have failed; tool calls will not be parsed",
+                    active_tools.len(),
+                );
+            }
         }
         let prompt = &tmpl_result.prompt;
         tracing::debug!(
