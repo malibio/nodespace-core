@@ -1,70 +1,14 @@
 //! Prompt templates for the local agent.
 //!
-//! Contains the fallback system prompt, tool-definition formatter, and history
-//! summarization prompt used by the ReAct loop.
+//! Contains the tool-definition formatter and history summarization prompt used
+//! by the ReAct loop.
 //!
-//! Note: The primary prompt assembly path uses `PromptAssembler` which reads
-//! prompt content exclusively from graph nodes. The `fallback_system_prompt()`
-//! here is only for use when `PromptAssembler` is not available (e.g., the
-//! agent loop has not yet been wired to accept a `PromptAssembler` instance).
+//! The system prompt itself is assembled exclusively by `PromptAssembler` from
+//! graph-seeded prompt nodes; see [`crate::prompt_assembler`]. There is no inline
+//! system-prompt duplication here — the only non-assembler path is the minimal
+//! `EMERGENCY_FALLBACK_PROMPT` safety net in that module.
 
 use crate::agent_types::ToolDefinition;
-
-/// Fallback system prompt for the local agent.
-///
-/// Only used when `PromptAssembler` is not available (e.g., the agent loop
-/// has not yet been wired to accept a `PromptAssembler` instance). The
-/// primary prompt path reads all content from graph nodes via `PromptAssembler`.
-///
-/// The TOOL STRATEGY and RESPONSE RULES blocks below are an abbreviated,
-/// intentional duplication of the canonical rules in [`crate::agent_guidance`].
-/// They are kept inline here so the fallback path stays self-contained until
-/// `PromptAssembler` is wired in everywhere, at which point this function and
-/// its inline rules should be deleted entirely. Do not extend the rules here —
-/// add new guidance to [`crate::agent_guidance`] and let the primary
-/// `PromptAssembler` path pick it up via the seeded graph nodes.
-///
-/// `dynamic_context` is a pre-formatted string describing the workspace's
-/// entity types, collections, and active playbooks (built by
-/// `context_ops::build_workspace_context` + `format_for_prompt`).
-pub fn fallback_system_prompt(dynamic_context: &str) -> String {
-    let ctx_block = if dynamic_context.is_empty() {
-        String::new()
-    } else {
-        format!("\n{dynamic_context}\n")
-    };
-
-    format!(
-        "You are NodeSpace's built-in assistant. You help users work with their \
-         knowledge graph — creating, finding, updating, and connecting nodes.\
-         {ctx_block}\n\
-         TOOL STRATEGY:\n\
-         - To discover whether a registered skill matches the user's intent: call search_skills(query) with a natural-language description of what you want to do. Empty matches mean no skill is related — judge whether to respond directly, ask the user, or proceed with general tools. Skip for purely conversational replies.\n\
-         - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
-         - To find nodes by meaning/topic: use search_semantic (natural language query)\n\
-         - To find nodes by exact fields: use search_nodes (keyword + type filter)\n\
-         - To get full node details: use get_node with the ID from search results\n\
-         - To update a task status: search for the task first, then use update_task_status with the real ID\n\
-         - To create a new entity type: use create_schema (not create_node)\n\
-         - To create an instance of an existing type: use create_node with node_type matching the schema ID\n\
-         - To connect nodes: use create_relationship with relationship names from the schemas above\n\
-         - Tool call arguments must be valid JSON. Do NOT include comments (#) in JSON.\n\n\
-         RESPONSE RULES:\n\
-         - When the user's intent is clear, call the tool immediately — do NOT describe your plan first.\n\
-         - Do NOT narrate what you are about to do (\"I'll now create...\", \"Let me search...\", \"Next I will...\").\n\
-         - Do NOT show intermediate reasoning or self-corrections before a tool call.\n\
-         - After tool results: summarize in natural language. NEVER paste raw JSON as your response.\n\
-         - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
-         - Enum values in tool calls: use exact schema values (\"done\", \"in_progress\"). In responses to user: use friendly labels (\"Done\", \"In Progress\").\n\
-         - When listing nodes: **Title** (nodespace://id) — brief description\n\
-         - When reporting search results: \"Found N nodes...\" then list top results\n\
-         - If tool returns empty results: say so clearly. Do NOT retry the same query.\n\
-         - Keep responses concise — under 3 sentences unless user asks for detail.\n\n\
-         TOOL CALL FORMAT:\n\
-         - Pass arguments flat. Do NOT nest under \"properties\" or \"arguments\".\n\
-         - Use the exact field names shown in the schema definitions above."
-    )
-}
 
 /// Format tool definitions into the text block appended to the system prompt.
 ///
@@ -115,48 +59,6 @@ pub fn format_tool_result(_name: &str, result: &serde_json::Value, is_error: boo
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn fallback_system_prompt_includes_context() {
-        let ctx = "COLLECTIONS: Projects, Clients\n";
-        let prompt = fallback_system_prompt(ctx);
-        assert!(prompt.contains("NodeSpace"));
-        assert!(prompt.contains("COLLECTIONS:"));
-        assert!(prompt.contains("Projects"));
-        assert!(prompt.contains("TOOL STRATEGY:"));
-        assert!(prompt.contains("RESPONSE RULES:"));
-    }
-
-    #[test]
-    fn fallback_system_prompt_empty_context() {
-        let prompt = fallback_system_prompt("");
-        assert!(prompt.contains("NodeSpace"));
-        assert!(prompt.contains("TOOL STRATEGY:"));
-        // No double newlines from empty context
-        assert!(!prompt.contains("\n\n\n\n"));
-    }
-
-    #[test]
-    fn fallback_system_prompt_per_turn_refresh() {
-        // Simulate dynamic context being refreshed per turn (collections + playbooks only)
-        let workspace_context_1 = "COLLECTIONS: Projects, Tasks\n";
-        let prompt_1 = fallback_system_prompt(workspace_context_1);
-
-        assert!(prompt_1.contains("NodeSpace"));
-        assert!(prompt_1.contains("COLLECTIONS:"));
-        assert!(prompt_1.contains("Projects"));
-
-        // Entity type details are no longer injected (#1283)
-        assert!(!prompt_1.contains("ENTITY TYPES:"));
-
-        // Simulate playbooks added and context refreshed
-        let workspace_context_2 =
-            "COLLECTIONS: Projects\n\nACTIVE PLAYBOOKS:\n- \"Sprint Planning\"\n";
-        let prompt_2 = fallback_system_prompt(workspace_context_2);
-
-        assert!(prompt_2.contains("Projects"));
-        assert!(prompt_2.contains("Sprint Planning"));
-    }
 
     #[test]
     fn format_tool_definitions_empty() {
