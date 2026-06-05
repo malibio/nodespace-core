@@ -136,11 +136,43 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     min_memory_gb: 24,
 };
 
+/// Gemma 4 12B -- Google's mid-tier dense model; stronger reasoning than E4B,
+/// viable on 16GB Apple Silicon with Q8_0 KV cache quantization.
+/// Q4_K_M quantization; Q8_0 KV cache cuts 32K KV from ~5GB (F16) to ~2.5GB,
+/// making it fit alongside ~7.4GB weights on a 16GB device.
+const GEMMA_4_12B: CatalogEntry = CatalogEntry {
+    id: "gemma-4-12b-q4km",
+    family: ModelFamily::Gemma4,
+    name: "Gemma 4 12B Instruct Q4_K_M",
+    filename: "gemma-4-12B-it-Q4_K_M.gguf",
+    size_bytes: 7_381_382_048, // ~7.4 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12B-it-Q4_K_M.gguf",
+    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    context_window: 32_768,
+    default_temperature: 0.3,
+    // Q8_0 cuts the 32K KV cache from ~5GB (F16) to ~2.5GB, leaving enough
+    // headroom alongside the ~7.4GB weights on a 16GB device.
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    min_memory_gb: 16,
+};
+
 /// All catalog entries, in preference order.
-const CATALOG: &[&CatalogEntry] = &[&MINISTRAL_3B, &MINISTRAL_8B, &GEMMA_4_E4B, &GEMMA_4_31B];
+const CATALOG: &[&CatalogEntry] = &[
+    &MINISTRAL_3B,
+    &MINISTRAL_8B,
+    &GEMMA_4_E4B,
+    &GEMMA_4_12B,
+    &GEMMA_4_31B,
+];
+
+/// RAM threshold (in bytes) at or above which the mid-tier model (Gemma 4 12B)
+/// is selected instead of the small one (Gemma 4 E4B).
+const RAM_THRESHOLD_MEDIUM: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
 
 /// RAM threshold (in bytes) at or above which the large recommended model
-/// (Gemma 4 31B) is selected instead of the small one (Gemma 4 E4B).
+/// (Gemma 4 31B) is selected instead of the mid-tier one (Gemma 4 12B).
 const RAM_THRESHOLD_LARGE: u64 = 32 * 1024 * 1024 * 1024; // 32 GB
 
 // ---------------------------------------------------------------------------
@@ -240,12 +272,14 @@ impl GgufModelManager {
     /// current system's RAM.
     ///
     /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_LARGE`], otherwise 3B.
-    /// - `Gemma4`:    31B at or above [`RAM_THRESHOLD_LARGE`], otherwise E4B.
+    /// - `Gemma4`:    three-tier — 31B at or above [`RAM_THRESHOLD_LARGE`],
+    ///   12B at or above [`RAM_THRESHOLD_MEDIUM`], otherwise E4B.
     /// - `Ollama`:    has no GGUF catalog entries; falls back to the default
     ///   Gemma 4 recommendation.
     pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
         let large = total_ram >= RAM_THRESHOLD_LARGE;
+        let medium = total_ram >= RAM_THRESHOLD_MEDIUM;
         match family {
             ModelFamily::Ministral => {
                 if large {
@@ -257,6 +291,8 @@ impl GgufModelManager {
             ModelFamily::Gemma4 => {
                 if large {
                     GEMMA_4_31B.id
+                } else if medium {
+                    GEMMA_4_12B.id
                 } else {
                     GEMMA_4_E4B.id
                 }
@@ -264,6 +300,8 @@ impl GgufModelManager {
             ModelFamily::Ollama => {
                 if large {
                     GEMMA_4_31B.id
+                } else if medium {
+                    GEMMA_4_12B.id
                 } else {
                     GEMMA_4_E4B.id
                 }
@@ -920,10 +958,11 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 5);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
+        assert!(models.iter().any(|m| m.id == "gemma-4-12b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-31b-q4km"));
     }
 
@@ -1008,7 +1047,7 @@ mod tests {
         let (mgr, _tmp) = test_manager();
         let rec = mgr.recommended_model().await.unwrap();
         assert!(
-            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-31b-q4km",
+            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-12b-q4km" || rec == "gemma-4-31b-q4km",
             "unexpected recommendation: {}",
             rec
         );
@@ -1017,7 +1056,11 @@ mod tests {
     #[test]
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
-        assert!(spec.model_id == "gemma-4-e4b-q4km" || spec.model_id == "gemma-4-31b-q4km");
+        assert!(
+            spec.model_id == "gemma-4-e4b-q4km"
+                || spec.model_id == "gemma-4-12b-q4km"
+                || spec.model_id == "gemma-4-31b-q4km"
+        );
         assert_eq!(spec.family, ModelFamily::Gemma4);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
@@ -1040,6 +1083,19 @@ mod tests {
         assert_eq!(spec.family, ModelFamily::Ministral);
         assert_eq!(spec.context_window, 32_768);
         assert!(spec.type_k.is_none());
+
+        // 12B uses Q8_0 KV compression to fit alongside the ~7.4GB weights on 16GB RAM.
+        let spec = mgr.model_spec_for("gemma-4-12b-q4km").unwrap();
+        assert_eq!(spec.model_id, "gemma-4-12b-q4km");
+        assert_eq!(spec.family, ModelFamily::Gemma4);
+        assert_eq!(
+            spec.type_k,
+            Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0)
+        );
+        assert_eq!(
+            spec.type_v,
+            Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0)
+        );
 
         // 31B uses Q8_0 KV compression to fit alongside the ~19GB weights on 24GB RAM.
         let spec = mgr.model_spec_for("gemma-4-31b-q4km").unwrap();
