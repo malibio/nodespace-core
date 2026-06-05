@@ -128,9 +128,18 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamingChunk {
-    /// A token of generated text.
+    /// A token of generated text (answer content shown to the user).
     Token {
         /// The text content of this token.
+        text: String,
+    },
+    /// A span of the model's internal reasoning (chain-of-thought).
+    ///
+    /// Captured separately from the answer so it can be surfaced in a dedicated
+    /// collapsible UI section rather than inline. Not forwarded to the live UI
+    /// overlay; it is accumulated into the final assistant message.
+    Reasoning {
+        /// The reasoning text content of this span.
         text: String,
     },
     /// The model is starting a tool call.
@@ -285,6 +294,12 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     /// Optional name for tool-role messages (the tool name).
     pub name: Option<String>,
+    /// The model's internal reasoning (chain-of-thought) toward this assistant
+    /// message, captured from channel markers and surfaced in a dedicated
+    /// collapsible UI section. `None` for non-assistant turns or when the model
+    /// produced no reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl ChatMessage {
@@ -296,6 +311,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             tool_call_id: None,
             name: None,
+            reasoning: None,
         }
     }
 
@@ -310,6 +326,7 @@ impl ChatMessage {
             tool_calls,
             tool_call_id: None,
             name: None,
+            reasoning: None,
         }
     }
 
@@ -325,6 +342,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
+            reasoning: None,
         }
     }
 }
@@ -507,6 +525,9 @@ pub struct AgentSession {
 pub struct AgentTurnResult {
     /// The final text response produced by the agent (after all tool calls).
     pub response: String,
+    /// The model's internal reasoning (chain-of-thought) accumulated across all
+    /// ReAct iterations of this turn. `None` when the model produced none.
+    pub reasoning: Option<String>,
     /// Tool calls that were made and executed during this turn.
     pub tool_calls_made: Vec<ToolExecutionRecord>,
     /// Token usage statistics for this turn.

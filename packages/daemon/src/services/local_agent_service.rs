@@ -343,7 +343,14 @@ impl LocalAgentServiceImpl {
             &user_message,
             move |_status: LocalAgentStatus| {},
             move |chunk: StreamingChunk| {
-                if !matches!(chunk, StreamingChunk::Done { .. }) {
+                // `Done` is conveyed via the turn result, not a wire chunk.
+                // `Reasoning` is intentionally not streamed live (it is captured
+                // and surfaced via the persisted message; see issue design):
+                // skip it here so the live answer stream stays clean.
+                if !matches!(
+                    chunk,
+                    StreamingChunk::Done { .. } | StreamingChunk::Reasoning { .. }
+                ) {
                     let mut proto = streaming_chunk_to_proto(chunk);
                     proto.node_id = Some(node_id2.clone());
                     // Ignore send errors — no subscribers connected is fine.
@@ -399,7 +406,9 @@ impl LocalAgentServiceImpl {
                 });
 
                 // Append assistant message; also atomically sets status: idle.
-                let assistant_content = service
+                // Pull both the content and the captured reasoning from the
+                // session's last assistant message, falling back to the turn result.
+                let (assistant_content, assistant_reasoning) = service
                     .get_session(&session_id)
                     .await
                     .and_then(|s| {
@@ -407,12 +416,16 @@ impl LocalAgentServiceImpl {
                             .into_iter()
                             .rev()
                             .find(|m| m.role == Role::Assistant)
-                            .map(|m| m.content)
+                            .map(|m| (m.content, m.reasoning))
                     })
-                    .unwrap_or_else(|| result.response.clone());
+                    .unwrap_or_else(|| (result.response.clone(), result.reasoning.clone()));
 
                 match self
-                    .append_assistant_message(&node_id, &assistant_content)
+                    .append_assistant_message(
+                        &node_id,
+                        &assistant_content,
+                        assistant_reasoning.as_deref(),
+                    )
                     .await
                 {
                     Ok(()) => needs_idle_reset = false,
@@ -548,8 +561,14 @@ impl LocalAgentServiceImpl {
     }
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
-    /// Retries once on version conflict.
-    async fn append_assistant_message(&self, node_id: &str, content: &str) -> Result<(), String> {
+    /// Retries once on version conflict. `reasoning` is the model's captured
+    /// chain-of-thought, persisted alongside the answer when present.
+    async fn append_assistant_message(
+        &self,
+        node_id: &str,
+        content: &str,
+        reasoning: Option<&str>,
+    ) -> Result<(), String> {
         for attempt in 0..2 {
             let node = self
                 .inner
@@ -568,11 +587,16 @@ impl LocalAgentServiceImpl {
             let messages = ai_chat.get_mut("messages").and_then(|v| v.as_array_mut());
 
             let timestamp = chrono::Utc::now().to_rfc3339();
-            let new_msg = serde_json::json!({
+            let mut new_msg = serde_json::json!({
                 "role": "assistant",
                 "content": content,
                 "timestamp": timestamp
             });
+            // Persist reasoning only when the model produced some, keeping the
+            // message shape minimal for plain answers.
+            if let Some(r) = reasoning.filter(|r| !r.trim().is_empty()) {
+                new_msg["reasoning"] = serde_json::Value::String(r.to_string());
+            }
 
             if let Some(msgs) = messages {
                 msgs.push(new_msg);
@@ -1094,6 +1118,15 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
             token_text: Some(text),
             ..Default::default()
         },
+        // Reasoning is not streamed live (filtered out before this function in the
+        // send callback); it reaches the UI via the persisted message. This arm
+        // exists only for exhaustiveness and tags the chunk so any future live
+        // consumer can distinguish/ignore it rather than render it as the answer.
+        StreamingChunk::Reasoning { text } => AgentChunk {
+            chunk_type: "reasoning".to_string(),
+            token_text: Some(text),
+            ..Default::default()
+        },
         StreamingChunk::ToolCallStart { id, name } => AgentChunk {
             chunk_type: "tool_call_start".to_string(),
             tool_call_id: Some(id),
@@ -1153,7 +1186,13 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
                 _ => return None,
             };
             let content = m.get("content")?.as_str()?.to_string();
-            Some(ChatMessage::text(role, content))
+            let mut msg = ChatMessage::text(role, content);
+            // Round-trip any persisted reasoning so reloaded history retains it.
+            msg.reasoning = m
+                .get("reasoning")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(msg)
         })
         .collect()
 }

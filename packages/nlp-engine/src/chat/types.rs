@@ -92,8 +92,15 @@ pub struct ToolSpec {
 /// A chunk emitted during streaming inference.
 #[derive(Debug, Clone)]
 pub enum ChatChunk {
-    /// A generated text token.
+    /// A generated text token (answer content shown to the user).
     Token(String),
+    /// A span of the model's internal reasoning (chain-of-thought).
+    ///
+    /// Emitted for text the model wrapped in channel markers
+    /// (`<|channel> … <channel|>`). Routed to a separate reasoning stream rather
+    /// than the answer, so the answer bubble stays clean while the reasoning can
+    /// be surfaced in a dedicated collapsible UI section.
+    Reasoning(String),
     /// The model is starting a tool call.
     ToolCallStart {
         /// Unique identifier for this tool call.

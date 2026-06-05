@@ -18,4 +18,6 @@ export interface DisplayMessage {
   content: string;
   readonly toolExecutions: ToolExecutionRecord[];
   readonly timestamp: number;
+  /** Model chain-of-thought, rendered as a collapsible section under the answer. */
+  readonly reasoning?: string;
 }

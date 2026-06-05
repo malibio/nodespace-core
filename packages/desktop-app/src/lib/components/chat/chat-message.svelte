@@ -41,6 +41,15 @@
       </div>
     {/if}
 
+    {#if isAssistant && message.reasoning}
+      <details class="reasoning-block">
+        <summary class="reasoning-summary">Reasoning</summary>
+        <div class="reasoning-content">
+          <ChatMarkdown content={message.reasoning} />
+        </div>
+      </details>
+    {/if}
+
     {#if isAssistant && showCopyButton}
       <button
         class="copy-button"
@@ -103,6 +112,42 @@
 
   .user-message .message-content {
     white-space: pre-wrap;
+  }
+
+  .reasoning-block {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid hsl(var(--border));
+    font-size: 0.8125rem;
+  }
+
+  .reasoning-summary {
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    font-weight: 500;
+    user-select: none;
+    list-style: none;
+  }
+
+  .reasoning-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .reasoning-summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 0.375rem;
+    transition: transform 0.15s;
+  }
+
+  .reasoning-block[open] .reasoning-summary::before {
+    transform: rotate(90deg);
+  }
+
+  .reasoning-content {
+    margin-top: 0.375rem;
+    color: hsl(var(--muted-foreground));
+    word-break: break-word;
   }
 
   .copy-button {
