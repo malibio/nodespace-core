@@ -306,6 +306,12 @@ impl ChatEngine {
 
         // --- Apply chat template ---
         let tmpl_result = Self::apply_chat_template(&llama.model, &messages, &tools)?;
+        tracing::info!(
+            "Chat template applied: chat_format={} parse_tool_calls={} additional_stops={:?}",
+            tmpl_result.chat_format,
+            tmpl_result.parse_tool_calls,
+            tmpl_result.additional_stops,
+        );
         let prompt = &tmpl_result.prompt;
         tracing::debug!(
             "Chat prompt ({} chars): {:?}",
