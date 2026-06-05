@@ -46,6 +46,22 @@ impl ChatConfig {
     }
 }
 
+/// A tool call issued by an assistant message, carried back through a re-prompt.
+///
+/// The chat template renders these into the assistant turn (e.g. OpenAI-format
+/// `tool_calls`) so the subsequent `tool` result messages have a matching call
+/// to pair with. Omitting them leaves orphan tool results in the history, which
+/// destabilizes generation on some models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallInput {
+    /// Unique id of this tool call (must match the paired tool result's call_id).
+    pub id: String,
+    /// Name of the invoked tool.
+    pub name: String,
+    /// Raw JSON arguments string as the model emitted them.
+    pub arguments: String,
+}
+
 /// A chat message input for inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessageInput {
@@ -56,6 +72,10 @@ pub struct ChatMessageInput {
     /// For tool-result messages: the call ID that produced this result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
+    /// For assistant messages that issued tool calls: the calls, in order.
+    /// Empty for ordinary messages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallInput>,
 }
 
 /// Specification of a tool the model may invoke.

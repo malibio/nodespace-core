@@ -11,6 +11,54 @@ fn backtick_uri_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"`(nodespace://[^`]+)`").unwrap())
 }
 
+/// Matches Gemma's textual tool-call / tool-response syntax leaking into prose.
+///
+/// When the tool-less final inference still tries to "speak" tool activity, the
+/// model writes it as literal text like
+/// `call:update_schema{...}response:update_schema{...}` instead of emitting a
+/// real tool-call token. These segments are internal plumbing, never something
+/// the user should see, so we delete each `call:`/`response:` keyword plus its
+/// trailing `{...}` argument/result blob.
+fn tool_call_prose_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // `(?s)` so the brace blob may span newlines. The blob is a JSON object that
+    // may nest (e.g. `{value:{success:true}}` or `{rels:[{name:x}]}`); the
+    // `rust regex` crate has no recursion, so we hand-unroll the nesting: an
+    // outer `{…}` whose body is any mix of non-brace text and fully-paired inner
+    // groups that themselves allow one more level — i.e. up to TWO nested levels
+    // (three braces deep total), which spans the shapes these leaks actually
+    // take. A blob deeper than that, or one truncated by the token cap
+    // (unbalanced braces), simply fails to match and is left intact — safer than
+    // greedily eating real trailing prose. Being a DFA, the engine has no
+    // catastrophic-backtracking (ReDoS) risk on pathological input.
+    RE.get_or_init(|| {
+        Regex::new(r"(?s)(?:call|response):[a-z_]+\s*\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}")
+            .unwrap()
+    })
+}
+
+/// Matches Gemma's "channel" reasoning blocks leaking into prose.
+///
+/// Gemma 4 sometimes emits an internal chain-of-thought wrapped in channel
+/// markers, e.g. `<|channel>thought\n…reasoning…<channel|>actual answer`. The
+/// thought between the markers is internal and must never reach the user. We
+/// strip the opening marker plus everything up to and including the closing
+/// `<channel|>` marker, leaving the real answer that follows it.
+fn channel_block_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<\|channel>.*?<channel\|>").unwrap())
+}
+
+/// Matches any stray Gemma channel marker not consumed as a full block.
+///
+/// Covers a dangling `<|channel>` with no closing marker (truncated by the
+/// token cap) or a `<channel|>` with no opener — either way the marker itself
+/// is plumbing and is removed.
+fn stray_channel_marker_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<\|channel>|<channel\|>").unwrap())
+}
+
 /// Normalize LLM response text for consistent formatting.
 ///
 /// Applies post-processing rules to fix common formatting issues
@@ -20,7 +68,9 @@ pub fn normalize_response(text: &str) -> String {
         return String::new();
     }
 
-    let result = fix_markdown_link_uris(text);
+    let result = strip_channel_blocks(text);
+    let result = strip_tool_call_prose(&result);
+    let result = fix_markdown_link_uris(&result);
     let result = fix_backtick_wrapped_uris(&result);
     let result = normalize_snake_case_statuses(&result);
     let result = strip_raw_tool_output_json(&result);
@@ -157,6 +207,40 @@ fn replace_status_outside_special(line: &str, pattern: &str, replacement: &str) 
     }
 
     result
+}
+
+/// Strip leaked Gemma channel/thought reasoning blocks.
+///
+/// First removes complete `<|channel>…<channel|>` spans. If a dangling opener
+/// remains (closing marker lost to the token cap), everything from that opener
+/// onward is internal thought and is dropped. Any stray markers left over are
+/// then removed. See [`channel_block_re`] / [`stray_channel_marker_re`].
+fn strip_channel_blocks(text: &str) -> String {
+    if !text.contains("<|channel>") && !text.contains("<channel|>") {
+        return text.to_string();
+    }
+    let result = channel_block_re().replace_all(text, "").into_owned();
+    // Drop a dangling, never-closed thought block (truncated mid-reasoning).
+    let result = match result.find("<|channel>") {
+        Some(idx) => result[..idx].to_string(),
+        None => result,
+    };
+    stray_channel_marker_re()
+        .replace_all(&result, "")
+        .into_owned()
+}
+
+/// Strip leaked Gemma tool-call/response prose (`call:foo{...}response:foo{...}`).
+///
+/// See [`tool_call_prose_re`]. If stripping these segments leaves nothing but
+/// whitespace, the whole response was tool-call plumbing — return empty so the
+/// caller's "empty response" handling (a synthesized confirmation) kicks in
+/// rather than surfacing a blank bubble.
+fn strip_tool_call_prose(text: &str) -> String {
+    if !text.contains("call:") && !text.contains("response:") {
+        return text.to_string();
+    }
+    tool_call_prose_re().replace_all(text, "").into_owned()
 }
 
 /// Strip raw JSON blocks that look like pasted tool output.
@@ -435,5 +519,51 @@ mod tests {
         let input = "Results:\n{\n  \"count\": 5,\n  \"nodes\": [\n    \"a\"\n  ]\n}\nDone.";
         let result = normalize_response(input);
         assert_eq!(result, "Results:\n\nDone.");
+    }
+
+    #[test]
+    fn strips_leaked_tool_call_prose() {
+        // Gemma's textual tool-call/response syntax must never reach the user.
+        let input = "call:update_schema{add_relationships:[{name:invoices_for}],schema_id:product}response:update_schema{value:{success:true}}";
+        let result = normalize_response(input);
+        assert_eq!(result, "", "leaked tool-call prose should strip to empty");
+    }
+
+    #[test]
+    fn strips_tool_call_prose_keeping_surrounding_text() {
+        let input = "Created the schema. call:create_schema{name:Invoice} All set.";
+        let result = normalize_response(input);
+        assert_eq!(result, "Created the schema.  All set.");
+    }
+
+    #[test]
+    fn leaves_prose_mentioning_call_unchanged() {
+        // "call:" without a following brace blob is ordinary prose, not a leak.
+        let input = "Give me a call: I'll explain the response: it's ready.";
+        let result = normalize_response(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn strips_channel_thought_block_keeping_answer() {
+        let input =
+            "Done.<|channel>thought\nThe user wants X, I should Y.<channel|>I've added the node!";
+        let result = normalize_response(input);
+        assert_eq!(result, "Done.I've added the node!");
+    }
+
+    #[test]
+    fn strips_dangling_channel_block_truncated_by_token_cap() {
+        // No closing marker (generation hit the cap mid-thought): drop the rest.
+        let input = "Here is your answer.<|channel>thought\nNow I will reason endlessly";
+        let result = normalize_response(input);
+        assert_eq!(result, "Here is your answer.");
+    }
+
+    #[test]
+    fn strips_stray_channel_marker() {
+        let input = "All set.<channel|>";
+        let result = normalize_response(input);
+        assert_eq!(result, "All set.");
     }
 }

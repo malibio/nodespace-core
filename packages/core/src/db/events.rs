@@ -164,10 +164,7 @@ pub struct EventEnvelope {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainEvent {
     /// A new node was created
-    NodeCreated {
-        node_id: String,
-        node_type: String,
-    },
+    NodeCreated { node_id: String, node_type: String },
 
     /// An existing node was updated — carries the full committed node so
     /// subscribers (WatchNodes, LocalAgentService) don't need a re-fetch.

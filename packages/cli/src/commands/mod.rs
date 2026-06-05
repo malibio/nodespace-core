@@ -1,6 +1,7 @@
 pub mod diagnostics;
 pub mod import;
 pub mod mention;
+pub mod model;
 pub mod node;
 pub mod schema;
 pub mod search;
