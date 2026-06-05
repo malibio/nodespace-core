@@ -1,0 +1,28 @@
+//! Shared wire types for NodeSpace.
+//!
+//! This crate provides the type definitions and conversion functions shared
+//! between `nodespace-core` (storage layer) and the Tauri command layer
+//! (`packages/desktop-app/src-tauri`). Both crates re-use these types
+//! directly, eliminating the hand-synced mirror that previously lived in
+//! `src-tauri/src/types.rs`.
+//!
+//! # Dependencies
+//!
+//! Intentionally minimal: `serde`, `serde_json`, `chrono`, `uuid`,
+//! `thiserror`. No database, HTTP, or NLP dependencies.
+
+mod ai_chat;
+mod convert;
+mod helpers;
+mod node;
+mod schema;
+mod task;
+
+pub use ai_chat::{AiChatMessage, AiChatNode};
+pub use convert::{node_to_typed_value, nodes_to_typed_values};
+pub use node::{DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, ValidationError};
+pub use schema::{
+    EdgeField, EnumValue, RelationshipCardinality, RelationshipDirection, SchemaField, SchemaNode,
+    SchemaProtectionLevel, SchemaRelationship,
+};
+pub use task::{TaskNode, TaskNodeUpdate, TaskPriority, TaskStatus};
