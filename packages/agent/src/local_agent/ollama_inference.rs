@@ -1,6 +1,6 @@
 use crate::agent_types::{
     ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
-    ModelFamily, Role, StreamingChunk,
+    ModelFamily, StreamingChunk,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -120,7 +120,7 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
             .messages
             .iter()
             .map(|msg| OllamaMessage {
-                role: map_role(&msg.role),
+                role: msg.role.as_str().to_string(),
                 content: msg.content.clone(),
                 tool_call_id: msg.tool_call_id.clone(),
             })
@@ -304,18 +304,10 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
     }
 }
 
-fn map_role(role: &Role) -> String {
-    match role {
-        Role::System => "system".to_string(),
-        Role::User => "user".to_string(),
-        Role::Assistant => "assistant".to_string(),
-        Role::Tool => "tool".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_types::Role;
 
     #[test]
     fn test_token_count_estimate() {
@@ -332,11 +324,11 @@ mod tests {
     }
 
     #[test]
-    fn test_map_chat_message_roles() {
-        assert_eq!(map_role(&Role::System), "system");
-        assert_eq!(map_role(&Role::User), "user");
-        assert_eq!(map_role(&Role::Assistant), "assistant");
-        assert_eq!(map_role(&Role::Tool), "tool");
+    fn test_role_as_str() {
+        assert_eq!(Role::System.as_str(), "system");
+        assert_eq!(Role::User.as_str(), "user");
+        assert_eq!(Role::Assistant.as_str(), "assistant");
+        assert_eq!(Role::Tool.as_str(), "tool");
     }
 
     #[test]
