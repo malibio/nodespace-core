@@ -167,8 +167,12 @@ const CATALOG: &[&CatalogEntry] = &[
     &GEMMA_4_31B,
 ];
 
+/// RAM threshold (in bytes) at or above which the mid-tier model (Gemma 4 12B)
+/// is selected instead of the small one (Gemma 4 E4B).
+const RAM_THRESHOLD_MEDIUM: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
+
 /// RAM threshold (in bytes) at or above which the large recommended model
-/// (Gemma 4 31B) is selected instead of the small one (Gemma 4 E4B).
+/// (Gemma 4 31B) is selected instead of the mid-tier one (Gemma 4 12B).
 const RAM_THRESHOLD_LARGE: u64 = 32 * 1024 * 1024 * 1024; // 32 GB
 
 // ---------------------------------------------------------------------------
@@ -268,12 +272,14 @@ impl GgufModelManager {
     /// current system's RAM.
     ///
     /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_LARGE`], otherwise 3B.
-    /// - `Gemma4`:    31B at or above [`RAM_THRESHOLD_LARGE`], otherwise E4B.
+    /// - `Gemma4`:    three-tier — 31B at or above [`RAM_THRESHOLD_LARGE`],
+    ///   12B at or above [`RAM_THRESHOLD_MEDIUM`], otherwise E4B.
     /// - `Ollama`:    has no GGUF catalog entries; falls back to the default
     ///   Gemma 4 recommendation.
     pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
         let large = total_ram >= RAM_THRESHOLD_LARGE;
+        let medium = total_ram >= RAM_THRESHOLD_MEDIUM;
         match family {
             ModelFamily::Ministral => {
                 if large {
@@ -285,6 +291,8 @@ impl GgufModelManager {
             ModelFamily::Gemma4 => {
                 if large {
                     GEMMA_4_31B.id
+                } else if medium {
+                    GEMMA_4_12B.id
                 } else {
                     GEMMA_4_E4B.id
                 }
@@ -292,6 +300,8 @@ impl GgufModelManager {
             ModelFamily::Ollama => {
                 if large {
                     GEMMA_4_31B.id
+                } else if medium {
+                    GEMMA_4_12B.id
                 } else {
                     GEMMA_4_E4B.id
                 }
@@ -1037,7 +1047,7 @@ mod tests {
         let (mgr, _tmp) = test_manager();
         let rec = mgr.recommended_model().await.unwrap();
         assert!(
-            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-31b-q4km",
+            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-12b-q4km" || rec == "gemma-4-31b-q4km",
             "unexpected recommendation: {}",
             rec
         );
@@ -1046,7 +1056,11 @@ mod tests {
     #[test]
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
-        assert!(spec.model_id == "gemma-4-e4b-q4km" || spec.model_id == "gemma-4-31b-q4km");
+        assert!(
+            spec.model_id == "gemma-4-e4b-q4km"
+                || spec.model_id == "gemma-4-12b-q4km"
+                || spec.model_id == "gemma-4-31b-q4km"
+        );
         assert_eq!(spec.family, ModelFamily::Gemma4);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
