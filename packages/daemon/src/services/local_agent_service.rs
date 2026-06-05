@@ -1211,3 +1211,79 @@ async fn build_workspace_context(
     .map_err(|_| ())?;
     Ok(context.format_for_prompt(4000))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nodespace_core::models::Node;
+    use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
+
+    /// Build a `LocalAgentServiceImpl` backed by a temp-dir SqliteStore.
+    /// Returns the `TempDir` so it outlives the test body.
+    async fn test_service() -> (LocalAgentServiceImpl, Arc<NodeService>, tempfile::TempDir) {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(tempdir.path().join("daemon-db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(
+            CoreNodeService::new(&mut store)
+                .await
+                .expect("NodeService"),
+        );
+        let embedding: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> =
+            Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding);
+        (svc, node_service, tempdir)
+    }
+
+    async fn create_ai_chat_node(node_service: &Arc<NodeService>) -> String {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Test chat".to_string(),
+            serde_json::json!({ "ai-chat": { "messages": [] } }),
+        );
+        node_service.create_node(node).await.expect("create ai-chat")
+    }
+
+    #[tokio::test]
+    async fn reasoning_round_trips_through_persist_and_reload() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        svc.append_assistant_message(&node_id, "The answer.", Some("I reasoned about it."))
+            .await
+            .expect("append");
+
+        let history = load_node_history(&node_service, &node_id).await;
+        let assistant = history
+            .iter()
+            .find(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant message present");
+        assert_eq!(assistant.content, "The answer.");
+        assert_eq!(assistant.reasoning.as_deref(), Some("I reasoned about it."));
+    }
+
+    #[tokio::test]
+    async fn empty_or_whitespace_reasoning_is_omitted() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        // None and whitespace-only both persist no reasoning field.
+        svc.append_assistant_message(&node_id, "Plain answer.", None)
+            .await
+            .expect("append none");
+        svc.append_assistant_message(&node_id, "Another answer.", Some("   "))
+            .await
+            .expect("append whitespace");
+
+        let history = load_node_history(&node_service, &node_id).await;
+        let assistants: Vec<_> = history
+            .iter()
+            .filter(|m| matches!(m.role, Role::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 2);
+        assert!(assistants.iter().all(|m| m.reasoning.is_none()));
+    }
+}
