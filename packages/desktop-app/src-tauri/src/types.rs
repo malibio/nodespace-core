@@ -480,6 +480,7 @@ pub fn node_to_typed_value(node: Node) -> Result<serde_json::Value, String> {
     let node_id = node.id.clone();
     let mut value = match node.node_type.as_str() {
         "task" => task_node_to_value(node),
+        "ai-chat" => ai_chat_node_to_value(node),
         "schema" => SchemaNode::from_node(node).and_then(|s| {
             serde_json::to_value(s).map_err(|e| format!("Failed to serialize schema: {}", e))
         }),
@@ -619,6 +620,90 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
     };
 
     serde_json::to_value(&task).map_err(|e| format!("Failed to serialize task node: {}", e))
+}
+
+/// A single ai-chat message — mirrors core `AiChatMessage` and the frontend
+/// `AiChatMessage` TS interface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatMessage {
+    role: String,
+    content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
+}
+
+/// Local mirror of core's `AiChatNode` — produces the flat top-level field shape
+/// the frontend `nodeToAiChatNode()` expects:
+/// `{ id, nodeType, content, version, ..., status, provider, model, messages }`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatNode {
+    id: String,
+    #[serde(rename = "nodeType")]
+    node_type: String,
+    content: String,
+    #[serde(default = "default_version")]
+    version: i64,
+    created_at: DateTime<Utc>,
+    modified_at: DateTime<Utc>,
+    properties: serde_json::Value,
+    #[serde(default, skip_serializing_if = "is_active_lifecycle")]
+    lifecycle_status: String,
+    // ai-chat-specific fields at top level (mirrors core AiChatNode layout)
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    messages: Vec<AiChatMessage>,
+}
+
+fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
+    // Properties are already flattened by flatten_properties_for_api before this call.
+    let props = &node.properties;
+
+    let status = props
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let provider = props
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let model = props
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let messages = props
+        .get("messages")
+        .cloned()
+        .map(|v| serde_json::from_value::<Vec<AiChatMessage>>(v).unwrap_or_default())
+        .unwrap_or_default();
+
+    let lifecycle_status = node.lifecycle_status.clone();
+    let chat = AiChatNode {
+        id: node.id,
+        node_type: node.node_type,
+        content: node.content,
+        version: node.version,
+        created_at: node.created_at,
+        modified_at: node.modified_at,
+        properties: node.properties,
+        lifecycle_status,
+        status,
+        provider,
+        model,
+        messages,
+    };
+
+    serde_json::to_value(&chat).map_err(|e| format!("Failed to serialize ai-chat node: {}", e))
 }
 
 // ---------------------------------------------------------------------------

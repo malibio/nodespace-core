@@ -23,7 +23,7 @@ use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 use nodespace_agent::local_agent::tools::{GraphToolExecutor, SharedEmbeddingService};
-use nodespace_core::models::{NodeFilter, NodeUpdate};
+use nodespace_core::models::{AiChatMessage, AiChatNode, NodeFilter, NodeUpdate};
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
@@ -260,26 +260,22 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        let ai_chat = match node.properties.get("ai-chat") {
-            Some(v) => v,
-            None => return,
+        let ai_chat = match AiChatNode::from_node(node) {
+            Ok(c) => c,
+            Err(_) => return,
         };
 
         // Only trigger when the frontend has set status: processing, signalling
         // it wants an inference turn. Any other status (idle, error) is not
         // actionable here.
-        if ai_chat.get("status").and_then(|v| v.as_str()) != Some("processing") {
+        if ai_chat.status != "processing" {
             return;
         }
 
         // Check that the last message is from the user.
-        let messages = match ai_chat.get("messages").and_then(|v| v.as_array()) {
-            Some(m) if !m.is_empty() => m,
+        match ai_chat.messages.last() {
+            Some(last) if last.role == "user" => {}
             _ => return,
-        };
-        let last = &messages[messages.len() - 1];
-        if last.get("role").and_then(|v| v.as_str()) != Some("user") {
-            return;
         }
 
         // Atomically check-and-insert the cancellation token to prevent duplicate
@@ -460,41 +456,39 @@ impl LocalAgentServiceImpl {
         };
 
         for node in nodes {
-            let ai_chat = match node.properties.get("ai-chat") {
-                Some(v) => v,
-                None => continue,
+            let node_id = node.id.clone();
+            let ai_chat = match AiChatNode::from_node(node) {
+                Ok(c) => c,
+                Err(_) => continue,
             };
-            if ai_chat.get("status").and_then(|v| v.as_str()) != Some("processing") {
+            if ai_chat.status != "processing" {
                 continue;
             }
             // Verify last message is from user before retrying.
             let is_trailing_user = ai_chat
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .and_then(|msgs| msgs.last())
-                .and_then(|m| m.get("role"))
-                .and_then(|v| v.as_str())
-                == Some("user");
+                .messages
+                .last()
+                .map(|m| m.role == "user")
+                .unwrap_or(false);
 
             if is_trailing_user {
-                tracing::info!(node_id = %node.id, "recovering stuck ai-chat turn");
+                tracing::info!(node_id = %node_id, "recovering stuck ai-chat turn");
                 let cancel = {
                     let mut tokens = self.inner.turn_tokens.lock().await;
-                    if tokens.contains_key(&node.id) {
+                    if tokens.contains_key(&node_id) {
                         continue;
                     }
                     let cancel = CancellationToken::new();
-                    tokens.insert(node.id.clone(), cancel.clone());
+                    tokens.insert(node_id.clone(), cancel.clone());
                     cancel
                 };
                 let this = self.clone();
-                let nid = node.id.clone();
                 tokio::spawn(async move {
-                    this.run_ai_chat_turn(nid, cancel).await;
+                    this.run_ai_chat_turn(node_id, cancel).await;
                 });
             } else {
                 // Stuck in processing but no trailing user message — reset to idle.
-                let _ = self.write_ai_chat_status(&node.id, "idle", None).await;
+                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
             }
         }
     }
@@ -520,25 +514,23 @@ impl LocalAgentServiceImpl {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("node {node_id} not found"))?;
 
-            let mut ai_chat = node
-                .properties
-                .get("ai-chat")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
+            let version = node.version;
+            let mut props = node.properties.clone();
+            let mut ai_chat = AiChatNode::from_node(node).map_err(|e| e.to_string())?;
 
-            ai_chat["status"] = serde_json::Value::String(status.to_string());
+            ai_chat.status = status.to_string();
             if let Some(m) = model {
-                ai_chat["model"] = serde_json::Value::String(m.to_string());
+                ai_chat.model = Some(m.to_string());
             }
 
-            let mut props = node.properties.clone();
-            props["ai-chat"] = ai_chat;
+            // Splice the updated namespace back, preserving sibling namespaces.
+            props["ai-chat"] = ai_chat.to_properties_value();
 
             let update = NodeUpdate::new().with_properties(props);
             match self
                 .inner
                 .node_service
-                .update_node(node_id, node.version, update)
+                .update_node(node_id, version, update)
                 .await
             {
                 Ok(_) => return Ok(()),
@@ -573,43 +565,33 @@ impl LocalAgentServiceImpl {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("node {node_id} not found"))?;
 
-            let mut ai_chat = node
-                .properties
-                .get("ai-chat")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
+            let version = node.version;
+            let mut props = node.properties.clone();
+            let mut ai_chat = AiChatNode::from_node(node).map_err(|e| e.to_string())?;
 
-            let messages = ai_chat.get_mut("messages").and_then(|v| v.as_array_mut());
-
-            let timestamp = chrono::Utc::now().to_rfc3339();
-            let mut new_msg = serde_json::json!({
-                "role": "assistant",
-                "content": content,
-                "timestamp": timestamp
-            });
             // Persist reasoning only when the model produced some, keeping the
             // message shape minimal for plain answers.
-            if let Some(r) = reasoning.filter(|r| !r.trim().is_empty()) {
-                new_msg["reasoning"] = serde_json::Value::String(r.to_string());
-            }
-
-            if let Some(msgs) = messages {
-                msgs.push(new_msg);
-            } else {
-                ai_chat["messages"] = serde_json::json!([new_msg]);
-            }
+            let reasoning = reasoning
+                .filter(|r| !r.trim().is_empty())
+                .map(|r| r.to_string());
+            ai_chat.messages.push(AiChatMessage {
+                role: "assistant".to_string(),
+                content: content.to_string(),
+                timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                reasoning,
+            });
 
             // Set status to idle here too (atomic with message append).
-            ai_chat["status"] = serde_json::Value::String("idle".to_string());
+            ai_chat.status = "idle".to_string();
 
-            let mut props = node.properties.clone();
-            props["ai-chat"] = ai_chat;
+            // Splice the updated namespace back, preserving sibling namespaces.
+            props["ai-chat"] = ai_chat.to_properties_value();
 
             let update = NodeUpdate::new().with_properties(props);
             match self
                 .inner
                 .node_service
-                .update_node(node_id, node.version, update)
+                .update_node(node_id, version, update)
                 .await
             {
                 Ok(_) => return Ok(()),
@@ -1161,32 +1143,26 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
         }
     };
 
-    let messages = node
-        .properties
-        .get("ai-chat")
-        .and_then(|ns| ns.get("messages"))
-        .and_then(|v| v.as_array());
-
-    let Some(messages) = messages else {
-        return vec![];
+    let ai_chat = match AiChatNode::from_node(node) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(node_id, error = %e, "node is not an ai-chat node");
+            return vec![];
+        }
     };
 
-    messages
-        .iter()
+    ai_chat
+        .messages
+        .into_iter()
         .filter_map(|m| {
-            let role_str = m.get("role")?.as_str()?;
-            let role = match role_str {
+            let role = match m.role.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
                 _ => return None,
             };
-            let content = m.get("content")?.as_str()?.to_string();
-            let mut msg = ChatMessage::text(role, content);
+            let mut msg = ChatMessage::text(role, m.content);
             // Round-trip any persisted reasoning so reloaded history retains it.
-            msg.reasoning = m
-                .get("reasoning")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            msg.reasoning = m.reasoning;
             Some(msg)
         })
         .collect()
