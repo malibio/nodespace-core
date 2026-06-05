@@ -49,7 +49,7 @@ pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<serde_json::Value>,
 /// API format:     `{ "status": "open" }`
 ///
 /// Dormant namespaces (from previous type changes) are not exposed.
-pub(crate) fn flatten_properties_for_api(node: &mut Node) {
+fn flatten_properties_for_api(node: &mut Node) {
     let node_type = node.node_type.clone();
 
     let Some(props_obj) = node.properties.as_object() else {

@@ -1,11 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::helpers::default_version;
 use crate::node::Node;
-
-fn default_version() -> i64 {
-    1
-}
 
 fn default_protection_level() -> SchemaProtectionLevel {
     SchemaProtectionLevel::User

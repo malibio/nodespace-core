@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+use crate::helpers::is_active_lifecycle;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TaskStatus {
     #[default]
@@ -97,10 +99,6 @@ impl<'de> Deserialize<'de> for TaskPriority {
     }
 }
 
-fn is_active_lifecycle(s: &str) -> bool {
-    s == "active"
-}
-
 /// Wire shape for task nodes sent to the frontend.
 ///
 /// Produced by `node_to_typed_value` for `node_type == "task"`. Fields map
@@ -170,6 +168,10 @@ pub struct TaskNodeUpdate {
 /// - Field absent from JSON → `None` (don't change)
 /// - Field present as `null` → `Some(None)` (clear the value)
 /// - Field present as a string → `Some(Some(dt))` (set to this value)
+///
+/// Note: The old `src-tauri/types.rs` mirror used `Option<Option<String>>` as
+/// the intermediate which caused JSON `null` to map to `None` (no-op) instead
+/// of `Some(None)` (clear). This is the corrected implementation.
 pub(crate) mod flexible_date {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use serde::{Deserialize, Deserializer};

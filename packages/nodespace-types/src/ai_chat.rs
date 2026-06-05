@@ -1,9 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-fn is_active_lifecycle(s: &str) -> bool {
-    s == "active"
-}
+use crate::helpers::is_active_lifecycle;
 
 /// A single message in an ai-chat conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

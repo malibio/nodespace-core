@@ -3,14 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::helpers::default_lifecycle_status;
-
-fn default_version() -> i64 {
-    1
-}
-fn is_active_lifecycle(s: &str) -> bool {
-    s == "active"
-}
+use crate::helpers::{default_lifecycle_status, default_version, is_active_lifecycle};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
