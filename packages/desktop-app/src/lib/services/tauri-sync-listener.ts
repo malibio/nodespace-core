@@ -58,25 +58,8 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
     const node = await backendAdapter.getNode(nodeId);
     if (node) {
       const normalizedNode = normalizeNodeData(node);
-
-      // Guard: never overwrite an ai-chat node with a snapshot that has fewer
-      // messages than the current store. This prevents a stale echo (arriving
-      // after hasPending clears) from wiping an optimistically-appended user
-      // message before the daemon's next write delivers the assistant reply.
-      const currentNode = sharedNodeStore.getNode(nodeId);
-      if (currentNode?.nodeType === 'ai-chat') {
-        const currentMsgs = (currentNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-        const fetchedMsgs = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-        const currentCount = Array.isArray(currentMsgs) ? currentMsgs.length : 0;
-        const fetchedCount = Array.isArray(fetchedMsgs) ? fetchedMsgs.length : 0;
-        if (fetchedCount < currentCount) {
-          log.debug(`${eventType}: skipping stale ai-chat snapshot (fetched ${fetchedCount} msgs < current ${currentCount} msgs)`, nodeId);
-          return;
-        }
-      }
-
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
-      log.debug(`${eventType}: updated store for node`, nodeId);
+      log.info(`${eventType}: store updated for node`, nodeId);
     } else {
       log.warn(`${eventType}: node not found`, nodeId);
     }
@@ -126,12 +109,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<NodeEventData>('node:updated', (event) => {
-      log.debug(`Node updated: ${event.payload.id}`);
-      if (sharedNodeStore.hasNode(event.payload.id)) {
-        fetchAndUpdateNode(event.payload.id, 'node:updated');
-      } else {
-        log.debug('Node not in store, skipping fetch:', event.payload.id);
-      }
+      const nodeId = event.payload.id;
+      log.debug(`node:updated received`, { nodeId });
+      fetchAndUpdateNode(nodeId, 'node:updated');
     });
 
     await listen<{ id: string }>('node:deleted', (event) => {

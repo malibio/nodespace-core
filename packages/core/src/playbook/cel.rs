@@ -510,6 +510,7 @@ mod tests {
         DomainEvent::NodeUpdated {
             node_type: node_type.to_string(),
             node_id: "test-node-1".to_string(),
+            node: test_node(node_type, json!({})),
             changed_properties: changes,
         }
     }

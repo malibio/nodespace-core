@@ -790,6 +790,7 @@ mod tests {
         DomainEvent::NodeUpdated {
             node_id: node_id.to_string(),
             node_type: node_type.to_string(),
+            node: make_test_node(node_id, node_type),
             changed_properties: changes,
         }
     }

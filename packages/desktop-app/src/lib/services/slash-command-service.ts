@@ -136,7 +136,8 @@ export class SlashCommandService {
       (command) =>
         command.name.toLowerCase().includes(lowerQuery) ||
         command.description.toLowerCase().includes(lowerQuery) ||
-        command.shortcut?.toLowerCase().includes(lowerQuery)
+        command.shortcut?.toLowerCase().includes(lowerQuery) ||
+        command.id.toLowerCase().includes(lowerQuery)
     );
   }
 
