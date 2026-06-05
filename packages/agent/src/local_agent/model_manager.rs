@@ -115,26 +115,6 @@ const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
-/// Gemma 4 12B -- mid-tier dense option under A/B trial (issue #1329) against
-/// E4B (and, on larger hardware, 31B). Q4_K_M weights ~7.4 GB. On 16 GB Apple
-/// Silicon the f16 KV cache at 32K context (~10.2 GB) busts the ~10.6 GB Metal
-/// ceiling — see the #1329 trial: 12B is NOT viable on 16 GB. min_memory_gb is
-/// set to 24 (same tier as 31B) so it is not auto-recommended on 16 GB machines;
-/// `model load gemma-4-12b-q4km` still loads it explicitly for the trial.
-const GEMMA_4_12B: CatalogEntry = CatalogEntry {
-    id: "gemma-4-12b-q4km",
-    family: ModelFamily::Gemma4,
-    name: "Gemma 4 12B Instruct Q4_K_M",
-    filename: "gemma-4-12B-it-Q4_K_M.gguf",
-    size_bytes: 7_381_382_048, // 7.38 GB (exact, verified after download)
-    quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12B-it-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
-    context_window: 32_768,
-    default_temperature: 0.3,
-    min_memory_gb: 24,
-};
-
 /// Gemma 4 31B -- Google's larger dense quality-tier option (24GB+ Apple
 /// Silicon, e.g. M3 Pro/Max, M4 Pro). Issue #1094 originally referenced "27B"
 /// but Gemma 4's dense large variant is 31B; 27B was a Gemma 2 size.
