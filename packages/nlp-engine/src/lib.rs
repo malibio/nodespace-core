@@ -53,6 +53,7 @@ pub use error::{EmbeddingError, Result};
 pub use chat::error::ChatError;
 pub use chat::parser::{parse_tool_calls, ParseResult, ParsedToolCall, StreamingToolCallParser};
 pub use chat::types::{
-    ChatChunk, ChatConfig, ChatMessage, ChatUsage, LoadedModelInfo, Role, ToolCallRaw, ToolSpec,
+    ChatChunk, ChatConfig, ChatMessage, ChatUsage, KvCacheQuantType, LoadedModelInfo, Role,
+    ToolCallRaw, ToolSpec,
 };
 pub use chat::ChatEngine;

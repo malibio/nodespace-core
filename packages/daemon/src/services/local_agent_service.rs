@@ -1018,13 +1018,27 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        let family = match self.inner.model_manager.gguf_manager().family_for(model_id) {
-            Ok(f) => f,
+        let (family, chat_config) = match self
+            .inner
+            .model_manager
+            .gguf_manager()
+            .model_spec_for(model_id)
+        {
+            Ok(spec) => {
+                let config = ChatConfig {
+                    n_ctx: spec.context_window,
+                    default_temperature: spec.default_temperature,
+                    type_k: spec.type_k,
+                    type_v: spec.type_v,
+                    ..ChatConfig::default()
+                };
+                (spec.family, config)
+            }
             Err(e) => {
                 events.push(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
-                    error_message: Some(format!("Failed to look up model family: {e}")),
+                    error_message: Some(format!("Failed to look up model spec: {e}")),
                     ..Default::default()
                 });
                 return events;
@@ -1033,7 +1047,7 @@ impl LocalAgentServiceImpl {
 
         let model_path_str = model_path.to_string_lossy().to_string();
         let engine_result = tokio::task::spawn_blocking(move || {
-            LlamaChatInferenceEngine::load(&model_path_str, family, ChatConfig::default())
+            LlamaChatInferenceEngine::load(&model_path_str, family, chat_config)
         })
         .await;
 
