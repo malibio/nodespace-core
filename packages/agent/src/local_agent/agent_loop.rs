@@ -67,30 +67,14 @@ fn session_prompt_override(session: &AgentSession) -> Option<&str> {
 /// Convert an internal tool identifier into user-facing prose.
 ///
 /// Used by fallback responses that surface tool activity to the chat UI when
-/// the model fails to produce its own text. Unknown identifiers fall back to
-/// a generic phrase so a stray tool name never reaches the user.
-///
-/// Keep arms in sync with `GraphToolExecutor` in
-/// `packages/agent/src/local_agent/tools.rs`. The
-/// `humanize_tool_name_covers_all_registered_tools` test asserts that every
-/// registered tool has a non-generic mapping.
+/// the model fails to produce its own text. The display label is derived from
+/// the tool registry ([`crate::local_agent::tools::Tool`]); names not in the
+/// registry fall back to a generic phrase so a stray tool name never reaches
+/// the user.
 fn humanize_tool_name(tool_name: &str) -> &'static str {
-    match tool_name {
-        "search_nodes" => "node search",
-        "search_semantic" => "semantic search",
-        "get_node" => "node lookup",
-        "create_node" => "node creation",
-        "update_node" => "node update",
-        "delete_node" => "node deletion",
-        "create_schema" => "schema creation",
-        "update_schema" => "schema update",
-        "update_task_status" => "task update",
-        "create_relationship" => "relationship creation",
-        "get_related_nodes" => "related node lookup",
-        "search_skills" => "skill search",
-        "create_nodes_from_markdown" => "markdown import",
-        _ => "the requested action",
-    }
+    crate::local_agent::tools::Tool::from_name(tool_name)
+        .map(|t| t.humanized())
+        .unwrap_or("the requested action")
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,22 +1386,9 @@ mod tests {
         assert_eq!(humanize_tool_name(""), "the requested action");
     }
 
-    /// Drift detector: every tool the executor exposes must have a non-generic
-    /// mapping in `humanize_tool_name`. Without this test, adding a new tool to
-    /// `GraphToolExecutor` and forgetting to extend the humanizer would silently
-    /// degrade the chat UI to "the requested action" with no signal.
-    #[test]
-    fn humanize_tool_name_covers_all_registered_tools() {
-        let generic = humanize_tool_name("__definitely_not_a_real_tool__");
-        for def in crate::local_agent::tools::all_tool_definitions() {
-            let humanized = humanize_tool_name(&def.name);
-            assert_ne!(
-                humanized, generic,
-                "tool {:?} has no humanized mapping — add an arm to `humanize_tool_name`",
-                def.name
-            );
-        }
-    }
+    // The former `humanize_tool_name_covers_all_registered_tools` drift detector
+    // is gone: `humanize_tool_name` now derives from `Tool`, whose `humanized()`
+    // arm is exhaustive over the registry, so coverage holds by construction.
 
     #[tokio::test]
     async fn cancellation_stops_generation() {
