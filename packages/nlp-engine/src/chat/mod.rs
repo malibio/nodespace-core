@@ -696,7 +696,7 @@ fn strip_gemma_special_tokens(s: &str) -> String {
     out
 }
 
-/// Convert one `ChatMessageInput` into an OpenAI-format message value for the
+/// Convert one `ChatMessage` into an OpenAI-format message value for the
 /// Jinja chat template.
 ///
 /// Pure and model-independent so it can be unit-tested without a loaded model.

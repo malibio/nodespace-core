@@ -96,8 +96,10 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCallRaw>,
     /// If this message is a tool result, the ID of the originating tool call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     /// Optional name for tool-role messages (the tool name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The model's internal reasoning (chain-of-thought) for this assistant message.
     /// `None` for non-assistant turns or when the model produced no reasoning.
