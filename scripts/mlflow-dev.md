@@ -13,7 +13,7 @@ MLflow 3.x includes a native OTLP HTTP receiver — no separate OpenTelemetry co
 ## Start the MLflow server
 
 ```bash
-mlflow server --host 0.0.0.0 --port 5000
+mlflow server --host 127.0.0.1 --port 5000
 ```
 
 The daemon will send traces to `http://localhost:5000/api/2.0/mlflow/otlp`.

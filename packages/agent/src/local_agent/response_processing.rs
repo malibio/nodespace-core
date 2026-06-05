@@ -61,26 +61,17 @@ fn stray_channel_marker_re() -> &'static Regex {
 
 /// Normalize LLM response text for consistent formatting.
 ///
-/// Applies post-processing rules to fix common formatting issues
-/// from small local models that don't always follow system prompt instructions.
+/// Delegates to [`normalize_response_traced`] and discards the stripper list.
 pub fn normalize_response(text: &str) -> String {
-    if text.is_empty() {
-        return String::new();
-    }
-
-    let result = strip_channel_blocks(text);
-    let result = strip_tool_call_prose(&result);
-    let result = fix_markdown_link_uris(&result);
-    let result = fix_backtick_wrapped_uris(&result);
-    let result = normalize_snake_case_statuses(&result);
-    let result = strip_raw_tool_output_json(&result);
-    let result = collapse_blank_lines(&result);
-    result.trim().to_string()
+    normalize_response_traced(text).0
 }
 
-/// Same as [`normalize_response`] but also returns a list of stripper names that
-/// modified the text. Used by the OTLP tracing path to populate the
-/// `response_processing` span's `strippers_fired` attribute.
+/// Normalize LLM response text and return which strippers modified it.
+///
+/// `normalize_response` delegates here, making this the single pipeline
+/// definition — adding or reordering a stripper only needs one change.
+/// The `strippers_fired` list is used by the OTLP tracing path to populate
+/// the `response_processing` span's `strippers_fired` attribute.
 pub fn normalize_response_traced(text: &str) -> (String, Vec<&'static str>) {
     if text.is_empty() {
         return (String::new(), Vec::new());
@@ -100,13 +91,12 @@ pub fn normalize_response_traced(text: &str) -> (String, Vec<&'static str>) {
         out
     };
 
-    let result = {
-        let out = strip_channel_blocks(text);
-        if out.as_str() != text {
-            fired.push("strip_channel_blocks");
-        }
-        out
-    };
+    let result = apply(
+        "strip_channel_blocks",
+        strip_channel_blocks,
+        text.to_owned(),
+        &mut fired,
+    );
     let result = apply(
         "strip_tool_call_prose",
         strip_tool_call_prose,
@@ -143,8 +133,7 @@ pub fn normalize_response_traced(text: &str) -> (String, Vec<&'static str>) {
         result,
         &mut fired,
     );
-    let trimmed = result.trim().to_string();
-    (trimmed, fired)
+    (result.trim().to_string(), fired)
 }
 
 /// Fix nodespace:// URIs wrapped in markdown links.
@@ -634,5 +623,57 @@ mod tests {
         let input = "All set.<channel|>";
         let result = normalize_response(input);
         assert_eq!(result, "All set.");
+    }
+
+    // normalize_response_traced: strippers_fired correctness
+
+    #[test]
+    fn traced_no_strippers_fire_on_clean_text() {
+        let (normalized, fired) = normalize_response_traced("Hello! How can I help?");
+        assert_eq!(normalized, "Hello! How can I help?");
+        assert!(fired.is_empty(), "no strippers should fire: {:?}", fired);
+    }
+
+    #[test]
+    fn traced_strip_tool_call_prose_fires() {
+        let input = "Here is my answer call:update_node{id:\"abc\",value:\"x\"} done.";
+        let (_, fired) = normalize_response_traced(input);
+        assert!(
+            fired.contains(&"strip_tool_call_prose"),
+            "expected strip_tool_call_prose in {:?}",
+            fired
+        );
+    }
+
+    #[test]
+    fn traced_strip_channel_blocks_fires() {
+        let input = "<|channel>internal thought<channel|>Actual reply.";
+        let (normalized, fired) = normalize_response_traced(input);
+        assert_eq!(normalized, "Actual reply.");
+        assert!(
+            fired.contains(&"strip_channel_blocks"),
+            "expected strip_channel_blocks in {:?}",
+            fired
+        );
+    }
+
+    #[test]
+    fn normalize_response_delegates_to_traced() {
+        // Verify the two entry-points produce identical output so the pipeline
+        // definition can never silently diverge.
+        let inputs = [
+            "Hello!",
+            "<|channel>thought<channel|>Answer.",
+            "call:foo{bar:baz} done.",
+            "in_progress",
+            "  \n\n  multiple\n\n\n\nblank lines\n\n  ",
+        ];
+        for input in &inputs {
+            assert_eq!(
+                normalize_response(input),
+                normalize_response_traced(input).0,
+                "mismatch for input: {input:?}"
+            );
+        }
     }
 }

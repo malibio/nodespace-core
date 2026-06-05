@@ -21,6 +21,29 @@ const ENV_MLFLOW_URL: &str = "NODESPACE_MLFLOW_URL";
 /// OTLP path appended to the MLflow base URL.
 const OTLP_PATH: &str = "/api/2.0/mlflow/otlp";
 
+/// Returns `true` when `url` resolves to a loopback address.
+///
+/// Checks for the `localhost`, `127.0.0.1`, and `::1` hostnames. Uses simple
+/// string parsing — no `url` crate dep — sufficient for a startup warning.
+fn is_localhost(url: &str) -> bool {
+    // Strip scheme (e.g. "http://") then isolate the host before any "/" or ":"
+    let after_scheme = url.find("://").map_or(url, |i| &url[i + 3..]);
+    let host = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // Remove port if present (handle IPv6 brackets too)
+    let host = if host.starts_with('[') {
+        host.trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or(host)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
 /// Initialise OTLP tracing if `NODESPACE_MLFLOW_URL` is set.
 ///
 /// Installs the provider as the global OTel tracer provider. Call once at
@@ -35,6 +58,20 @@ pub fn init_tracer() -> Option<SdkTracerProvider> {
     }
 
     let endpoint = format!("{}{}", mlflow_url.trim_end_matches('/'), OTLP_PATH);
+
+    // Warn if the URL resolves to a non-localhost host. Traces contain the full
+    // assembled system prompt, user messages, and tool results — they must not
+    // leave the machine. This does not block (it's a dev tool), but makes the
+    // boundary mechanically observable rather than documentation-only.
+    if !is_localhost(mlflow_url) {
+        tracing::warn!(
+            url = %mlflow_url,
+            "NODESPACE_MLFLOW_URL points to a non-localhost host — \
+             traces contain assembled prompts and user messages; \
+             ensure data does not leave the machine"
+        );
+    }
+
     tracing::info!(endpoint = %endpoint, "OTLP tracing enabled (NODESPACE_MLFLOW_URL is set)");
 
     let exporter = match opentelemetry_otlp::SpanExporter::builder()
