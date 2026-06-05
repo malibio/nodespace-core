@@ -23,7 +23,9 @@ pub mod types;
 
 pub use error::{ChatError, Result};
 pub use parser::{parse_tool_calls, ParseResult, ParsedToolCall, StreamingToolCallParser};
-pub use types::{ChatChunk, ChatConfig, ChatMessageInput, ChatUsage, LoadedModelInfo, ToolSpec};
+pub use types::{
+    ChatChunk, ChatConfig, ChatMessageInput, ChatUsage, LoadedModelInfo, ToolCallInput, ToolSpec,
+};
 
 #[cfg(feature = "chat-service")]
 use crate::embedding::{get_or_init_backend, register_atexit_handler};
@@ -650,6 +652,30 @@ impl ChatEngine {
                         "role": "tool",
                         "tool_call_id": msg.call_id.as_deref().unwrap_or("unknown"),
                         "content": msg.content,
+                    })
+                } else if msg.role == "assistant" && !msg.tool_calls.is_empty() {
+                    // Assistant turn that issued tool calls: emit OpenAI-format
+                    // `tool_calls` so the template pairs them with the following
+                    // `tool` result messages. Arguments are passed through as the
+                    // raw JSON string the model produced.
+                    let tool_calls: Vec<serde_json::Value> = msg
+                        .tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                }
+                            })
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": msg.content,
+                        "tool_calls": tool_calls,
                     })
                 } else {
                     serde_json::json!({

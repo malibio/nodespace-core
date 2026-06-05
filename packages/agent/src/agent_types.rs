@@ -273,10 +273,60 @@ pub struct ChatMessage {
     pub role: Role,
     /// Text content of the message.
     pub content: String,
+    /// Tool calls this (assistant) message made, in order. Empty for non-tool
+    /// turns. Carried through re-prompts so the chat template can emit a
+    /// well-formed assistant turn: an assistant message with `tool_calls`
+    /// followed by the matching `tool` result messages. Without this, the
+    /// template sees orphan tool results (no preceding `tool_calls`), which
+    /// makes some models (e.g. Gemma 4) run away to the token limit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallRaw>,
     /// If this message is a tool result, the ID of the originating tool call.
     pub tool_call_id: Option<String>,
     /// Optional name for tool-role messages (the tool name).
     pub name: Option<String>,
+}
+
+impl ChatMessage {
+    /// A plain text message (no tool calls). Covers system/user/assistant-text.
+    pub fn text(role: Role, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    /// An assistant message that issued one or more tool calls.
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCallRaw>,
+    ) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    /// A tool-result message paired to the tool call `tool_call_id`.
+    pub fn tool_result(
+        content: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+            name: Some(name.into()),
+        }
+    }
 }
 
 /// Parameters for an inference request.

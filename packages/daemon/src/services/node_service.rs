@@ -1296,7 +1296,7 @@ async fn convert_domain_event(
             }
         },
         DomainEvent::NodeUpdated { node, .. } => Some(NodeEvent {
-            event: Some(NodeEventKind::Updated(node_to_proto(node.clone(), None, None))),
+            event: Some(NodeEventKind::Updated(node_to_proto(node.clone()))),
         }),
         DomainEvent::NodeDeleted { id, node_type } => Some(NodeEvent {
             event: Some(NodeEventKind::Deleted(NodeDeleted {

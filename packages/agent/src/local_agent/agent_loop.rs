@@ -126,12 +126,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         let on_chunk = Arc::new(on_chunk);
 
         // Append user message
-        session.messages.push(ChatMessage {
-            role: Role::User,
-            content: user_message.to_string(),
-            tool_call_id: None,
-            name: None,
-        });
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, user_message.to_string()));
 
         // Get available tools, then scope to query-relevant tools.
         // select_tools runs a pre-inference semantic skill search to narrow
@@ -195,12 +192,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 .await?;
 
             // Build message list: system + history
-            let mut messages = vec![ChatMessage {
-                role: Role::System,
-                content: system_content.clone(),
-                tool_call_id: None,
-                name: None,
-            }];
+            let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];
             messages.extend(session.messages.clone());
 
             // Status: Thinking
@@ -302,12 +294,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // Append assistant response to history
-                session.messages.push(ChatMessage {
-                    role: Role::Assistant,
-                    content: final_response.clone(),
-                    tool_call_id: None,
-                    name: None,
-                });
+                session
+                    .messages
+                    .push(ChatMessage::text(Role::Assistant, final_response.clone()));
 
                 on_status(LocalAgentStatus::Idle);
                 session.status = LocalAgentStatus::Idle;
@@ -319,13 +308,15 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 });
             }
 
-            // Append assistant message with tool call indication
-            session.messages.push(ChatMessage {
-                role: Role::Assistant,
-                content: response_text.clone(),
-                tool_call_id: None,
-                name: None,
-            });
+            // Append the assistant message that issued these tool calls, carrying
+            // the structured tool_calls so the next re-prompt produces a
+            // well-formed turn (assistant tool_calls → matching tool results).
+            session
+                .messages
+                .push(ChatMessage::assistant_with_tool_calls(
+                    response_text.clone(),
+                    tool_calls.clone(),
+                ));
 
             // Execute each tool call
             for tc in &tool_calls {
@@ -383,12 +374,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     &result_value,
                     is_error,
                 );
-                session.messages.push(ChatMessage {
-                    role: Role::Tool,
-                    content: tool_msg,
-                    tool_call_id: Some(tc.id.clone()),
-                    name: Some(tc.function_name.clone()),
-                });
+                session.messages.push(ChatMessage::tool_result(
+                    tool_msg,
+                    tc.id.clone(),
+                    tc.function_name.clone(),
+                ));
             }
 
             // If this was the last allowed iteration, do one final inference
@@ -399,12 +389,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 );
                 on_status(LocalAgentStatus::Thinking);
 
-                let mut messages = vec![ChatMessage {
-                    role: Role::System,
-                    content: system_content.clone(),
-                    tool_call_id: None,
-                    name: None,
-                }];
+                let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];
                 messages.extend(session.messages.clone());
 
                 let final_chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
@@ -439,12 +424,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     let (final_text, _) = Self::parse_chunks(&chunks);
                     if !final_text.is_empty() {
                         let normalized = normalize_response(&final_text);
-                        session.messages.push(ChatMessage {
-                            role: Role::Assistant,
-                            content: normalized.clone(),
-                            tool_call_id: None,
-                            name: None,
-                        });
+                        session
+                            .messages
+                            .push(ChatMessage::text(Role::Assistant, normalized.clone()));
 
                         on_status(LocalAgentStatus::Idle);
                         session.status = LocalAgentStatus::Idle;
@@ -604,12 +586,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
         // Run a single-shot summarization inference (no tools)
         let summary_request = InferenceRequest {
-            messages: vec![ChatMessage {
-                role: Role::User,
-                content: summary_prompt,
-                tool_call_id: None,
-                name: None,
-            }],
+            messages: vec![ChatMessage::text(Role::User, summary_prompt)],
             tools: None,
             temperature: Some(0.1),
             max_tokens: Some(4096),
@@ -640,15 +617,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         };
 
         // Prepend summary as a system-like message at the start of remaining history
-        session.messages.insert(
-            0,
-            ChatMessage {
-                role: Role::System,
-                content: summary_content,
-                tool_call_id: None,
-                name: None,
-            },
-        );
+        session
+            .messages
+            .insert(0, ChatMessage::text(Role::System, summary_content));
 
         Ok(())
     }
@@ -1625,12 +1596,10 @@ mod tests {
             } else {
                 Role::Assistant
             };
-            session.messages.push(ChatMessage {
+            session.messages.push(ChatMessage::text(
                 role,
-                content: format!("Message {} with extensive content: {}", i, "x".repeat(7000)),
-                tool_call_id: None,
-                name: None,
-            });
+                format!("Message {} with extensive content: {}", i, "x".repeat(7000)),
+            ));
         }
 
         let messages_before = session.messages.len();
@@ -1947,12 +1916,10 @@ mod tests {
             } else {
                 Role::Assistant
             };
-            session.messages.push(ChatMessage {
+            session.messages.push(ChatMessage::text(
                 role,
-                content: format!("Msg {}: {}", i, "a".repeat(2000)),
-                tool_call_id: None,
-                name: None,
-            });
+                format!("Msg {}: {}", i, "a".repeat(2000)),
+            ));
         }
 
         let _result = agent_loop
