@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::local_agent::otlp_tracer;
 use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_agent::skill_pipeline::seed_skill_nodes;
@@ -62,6 +63,11 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    // Initialise OTLP tracing when NODESPACE_MLFLOW_URL is set (dev only).
+    // Keep the provider alive for the duration of main so the background
+    // exporter thread is not torn down prematurely.
+    let _otlp_provider = otlp_tracer::init_tracer();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

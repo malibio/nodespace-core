@@ -78,6 +78,75 @@ pub fn normalize_response(text: &str) -> String {
     result.trim().to_string()
 }
 
+/// Same as [`normalize_response`] but also returns a list of stripper names that
+/// modified the text. Used by the OTLP tracing path to populate the
+/// `response_processing` span's `strippers_fired` attribute.
+pub fn normalize_response_traced(text: &str) -> (String, Vec<&'static str>) {
+    if text.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let mut fired: Vec<&'static str> = Vec::new();
+
+    let apply = |name: &'static str,
+                 f: fn(&str) -> String,
+                 input: String,
+                 fired: &mut Vec<&'static str>|
+     -> String {
+        let out = f(&input);
+        if out != input {
+            fired.push(name);
+        }
+        out
+    };
+
+    let result = {
+        let out = strip_channel_blocks(text);
+        if out.as_str() != text {
+            fired.push("strip_channel_blocks");
+        }
+        out
+    };
+    let result = apply(
+        "strip_tool_call_prose",
+        strip_tool_call_prose,
+        result,
+        &mut fired,
+    );
+    let result = apply(
+        "fix_markdown_link_uris",
+        fix_markdown_link_uris,
+        result,
+        &mut fired,
+    );
+    let result = apply(
+        "fix_backtick_wrapped_uris",
+        fix_backtick_wrapped_uris,
+        result,
+        &mut fired,
+    );
+    let result = apply(
+        "normalize_snake_case_statuses",
+        normalize_snake_case_statuses,
+        result,
+        &mut fired,
+    );
+    let result = apply(
+        "strip_raw_tool_output_json",
+        strip_raw_tool_output_json,
+        result,
+        &mut fired,
+    );
+    let result = apply(
+        "collapse_blank_lines",
+        collapse_blank_lines,
+        result,
+        &mut fired,
+    );
+    let trimmed = result.trim().to_string();
+    (trimmed, fired)
+}
+
 /// Fix nodespace:// URIs wrapped in markdown links.
 ///
 /// - `[nodespace://abc-123](nodespace://abc-123)` -> `nodespace://abc-123`

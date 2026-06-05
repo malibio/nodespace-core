@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use opentelemetry::trace::{Span, TraceContextExt, Tracer};
+use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -18,8 +20,9 @@ use crate::agent_types::{
     InferenceError, InferenceRequest, InferenceUsage, LocalAgentStatus, Role, StreamingChunk,
     ToolCallRaw, ToolExecutionRecord,
 };
+use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
-use crate::local_agent::response_processing::normalize_response;
+use crate::local_agent::response_processing::{normalize_response, normalize_response_traced};
 use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
 // ---------------------------------------------------------------------------
@@ -127,6 +130,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // Wrap on_chunk in Arc so it can be cloned into each iteration's callback
         let on_chunk = Arc::new(on_chunk);
 
+        // Root OTLP span for this full agent turn. No-op when tracing is disabled.
+        let tracer = opentelemetry::global::tracer(TRACER_NAME);
+        let mut turn_span = tracer.start("agent_turn");
+        turn_span.set_attribute(KeyValue::new("session_id", session.id.clone()));
+        turn_span.set_attribute(KeyValue::new(
+            "model_id",
+            session.model_id.clone().unwrap_or_default(),
+        ));
+        turn_span.set_attribute(KeyValue::new("user_message", user_message.to_string()));
+        let turn_cx = opentelemetry::Context::current_with_span(turn_span);
+
         // Append user message
         session
             .messages
@@ -170,6 +184,21 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             EMERGENCY_FALLBACK_PROMPT.to_string()
         };
 
+        // prompt_assembly child span: records full assembled system prompt and tools offered.
+        {
+            let mut span = tracer.start_with_context("prompt_assembly", &turn_cx);
+            span.set_attribute(KeyValue::new("system_prompt", system_content.clone()));
+            span.set_attribute(KeyValue::new("workspace_context", dynamic_ctx.to_string()));
+            let tools_json: Vec<serde_json::Value> = tools
+                .iter()
+                .map(|t| serde_json::json!({"name": t.name, "description": t.description}))
+                .collect();
+            span.set_attribute(KeyValue::new(
+                "tools_offered",
+                serde_json::to_string(&tools_json).unwrap_or_default(),
+            ));
+        }
+
         let effective_max_iterations = MAX_TOOL_ITERATIONS;
 
         tracing::info!(
@@ -201,6 +230,24 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Build message list: system + history
             let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];
             messages.extend(session.messages.clone());
+
+            // react_iteration_N child span — records full messages sent, raw response, tool calls.
+            let iter_span_name = format!("react_iteration_{iteration}");
+            let mut iter_span = tracer.start_with_context(iter_span_name, &turn_cx);
+            iter_span.set_attribute(KeyValue::new("iteration", iteration as i64));
+            // Serialize messages sent (truncated per message to avoid huge spans).
+            let messages_json: Vec<serde_json::Value> = messages
+                .iter()
+                .map(|m| {
+                    let role = format!("{:?}", m.role).to_lowercase();
+                    let preview: String = m.content.chars().take(2000).collect();
+                    serde_json::json!({"role": role, "content": preview})
+                })
+                .collect();
+            iter_span.set_attribute(KeyValue::new(
+                "messages_sent",
+                serde_json::to_string(&messages_json).unwrap_or_default(),
+            ));
 
             // Status: Thinking
             on_status(LocalAgentStatus::Thinking);
@@ -247,6 +294,27 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             };
             let (response_text, iteration_reasoning, tool_calls) = Self::parse_chunks(&chunks);
 
+            iter_span.set_attribute(KeyValue::new("raw_response", response_text.clone()));
+            let tool_calls_json: Vec<serde_json::Value> = tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "name": tc.function_name,
+                        "arguments": tc.arguments_json,
+                    })
+                })
+                .collect();
+            iter_span.set_attribute(KeyValue::new(
+                "tool_calls_parsed",
+                serde_json::to_string(&tool_calls_json).unwrap_or_default(),
+            ));
+            iter_span.set_attribute(KeyValue::new("prompt_tokens", usage.prompt_tokens as i64));
+            iter_span.set_attribute(KeyValue::new(
+                "completion_tokens",
+                usage.completion_tokens as i64,
+            ));
+
             // Accumulate this iteration's reasoning into the turn-wide section,
             // separating iterations with a blank line.
             if !iteration_reasoning.trim().is_empty() {
@@ -269,7 +337,20 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 on_status(LocalAgentStatus::Streaming);
                 session.status = LocalAgentStatus::Streaming;
 
-                let normalized = normalize_response(&response_text);
+                // response_processing child span: records raw input, normalized output,
+                // and which strippers fired. Uses normalize_response_traced so we get
+                // the stripper list without running normalization twice.
+                let raw_for_span = response_text.clone();
+                let (normalized, strippers_fired) = normalize_response_traced(&response_text);
+                {
+                    let mut span = tracer.start_with_context("response_processing", &turn_cx);
+                    span.set_attribute(KeyValue::new("raw_input", raw_for_span));
+                    span.set_attribute(KeyValue::new("normalized_output", normalized.clone()));
+                    span.set_attribute(KeyValue::new(
+                        "strippers_fired",
+                        strippers_fired.join(", "),
+                    ));
+                }
 
                 // If the model produced no text after tool calls, synthesize a
                 // brief confirmation so the UI always shows something meaningful.
@@ -351,6 +432,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 ));
 
             // Execute each tool call
+            let mut tool_results_for_span: Vec<serde_json::Value> = Vec::new();
             for tc in &tool_calls {
                 if cancel.is_cancelled() {
                     return Err(InferenceError::Engine("cancelled".into()));
@@ -388,6 +470,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     "Tool executed"
                 );
 
+                tool_results_for_span.push(serde_json::json!({
+                    "tool": tc.function_name,
+                    "is_error": is_error,
+                    "duration_ms": duration_ms,
+                    "result": result_value.to_string().chars().take(2000).collect::<String>(),
+                }));
+
                 let record = ToolExecutionRecord {
                     tool_call_id: tc.id.clone(),
                     name: tc.function_name.clone(),
@@ -412,6 +501,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     tc.function_name.clone(),
                 ));
             }
+
+            // Set tool results on the iteration span and close it before the next iteration.
+            iter_span.set_attribute(KeyValue::new(
+                "tool_results",
+                serde_json::to_string(&tool_results_for_span).unwrap_or_default(),
+            ));
 
             // If this was the last allowed iteration, do one final inference
             // WITHOUT tools so the model must produce a text response.
