@@ -51,7 +51,12 @@ pub struct ChatConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
-            n_ctx: 32_768,
+            // #1329 TRIAL PROBE: reduced from 32_768 so Gemma-4-12B's f16 KV cache
+            // fits in 16 GB (10.2 GB @32K → 2.7 GB @8K). This is a GLOBAL override
+            // affecting every model — revert to 32_768 (or wire per-model n_ctx
+            // from the catalog `context_window`, see #1332) on hardware with
+            // headroom before measuring 12B/31B at full context.
+            n_ctx: 8_192,
             default_temperature: 0.1,
             n_gpu_layers: 99,
             n_threads: std::thread::available_parallelism()
