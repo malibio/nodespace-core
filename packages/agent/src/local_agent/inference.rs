@@ -1,20 +1,18 @@
 //! Bridge between `nlp-engine::ChatEngine` and the `ChatInferenceEngine` trait.
 //!
-//! Adapts the nlp-engine's `ChatEngine` (which speaks its own `ChatChunk`,
-//! `ChatMessageInput`, `ToolSpec` types) to the app-crate's
-//! `ChatInferenceEngine` trait (which uses `StreamingChunk`, `ChatMessage`,
-//! `ToolDefinition`). This is the same adapter pattern used for embeddings.
+//! Adapts the nlp-engine's `ChatEngine` (which speaks its own `ChatChunk` and
+//! `ToolSpec` types) to the app-crate's `ChatInferenceEngine` trait (which uses
+//! `StreamingChunk` and `ToolDefinition`). `ChatMessage` is the canonical type
+//! shared by both crates — no conversion needed on the message path.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nodespace_nlp_engine::chat::{
-    ChatChunk, ChatConfig, ChatEngine, ChatMessageInput, ToolCallInput, ToolSpec,
-};
+use nodespace_nlp_engine::chat::{ChatChunk, ChatConfig, ChatEngine, ToolSpec};
 
 use crate::agent_types::{
     ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
-    ModelFamily, Role, StreamingChunk, ToolDefinition,
+    ModelFamily, StreamingChunk, ToolDefinition,
 };
 
 /// Chat inference engine backed by llama.cpp via `nlp-engine::ChatEngine`.
@@ -64,31 +62,6 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
         request: InferenceRequest,
         on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
     ) -> Result<InferenceUsage, InferenceError> {
-        // Convert ChatMessage → ChatMessageInput
-        let messages: Vec<ChatMessageInput> = request
-            .messages
-            .iter()
-            .map(|m| ChatMessageInput {
-                role: match m.role {
-                    Role::System => "system".to_string(),
-                    Role::User => "user".to_string(),
-                    Role::Assistant => "assistant".to_string(),
-                    Role::Tool => "tool".to_string(),
-                },
-                content: m.content.clone(),
-                call_id: m.tool_call_id.clone(),
-                tool_calls: m
-                    .tool_calls
-                    .iter()
-                    .map(|tc| ToolCallInput {
-                        id: tc.id.clone(),
-                        name: tc.function_name.clone(),
-                        arguments: tc.arguments_json.clone(),
-                    })
-                    .collect(),
-            })
-            .collect();
-
         // Convert ToolDefinition → ToolSpec
         let tools: Option<Vec<ToolSpec>> = request.tools.map(|defs| {
             defs.into_iter()
@@ -106,31 +79,37 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
         // Bridge ChatChunk → StreamingChunk
         let usage_result = self
             .engine
-            .generate_streaming(messages, tools, temperature, max_tokens, move |chunk| {
-                match chunk {
-                    ChatChunk::Token(text) => {
-                        on_chunk(StreamingChunk::Token { text });
+            .generate_streaming(
+                request.messages,
+                tools,
+                temperature,
+                max_tokens,
+                move |chunk| {
+                    match chunk {
+                        ChatChunk::Token(text) => {
+                            on_chunk(StreamingChunk::Token { text });
+                        }
+                        ChatChunk::Reasoning(text) => {
+                            on_chunk(StreamingChunk::Reasoning { text });
+                        }
+                        ChatChunk::ToolCallStart { id, name } => {
+                            on_chunk(StreamingChunk::ToolCallStart { id, name });
+                        }
+                        ChatChunk::ToolCallArgs { id, json } => {
+                            on_chunk(StreamingChunk::ToolCallArgs {
+                                id,
+                                args_json: json,
+                            });
+                        }
+                        ChatChunk::Done => {
+                            // Done is handled by the return value, not a chunk
+                        }
+                        ChatChunk::Error(msg) => {
+                            tracing::error!("Inference error chunk: {}", msg);
+                        }
                     }
-                    ChatChunk::Reasoning(text) => {
-                        on_chunk(StreamingChunk::Reasoning { text });
-                    }
-                    ChatChunk::ToolCallStart { id, name } => {
-                        on_chunk(StreamingChunk::ToolCallStart { id, name });
-                    }
-                    ChatChunk::ToolCallArgs { id, json } => {
-                        on_chunk(StreamingChunk::ToolCallArgs {
-                            id,
-                            args_json: json,
-                        });
-                    }
-                    ChatChunk::Done => {
-                        // Done is handled by the return value, not a chunk
-                    }
-                    ChatChunk::Error(msg) => {
-                        tracing::error!("Inference error chunk: {}", msg);
-                    }
-                }
-            })
+                },
+            )
             .await
             .map_err(|e| InferenceError::Engine(e.to_string()))?;
 

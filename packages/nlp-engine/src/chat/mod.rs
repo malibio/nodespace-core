@@ -24,7 +24,7 @@ pub mod types;
 pub use error::{ChatError, Result};
 pub use parser::{parse_tool_calls, ParseResult, ParsedToolCall, StreamingToolCallParser};
 pub use types::{
-    ChatChunk, ChatConfig, ChatMessageInput, ChatUsage, LoadedModelInfo, ToolCallInput, ToolSpec,
+    ChatChunk, ChatConfig, ChatMessage, ChatUsage, LoadedModelInfo, Role, ToolCallRaw, ToolSpec,
 };
 
 #[cfg(feature = "chat-service")]
@@ -226,7 +226,7 @@ impl ChatEngine {
     /// at a time. Concurrent callers will wait.
     pub async fn generate_streaming(
         &self,
-        messages: Vec<ChatMessageInput>,
+        messages: Vec<ChatMessage>,
         tools: Option<Vec<ToolSpec>>,
         temperature: f32,
         max_tokens: u32,
@@ -272,7 +272,7 @@ impl ChatEngine {
     #[cfg(feature = "chat-service")]
     fn generate_blocking(
         state: &Arc<Mutex<Option<ChatLlamaState>>>,
-        messages: Vec<ChatMessageInput>,
+        messages: Vec<ChatMessage>,
         tools: Option<Vec<ToolSpec>>,
         temperature: f32,
         max_tokens: u32,
@@ -707,26 +707,27 @@ fn strip_gemma_special_tokens(s: &str) -> String {
 ///   when it has no text, never `""`.
 /// - Each tool call's `arguments` must be a valid JSON *object* string; any
 ///   non-object (empty, malformed) is normalized to `"{}"`.
-fn chat_message_to_oai_value(msg: &ChatMessageInput) -> serde_json::Value {
-    if msg.role == "tool" {
+fn chat_message_to_oai_value(msg: &ChatMessage) -> serde_json::Value {
+    if msg.role == Role::Tool {
         serde_json::json!({
             "role": "tool",
-            "tool_call_id": msg.call_id.as_deref().unwrap_or("unknown"),
+            "tool_call_id": msg.tool_call_id.as_deref().unwrap_or("unknown"),
             "content": msg.content,
         })
-    } else if msg.role == "assistant" && !msg.tool_calls.is_empty() {
+    } else if msg.role == Role::Assistant && !msg.tool_calls.is_empty() {
         let tool_calls: Vec<serde_json::Value> = msg
             .tool_calls
             .iter()
             .map(|tc| {
-                let arguments = match serde_json::from_str::<serde_json::Value>(&tc.arguments) {
-                    Ok(v) if v.is_object() => tc.arguments.clone(),
+                let arguments = match serde_json::from_str::<serde_json::Value>(&tc.arguments_json)
+                {
+                    Ok(v) if v.is_object() => tc.arguments_json.clone(),
                     _ => "{}".to_string(),
                 };
                 serde_json::json!({
                     "id": tc.id,
                     "type": "function",
-                    "function": { "name": tc.name, "arguments": arguments }
+                    "function": { "name": tc.function_name, "arguments": arguments }
                 })
             })
             .collect();
@@ -742,7 +743,7 @@ fn chat_message_to_oai_value(msg: &ChatMessageInput) -> serde_json::Value {
         })
     } else {
         serde_json::json!({
-            "role": msg.role,
+            "role": msg.role.as_str(),
             "content": msg.content,
         })
     }
@@ -846,7 +847,7 @@ impl ChatEngine {
     #[cfg(feature = "chat-service")]
     fn apply_chat_template(
         model: &LlamaModel,
-        messages: &[ChatMessageInput],
+        messages: &[ChatMessage],
         tools: &Option<Vec<ToolSpec>>,
     ) -> Result<ChatTemplateResult> {
         // Build OpenAI-format messages JSON. Tool-result messages carry
@@ -1143,18 +1144,13 @@ mod tests {
         );
     }
 
-    fn msg(role: &str, content: &str) -> ChatMessageInput {
-        ChatMessageInput {
-            role: role.to_string(),
-            content: content.to_string(),
-            call_id: None,
-            tool_calls: Vec::new(),
-        }
+    fn msg(role: Role, content: &str) -> ChatMessage {
+        ChatMessage::text(role, content)
     }
 
     #[test]
     fn oai_value_plain_message_passes_through() {
-        let v = chat_message_to_oai_value(&msg("user", "hi"));
+        let v = chat_message_to_oai_value(&msg(Role::User, "hi"));
         assert_eq!(v["role"], "user");
         assert_eq!(v["content"], "hi");
         assert!(v.get("tool_calls").is_none());
@@ -1164,12 +1160,14 @@ mod tests {
     fn oai_value_tool_call_turn_empty_content_is_null() {
         // The load-bearing shape: empty content on a tool-call turn must emit
         // `null`, not `""` — else Gemma's template fails (ffi error -3).
-        let mut m = msg("assistant", "");
-        m.tool_calls = vec![ToolCallInput {
-            id: "tc_1".into(),
-            name: "search_nodes".into(),
-            arguments: r#"{"query":"x"}"#.into(),
-        }];
+        let m = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "tc_1".into(),
+                function_name: "search_nodes".into(),
+                arguments_json: r#"{"query":"x"}"#.into(),
+            }],
+        );
         let v = chat_message_to_oai_value(&m);
         assert!(
             v["content"].is_null(),
@@ -1184,12 +1182,14 @@ mod tests {
 
     #[test]
     fn oai_value_tool_call_turn_keeps_real_content() {
-        let mut m = msg("assistant", "Let me check.");
-        m.tool_calls = vec![ToolCallInput {
-            id: "tc_1".into(),
-            name: "get_node".into(),
-            arguments: r#"{"id":"abc"}"#.into(),
-        }];
+        let m = ChatMessage::assistant_with_tool_calls(
+            "Let me check.",
+            vec![ToolCallRaw {
+                id: "tc_1".into(),
+                function_name: "get_node".into(),
+                arguments_json: r#"{"id":"abc"}"#.into(),
+            }],
+        );
         let v = chat_message_to_oai_value(&m);
         assert_eq!(v["content"], "Let me check.");
     }
@@ -1199,12 +1199,14 @@ mod tests {
         // Empty / malformed / non-object arguments are normalized to "{}" so the
         // template never receives invalid JSON.
         for bad in ["", "not json", "[1,2]", "\"str\"", "42"] {
-            let mut m = msg("assistant", "");
-            m.tool_calls = vec![ToolCallInput {
-                id: "tc_1".into(),
-                name: "create_schema".into(),
-                arguments: bad.into(),
-            }];
+            let m = ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![ToolCallRaw {
+                    id: "tc_1".into(),
+                    function_name: "create_schema".into(),
+                    arguments_json: bad.into(),
+                }],
+            );
             let v = chat_message_to_oai_value(&m);
             assert_eq!(
                 v["tool_calls"][0]["function"]["arguments"], "{}",
@@ -1215,8 +1217,7 @@ mod tests {
 
     #[test]
     fn oai_value_tool_result_carries_call_id() {
-        let mut m = msg("tool", "result text");
-        m.call_id = Some("tc_1".into());
+        let m = ChatMessage::tool_result("result text", "tc_1", "my_tool");
         let v = chat_message_to_oai_value(&m);
         assert_eq!(v["role"], "tool");
         assert_eq!(v["tool_call_id"], "tc_1");
