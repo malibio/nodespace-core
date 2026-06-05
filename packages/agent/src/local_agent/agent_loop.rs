@@ -37,6 +37,14 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// as "no reply". A tight cap bounds any such runaway to a couple of
 /// seconds while still leaving ample room for a normal chat reply or a
 /// tool-call argument blob.
+///
+/// This is also the ceiling on a single tool call's generated arguments:
+/// 2048 tokens comfortably covers the largest realistic blob (a full
+/// `create_schema` with many fields/enums is a few hundred tokens). If a
+/// future tool needs to emit a larger single argument payload, raise this
+/// rather than letting the call truncate into unparseable JSON. The
+/// summarization path uses its own larger cap by design (see
+/// `maybe_summarize_history`).
 const MAX_RESPONSE_TOKENS: u32 = 2_048;
 
 /// Total token budget for the context window.
@@ -586,11 +594,26 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
         // Need to summarize. Keep the last 3 messages verbatim, summarize the rest.
         let keep_count = 3.min(session.messages.len());
-        let split_point = session.messages.len() - keep_count;
+        let mut split_point = session.messages.len() - keep_count;
+
+        // Never split an assistant tool-call turn from its tool results. A naive
+        // cut can leave the kept window starting with an orphan `Tool` message
+        // (its preceding assistant `tool_calls` turn drained into the summary),
+        // which is exactly the malformed sequence that makes Gemma's template
+        // collapse turns and run away. Walk the cut back until the kept window
+        // begins on a non-tool message, so every tool result stays paired with
+        // the assistant turn that issued it.
+        while split_point > 0 && matches!(session.messages[split_point].role, Role::Tool) {
+            split_point -= 1;
+        }
 
         let older_messages: Vec<ChatMessage> = session.messages.drain(..split_point).collect();
 
-        // Build summarization text from older messages
+        // Build summarization text from older messages. A tool-call assistant
+        // turn carries its signal in `tool_calls`, not `content` (content is
+        // empty by construction), so render a synthetic line for it — otherwise
+        // it collapses to a bare "Assistant:" and the summary loses what the
+        // agent actually did.
         let mut summary_input = String::new();
         for msg in &older_messages {
             let role_str = match msg.role {
@@ -599,12 +622,29 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 Role::Assistant => "Assistant",
                 Role::Tool => "Tool",
             };
-            summary_input.push_str(&format!("{}: {}\n", role_str, msg.content));
+            let rendered = if msg.content.is_empty() && !msg.tool_calls.is_empty() {
+                let calls = msg
+                    .tool_calls
+                    .iter()
+                    .map(|tc| format!("{}({})", tc.function_name, tc.arguments_json))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("called tools: {calls}")
+            } else {
+                msg.content.clone()
+            };
+            summary_input.push_str(&format!("{role_str}: {rendered}\n"));
         }
 
         let summary_prompt = prompt_templates::summarization_prompt(&summary_input);
 
-        // Run a single-shot summarization inference (no tools)
+        // Run a single-shot summarization inference (no tools).
+        //
+        // This cap is intentionally larger than `MAX_RESPONSE_TOKENS` (the chat
+        // turn cap): a summary condenses many drained turns and is not part of
+        // the runaway-prone ReAct loop (no tools, single shot, then discarded
+        // into one message), so it can afford more room without risking a
+        // multi-minute hang. Do NOT unify the two constants.
         let summary_request = InferenceRequest {
             messages: vec![ChatMessage::text(Role::User, summary_prompt)],
             tools: None,
@@ -1655,6 +1695,85 @@ mod tests {
         );
 
         assert_eq!(result.response, "Here is your answer.");
+    }
+
+    #[tokio::test]
+    async fn summarization_never_orphans_a_tool_result() {
+        // Build a history that exceeds the token budget and is arranged so the
+        // naive "keep last 3" window would START on a Tool message — i.e. its
+        // preceding assistant tool-call turn would be drained into the summary,
+        // leaving an orphan tool result. The split must back off so the kept
+        // window begins on the assistant tool-call turn instead.
+        let engine = Arc::new(MockEngine::new(vec![vec![
+            StreamingChunk::Token {
+                text: "Summary of earlier turns.".to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                },
+            },
+        ]]));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        // Bulk filler to blow the budget (≈4 chars/token in the mock).
+        for i in 0..18 {
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
+            session
+                .messages
+                .push(ChatMessage::text(role, "x".repeat(8000)));
+        }
+        // Tail arranged so the last 3 are: [assistant tool-call, tool result, user].
+        // The naive cut keeps exactly these 3 and would orphan the tool result if
+        // it instead landed at the window boundary; here we also assert the
+        // assistant tool-call turn is retained with its result.
+        session
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                String::new(),
+                vec![ToolCallRaw {
+                    id: "tc_1".into(),
+                    function_name: "search_nodes".into(),
+                    arguments_json: r#"{"query":"q"}"#.into(),
+                }],
+            ));
+        session.messages.push(ChatMessage::tool_result(
+            "result".to_string(),
+            "tc_1".to_string(),
+            "search_nodes".to_string(),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "follow-up question"));
+
+        agent_loop
+            .maybe_summarize_history(&mut session, "system")
+            .await
+            .unwrap();
+
+        // Find the first non-summary, non-system message and assert it is NOT an
+        // orphan tool result. Every Tool message must be immediately preceded by
+        // an assistant turn carrying tool_calls.
+        for (i, m) in session.messages.iter().enumerate() {
+            if matches!(m.role, Role::Tool) {
+                assert!(
+                    i > 0,
+                    "tool result at index 0 has no preceding assistant turn"
+                );
+                let prev = &session.messages[i - 1];
+                assert!(
+                    matches!(prev.role, Role::Assistant) && !prev.tool_calls.is_empty(),
+                    "tool result at index {i} is orphaned (preceding message is not an assistant tool-call turn)"
+                );
+            }
+        }
     }
 
     // -- Additional coverage tests ------------------------------------------

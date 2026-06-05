@@ -22,12 +22,15 @@ fn backtick_uri_re() -> &'static Regex {
 fn tool_call_prose_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // `(?s)` so the brace blob may span newlines. The blob is a JSON object that
-    // may nest one or more levels (e.g. `{value:{success:true}}` or
-    // `{rels:[{name:x}]}`); the `rust regex` crate has no recursion, so match a
-    // balanced-ish blob greedily up to the final closing brace of the segment:
-    // run from `{` across any non-brace text and fully-paired `{…}` groups.
-    // `(?:[^{}]|\{[^{}]*\})*` covers text plus one nesting level, applied
-    // repeatedly, which spans the two-level shapes these leaks actually take.
+    // may nest (e.g. `{value:{success:true}}` or `{rels:[{name:x}]}`); the
+    // `rust regex` crate has no recursion, so we hand-unroll the nesting: an
+    // outer `{…}` whose body is any mix of non-brace text and fully-paired inner
+    // groups that themselves allow one more level — i.e. up to TWO nested levels
+    // (three braces deep total), which spans the shapes these leaks actually
+    // take. A blob deeper than that, or one truncated by the token cap
+    // (unbalanced braces), simply fails to match and is left intact — safer than
+    // greedily eating real trailing prose. Being a DFA, the engine has no
+    // catastrophic-backtracking (ReDoS) risk on pathological input.
     RE.get_or_init(|| {
         Regex::new(r"(?s)(?:call|response):[a-z_]+\s*\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}")
             .unwrap()

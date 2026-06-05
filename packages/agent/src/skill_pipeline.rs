@@ -40,7 +40,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
 
 When answering questions about stored knowledge:
 
-SEARCH FIRST: Always call search_semantic with a natural language query. Results are ordered by relevance — the first result is the best match.
+SEARCH FIRST: When the user is looking for information or wants to act on a specific node, call search_semantic with a natural language query. Results are ordered by relevance — the first result is the best match. Skip search for conversational messages or capability questions.
 
 RESULT STRUCTURE: Each result contains:
 - id: node ID (use this for follow-up get_node calls)
