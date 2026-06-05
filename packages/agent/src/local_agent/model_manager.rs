@@ -55,6 +55,10 @@ struct CatalogEntry {
     sha256: &'static str,
     context_window: u32,
     default_temperature: f32,
+    /// KV cache quantization for key tensors. `None` = F16 (default).
+    type_k: Option<nodespace_nlp_engine::KvCacheQuantType>,
+    /// KV cache quantization for value tensors. `None` = F16 (default).
+    type_v: Option<nodespace_nlp_engine::KvCacheQuantType>,
     /// Minimum system RAM (in GiB) required to run this model comfortably.
     min_memory_gb: u8,
 }
@@ -71,6 +75,8 @@ const MINISTRAL_3B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official Mistral repo, Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    type_k: None, // F16 — KV cache is not the bottleneck at 3B
+    type_v: None,
     min_memory_gb: 8,
 };
 
@@ -86,6 +92,8 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official Mistral repo, Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    type_k: None, // F16 — KV cache is not the bottleneck at 8B
+    type_v: None,
     min_memory_gb: 16,
 };
 
@@ -102,6 +110,8 @@ const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    type_k: None, // F16 — KV cache headroom adequate at E4B weight size
+    type_v: None,
     min_memory_gb: 16,
 };
 
@@ -119,6 +129,10 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
     context_window: 32_768,
     default_temperature: 0.3,
+    // Q8_0 cuts the 32K KV cache from ~10GB (F16) to ~5GB, making 31B viable
+    // on 24GB Apple Silicon alongside the ~19GB weights.
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
     min_memory_gb: 24,
 };
 
@@ -266,6 +280,8 @@ impl GgufModelManager {
             family: entry.family,
             context_window: entry.context_window,
             default_temperature: entry.default_temperature,
+            type_k: entry.type_k,
+            type_v: entry.type_v,
         }
     }
 
@@ -283,6 +299,8 @@ impl GgufModelManager {
             family: entry.family,
             context_window: entry.context_window,
             default_temperature: entry.default_temperature,
+            type_k: entry.type_k,
+            type_v: entry.type_v,
         })
     }
 
@@ -1014,11 +1032,25 @@ mod tests {
         assert_eq!(spec.family, ModelFamily::Gemma4);
         assert_eq!(spec.context_window, 32_768);
         assert!(spec.default_temperature > 0.0);
+        // E4B is small enough that F16 KV cache is not the bottleneck.
+        assert!(spec.type_k.is_none());
 
         let spec = mgr.model_spec_for("ministral-3b-q4km").unwrap();
         assert_eq!(spec.model_id, "ministral-3b-q4km");
         assert_eq!(spec.family, ModelFamily::Ministral);
         assert_eq!(spec.context_window, 32_768);
+        assert!(spec.type_k.is_none());
+
+        // 31B uses Q8_0 KV compression to fit alongside the ~19GB weights on 24GB RAM.
+        let spec = mgr.model_spec_for("gemma-4-31b-q4km").unwrap();
+        assert_eq!(
+            spec.type_k,
+            Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0)
+        );
+        assert_eq!(
+            spec.type_v,
+            Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0)
+        );
     }
 
     #[tokio::test]

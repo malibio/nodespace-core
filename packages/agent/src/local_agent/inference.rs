@@ -129,6 +129,8 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
             family: self.family,
             context_window: self.context_window,
             default_temperature: self.default_temperature,
+            type_k: None,
+            type_v: None,
         }))
     }
 

@@ -376,6 +376,13 @@ pub struct ChatModelSpec {
     pub context_window: u32,
     /// Default sampling temperature.
     pub default_temperature: f32,
+    /// KV cache quantization for key tensors. `None` leaves keys at F16.
+    /// Set to `Q8_0` for ~2× memory savings (recommended for 12B+ models).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_k: Option<nodespace_nlp_engine::KvCacheQuantType>,
+    /// KV cache quantization for value tensors. Same semantics as `type_k`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_v: Option<nodespace_nlp_engine::KvCacheQuantType>,
 }
 
 /// Event payload emitted during model download progress.

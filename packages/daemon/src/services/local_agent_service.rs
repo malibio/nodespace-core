@@ -1028,6 +1028,8 @@ impl LocalAgentServiceImpl {
                 let config = ChatConfig {
                     n_ctx: spec.context_window,
                     default_temperature: spec.default_temperature,
+                    type_k: spec.type_k,
+                    type_v: spec.type_v,
                     ..ChatConfig::default()
                 };
                 (spec.family, config)

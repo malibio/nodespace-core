@@ -258,6 +258,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // Reasoning (chain-of-thought) accumulated across every ReAct iteration of
         // this turn, joined into a single section on the final assistant message.
         let mut accumulated_reasoning = String::new();
+        // Tracks whether any iteration in this turn has produced at least one
+        // tool call. Used by the anti-fabrication guard: once the model has done
+        // real work, a fabricated final summary is a different (harder) problem
+        // than a pure hallucination with zero tool calls.
+        let mut any_real_tool_calls = false;
         let mut total_usage = InferenceUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -399,16 +404,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 }
 
                 // Anti-fabrication guard: if the model claims an action it never
-                // executed (no tool calls this iteration AND no prior tool calls),
-                // suppress the fabricated claim and ask the user to confirm instead.
+                // executed (no tool calls in any iteration this turn), suppress the
+                // fabricated claim and ask the user to confirm instead.
                 // This catches models (e.g. 12B@8K) that narrate fictional successes
                 // like "I created invoice 104" without calling any tool.
+                // Uses any_real_tool_calls rather than all_tool_executions.is_empty()
+                // so that the guard correctly fires in the final iteration even when
+                // zero-tool-call turns precede it in the same ReAct loop.
                 let normalized = if normalized.is_empty() {
                     normalized
-                } else if tool_calls.is_empty()
-                    && all_tool_executions.is_empty()
-                    && contains_action_claim(&normalized)
-                {
+                } else if !any_real_tool_calls && contains_action_claim(&normalized) {
                     tracing::warn!(
                         session_id = %session.id,
                         model = %session.model_id.as_deref().unwrap_or("unknown"),
@@ -422,8 +427,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // Tool-failure surfacing: if any tool failed and the model's response
-                // doesn't acknowledge the error, append a note so the user is never
-                // misled by a "success" summary when operations actually failed.
+                // doesn't acknowledge the error, replace the response with an honest
+                // error message. Appending to a success claim would produce contradictory
+                // output ("The node was updated. ⚠️ Note: ... encountered an error.").
                 let failed_tools: Vec<&str> = all_tool_executions
                     .iter()
                     .filter(|r| r.is_error)
@@ -437,25 +443,21 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         || lower.contains("could not")
                         || lower.contains("unable");
                     if !mentions_error {
-                        let error_labels: Vec<String> = failed_tools
-                            .iter()
-                            .map(|n| humanize_tool_name(n).to_string())
-                            .collect();
                         let unique_labels: Vec<String> = {
                             let mut seen = std::collections::HashSet::new();
-                            error_labels
-                                .into_iter()
+                            failed_tools
+                                .iter()
+                                .map(|n| humanize_tool_name(n).to_string())
                                 .filter(|l| seen.insert(l.clone()))
                                 .collect()
                         };
                         tracing::warn!(
                             session_id = %session.id,
                             failed_tools = %failed_tools.join(", "),
-                            "Tool failures not surfaced in model response — appending error note"
+                            "Tool failures not surfaced in model response — replacing with error message"
                         );
                         format!(
-                            "{}\n\n⚠️ Note: {} encountered an error during this request.",
-                            normalized,
+                            "⚠️ {} encountered an error. Please try again or check the details and retry.",
                             unique_labels.join(", ")
                         )
                     } else {
@@ -543,6 +545,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     String::new(),
                     tool_calls.clone(),
                 ));
+
+            // Record that at least one real tool call has been made this turn.
+            any_real_tool_calls = true;
 
             // Execute each tool call
             let mut tool_results_for_span: Vec<serde_json::Value> = Vec::new();
@@ -1247,6 +1252,8 @@ mod tests {
                 family: ModelFamily::Ministral,
                 context_window: 8192,
                 default_temperature: 0.1,
+                type_k: None,
+                type_v: None,
             }))
         }
 
