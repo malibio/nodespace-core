@@ -12,6 +12,8 @@ default = ["nlp"]
 nlp = ["dep:nodespace-nlp-engine"]
 
 [dependencies]
+nodespace-types = { workspace = true }
+
 # Database - SQLite via libsql
 libsql = { workspace = true }
 # Vector search extension (statically linked, registered via sqlite3_auto_extension)

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "packages/nodespace-types",
     "packages/core",
     "packages/nlp-engine",
     "packages/agent",
@@ -28,6 +29,7 @@ async-trait = "0.1"
 libsql = "0.6"
 sqlite-vec = "0.1"
 tracing = "0.1"
+nodespace-types = { path = "packages/nodespace-types" }
 nodespace-core = { path = "packages/core" }
 nodespace-nlp-engine = { path = "packages/nlp-engine" }
 nodespace-agent = { path = "packages/agent" }

@@ -25,6 +25,7 @@ path = "src/main.rs"
 # to exclude them from Tauri release builds
 
 [dependencies]
+nodespace-types = { workspace = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"

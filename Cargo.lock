@@ -3770,6 +3770,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "nodespace-proto",
+ "nodespace-types",
  "prost 0.13.5",
  "protoc-bin-vendored",
  "serde",
@@ -3827,6 +3828,7 @@ dependencies = [
  "http-body-util",
  "libsql",
  "nodespace-nlp-engine",
+ "nodespace-types",
  "pulldown-cmark",
  "regex",
  "serde",
@@ -3906,6 +3908,17 @@ dependencies = [
  "protoc-bin-vendored",
  "tonic 0.12.3",
  "tonic-build",
+]
+
+[[package]]
+name = "nodespace-types"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
