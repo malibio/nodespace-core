@@ -607,6 +607,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             split_point -= 1;
         }
 
+        // If the back-off consumed the whole prefix there is nothing older to
+        // summarize — skip the summarization inference entirely rather than
+        // spending a model call on empty input. (Rare: only when the entire
+        // over-budget history is one unbroken tool-call chain.)
+        if split_point == 0 {
+            return Ok(());
+        }
+
         let older_messages: Vec<ChatMessage> = session.messages.drain(..split_point).collect();
 
         // Build summarization text from older messages. A tool-call assistant
@@ -623,10 +631,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 Role::Tool => "Tool",
             };
             let rendered = if msg.content.is_empty() && !msg.tool_calls.is_empty() {
+                // Cap each argument blob: a single tool call can emit up to the
+                // generation token cap of JSON, and the summary only needs the
+                // gist of what was called, not the full payload.
                 let calls = msg
                     .tool_calls
                     .iter()
-                    .map(|tc| format!("{}({})", tc.function_name, tc.arguments_json))
+                    .map(|tc| {
+                        let args: String = tc.arguments_json.chars().take(120).collect();
+                        format!("{}({})", tc.function_name, args)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("called tools: {calls}")
@@ -1730,10 +1744,13 @@ mod tests {
                 .messages
                 .push(ChatMessage::text(role, "x".repeat(8000)));
         }
-        // Tail arranged so the last 3 are: [assistant tool-call, tool result, user].
-        // The naive cut keeps exactly these 3 and would orphan the tool result if
-        // it instead landed at the window boundary; here we also assert the
-        // assistant tool-call turn is retained with its result.
+        // CRITICAL fixture detail: the tail is
+        //   [assistant tool-call, tool result, user, user]
+        // so the naive "keep last 3" window is [tool result, user, user] — it
+        // STARTS on the orphan tool result, with its assistant tool-call turn
+        // sitting just before the cut. This is what actually exercises the
+        // back-off; without it (e.g. a 3-element tail) the split lands on the
+        // assistant turn and the loop never runs, making the test a tautology.
         session
             .messages
             .push(ChatMessage::assistant_with_tool_calls(
@@ -1751,15 +1768,17 @@ mod tests {
         ));
         session
             .messages
-            .push(ChatMessage::text(Role::User, "follow-up question"));
+            .push(ChatMessage::text(Role::User, "first follow-up"));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "second follow-up"));
 
         agent_loop
             .maybe_summarize_history(&mut session, "system")
             .await
             .unwrap();
 
-        // Find the first non-summary, non-system message and assert it is NOT an
-        // orphan tool result. Every Tool message must be immediately preceded by
+        // (1) No orphan: every retained Tool message is immediately preceded by
         // an assistant turn carrying tool_calls.
         for (i, m) in session.messages.iter().enumerate() {
             if matches!(m.role, Role::Tool) {
@@ -1774,6 +1793,20 @@ mod tests {
                 );
             }
         }
+
+        // (2) Back-off actually fired: the assistant tool-call turn (which a naive
+        // cut would have drained into the summary) must be RETAINED in the kept
+        // window, paired with its tool result. Without the back-off this assertion
+        // fails — that is what makes this test exercise the fix rather than pass
+        // vacuously.
+        let retained_tool_call = session
+            .messages
+            .iter()
+            .any(|m| matches!(m.role, Role::Assistant) && !m.tool_calls.is_empty());
+        assert!(
+            retained_tool_call,
+            "assistant tool-call turn was drained, orphaning its tool result — back-off did not fire"
+        );
     }
 
     // -- Additional coverage tests ------------------------------------------
