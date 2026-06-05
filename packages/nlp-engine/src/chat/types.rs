@@ -1,6 +1,22 @@
 /// Types for the chat inference engine.
 use serde::{Deserialize, Serialize};
 
+/// KV cache quantization type for a context's key or value tensors.
+///
+/// Quantizing the KV cache reduces memory usage at the cost of a small quality
+/// degradation. `Q8_0` is a good default: ~2× smaller than F16 with negligible
+/// quality loss. `Q4_0` offers ~4× savings at slightly lower quality.
+///
+/// The default (`None`) leaves the cache at F16, matching llama.cpp's default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KvCacheQuantType {
+    /// 8-bit quantization (~2× smaller than F16, negligible quality loss).
+    Q8_0,
+    /// 4-bit quantization (~4× smaller than F16, small quality loss).
+    Q4_0,
+}
+
 /// Configuration for the chat inference engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatConfig {
@@ -15,6 +31,21 @@ pub struct ChatConfig {
 
     /// Number of threads for CPU computation.
     pub n_threads: i32,
+
+    /// KV cache quantization for key tensors.
+    ///
+    /// `None` leaves keys at F16 (llama.cpp default). Set to `Some(Q8_0)` for
+    /// ~2× headroom reduction with negligible quality loss; `Some(Q4_0)` for
+    /// ~4× at slightly lower quality. Recommended for large models (12B+) where
+    /// the F16 KV cache is the memory bottleneck rather than the weights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_k: Option<KvCacheQuantType>,
+
+    /// KV cache quantization for value tensors.
+    ///
+    /// Same semantics as `type_k`. Typically set to the same value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_v: Option<KvCacheQuantType>,
 }
 
 impl Default for ChatConfig {
@@ -26,6 +57,8 @@ impl Default for ChatConfig {
             n_threads: std::thread::available_parallelism()
                 .map(|p| p.get() as i32)
                 .unwrap_or(4),
+            type_k: None,
+            type_v: None,
         }
     }
 }
@@ -224,6 +257,20 @@ mod tests {
         assert!((config.default_temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(config.n_gpu_layers, 99);
         assert!(config.n_threads > 0);
+        assert!(config.type_k.is_none());
+        assert!(config.type_v.is_none());
+    }
+
+    #[test]
+    fn test_chat_config_with_kv_quant() {
+        let config = ChatConfig {
+            type_k: Some(KvCacheQuantType::Q8_0),
+            type_v: Some(KvCacheQuantType::Q4_0),
+            ..Default::default()
+        };
+        assert_eq!(config.type_k, Some(KvCacheQuantType::Q8_0));
+        assert_eq!(config.type_v, Some(KvCacheQuantType::Q4_0));
+        assert!(config.validate().is_ok());
     }
 
     #[test]

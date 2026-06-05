@@ -31,7 +31,7 @@ pub use types::{
 use crate::embedding::{get_or_init_backend, register_atexit_handler};
 
 #[cfg(feature = "chat-service")]
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::context::LlamaContext;
 #[cfg(feature = "chat-service")]
@@ -82,19 +82,30 @@ struct ChatLlamaState {
     model_path: String,
     context_size: u32,
     n_threads: i32,
+    type_k: Option<crate::chat::types::KvCacheQuantType>,
+    type_v: Option<crate::chat::types::KvCacheQuantType>,
     /// Tokens from the last decoded prompt, used to find the reusable prefix.
     cached_prompt: Vec<llama_cpp_2::token::LlamaToken>,
 }
 
 #[cfg(feature = "chat-service")]
 impl ChatLlamaState {
-    fn new(model: LlamaModel, model_path: String, context_size: u32, n_threads: i32) -> Self {
+    fn new(
+        model: LlamaModel,
+        model_path: String,
+        context_size: u32,
+        n_threads: i32,
+        type_k: Option<crate::chat::types::KvCacheQuantType>,
+        type_v: Option<crate::chat::types::KvCacheQuantType>,
+    ) -> Self {
         Self {
             model,
             context: None,
             model_path,
             context_size,
             n_threads,
+            type_k,
+            type_v,
             cached_prompt: Vec::new(),
         }
     }
@@ -106,16 +117,25 @@ impl ChatLlamaState {
     fn get_or_create_context(&mut self) -> Result<&mut LlamaContext<'static>> {
         if self.context.is_none() {
             tracing::info!(
-                "Creating chat LlamaContext (n_ctx={}, n_threads={})",
+                "Creating chat LlamaContext (n_ctx={}, n_threads={}, type_k={:?}, type_v={:?})",
                 self.context_size,
                 self.n_threads,
+                self.type_k,
+                self.type_v,
             );
 
-            let ctx_params = LlamaContextParams::default()
+            let mut ctx_params = LlamaContextParams::default()
                 .with_n_ctx(std::num::NonZeroU32::new(self.context_size))
                 .with_n_batch(self.context_size)
                 .with_n_threads(self.n_threads)
                 .with_n_threads_batch(self.n_threads);
+
+            if let Some(k) = self.type_k {
+                ctx_params = ctx_params.with_type_k(kv_quant_to_llama(k));
+            }
+            if let Some(v) = self.type_v {
+                ctx_params = ctx_params.with_type_v(kv_quant_to_llama(v));
+            }
 
             let backend = backend()?;
             let ctx = self.model.new_context(&backend, ctx_params).map_err(|e| {
@@ -190,6 +210,8 @@ impl ChatEngine {
                 model_path.to_string(),
                 self.config.n_ctx,
                 self.config.n_threads,
+                self.config.type_k,
+                self.config.type_v,
             );
 
             {
@@ -985,6 +1007,15 @@ impl ChatEngine {
         {
             false
         }
+    }
+}
+
+/// Convert our `KvCacheQuantType` to the llama-cpp-2 `KvCacheType`.
+#[cfg(feature = "chat-service")]
+fn kv_quant_to_llama(q: crate::chat::types::KvCacheQuantType) -> KvCacheType {
+    match q {
+        crate::chat::types::KvCacheQuantType::Q8_0 => KvCacheType::Q8_0,
+        crate::chat::types::KvCacheQuantType::Q4_0 => KvCacheType::Q4_0,
     }
 }
 

@@ -285,6 +285,8 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                         family: ModelFamily::Ollama,
                         context_window,
                         default_temperature: 0.7,
+                        type_k: None,
+                        type_v: None,
                     }))
                 }
                 Err(e) => {
