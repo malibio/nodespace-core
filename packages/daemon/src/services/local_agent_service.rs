@@ -22,7 +22,7 @@ use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-use nodespace_agent::local_agent::tools::GraphToolExecutor;
+use nodespace_agent::local_agent::tools::{GraphToolExecutor, SharedEmbeddingService};
 use nodespace_core::models::{NodeFilter, NodeUpdate};
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use tokio::sync::{broadcast, Mutex, RwLock};
@@ -82,7 +82,7 @@ struct LocalAgentServiceInner {
     model_manager: Arc<CompositeModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
-    embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
+    embedding_service: SharedEmbeddingService,
     /// Broadcast channel for streaming tokens → all SubscribeTokenStream clients.
     token_tx: broadcast::Sender<AgentChunk>,
     /// Cancellation tokens keyed by node_id.
@@ -97,10 +97,7 @@ pub struct LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
-    pub fn new(
-        node_service: Arc<NodeService>,
-        embedding_service: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
-    ) -> Self {
+    pub fn new(node_service: Arc<NodeService>, embedding_service: SharedEmbeddingService) -> Self {
         let gguf =
             Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
         let ollama = Arc::new(OllamaModelManager::new());
@@ -111,7 +108,10 @@ impl LocalAgentServiceImpl {
 
         Self {
             inner: Arc::new(LocalAgentServiceInner {
-                service: RwLock::new(Arc::new(Self::build_noop_service(node_service.clone()))),
+                service: RwLock::new(Arc::new(Self::build_noop_service(
+                    node_service.clone(),
+                    embedding_service.clone(),
+                ))),
                 model_manager,
                 node_service,
                 active_model_id: Mutex::new(None),
@@ -124,11 +124,12 @@ impl LocalAgentServiceImpl {
 
     fn build_noop_service(
         node_service: Arc<NodeService>,
+        embedding_service: SharedEmbeddingService,
     ) -> LocalAgentService<dyn ChatInferenceEngine, dyn AgentToolExecutor> {
         let engine: Arc<dyn ChatInferenceEngine> = Arc::new(NoOpInferenceEngine);
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(node_service),
-            embedding_service: None,
+            embedding_service,
         });
         LocalAgentService::new(engine, executor)
     }
@@ -138,15 +139,14 @@ impl LocalAgentServiceImpl {
     }
 
     async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
-        // Wire the embedding service into the tool executor so the agent can run
-        // search_semantic and so select_tools can skill-route (both need
-        // embeddings). It's populated in the background after model load; if it
-        // isn't ready yet the executor degrades to None and skill routing falls
-        // back to the full tool list until the next engine swap.
-        let embedding_service = self.inner.embedding_service.read().await.clone();
+        // Hand the executor the *shared* embedding handle, not a snapshot. The
+        // executor reads the current value per call, so search_semantic and
+        // skill-based select_tools work as soon as the embedding model finishes
+        // loading in the background — no engine swap required, and no
+        // construction site can wire a stale or `None` service.
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(self.inner.node_service.clone()),
-            embedding_service,
+            embedding_service: self.inner.embedding_service.clone(),
         });
 
         let prompt_assembler = Some(Arc::new(
@@ -183,7 +183,10 @@ impl LocalAgentServiceImpl {
 
     pub async fn reset_to_noop_engine(&self) {
         let mut guard = self.inner.service.write().await;
-        *guard = Arc::new(Self::build_noop_service(self.inner.node_service.clone()));
+        *guard = Arc::new(Self::build_noop_service(
+            self.inner.node_service.clone(),
+            self.inner.embedding_service.clone(),
+        ));
         drop(guard);
         *self.inner.active_model_id.lock().await = None;
         tracing::debug!("LocalAgentServiceImpl: inference engine reset to NoOp");
@@ -1220,7 +1223,7 @@ mod tests {
                 .expect("SqliteStore"),
         );
         let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
-        let embedding: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> = Arc::new(RwLock::new(None));
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
         let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding);
         (svc, node_service, tempdir)
     }
