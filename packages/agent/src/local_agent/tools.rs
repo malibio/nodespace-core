@@ -15,6 +15,18 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Shared handle to the embedding service.
+///
+/// The embedding model loads in a background task after daemon startup, so the
+/// service may be absent when the executor is built and appear later. Holding it
+/// behind a shared `RwLock` (rather than a captured snapshot) lets the executor
+/// read the *current* value on every call — it never gets wired with a stale or
+/// `None` service once one becomes available, and there is no engine-swap step
+/// to remember. The inner `Option` is `None` until the embedding model finishes
+/// loading.
+pub type SharedEmbeddingService = Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>;
 
 // ---------------------------------------------------------------------------
 // Agent-specific parameter structs
@@ -672,36 +684,14 @@ pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
 pub struct GraphToolExecutor {
     /// Node service for graph operations. `None` if services aren't initialized yet.
     pub node_service: Option<Arc<NodeService>>,
-    /// Embedding service for semantic search. `None` if unavailable.
-    pub embedding_service: Option<Arc<NodeEmbeddingService>>,
+    /// Shared handle to the embedding service for semantic search and skill
+    /// routing. Read per-call so the executor always sees the current value,
+    /// even when the embedding model finishes loading after this executor is
+    /// built. See [`SharedEmbeddingService`].
+    pub embedding_service: SharedEmbeddingService,
 }
 
 impl GraphToolExecutor {
-    /// Create a new executor with the given services.
-    pub fn new(
-        node_service: Arc<NodeService>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-    ) -> Self {
-        Self {
-            node_service: Some(node_service),
-            embedding_service,
-        }
-    }
-
-    /// Create an executor with optional services.
-    ///
-    /// Use when services may not be initialized yet (e.g., at startup).
-    /// Operations that need missing services will return a clear error.
-    pub fn new_with_optional_services(
-        node_service: Option<Arc<NodeService>>,
-        embedding_service: Option<Arc<NodeEmbeddingService>>,
-    ) -> Self {
-        Self {
-            node_service,
-            embedding_service,
-        }
-    }
-
     // -- Individual tool implementations --
 
     async fn exec_search_nodes(
@@ -809,7 +799,7 @@ impl GraphToolExecutor {
         let threshold = params.threshold.unwrap_or(SEMANTIC_THRESHOLD);
 
         let ns = self.node_service()?;
-        let emb = self.embedding_service()?;
+        let emb = self.embedding_service().await?;
 
         let input = search_ops::SearchSemanticInput {
             query: query.clone(),
@@ -1171,7 +1161,7 @@ impl GraphToolExecutor {
             })?;
         let limit = params.limit.unwrap_or(3);
 
-        let emb = match &self.embedding_service {
+        let emb = match self.embedding_service.read().await.clone() {
             Some(svc) => svc,
             None => {
                 return Ok(error_result(
@@ -1186,7 +1176,7 @@ impl GraphToolExecutor {
 
         use nodespace_core::ops::skill_ops;
         let output = skill_ops::find_skills(
-            emb,
+            &emb,
             &ns,
             skill_ops::FindSkillsInput {
                 query: params.query.clone(),
@@ -1384,8 +1374,14 @@ impl GraphToolExecutor {
             .ok_or_else(|| ToolError::ExecutionFailed("Node service unavailable".to_string()))
     }
 
-    fn embedding_service(&self) -> Result<Arc<NodeEmbeddingService>, ToolError> {
+    /// Read the current embedding service from the shared handle.
+    ///
+    /// Returns the value live each call, so a service that loaded after this
+    /// executor was built is picked up without any re-wiring.
+    async fn embedding_service(&self) -> Result<Arc<NodeEmbeddingService>, ToolError> {
         self.embedding_service
+            .read()
+            .await
             .clone()
             .ok_or_else(|| ToolError::ExecutionFailed("Embedding service unavailable".to_string()))
     }
@@ -1423,7 +1419,7 @@ impl AgentToolExecutor for GraphToolExecutor {
         query: &str,
         all_tools: Vec<ToolDefinition>,
     ) -> Vec<ToolDefinition> {
-        let emb = match &self.embedding_service {
+        let emb = match self.embedding_service.read().await.clone() {
             Some(svc) => svc,
             None => {
                 tracing::debug!("select_tools: no embedding service, using full tool list");
@@ -1441,7 +1437,7 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         use nodespace_core::ops::skill_ops;
         let skill_result = skill_ops::find_skills(
-            emb,
+            &emb,
             ns,
             skill_ops::FindSkillsInput {
                 query: query.to_string(),
@@ -1545,7 +1541,7 @@ mod tests {
     fn test_executor() -> GraphToolExecutor {
         GraphToolExecutor {
             node_service: None,
-            embedding_service: None,
+            embedding_service: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -2026,6 +2022,49 @@ mod tests {
                 baseline
             );
         }
+    }
+
+    // -- Embedding handle is read live (race fix, #1328) --
+
+    /// The executor must read the embedding service through the shared handle on
+    /// every call, not capture a snapshot at construction. This is what closes
+    /// the startup race: an executor built before the embedding model loads must
+    /// see the service the moment the background loader writes it — with no
+    /// engine swap or re-wiring.
+    ///
+    /// We can't construct a real `NodeEmbeddingService` here (it needs an NLP
+    /// engine), so we assert the structural guarantee: the executor holds the
+    /// *same* `Arc<RwLock<..>>` it was given. A `None → Some` write through that
+    /// handle is therefore observed by the executor by construction.
+    #[tokio::test]
+    async fn embedding_handle_is_shared_not_snapshotted() {
+        let handle: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let executor = GraphToolExecutor {
+            node_service: None,
+            embedding_service: handle.clone(),
+        };
+
+        // Same lock — a write through `handle` is visible to `executor`.
+        assert!(
+            Arc::ptr_eq(&handle, &executor.embedding_service),
+            "executor must hold the shared handle, not a captured snapshot"
+        );
+
+        // With the handle empty, the accessor and the skill path both report the
+        // service as unavailable — read live from the shared lock.
+        assert!(
+            executor.embedding_service().await.is_err(),
+            "empty handle must surface as unavailable"
+        );
+        let result = executor
+            .execute("search_skills", json!({ "query": "manage tasks" }))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.result["error"]
+            .as_str()
+            .unwrap()
+            .contains("embedding service"));
     }
 
     // -- Helper: node_uri / strip_node_uri round-trip --
