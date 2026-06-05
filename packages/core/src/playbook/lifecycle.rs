@@ -695,6 +695,19 @@ mod tests {
         let event = crate::db::events::DomainEvent::NodeUpdated {
             node_type: "task".to_string(),
             node_id: "n1".to_string(),
+            node: Node {
+                id: "n1".to_string(),
+                node_type: "task".to_string(),
+                content: String::new(),
+                version: 1,
+                created_at: Utc::now(),
+                modified_at: Utc::now(),
+                properties: json!({}),
+                mentions: vec![],
+                mentioned_in: vec![],
+                title: None,
+                lifecycle_status: "active".to_string(),
+            },
             changed_properties: vec![crate::db::events::PropertyChange {
                 key: "status".to_string(),
                 old_value: Some(json!("open")),

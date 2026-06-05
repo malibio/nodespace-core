@@ -176,6 +176,11 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
         NodeEventKind::Updated(data) => {
             // Match DomainEventForwarder: node:updated payload omits node_type
             // because the frontend already knows the type from its cached node.
+            debug!(
+                node_id = %data.id,
+                node_type = %data.node_type,
+                "WatchNodes → emitting node:updated"
+            );
             let payload = NodeIdPayload {
                 id: data.id,
                 node_type: None,

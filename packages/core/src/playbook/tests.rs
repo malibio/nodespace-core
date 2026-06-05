@@ -40,6 +40,23 @@ mod playbook_tests {
         node
     }
 
+    /// Helper: create a minimal node for test events.
+    fn make_node(id: &str, node_type: &str) -> Node {
+        Node {
+            id: id.to_string(),
+            node_type: node_type.to_string(),
+            content: String::new(),
+            version: 1,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            properties: json!({}),
+            mentions: vec![],
+            mentioned_in: vec![],
+            title: None,
+            lifecycle_status: "active".to_string(),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Rule parsing tests
     // -----------------------------------------------------------------------
@@ -570,6 +587,7 @@ mod playbook_tests {
         let event = DomainEvent::NodeUpdated {
             node_id: "node:123".to_string(),
             node_type: "invoice".to_string(),
+            node: make_node("node:123", "invoice"),
             changed_properties: vec![
                 PropertyChange {
                     key: "invoice.status".to_string(),
@@ -610,6 +628,7 @@ mod playbook_tests {
         let event = DomainEvent::NodeUpdated {
             node_id: "node:123".to_string(),
             node_type: "invoice".to_string(),
+            node: make_node("node:123", "invoice"),
             changed_properties: vec![],
         };
 
@@ -980,6 +999,7 @@ mod playbook_tests {
         let event = DomainEvent::NodeUpdated {
             node_id: "node:xyz".to_string(),
             node_type: "task".to_string(),
+            node: make_node("node:xyz", "task"),
             changed_properties: vec![],
         };
         assert_eq!(
@@ -1097,6 +1117,7 @@ mod playbook_tests {
             event: DomainEvent::NodeUpdated {
                 node_id: "node:invoice-1".to_string(),
                 node_type: "invoice".to_string(),
+                node: trigger_node.clone(),
                 changed_properties: vec![PropertyChange {
                     key: "status".to_string(),
                     old_value: Some(json!("draft")),

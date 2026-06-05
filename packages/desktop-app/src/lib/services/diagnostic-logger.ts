@@ -236,7 +236,7 @@ function truncateArgs(args: unknown[]): unknown[] {
     if (typeof arg === 'object') {
       const str = JSON.stringify(arg);
       if (str.length > 500) {
-        return JSON.parse(str.substring(0, 497) + '..."}');
+        return `[Object truncated: ${str.substring(0, 200)}...]`;
       }
       return arg;
     }
