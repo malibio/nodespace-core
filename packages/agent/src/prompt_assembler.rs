@@ -46,8 +46,10 @@ const MAX_PROMPT_NODES: usize = 50;
 
 /// Minimal emergency fallback when no prompt nodes exist in the graph.
 /// This should only fire on corrupted/empty databases — normal operation
-/// reads all prompt content from graph nodes seeded on first run.
-const EMERGENCY_FALLBACK_PROMPT: &str = "\
+/// reads all prompt content from graph nodes seeded on first run. Also used
+/// by the agent loop when no `PromptAssembler` is wired (only the daemon's
+/// no-op/idle state, which never runs inference).
+pub(crate) const EMERGENCY_FALLBACK_PROMPT: &str = "\
 You are NodeSpace's built-in assistant. You help users work with their \
 knowledge graph — creating, finding, updating, and connecting nodes.\n\n\
 Use the available tools to accomplish tasks. Summarize results in natural language.";
