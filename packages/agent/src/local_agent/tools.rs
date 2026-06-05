@@ -749,13 +749,13 @@ impl Tool {
             Tool::GetNode => "node lookup",
             Tool::CreateNode => "node creation",
             Tool::UpdateNode => "node update",
-            Tool::DeleteNode => "node deletion",
             Tool::CreateSchema => "schema creation",
             Tool::UpdateSchema => "schema update",
             Tool::UpdateTaskStatus => "task update",
             Tool::CreateRelationship => "relationship creation",
             Tool::GetRelatedNodes => "related node lookup",
             Tool::SearchSkills => "skill search",
+            Tool::DeleteNode => "node deletion",
             Tool::CreateNodesFromMarkdown => "markdown import",
         }
     }
