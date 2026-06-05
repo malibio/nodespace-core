@@ -17,11 +17,16 @@ pub mod schema;
 pub mod time;
 
 // Type-safe node wrappers
+mod ai_chat_node;
 mod collection_node;
 mod date_node;
 mod schema_node;
 mod task_node;
 mod text_node;
+
+#[cfg(test)]
+#[path = "ai_chat_node_test.rs"]
+mod ai_chat_node_test;
 
 #[cfg(test)]
 #[path = "task_node_test.rs"]
@@ -51,6 +56,7 @@ pub mod ordered_list_node;
 #[path = "ordered_list_node_test.rs"]
 mod ordered_list_node_test;
 
+pub use ai_chat_node::{AiChatMessage, AiChatNode};
 pub use code_block_node::{CodeBlockNode, CodeBlockValidationError};
 pub use node::{
     DeleteResult, FilterOperator, Node, NodeFilter, NodeQuery, NodeReference, NodeRelationship,
@@ -98,6 +104,10 @@ pub fn node_to_typed_value(node: Node) -> Result<serde_json::Value, String> {
         "task" => {
             let task = TaskNode::from_node(node).map_err(|e| e.to_string())?;
             serde_json::to_value(task)
+        }
+        "ai-chat" => {
+            let chat = AiChatNode::from_node(node).map_err(|e| e.to_string())?;
+            serde_json::to_value(chat)
         }
         "schema" => {
             let schema = SchemaNode::from_node(node).map_err(|e| e.to_string())?;
