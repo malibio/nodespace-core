@@ -406,25 +406,17 @@ impl LocalAgentServiceImpl {
                 });
 
                 // Append assistant message; also atomically sets status: idle.
-                // Pull both the content and the captured reasoning from the
-                // session's last assistant message, falling back to the turn result.
-                let (assistant_content, assistant_reasoning) = service
-                    .get_session(&session_id)
-                    .await
-                    .and_then(|s| {
-                        s.messages
-                            .into_iter()
-                            .rev()
-                            .find(|m| m.role == Role::Assistant)
-                            .map(|m| (m.content, m.reasoning))
-                    })
-                    .unwrap_or_else(|| (result.response.clone(), result.reasoning.clone()));
-
+                // `AgentTurnResult` is the authoritative current-turn output: every
+                // return path (normal, no-tools-final, synthesized fallback, empty)
+                // sets `response`/`reasoning` for *this* turn. Using it directly avoids
+                // a session-history scan that, on the fallback branches (which do not
+                // push an assistant message), could surface a *previous* turn's
+                // content/reasoning instead.
                 match self
                     .append_assistant_message(
                         &node_id,
-                        &assistant_content,
-                        assistant_reasoning.as_deref(),
+                        &result.response,
+                        result.reasoning.as_deref(),
                     )
                     .await
                 {
@@ -1227,13 +1219,8 @@ mod tests {
                 .await
                 .expect("SqliteStore"),
         );
-        let node_service = Arc::new(
-            CoreNodeService::new(&mut store)
-                .await
-                .expect("NodeService"),
-        );
-        let embedding: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> =
-            Arc::new(RwLock::new(None));
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let embedding: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> = Arc::new(RwLock::new(None));
         let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding);
         (svc, node_service, tempdir)
     }
@@ -1244,7 +1231,10 @@ mod tests {
             "Test chat".to_string(),
             serde_json::json!({ "ai-chat": { "messages": [] } }),
         );
-        node_service.create_node(node).await.expect("create ai-chat")
+        node_service
+            .create_node(node)
+            .await
+            .expect("create ai-chat")
     }
 
     #[tokio::test]
