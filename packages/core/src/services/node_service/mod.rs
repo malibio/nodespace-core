@@ -3604,8 +3604,9 @@ mod tests {
         );
     }
 
-    /// `bulk_create_hierarchy_trusted` must emit at most one Created event per root
-    /// node regardless of how many child nodes are inserted beneath it (Issue #1311).
+    /// `bulk_create_hierarchy_trusted` must emit exactly one Created event per inserted
+    /// node with no duplicates, delivered in a single flush rather than one-at-a-time
+    /// (Issue #1311). The batch guard coalesces last-write-wins per node_id on drop.
     #[tokio::test]
     async fn bulk_create_hierarchy_trusted_coalesces_events_per_root() {
         let (service, _temp) = create_test_service().await;
@@ -3653,11 +3654,7 @@ mod tests {
             events.push(env);
         }
 
-        // Without the batch guard, three Created events would fire (one per node).
-        // With the guard, last-write-wins coalesces them to one per unique node_id,
-        // so we expect exactly three distinct events — but crucially the subscriber
-        // is not flooded: all arrive in a single flush rather than one at a time.
-        // More specifically, each node still gets exactly one event (no duplicates).
+        // One event per node, no duplicates — all arrive in a single flush.
         assert_eq!(
             events.len(),
             3,

@@ -400,7 +400,8 @@ impl NodeService {
         // inserted node, flooding WatchNodes subscribers on large imports.
         let _batch = self.begin_batch_emit();
 
-        // Delegate to store - use root-only notify variant for efficiency
+        // Delegate to store (fires one notification per inserted node at the store
+        // layer; the batch guard above coalesces them into a single flush on drop).
         let result = self
             .store
             .bulk_create_hierarchy_root_notify(nodes_normalized, vec![])
