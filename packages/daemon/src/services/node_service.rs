@@ -90,7 +90,6 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
 
         let properties = parse_properties(&req.properties).map_err(properties_error)?;
-        let parent_id_opt = req.parent_id;
 
         use crate::nodespace::create_node_request::Position as CreatePos;
         let position = match req.position {
@@ -104,7 +103,7 @@ impl GrpcNodeService for NodeServiceImpl {
             id: req.id,
             node_type: req.node_type,
             content: req.content,
-            parent_id: parent_id_opt.clone(),
+            parent_id: req.parent_id,
             position,
             properties,
             collection: req.collection,
@@ -117,15 +116,11 @@ impl GrpcNodeService for NodeServiceImpl {
 
         let node = fetch_node(&self.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
-        let parent_id = parent_id_opt.unwrap_or_default();
-        let collection_id = output.collection_id;
 
         Ok(Response::new(NodeResponse {
             node_id: output.node_id,
             node_type,
-            parent_id,
-            collection_id: collection_id.clone().unwrap_or_default(),
-            node_data: Some(node_to_proto(node, None, collection_id)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -141,9 +136,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id: req.node_id,
             node_type,
-            parent_id: String::new(),
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -175,14 +168,11 @@ impl GrpcNodeService for NodeServiceImpl {
 
         let node = fetch_node(&self.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
-        let collection_id = output.collection_added;
 
         Ok(Response::new(NodeResponse {
             node_id: output.node_id,
             node_type,
-            parent_id: String::new(),
-            collection_id: collection_id.clone().unwrap_or_default(),
-            node_data: Some(node_to_proto(node, None, collection_id)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -229,11 +219,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let parent_id = req.node_id.clone();
-        let nodes: Vec<NodeData> = children
-            .into_iter()
-            .map(|n| node_to_proto(n, Some(parent_id.clone()), None))
-            .collect();
+        let nodes: Vec<NodeData> = children.into_iter().map(node_to_proto).collect();
 
         let count = nodes.len() as i32;
 
@@ -282,10 +268,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let nodes: Vec<NodeData> = roots
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let nodes: Vec<NodeData> = roots.into_iter().map(node_to_proto).collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -366,7 +349,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 continue;
             };
             match self.node_service.get_node(id).await {
-                Ok(Some(node)) => nodes.push(node_to_proto(node, None, None)),
+                Ok(Some(node)) => nodes.push(node_to_proto(node)),
                 Ok(None) => tracing::warn!(node_id = %id, "search result missing on re-fetch"),
                 Err(e) => {
                     tracing::warn!(node_id = %id, error = %e, "failed to re-fetch search result")
@@ -412,10 +395,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let proto_nodes: Vec<NodeData> = nodes
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let proto_nodes: Vec<NodeData> = nodes.into_iter().map(node_to_proto).collect();
         let count = proto_nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -443,10 +423,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let proto_nodes: Vec<NodeData> = nodes
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let proto_nodes: Vec<NodeData> = nodes.into_iter().map(node_to_proto).collect();
         let count = proto_nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -479,9 +456,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id: req.node_id,
             node_type,
-            parent_id: req.parent_id,
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -512,9 +487,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id: node.id.clone(),
             node_type,
-            parent_id: new_parent.unwrap_or_default(),
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -558,10 +531,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let children_proto = updated
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let children_proto = updated.into_iter().map(node_to_proto).collect();
 
         Ok(Response::new(MoveChildrenToParentResponse {
             children: children_proto,
@@ -704,9 +674,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id,
             node_type,
-            parent_id: String::new(),
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -789,10 +757,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .cloned()
             .collect();
 
-        let nodes: Vec<NodeData> = fetched
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let nodes: Vec<NodeData> = fetched.into_iter().map(node_to_proto).collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(GetNodesBatchResponse {
@@ -910,10 +875,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let proto_nodes: Vec<NodeData> = nodes
-            .into_iter()
-            .map(|n| node_to_proto(n, None, None))
-            .collect();
+        let proto_nodes: Vec<NodeData> = nodes.into_iter().map(node_to_proto).collect();
         let count = proto_nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -939,9 +901,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id: req.schema_id,
             node_type,
-            parent_id: String::new(),
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -960,7 +920,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .collections
             .into_iter()
             .map(|e| CollectionInfo {
-                node: Some(node_to_proto(e.node, None, None)),
+                node: Some(node_to_proto(e.node)),
                 member_count: e.member_count as u32,
                 parent_collection_ids: e.parent_collection_ids,
             })
@@ -983,11 +943,7 @@ impl GrpcNodeService for NodeServiceImpl {
         .await
         .map_err(ops_error_to_status)?;
 
-        let nodes: Vec<NodeData> = output
-            .members
-            .into_iter()
-            .map(|n| node_to_proto(n, None, Some(output.collection_id.clone())))
-            .collect();
+        let nodes: Vec<NodeData> = output.members.into_iter().map(node_to_proto).collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -1011,11 +967,7 @@ impl GrpcNodeService for NodeServiceImpl {
         .await
         .map_err(ops_error_to_status)?;
 
-        let nodes: Vec<NodeData> = output
-            .members
-            .into_iter()
-            .map(|n| node_to_proto(n, None, Some(output.collection_id.clone())))
-            .collect();
+        let nodes: Vec<NodeData> = output.members.into_iter().map(node_to_proto).collect();
         let count = nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -1116,9 +1068,7 @@ impl GrpcNodeService for NodeServiceImpl {
             NodeResponse {
                 node_id,
                 node_type,
-                parent_id: String::new(),
-                collection_id: String::new(),
-                node_data: Some(node_to_proto(n, None, None)),
+                node_data: Some(node_to_proto(n)),
             }
         });
         Ok(Response::new(OptionalNodeResponse {
@@ -1144,9 +1094,7 @@ impl GrpcNodeService for NodeServiceImpl {
             NodeResponse {
                 node_id,
                 node_type,
-                parent_id: String::new(),
-                collection_id: String::new(),
-                node_data: Some(node_to_proto(n, None, None)),
+                node_data: Some(node_to_proto(n)),
             }
         });
         Ok(Response::new(OptionalNodeResponse {
@@ -1196,9 +1144,7 @@ impl GrpcNodeService for NodeServiceImpl {
         Ok(Response::new(NodeResponse {
             node_id,
             node_type,
-            parent_id: String::new(),
-            collection_id: String::new(),
-            node_data: Some(node_to_proto(node, None, None)),
+            node_data: Some(node_to_proto(node)),
         }))
     }
 
@@ -1307,22 +1253,16 @@ async fn fetch_node(service: &Arc<CoreNodeService>, node_id: &str) -> Result<Nod
         .ok_or_else(|| Status::not_found(format!("Node not found: {}", node_id)))
 }
 
-pub(crate) fn node_to_proto(
-    node: Node,
-    parent_id: Option<String>,
-    collection_id: Option<String>,
-) -> NodeData {
+pub(crate) fn node_to_proto(node: Node) -> NodeData {
     NodeData {
         id: node.id,
         node_type: node.node_type,
         content: node.content,
-        parent_id,
         properties: node.properties.to_string(),
         version: node.version,
         lifecycle_status: node.lifecycle_status,
         created_at: node.created_at.to_rfc3339(),
         modified_at: node.modified_at.to_rfc3339(),
-        collection_id: collection_id.unwrap_or_default(),
     }
 }
 
@@ -1344,7 +1284,7 @@ async fn convert_domain_event(
     match event {
         DomainEvent::NodeCreated { node_id, .. } => match node_service.get_node(node_id).await {
             Ok(Some(node)) => Some(NodeEvent {
-                event: Some(NodeEventKind::Created(node_to_proto(node, None, None))),
+                event: Some(NodeEventKind::Created(node_to_proto(node))),
             }),
             Ok(None) => {
                 tracing::debug!(node_id = %node_id, "NodeCreated event skipped: node already gone");
@@ -1563,10 +1503,13 @@ mod tests {
         let rpc_resp = svc.create_node(rpc_req).await.unwrap().into_inner();
         let rpc_node_id = rpc_resp.node_id.clone();
 
-        // Assert collection membership was set
+        // Assert collection membership was set (via dedicated API, not wire response)
+        let store = svc.node_service.store();
+        let coll_svc = CollectionService::new(store, &svc.node_service);
+        let node_collections = coll_svc.get_node_collections(&rpc_node_id).await.unwrap();
         assert!(
-            !rpc_resp.collection_id.is_empty(),
-            "RPC handler must populate collection_id"
+            !node_collections.is_empty(),
+            "RPC handler must add node to collection"
         );
         // Assert lifecycle_status is reflected in returned NodeData
         let rpc_node_data = rpc_resp.node_data.unwrap();
@@ -1590,7 +1533,9 @@ mod tests {
             .await
             .unwrap();
 
-        // Both nodes should be in a collection and have lifecycle_status=archived
+        // ops-layer output struct carries collection_id directly (not the wire response,
+        // which no longer exposes per-node collection_id; see NodeData proto).
+        // This assertion tests the ops layer's own return contract, not the wire format.
         assert!(
             ops_output.collection_id.is_some(),
             "ops must populate collection_id"
@@ -1671,21 +1616,17 @@ mod tests {
             remove_from_collection: None,
             lifecycle_status: None,
         });
-        let added = svc.update_node(add_req).await.unwrap().into_inner();
-        let collection_id = added.collection_id.clone();
-        assert!(
-            !collection_id.is_empty(),
-            "add_to_collection must return collection_id"
-        );
+        svc.update_node(add_req).await.unwrap();
 
-        // Verify membership via core
+        // Verify membership via dedicated API (collection_id no longer in NodeResponse)
         let store = svc.node_service.store();
         let coll_svc = CollectionService::new(store, &svc.node_service);
         let members_before: Vec<String> = coll_svc.get_node_collections(&node_id).await.unwrap();
         assert!(
-            members_before.contains(&collection_id),
+            !members_before.is_empty(),
             "node must be in collection after add"
         );
+        let collection_id = members_before[0].clone();
 
         // Remove from collection via update
         let remove_req = Request::new(crate::nodespace::UpdateNodeRequest {
