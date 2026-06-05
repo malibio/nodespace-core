@@ -1702,6 +1702,21 @@ export class SharedNodeStore {
     // Add all nodes to the store
     for (const node of normalizedNodes) {
       const existingNode = this.nodes.get(node.id);
+
+      // Same guard as setNode: never overwrite an ai-chat node with a snapshot
+      // that has fewer messages than what's already in the store.
+      if (node.nodeType === 'ai-chat' && source.type === 'database' && existingNode) {
+        type AiChatLike = Node & { messages?: unknown[] };
+        const incomingMsgs = (node as AiChatLike).messages;
+        const existingMsgs = (existingNode as AiChatLike).messages;
+        const incomingCount = Array.isArray(incomingMsgs) ? incomingMsgs.length : 0;
+        const existingCount = Array.isArray(existingMsgs) ? existingMsgs.length : 0;
+        if (incomingCount < existingCount) {
+          log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id, incomingCount, existingCount });
+          continue;
+        }
+      }
+
       const isHierarchyChange = !existingNode;
 
       if (isHierarchyChange) {

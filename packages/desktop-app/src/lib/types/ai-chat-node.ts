@@ -44,9 +44,10 @@ export function isAiChatNode(node: Node | AiChatNode): node is AiChatNode {
  * - Already promoted: node.messages, node.status (already an AiChatNode)
  */
 export function nodeToAiChatNode(node: Node): AiChatNode {
-  // Already promoted
-  if ('messages' in node && Array.isArray((node as AiChatNode).messages)) {
-    return node as unknown as AiChatNode;
+  // Already promoted (messages already at top level)
+  const nodeAsAny = node as unknown as AiChatNode;
+  if ('messages' in node && Array.isArray(nodeAsAny.messages)) {
+    return nodeAsAny;
   }
 
   const props = node.properties as Record<string, unknown> | undefined;
@@ -64,7 +65,7 @@ export function nodeToAiChatNode(node: Node): AiChatNode {
     nodeType: 'ai-chat',
     content: node.content,
     version: node.version,
-    lifecycleStatus: node.lifecycleStatus,
+    lifecycleStatus: (node as unknown as { lifecycleStatus?: string }).lifecycleStatus,
     createdAt: node.createdAt,
     modifiedAt: node.modifiedAt,
     status,

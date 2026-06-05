@@ -2,7 +2,7 @@
 //!
 //! The daemon watches for `NodeUpdated`/`NodeCreated` events on `ai-chat` nodes.
 //! When the last message in `properties['ai-chat']['messages']` has `role: 'user'`
-//! and `status != 'processing'`, it triggers an inference turn in-process.
+//! and `status == 'processing'`, it triggers an inference turn in-process.
 //!
 //! Streaming tokens are broadcast to any connected `SubscribeTokenStream` client
 //! (the Tauri process), which translates them to Tauri events for the frontend.

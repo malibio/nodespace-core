@@ -126,9 +126,17 @@
   /** Persist a provider mode change onto the node. */
   function selectProvider(p: Provider): void {
     if (p === provider) return;
+    const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: { provider: p } },
+      {
+        properties: {
+          messages: current?.messages ?? [],
+          status: current?.status ?? 'active',
+          model: current?.model,
+          provider: p,
+        },
+      },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
   }
@@ -170,7 +178,7 @@
       return;
     }
 
-    const existingMessages = Array.isArray((current as AiChatNode).messages) ? (current as AiChatNode).messages : [];
+    const existingMessages = Array.isArray((current as unknown as AiChatNode).messages) ? (current as unknown as AiChatNode).messages : [];
     const newMessage = {
       role: 'user' as const,
       content: trimmed,
