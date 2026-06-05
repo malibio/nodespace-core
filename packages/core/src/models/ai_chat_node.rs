@@ -165,6 +165,13 @@ impl AiChatNode {
     /// Use this to splice the typed fields back into an existing `properties`
     /// object without disturbing sibling namespaces — the read-modify-write
     /// pattern the daemon relies on.
+    ///
+    /// `AiChatNode` is the authoritative model for the `"ai-chat"` namespace:
+    /// this rebuilds the namespace value entirely from the struct's fields, so
+    /// every key stored under `"ai-chat"` MUST be represented as a field here.
+    /// An unmodeled key would be dropped on the next write — when adding a field
+    /// to the stored shape, add it to the struct too. (Sibling namespaces
+    /// outside `"ai-chat"` are untouched; only this namespace is rebuilt.)
     pub fn to_properties_value(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         map.insert("status".to_string(), serde_json::json!(self.status));
