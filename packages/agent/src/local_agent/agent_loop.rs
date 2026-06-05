@@ -29,6 +29,16 @@ use crate::prompt_assembler::{PromptAssembler, TemplateContext};
 /// Maximum number of tool-call iterations per turn.
 const MAX_TOOL_ITERATIONS: usize = 5;
 
+/// Maximum tokens any single inference round may generate.
+///
+/// Small local models (e.g. Gemma-4-E4B) occasionally open an empty
+/// assistant turn with nothing to say and then run away to the model's
+/// hard ceiling, producing a multi-minute hang that surfaces to the user
+/// as "no reply". A tight cap bounds any such runaway to a couple of
+/// seconds while still leaving ample room for a normal chat reply or a
+/// tool-call argument blob.
+const MAX_RESPONSE_TOKENS: u32 = 2_048;
+
 /// Total token budget for the context window.
 const TOTAL_TOKEN_BUDGET: u32 = 32_000;
 
@@ -222,7 +232,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 messages,
                 tools: Some(tools.clone()),
                 temperature: Some(0.1),
-                max_tokens: Some(16384),
+                max_tokens: Some(MAX_RESPONSE_TOKENS),
             };
 
             // Run inference
@@ -311,10 +321,20 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Append the assistant message that issued these tool calls, carrying
             // the structured tool_calls so the next re-prompt produces a
             // well-formed turn (assistant tool_calls → matching tool results).
+            //
+            // Drop any prose the model emitted alongside the tool call. Small
+            // models (Gemma 4) tend to narrate ("Let me search…") in the same
+            // turn as a tool call; when re-prompted, the chat template collapses
+            // that prose + the tool_call + the following tool result into a
+            // single malformed assistant turn, then opens an empty turn the
+            // model fills by running away to the token cap. Persisting only the
+            // tool_calls keeps the turn structurally clean: the assistant turn
+            // is purely the call, and the answer is produced in a later turn
+            // once the tool results are in hand.
             session
                 .messages
                 .push(ChatMessage::assistant_with_tool_calls(
-                    response_text.clone(),
+                    String::new(),
                     tool_calls.clone(),
                 ));
 
@@ -409,7 +429,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     messages,
                     tools: None, // No tools — force text response
                     temperature: Some(0.1),
-                    max_tokens: Some(16384),
+                    max_tokens: Some(MAX_RESPONSE_TOKENS),
                 };
 
                 if let Ok(usage) = self.engine.generate(final_request, final_callback).await {

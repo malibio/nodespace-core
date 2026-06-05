@@ -127,24 +127,28 @@ impl PromptAssembler {
             filters: None,
         };
 
-        let all_nodes: Vec<Node> =
-            match nodespace_core::ops::node_ops::query_nodes(&self.node_service, filter).await {
-                Ok(result) => result
-                    .nodes
-                    .into_iter()
-                    .filter_map(|v| match serde_json::from_value(v) {
-                        Ok(node) => Some(node),
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to deserialize prompt node, skipping");
-                            None
-                        }
-                    })
-                    .collect(),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to fetch prompt overrides, using base only");
-                    return Vec::new();
-                }
-            };
+        let all_nodes: Vec<Node> = match nodespace_core::ops::node_ops::query_nodes(
+            &self.node_service,
+            filter,
+        )
+        .await
+        {
+            Ok(result) => result
+                .nodes
+                .into_iter()
+                .filter_map(|v| match serde_json::from_value(v) {
+                    Ok(node) => Some(node),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to deserialize prompt node, skipping");
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch prompt overrides, using base only");
+                return Vec::new();
+            }
+        };
 
         // Keep only true root nodes (no parent edge pointing to them).
         // query_nodes ignores parent_id filter, so all prompt nodes are returned;
@@ -315,8 +319,8 @@ impl PromptAssembler {
                     - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
                     - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
-                    - Empty results: say so. Do NOT retry the same query.\n\
-                    - Keep responses under 3 sentences unless asked for detail.",
+                    - Empty/error tool result: state it in one sentence and stop. Do NOT retry the same tool, and do NOT call another tool to compensate — just answer.\n\
+                    - Keep responses to 1-2 sentences unless the user asks for detail. No preamble, no sign-off.",
                     NODE_REFERENCE_FORMAT
                 ),
             },
@@ -368,9 +372,11 @@ mod tests {
             .map(|s| (s.title.as_str(), s.markdown_content.as_str()))
             .collect();
 
-        let expected_tool_strategy = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\n\
+        let expected_tool_strategy = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\
+            \"DATABASE\" = SCHEMA: When the user asks to set up a tracker, database, system, or \"a way to track X\" (e.g. \"create an invoice tracking database\", \"set up a CRM\"), they want a new entity TYPE — call create_schema to define it, not search or create_node. The singular entity name is the schema (an \"invoice tracking database\" → an Invoice schema).\n\n\
             TOOL STRATEGY:\n\
-            - Before any non-conversational action: call search_skills(query) to find a matching skill. Empty result = no skill, proceed with general tools. Skip for greetings/small talk.\n\
+            - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool, not even search_skills. Only reach for tools when the user asks you to find, create, update, delete, or connect something in their graph.\n\
+            - For a real graph action: call search_skills(query) first to find a matching skill. Empty result = no skill, proceed with general tools.\n\
             - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
             - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
             - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
@@ -387,8 +393,8 @@ mod tests {
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
             - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
-            - Empty results: say so. Do NOT retry the same query.\n\
-            - Keep responses under 3 sentences unless asked for detail.";
+            - Empty/error tool result: state it in one sentence and stop. Do NOT retry the same tool, and do NOT call another tool to compensate — just answer.\n\
+            - Keep responses to 1-2 sentences unless the user asks for detail. No preamble, no sign-off.";
 
         assert_eq!(
             by_title.get("Tool Strategy Guide").copied(),

@@ -381,7 +381,16 @@ impl ChatEngine {
             .map_err(|e| ChatError::InferenceError(format!("Prompt decode failed: {}", e)))?;
 
         // --- Sampling setup ---
+        // A repetition penalty runs first so it reshapes the logits before the
+        // temperature softens them. Without it, small models at near-greedy
+        // temperature (0.1) fall into degenerate loops — repeating a closing
+        // phrase like "I'm ready to help you. What would you like to do next?"
+        // until they exhaust max_tokens (a ~100s hang that never emits the
+        // <end_of_turn> stop token). penalty_last_n=256 covers the recent
+        // window; repeat=1.3 is firm enough to escape a loop without distorting
+        // normal prose. Frequency/presence penalties stay disabled (0.0).
         let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(256, 1.3, 0.0, 0.0),
             LlamaSampler::temp(temperature),
             LlamaSampler::dist(0), // seed=0 for deterministic given temperature
         ]);
@@ -540,6 +549,8 @@ fn strip_gemma_special_tokens(s: &str) -> String {
         "<|turn>",
         "<end_of_turn>",
         "<start_of_turn>",
+        "<|channel>",
+        "<channel|>",
     ];
     let mut out = s.to_string();
     for token in SPECIAL {
@@ -658,23 +669,45 @@ impl ChatEngine {
                     // `tool_calls` so the template pairs them with the following
                     // `tool` result messages. Arguments are passed through as the
                     // raw JSON string the model produced.
+                    //
+                    // Arguments must be a valid JSON object string. A model that
+                    // emits a malformed/empty tool call (e.g. `create_schema` with
+                    // no args) would otherwise feed `""` straight into the Jinja
+                    // template, which then fails to apply (llama.cpp `ffi error
+                    // -3`) and aborts the whole turn. Normalize any non-object
+                    // arguments to `"{}"` so the template always renders.
                     let tool_calls: Vec<serde_json::Value> = msg
                         .tool_calls
                         .iter()
                         .map(|tc| {
+                            let arguments =
+                                match serde_json::from_str::<serde_json::Value>(&tc.arguments) {
+                                    Ok(v) if v.is_object() => tc.arguments.clone(),
+                                    _ => "{}".to_string(),
+                                };
                             serde_json::json!({
                                 "id": tc.id,
                                 "type": "function",
                                 "function": {
                                     "name": tc.name,
-                                    "arguments": tc.arguments,
+                                    "arguments": arguments,
                                 }
                             })
                         })
                         .collect();
+                    // OpenAI convention: a tool-call assistant turn carries
+                    // `content: null` when it has no accompanying text. Emitting
+                    // an empty string here instead can make the Jinja template
+                    // fail to apply (llama.cpp `ffi error -3`); `null` is the
+                    // shape the OAI-compat path expects.
+                    let content: serde_json::Value = if msg.content.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(msg.content.clone())
+                    };
                     serde_json::json!({
                         "role": "assistant",
-                        "content": msg.content,
+                        "content": content,
                         "tool_calls": tool_calls,
                     })
                 } else {

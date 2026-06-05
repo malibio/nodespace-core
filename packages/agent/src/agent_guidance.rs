@@ -17,7 +17,8 @@
 /// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
 /// should be consolidated here when that path is unified — tracked separately
 /// from #1089.
-pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.";
+pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\
+    \"DATABASE\" = SCHEMA: When the user asks to set up a tracker, database, system, or \"a way to track X\" (e.g. \"create an invoice tracking database\", \"set up a CRM\"), they want a new entity TYPE — call create_schema to define it, not search or create_node. The singular entity name is the schema (an \"invoice tracking database\" → an Invoice schema).";
 
 /// Tool strategy guidance.
 ///
@@ -26,7 +27,8 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// search_semantic, and canonical create/update/connect patterns. Parameter-level
 /// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
-    - Before any non-conversational action: call search_skills(query) to find a matching skill. Empty result = no skill, proceed with general tools. Skip for greetings/small talk.\n\
+    - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool, not even search_skills. Only reach for tools when the user asks you to find, create, update, delete, or connect something in their graph.\n\
+    - For a real graph action: call search_skills(query) first to find a matching skill. Empty result = no skill, proceed with general tools.\n\
     - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
     - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
