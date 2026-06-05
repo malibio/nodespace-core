@@ -20,7 +20,7 @@ use crate::agent_types::{
 };
 use crate::local_agent::prompt_templates;
 use crate::local_agent::response_processing::normalize_response;
-use crate::prompt_assembler::{PromptAssembler, TemplateContext};
+use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -170,9 +170,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             workspace_context: dynamic_ctx.to_string(),
         };
 
-        // Build the system prompt: test override > graph assembler > fallback.
+        // Build the system prompt: test override > graph assembler > emergency.
         // `session_prompt_override` returns `None` in production builds (see
-        // the `testing` feature on the agent crate).
+        // the `testing` feature on the agent crate). Production inference always
+        // wires a `PromptAssembler`; the emergency arm only fires for the
+        // daemon's no-op/idle service, which never reaches live inference.
         let system_content = if let Some(override_prompt) = session_prompt_override(session) {
             override_prompt.to_string()
         } else if let Some(ref assembler) = self.prompt_assembler {
@@ -181,7 +183,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 .await
                 .system_prompt
         } else {
-            prompt_templates::fallback_system_prompt(dynamic_ctx)
+            EMERGENCY_FALLBACK_PROMPT.to_string()
         };
 
         let effective_max_iterations = MAX_TOOL_ITERATIONS;
@@ -826,7 +828,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
 
     /// Override the full system prompt for a session.
     ///
-    /// When set, this bypasses both `PromptAssembler` and `fallback_system_prompt`.
+    /// When set, this bypasses both `PromptAssembler` and the emergency fallback.
     /// Intended for integration tests that want to inject a pre-built prompt
     /// (constructed via `PromptAssembler::assemble_static`) without a live database.
     ///
