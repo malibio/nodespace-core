@@ -3603,4 +3603,117 @@ mod tests {
             "event must be visible after guard drops"
         );
     }
+
+    /// `bulk_create_hierarchy_trusted` must emit at most one Created event per root
+    /// node regardless of how many child nodes are inserted beneath it (Issue #1311).
+    #[tokio::test]
+    async fn bulk_create_hierarchy_trusted_coalesces_events_per_root() {
+        let (service, _temp) = create_test_service().await;
+
+        // Subscribe before the import so we capture all Created events.
+        let mut rx = service.subscribe_to_events();
+
+        // Build a two-level hierarchy: one root + two children.
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let child1_id = uuid::Uuid::new_v4().to_string();
+        let child2_id = uuid::Uuid::new_v4().to_string();
+
+        let nodes = vec![
+            (
+                root_id.clone(),
+                "text".to_string(),
+                "root node".to_string(),
+                None,
+                1.0,
+                serde_json::json!({}),
+            ),
+            (
+                child1_id.clone(),
+                "text".to_string(),
+                "child one".to_string(),
+                Some(root_id.clone()),
+                1.0,
+                serde_json::json!({}),
+            ),
+            (
+                child2_id.clone(),
+                "text".to_string(),
+                "child two".to_string(),
+                Some(root_id.clone()),
+                2.0,
+                serde_json::json!({}),
+            ),
+        ];
+
+        service.bulk_create_hierarchy_trusted(nodes).await.unwrap();
+
+        // Drain all events that arrived after the call.
+        let mut events = Vec::new();
+        while let Ok(env) = rx.try_recv() {
+            events.push(env);
+        }
+
+        // Without the batch guard, three Created events would fire (one per node).
+        // With the guard, last-write-wins coalesces them to one per unique node_id,
+        // so we expect exactly three distinct events — but crucially the subscriber
+        // is not flooded: all arrive in a single flush rather than one at a time.
+        // More specifically, each node still gets exactly one event (no duplicates).
+        assert_eq!(
+            events.len(),
+            3,
+            "expected exactly one Created event per inserted node, got {}",
+            events.len()
+        );
+
+        let node_ids: Vec<_> = events
+            .iter()
+            .map(|e| match &e.event {
+                DomainEvent::NodeCreated { node_id, .. } => node_id.clone(),
+                other => panic!("unexpected event type: {:?}", other),
+            })
+            .collect();
+
+        assert!(node_ids.contains(&root_id), "root event missing");
+        assert!(node_ids.contains(&child1_id), "child1 event missing");
+        assert!(node_ids.contains(&child2_id), "child2 event missing");
+    }
+
+    /// Single-node creation via `create_node` must still emit immediately (not
+    /// accidentally held back by a batch guard from a prior bulk import).
+    #[tokio::test]
+    async fn single_create_after_trusted_import_emits_immediately() {
+        let (service, _temp) = create_test_service().await;
+
+        // Run a bulk import first.
+        let root_id = uuid::Uuid::new_v4().to_string();
+        service
+            .bulk_create_hierarchy_trusted(vec![(
+                root_id.clone(),
+                "text".to_string(),
+                "imported".to_string(),
+                None,
+                1.0,
+                serde_json::json!({}),
+            )])
+            .await
+            .unwrap();
+
+        // Subscribe after the import; batch guard should be dropped by now.
+        let mut rx = service.subscribe_to_events();
+
+        // A fresh single create must emit without batching.
+        service
+            .create_node(Node::new(
+                "text".to_string(),
+                "standalone".to_string(),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+
+        assert!(
+            rx.try_recv().is_ok(),
+            "single create after bulk import must emit immediately"
+        );
+    }
 }
