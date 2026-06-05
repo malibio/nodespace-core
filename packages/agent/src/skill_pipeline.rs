@@ -301,114 +301,26 @@ mod tests {
         }
     }
 
-    // -- Skill whitelist drift detectors ---------------------------------
+    // -- Skill whitelist / registry validation ---------------------------
 
+    /// Every tool named in a seed skill's `tool_whitelist` must resolve to a
+    /// real entry in the tool registry. This is the registry-backed replacement
+    /// for the former per-skill drift detectors: a typo or a reference to a
+    /// removed tool fails here instead of silently producing a whitelist entry
+    /// that can never match a dispatchable tool.
     #[test]
-    fn research_search_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Research & Search")
-            .expect("Research & Search skill should exist");
-        let wl = tmpl_tool_whitelist(skill);
-        assert!(
-            wl.contains(&"search_semantic".to_string()) || wl.contains(&"search_nodes".to_string()),
-            "Research & Search should whitelist search_semantic or search_nodes"
-        );
-    }
-
-    #[test]
-    fn node_creation_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Node Creation")
-            .expect("Node Creation skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"create_node".to_string()),
-            "Node Creation should whitelist create_node"
-        );
-    }
-
-    #[test]
-    fn schema_creation_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Schema Creation")
-            .expect("Schema Creation skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"create_schema".to_string()),
-            "Schema Creation should whitelist create_schema"
-        );
-    }
-
-    #[test]
-    fn graph_editing_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Graph Editing")
-            .expect("Graph Editing skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"update_node".to_string()),
-            "Graph Editing should whitelist update_node"
-        );
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"update_task_status".to_string()),
-            "Graph Editing should whitelist update_task_status"
-        );
-    }
-
-    #[test]
-    fn relationship_management_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Relationship Management")
-            .expect("Relationship Management skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"create_relationship".to_string()),
-            "Relationship Management should whitelist create_relationship"
-        );
-    }
-
-    #[test]
-    fn node_deletion_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Node Deletion")
-            .expect("Node Deletion skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"delete_node".to_string()),
-            "Node Deletion should whitelist delete_node"
-        );
-    }
-
-    #[test]
-    fn bulk_import_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Bulk Import")
-            .expect("Bulk Import skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"create_nodes_from_markdown".to_string()),
-            "Bulk Import should whitelist create_nodes_from_markdown"
-        );
-    }
-
-    #[test]
-    fn organization_skill_whitelist() {
-        let seeds = seed_skill_nodes();
-        let skill = seeds
-            .iter()
-            .find(|s| s.title == "Organization")
-            .expect("Organization skill should exist");
-        assert!(
-            tmpl_tool_whitelist(skill).contains(&"create_relationship".to_string()),
-            "Organization should whitelist create_relationship"
-        );
+    fn all_skill_whitelist_tools_are_registered() {
+        use crate::local_agent::tools::Tool;
+        for seed in seed_skill_nodes() {
+            for tool_name in tmpl_tool_whitelist(&seed) {
+                assert!(
+                    Tool::from_name(&tool_name).is_some(),
+                    "Skill '{}' whitelists unknown tool '{}' — it is not in the tool registry \
+                     (Tool enum). Fix the name or add the tool to the registry.",
+                    seed.title,
+                    tool_name
+                );
+            }
+        }
     }
 }

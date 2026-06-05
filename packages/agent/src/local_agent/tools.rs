@@ -653,23 +653,141 @@ fn def_update_task_status() -> ToolDefinition {
     }
 }
 
-/// All tool definitions for the graph executor.
+// ---------------------------------------------------------------------------
+// Tool registry — single source of truth
+// ---------------------------------------------------------------------------
+
+/// The canonical set of agent tools.
+///
+/// This enum is the *single source of truth* for the tool surface. Everything
+/// that used to be a separate hand-maintained list is derived from it:
+/// - the wire name ([`Tool::name`]) and JSON schema ([`Tool::definition`]),
+/// - the user-facing display label ([`Tool::humanized`]),
+/// - baseline always-on membership ([`Tool::is_baseline`]).
+///
+/// Adding a tool means adding one variant and filling in its arms; the compiler
+/// then forces every derivation to account for it. There are no drift-detector
+/// tests because the lists can no longer drift — they are computed from here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Tool {
+    SearchNodes,
+    SearchSemantic,
+    GetNode,
+    CreateNode,
+    UpdateNode,
+    CreateSchema,
+    UpdateSchema,
+    UpdateTaskStatus,
+    CreateRelationship,
+    GetRelatedNodes,
+    SearchSkills,
+    DeleteNode,
+    CreateNodesFromMarkdown,
+}
+
+impl Tool {
+    /// Every tool in registry order. The order here is the order tools are
+    /// presented to the model, so keep retrieval/discovery tools first.
+    pub(crate) const ALL: &'static [Tool] = &[
+        Tool::SearchNodes,
+        Tool::SearchSemantic,
+        Tool::GetNode,
+        Tool::CreateNode,
+        Tool::UpdateNode,
+        Tool::CreateSchema,
+        Tool::UpdateSchema,
+        Tool::UpdateTaskStatus,
+        Tool::CreateRelationship,
+        Tool::GetRelatedNodes,
+        Tool::SearchSkills,
+        Tool::DeleteNode,
+        Tool::CreateNodesFromMarkdown,
+    ];
+
+    /// The wire/identifier name the model uses to call this tool.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Tool::SearchNodes => "search_nodes",
+            Tool::SearchSemantic => "search_semantic",
+            Tool::GetNode => "get_node",
+            Tool::CreateNode => "create_node",
+            Tool::UpdateNode => "update_node",
+            Tool::CreateSchema => "create_schema",
+            Tool::UpdateSchema => "update_schema",
+            Tool::UpdateTaskStatus => "update_task_status",
+            Tool::CreateRelationship => "create_relationship",
+            Tool::GetRelatedNodes => "get_related_nodes",
+            Tool::SearchSkills => "search_skills",
+            Tool::DeleteNode => "delete_node",
+            Tool::CreateNodesFromMarkdown => "create_nodes_from_markdown",
+        }
+    }
+
+    /// Resolve a wire name back to its registry entry. Returns `None` for any
+    /// name not in the registry — used for dispatch and for validating
+    /// skill `tool_whitelist` references.
+    pub(crate) fn from_name(name: &str) -> Option<Tool> {
+        Tool::ALL.iter().copied().find(|t| t.name() == name)
+    }
+
+    /// The tool's JSON-schema definition (name, description, parameters).
+    pub(crate) fn definition(self) -> ToolDefinition {
+        match self {
+            Tool::SearchNodes => def_search_nodes(),
+            Tool::SearchSemantic => def_search_semantic(),
+            Tool::GetNode => def_get_node(),
+            Tool::CreateNode => def_create_node(),
+            Tool::UpdateNode => def_update_node(),
+            Tool::CreateSchema => def_create_schema(),
+            Tool::UpdateSchema => def_update_schema(),
+            Tool::UpdateTaskStatus => def_update_task_status(),
+            Tool::CreateRelationship => def_create_relationship(),
+            Tool::GetRelatedNodes => def_get_related_nodes(),
+            Tool::SearchSkills => def_search_skills(),
+            Tool::DeleteNode => def_delete_node(),
+            Tool::CreateNodesFromMarkdown => def_create_nodes_from_markdown(),
+        }
+    }
+
+    /// User-facing prose for surfacing tool activity in the chat UI.
+    ///
+    /// Used by fallback responses when the model fails to produce its own text.
+    /// Because every variant returns a real phrase, an internal name can never
+    /// leak to the user.
+    pub(crate) fn humanized(self) -> &'static str {
+        match self {
+            Tool::SearchNodes => "node search",
+            Tool::SearchSemantic => "semantic search",
+            Tool::GetNode => "node lookup",
+            Tool::CreateNode => "node creation",
+            Tool::UpdateNode => "node update",
+            Tool::CreateSchema => "schema creation",
+            Tool::UpdateSchema => "schema update",
+            Tool::UpdateTaskStatus => "task update",
+            Tool::CreateRelationship => "relationship creation",
+            Tool::GetRelatedNodes => "related node lookup",
+            Tool::SearchSkills => "skill search",
+            Tool::DeleteNode => "node deletion",
+            Tool::CreateNodesFromMarkdown => "markdown import",
+        }
+    }
+
+    /// Whether this tool is always passed to the model regardless of query.
+    ///
+    /// Baseline tools cover the core read/discover path every query may need:
+    /// basic retrieval (`search_nodes`/`search_semantic`/`get_node`) plus
+    /// `search_skills` so the model can discover narrower skill-specific tools.
+    pub(crate) fn is_baseline(self) -> bool {
+        matches!(
+            self,
+            Tool::SearchNodes | Tool::SearchSemantic | Tool::GetNode | Tool::SearchSkills
+        )
+    }
+}
+
+/// All tool definitions for the graph executor, derived from the registry.
 pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        def_search_nodes(),
-        def_search_semantic(),
-        def_get_node(),
-        def_create_node(),
-        def_update_node(),
-        def_create_schema(),
-        def_update_schema(),
-        def_update_task_status(),
-        def_create_relationship(),
-        def_get_related_nodes(),
-        def_search_skills(),
-        def_delete_node(),
-        def_create_nodes_from_markdown(),
-    ]
+    Tool::ALL.iter().map(|t| t.definition()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,18 +1505,6 @@ impl GraphToolExecutor {
     }
 }
 
-/// Tools always passed to the model regardless of query content.
-///
-/// These cover the core read/discover path that every query may need:
-/// - `search_nodes` / `search_semantic` / `get_node`: basic retrieval
-/// - `search_skills`: lets the model discover narrower skill-specific tools
-const BASELINE_TOOLS: &[&str] = &[
-    "search_nodes",
-    "search_semantic",
-    "get_node",
-    "search_skills",
-];
-
 /// Minimum confidence score for a skill match to contribute tools to the
 /// scoped set on the automated pre-filter path.
 ///
@@ -1457,7 +1563,12 @@ impl AgentToolExecutor for GraphToolExecutor {
         // Collect tool names: baseline always-on + whitelists from skills that
         // meet the confidence threshold. Low-confidence matches are excluded to
         // avoid injecting irrelevant tools from loosely-related skills.
-        let mut selected_names: HashSet<&str> = BASELINE_TOOLS.iter().copied().collect();
+        let baseline_count = Tool::ALL.iter().filter(|t| t.is_baseline()).count();
+        let mut selected_names: HashSet<&str> = Tool::ALL
+            .iter()
+            .filter(|t| t.is_baseline())
+            .map(|t| t.name())
+            .collect();
 
         for skill in &matched_skills {
             let confidence = skill
@@ -1478,7 +1589,7 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         // Fall back to full list if no skill contributed any tools beyond baseline
         // (all matches were below the confidence threshold or had empty whitelists).
-        if selected_names.len() <= BASELINE_TOOLS.len() {
+        if selected_names.len() <= baseline_count {
             tracing::debug!("select_tools: no confident skill matches, using full tool list");
             return all_tools;
         }
@@ -1504,24 +1615,28 @@ impl AgentToolExecutor for GraphToolExecutor {
         // (agent loop) will provide the real ID when it wraps the result.
         let tool_call_id = format!("call_{}", name);
 
-        match name {
-            "search_nodes" => self.exec_search_nodes(&tool_call_id, args).await,
-            "search_semantic" => self.exec_search_semantic(&tool_call_id, args).await,
-            "get_node" => self.exec_get_node(&tool_call_id, args).await,
-            "create_node" => self.exec_create_node(&tool_call_id, args).await,
-            "update_node" => self.exec_update_node(&tool_call_id, args).await,
-            "create_schema" => self.exec_create_schema(&tool_call_id, args).await,
-            "update_schema" => self.exec_update_schema(&tool_call_id, args).await,
-            "update_task_status" => self.exec_update_task_status(&tool_call_id, args).await,
-            "create_relationship" => self.exec_create_relationship(&tool_call_id, args).await,
-            "get_related_nodes" => self.exec_get_related_nodes(&tool_call_id, args).await,
-            "search_skills" => self.exec_search_skills(&tool_call_id, args).await,
-            "delete_node" => self.exec_delete_node(&tool_call_id, args).await,
-            "create_nodes_from_markdown" => {
+        // Resolve through the registry so dispatch and the tool surface can't
+        // drift: a name not in `Tool` is the single `UnknownTool` exit, and the
+        // exhaustive match forces an exec arm for every registered variant.
+        let tool = Tool::from_name(name).ok_or_else(|| ToolError::UnknownTool(name.to_string()))?;
+
+        match tool {
+            Tool::SearchNodes => self.exec_search_nodes(&tool_call_id, args).await,
+            Tool::SearchSemantic => self.exec_search_semantic(&tool_call_id, args).await,
+            Tool::GetNode => self.exec_get_node(&tool_call_id, args).await,
+            Tool::CreateNode => self.exec_create_node(&tool_call_id, args).await,
+            Tool::UpdateNode => self.exec_update_node(&tool_call_id, args).await,
+            Tool::CreateSchema => self.exec_create_schema(&tool_call_id, args).await,
+            Tool::UpdateSchema => self.exec_update_schema(&tool_call_id, args).await,
+            Tool::UpdateTaskStatus => self.exec_update_task_status(&tool_call_id, args).await,
+            Tool::CreateRelationship => self.exec_create_relationship(&tool_call_id, args).await,
+            Tool::GetRelatedNodes => self.exec_get_related_nodes(&tool_call_id, args).await,
+            Tool::SearchSkills => self.exec_search_skills(&tool_call_id, args).await,
+            Tool::DeleteNode => self.exec_delete_node(&tool_call_id, args).await,
+            Tool::CreateNodesFromMarkdown => {
                 self.exec_create_nodes_from_markdown(&tool_call_id, args)
                     .await
             }
-            _ => Err(ToolError::UnknownTool(name.to_string())),
         }
     }
 }
@@ -1629,7 +1744,67 @@ mod tests {
 
     #[test]
     fn definitions_count() {
-        assert_eq!(all_tool_definitions().len(), 13);
+        // Derived from the registry: one definition per `Tool::ALL` entry.
+        assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
+    }
+
+    // -- Tool registry invariants --
+
+    #[test]
+    fn registry_names_are_unique_and_round_trip() {
+        let mut seen = std::collections::HashSet::new();
+        for &tool in Tool::ALL {
+            assert!(
+                seen.insert(tool.name()),
+                "duplicate tool name in registry: {}",
+                tool.name()
+            );
+            assert_eq!(
+                Tool::from_name(tool.name()),
+                Some(tool),
+                "from_name must round-trip {}",
+                tool.name()
+            );
+        }
+    }
+
+    #[test]
+    fn registry_from_name_rejects_unknown() {
+        assert_eq!(Tool::from_name("definitely_not_a_tool"), None);
+        assert_eq!(Tool::from_name(""), None);
+    }
+
+    #[test]
+    fn registry_definition_name_matches_variant_name() {
+        // The schema body (`def_*`) and the registry name must agree, so the
+        // model-facing definition and the dispatch name can never diverge.
+        for &tool in Tool::ALL {
+            assert_eq!(
+                tool.definition().name,
+                tool.name(),
+                "definition name disagrees with registry name for {:?}",
+                tool
+            );
+        }
+    }
+
+    #[test]
+    fn registry_baseline_membership() {
+        // Baseline is derived from the registry; lock in the intended set.
+        let baseline: std::collections::HashSet<&str> = Tool::ALL
+            .iter()
+            .filter(|t| t.is_baseline())
+            .map(|t| t.name())
+            .collect();
+        let expected: std::collections::HashSet<&str> = [
+            "search_nodes",
+            "search_semantic",
+            "get_node",
+            "search_skills",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(baseline, expected);
     }
 
     #[test]
@@ -2015,11 +2190,11 @@ mod tests {
         let all = all_tool_definitions();
         let selected = executor.select_tools("search for billing info", all).await;
         let names: Vec<&str> = selected.iter().map(|t| t.name.as_str()).collect();
-        for baseline in BASELINE_TOOLS {
+        for baseline in Tool::ALL.iter().filter(|t| t.is_baseline()) {
             assert!(
-                names.contains(baseline),
+                names.contains(&baseline.name()),
                 "Baseline tool '{}' must always be present in selected tools",
-                baseline
+                baseline.name()
             );
         }
     }
