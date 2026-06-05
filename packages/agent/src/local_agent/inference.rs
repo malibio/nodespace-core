@@ -111,6 +111,9 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
                     ChatChunk::Token(text) => {
                         on_chunk(StreamingChunk::Token { text });
                     }
+                    ChatChunk::Reasoning(text) => {
+                        on_chunk(StreamingChunk::Reasoning { text });
+                    }
                     ChatChunk::ToolCallStart { id, name } => {
                         on_chunk(StreamingChunk::ToolCallStart { id, name });
                     }

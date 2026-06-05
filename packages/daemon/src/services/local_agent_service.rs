@@ -343,7 +343,14 @@ impl LocalAgentServiceImpl {
             &user_message,
             move |_status: LocalAgentStatus| {},
             move |chunk: StreamingChunk| {
-                if !matches!(chunk, StreamingChunk::Done { .. }) {
+                // `Done` is conveyed via the turn result, not a wire chunk.
+                // `Reasoning` is intentionally not streamed live (it is captured
+                // and surfaced via the persisted message; see issue design):
+                // skip it here so the live answer stream stays clean.
+                if !matches!(
+                    chunk,
+                    StreamingChunk::Done { .. } | StreamingChunk::Reasoning { .. }
+                ) {
                     let mut proto = streaming_chunk_to_proto(chunk);
                     proto.node_id = Some(node_id2.clone());
                     // Ignore send errors — no subscribers connected is fine.
@@ -399,20 +406,18 @@ impl LocalAgentServiceImpl {
                 });
 
                 // Append assistant message; also atomically sets status: idle.
-                let assistant_content = service
-                    .get_session(&session_id)
-                    .await
-                    .and_then(|s| {
-                        s.messages
-                            .into_iter()
-                            .rev()
-                            .find(|m| m.role == Role::Assistant)
-                            .map(|m| m.content)
-                    })
-                    .unwrap_or_else(|| result.response.clone());
-
+                // `AgentTurnResult` is the authoritative current-turn output: every
+                // return path (normal, no-tools-final, synthesized fallback, empty)
+                // sets `response`/`reasoning` for *this* turn. Using it directly avoids
+                // a session-history scan that, on the fallback branches (which do not
+                // push an assistant message), could surface a *previous* turn's
+                // content/reasoning instead.
                 match self
-                    .append_assistant_message(&node_id, &assistant_content)
+                    .append_assistant_message(
+                        &node_id,
+                        &result.response,
+                        result.reasoning.as_deref(),
+                    )
                     .await
                 {
                     Ok(()) => needs_idle_reset = false,
@@ -548,8 +553,14 @@ impl LocalAgentServiceImpl {
     }
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
-    /// Retries once on version conflict.
-    async fn append_assistant_message(&self, node_id: &str, content: &str) -> Result<(), String> {
+    /// Retries once on version conflict. `reasoning` is the model's captured
+    /// chain-of-thought, persisted alongside the answer when present.
+    async fn append_assistant_message(
+        &self,
+        node_id: &str,
+        content: &str,
+        reasoning: Option<&str>,
+    ) -> Result<(), String> {
         for attempt in 0..2 {
             let node = self
                 .inner
@@ -568,11 +579,16 @@ impl LocalAgentServiceImpl {
             let messages = ai_chat.get_mut("messages").and_then(|v| v.as_array_mut());
 
             let timestamp = chrono::Utc::now().to_rfc3339();
-            let new_msg = serde_json::json!({
+            let mut new_msg = serde_json::json!({
                 "role": "assistant",
                 "content": content,
                 "timestamp": timestamp
             });
+            // Persist reasoning only when the model produced some, keeping the
+            // message shape minimal for plain answers.
+            if let Some(r) = reasoning.filter(|r| !r.trim().is_empty()) {
+                new_msg["reasoning"] = serde_json::Value::String(r.to_string());
+            }
 
             if let Some(msgs) = messages {
                 msgs.push(new_msg);
@@ -1094,6 +1110,15 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
             token_text: Some(text),
             ..Default::default()
         },
+        // Reasoning is not streamed live (filtered out before this function in the
+        // send callback); it reaches the UI via the persisted message. This arm
+        // exists only for exhaustiveness and tags the chunk so any future live
+        // consumer can distinguish/ignore it rather than render it as the answer.
+        StreamingChunk::Reasoning { text } => AgentChunk {
+            chunk_type: "reasoning".to_string(),
+            token_text: Some(text),
+            ..Default::default()
+        },
         StreamingChunk::ToolCallStart { id, name } => AgentChunk {
             chunk_type: "tool_call_start".to_string(),
             tool_call_id: Some(id),
@@ -1153,7 +1178,13 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
                 _ => return None,
             };
             let content = m.get("content")?.as_str()?.to_string();
-            Some(ChatMessage::text(role, content))
+            let mut msg = ChatMessage::text(role, content);
+            // Round-trip any persisted reasoning so reloaded history retains it.
+            msg.reasoning = m
+                .get("reasoning")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(msg)
         })
         .collect()
 }
@@ -1171,4 +1202,78 @@ async fn build_workspace_context(
     .await
     .map_err(|_| ())?;
     Ok(context.format_for_prompt(4000))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nodespace_core::models::Node;
+    use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
+
+    /// Build a `LocalAgentServiceImpl` backed by a temp-dir SqliteStore.
+    /// Returns the `TempDir` so it outlives the test body.
+    async fn test_service() -> (LocalAgentServiceImpl, Arc<NodeService>, tempfile::TempDir) {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(tempdir.path().join("daemon-db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let embedding: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>> = Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding);
+        (svc, node_service, tempdir)
+    }
+
+    async fn create_ai_chat_node(node_service: &Arc<NodeService>) -> String {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Test chat".to_string(),
+            serde_json::json!({ "ai-chat": { "messages": [] } }),
+        );
+        node_service
+            .create_node(node)
+            .await
+            .expect("create ai-chat")
+    }
+
+    #[tokio::test]
+    async fn reasoning_round_trips_through_persist_and_reload() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        svc.append_assistant_message(&node_id, "The answer.", Some("I reasoned about it."))
+            .await
+            .expect("append");
+
+        let history = load_node_history(&node_service, &node_id).await;
+        let assistant = history
+            .iter()
+            .find(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant message present");
+        assert_eq!(assistant.content, "The answer.");
+        assert_eq!(assistant.reasoning.as_deref(), Some("I reasoned about it."));
+    }
+
+    #[tokio::test]
+    async fn empty_or_whitespace_reasoning_is_omitted() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        // None and whitespace-only both persist no reasoning field.
+        svc.append_assistant_message(&node_id, "Plain answer.", None)
+            .await
+            .expect("append none");
+        svc.append_assistant_message(&node_id, "Another answer.", Some("   "))
+            .await
+            .expect("append whitespace");
+
+        let history = load_node_history(&node_service, &node_id).await;
+        let assistants: Vec<_> = history
+            .iter()
+            .filter(|m| matches!(m.role, Role::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 2);
+        assert!(assistants.iter().all(|m| m.reasoning.is_none()));
+    }
 }

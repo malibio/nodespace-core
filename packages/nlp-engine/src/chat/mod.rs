@@ -406,6 +406,11 @@ impl ChatEngine {
         let mut tool_call_ids: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
 
+        // Route the model's `<|channel> … <channel|>` reasoning out of the answer
+        // stream. Held across the whole loop so a span (or marker) that straddles
+        // a delta boundary is resolved correctly.
+        let mut channel_splitter = ChannelSplitter::default();
+
         // --- Token generation loop ---
         // Reborrow model and context separately to satisfy the borrow checker.
         // get_or_create_context() ensured the context exists, so we can safely
@@ -471,7 +476,12 @@ impl ChatEngine {
             match oai_parser.update(&piece, true) {
                 Ok(deltas) => {
                     for delta_json in deltas {
-                        emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
+                        emit_oai_delta(
+                            &delta_json,
+                            &mut tool_call_ids,
+                            &mut channel_splitter,
+                            on_chunk,
+                        );
                     }
                 }
                 Err(e) => {
@@ -504,10 +514,26 @@ impl ChatEngine {
         match oai_parser.update("", false) {
             Ok(deltas) => {
                 for delta_json in deltas {
-                    emit_oai_delta(&delta_json, &mut tool_call_ids, on_chunk);
+                    emit_oai_delta(
+                        &delta_json,
+                        &mut tool_call_ids,
+                        &mut channel_splitter,
+                        on_chunk,
+                    );
                 }
             }
             Err(e) => tracing::warn!("OAI parser finalize error: {}", e),
+        }
+
+        // Drain any text the splitter held back (a trailing partial marker that
+        // never completed, or an unclosed channel truncated by the token cap).
+        let (final_answer, final_reasoning) = channel_splitter.finalize();
+        if !final_reasoning.is_empty() {
+            on_chunk(ChatChunk::Reasoning(final_reasoning));
+        }
+        let final_cleaned = strip_gemma_special_tokens(&final_answer);
+        if !final_cleaned.is_empty() {
+            on_chunk(ChatChunk::Token(final_cleaned));
         }
 
         on_chunk(ChatChunk::Done);
@@ -525,6 +551,117 @@ impl ChatEngine {
 
         Ok(usage)
     }
+}
+
+/// Channel markers Gemma 4 uses to wrap its internal chain-of-thought.
+const CHANNEL_OPEN: &str = "<|channel>";
+const CHANNEL_CLOSE: &str = "<channel|>";
+
+/// Splits a streamed content sequence into answer text and reasoning text.
+///
+/// Gemma 4 wraps its internal chain-of-thought in `<|channel> … <channel|>`
+/// markers. llama.cpp's OAI-compat parser does not separate these — it passes
+/// the whole span through as plain content — so we route it ourselves: text
+/// between the markers is *reasoning* (surfaced in a dedicated collapsible UI
+/// section), text outside is the *answer* (the clean message bubble).
+///
+/// The splitter is stateful because a single logical span — and even a single
+/// marker — may be split across multiple streaming deltas. It tracks whether
+/// it is currently inside a channel and carries a tail that could be the
+/// beginning of a marker straddling a delta boundary.
+#[derive(Debug, Default)]
+struct ChannelSplitter {
+    /// True while between an opener and its (not-yet-seen) closer.
+    in_channel: bool,
+    /// Tail of the last delta that may be the prefix of a marker spanning the
+    /// boundary into the next delta. Always marker-free text otherwise.
+    carry: String,
+}
+
+impl ChannelSplitter {
+    /// Feed a content delta, returning `(answer, reasoning)` text resolved so far.
+    ///
+    /// Any trailing bytes that could still grow into a marker are held back in
+    /// `carry` and resolved on a later `push` or on `finalize`.
+    fn push(&mut self, content: &str) -> (String, String) {
+        let mut answer = String::new();
+        let mut reasoning = String::new();
+
+        let mut buf = std::mem::take(&mut self.carry);
+        buf.push_str(content);
+
+        let mut rest = buf.as_str();
+        loop {
+            let marker = if self.in_channel {
+                CHANNEL_CLOSE
+            } else {
+                CHANNEL_OPEN
+            };
+            match rest.find(marker) {
+                Some(idx) => {
+                    // Emit the text before the marker to the active sink, then
+                    // toggle state and continue scanning past the marker.
+                    let before = &rest[..idx];
+                    if self.in_channel {
+                        reasoning.push_str(before);
+                    } else {
+                        answer.push_str(before);
+                    }
+                    self.in_channel = !self.in_channel;
+                    rest = &rest[idx + marker.len()..];
+                }
+                None => {
+                    // No complete marker remains. Hold back any suffix that
+                    // could be the prefix of the marker we're looking for; emit
+                    // the rest to the active sink.
+                    let keep = partial_marker_suffix_len(rest, marker);
+                    let split = rest.len() - keep;
+                    let emit = &rest[..split];
+                    if self.in_channel {
+                        reasoning.push_str(emit);
+                    } else {
+                        answer.push_str(emit);
+                    }
+                    self.carry = rest[split..].to_string();
+                    break;
+                }
+            }
+        }
+
+        (answer, reasoning)
+    }
+
+    /// Flush any carried text once generation is complete.
+    ///
+    /// No further deltas can complete a marker, so the carry is plain text and
+    /// is emitted to whichever sink is currently active.
+    fn finalize(&mut self) -> (String, String) {
+        let carried = std::mem::take(&mut self.carry);
+        if self.in_channel {
+            (String::new(), carried)
+        } else {
+            (carried, String::new())
+        }
+    }
+}
+
+/// Length of the longest suffix of `text` that is a (strict) prefix of `marker`.
+///
+/// Used to decide how much trailing text to hold back across a delta boundary:
+/// e.g. if `text` ends in `"<chan"` and `marker` is `"<channel|>"`, the last 5
+/// bytes must be carried in case the rest of the marker arrives next. Marker
+/// bytes are ASCII, so a match position is always a UTF-8 char boundary.
+fn partial_marker_suffix_len(text: &str, marker: &str) -> usize {
+    let max = marker.len().min(text.len());
+    // Longest first so we hold back the most that could still match.
+    (1..=max)
+        .rev()
+        .find(|&k| {
+            marker
+                .as_bytes()
+                .starts_with(&text.as_bytes()[text.len() - k..])
+        })
+        .unwrap_or(0)
 }
 
 /// Remove Gemma 4 special-token strings from a content string.
@@ -622,6 +759,7 @@ fn chat_message_to_oai_value(msg: &ChatMessageInput) -> serde_json::Value {
 fn emit_oai_delta(
     delta_json: &str,
     tool_call_ids: &mut std::collections::HashMap<u32, String>,
+    splitter: &mut ChannelSplitter,
     on_chunk: &(impl Fn(ChatChunk) + Send),
 ) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(delta_json) else {
@@ -629,11 +767,18 @@ fn emit_oai_delta(
         return;
     };
 
-    // Plain text content — strip any residual Gemma 4 special-token strings
-    // (e.g. "<|tool_call>", "<|"|>", "<tool_call|>") that the PEG parser may
-    // pass through as content before it recognises the full tool-call boundary.
+    // Plain text content. Route `<|channel> … <channel|>` spans to a separate
+    // reasoning stream (the splitter is stateful across deltas; a span or even a
+    // single marker may straddle a delta boundary). The answer part still passes
+    // through `strip_gemma_special_tokens` so other residual special tokens (e.g.
+    // "<|tool_call>", "<|"|>") the PEG parser leaks before recognising a tool-call
+    // boundary are scrubbed.
     if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
-        let cleaned = strip_gemma_special_tokens(content);
+        let (answer, reasoning) = splitter.push(content);
+        if !reasoning.is_empty() {
+            on_chunk(ChatChunk::Reasoning(reasoning));
+        }
+        let cleaned = strip_gemma_special_tokens(&answer);
         if !cleaned.is_empty() {
             on_chunk(ChatChunk::Token(cleaned));
         }
@@ -857,6 +1002,82 @@ fn uuid_v4_simple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- ChannelSplitter: route <|channel> … <channel|> reasoning out of answer ---
+
+    /// Drive a splitter over a sequence of deltas, returning the fully
+    /// accumulated `(answer, reasoning)` including the finalize flush.
+    fn split_all(deltas: &[&str]) -> (String, String) {
+        let mut s = ChannelSplitter::default();
+        let mut answer = String::new();
+        let mut reasoning = String::new();
+        for d in deltas {
+            let (a, r) = s.push(d);
+            answer.push_str(&a);
+            reasoning.push_str(&r);
+        }
+        let (a, r) = s.finalize();
+        answer.push_str(&a);
+        reasoning.push_str(&r);
+        (answer, reasoning)
+    }
+
+    #[test]
+    fn channel_splitter_marker_within_one_delta() {
+        let (answer, reasoning) =
+            split_all(&["Done.<|channel>I should add the node.<channel|>Added it!"]);
+        assert_eq!(answer, "Done.Added it!");
+        assert_eq!(reasoning, "I should add the node.");
+    }
+
+    #[test]
+    fn channel_splitter_marker_split_across_deltas() {
+        // Both the opener and closer are fragmented across delta boundaries.
+        let (answer, reasoning) =
+            split_all(&["Hi<|cha", "nnel>think", "ing more<chan", "nel|>the answer"]);
+        assert_eq!(answer, "Hithe answer");
+        assert_eq!(reasoning, "thinking more");
+    }
+
+    #[test]
+    fn channel_splitter_opener_without_closer_is_all_reasoning() {
+        // Truncated by the token cap mid-thought: everything after the opener
+        // is reasoning, and no answer text leaks.
+        let (answer, reasoning) = split_all(&["Here.<|channel>reasoning that never closes"]);
+        assert_eq!(answer, "Here.");
+        assert_eq!(reasoning, "reasoning that never closes");
+    }
+
+    #[test]
+    fn channel_splitter_clean_content_has_no_reasoning() {
+        let (answer, reasoning) = split_all(&["Just a normal ", "answer."]);
+        assert_eq!(answer, "Just a normal answer.");
+        assert_eq!(reasoning, "");
+    }
+
+    #[test]
+    fn channel_splitter_trailing_partial_marker_flushed_as_answer() {
+        // A suffix that looks like the start of a marker but never completes
+        // must be flushed to the answer on finalize, not swallowed.
+        let (answer, reasoning) = split_all(&["answer<|chan"]);
+        assert_eq!(answer, "answer<|chan");
+        assert_eq!(reasoning, "");
+    }
+
+    #[test]
+    fn channel_splitter_multiple_channels_concatenate() {
+        let (answer, reasoning) = split_all(&["a<|channel>r1<channel|>b<|channel>r2<channel|>c"]);
+        assert_eq!(answer, "abc");
+        assert_eq!(reasoning, "r1r2");
+    }
+
+    #[test]
+    fn channel_splitter_handles_multibyte_answer_text() {
+        // Non-ASCII answer text must not panic the byte-based carry logic.
+        let (answer, reasoning) = split_all(&["café ☕<|channel>think<channel|> déjà vu"]);
+        assert_eq!(answer, "café ☕ déjà vu");
+        assert_eq!(reasoning, "think");
+    }
 
     #[test]
     fn test_chat_engine_creation() {

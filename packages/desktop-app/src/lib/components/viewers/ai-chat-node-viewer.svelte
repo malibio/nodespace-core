@@ -102,6 +102,7 @@
         content: m.content ?? '',
         toolExecutions: [],
         timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+        reasoning: m.reasoning,
       }));
   });
 
