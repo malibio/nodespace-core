@@ -275,6 +275,17 @@ impl GgufModelManager {
         Ok(entry.family)
     }
 
+    /// Get a [`ChatModelSpec`] for any catalog model by id.
+    pub fn model_spec_for(&self, model_id: &str) -> Result<ChatModelSpec, ModelError> {
+        let entry = find_catalog_entry(model_id)?;
+        Ok(ChatModelSpec {
+            model_id: entry.id.to_string(),
+            family: entry.family,
+            context_window: entry.context_window,
+            default_temperature: entry.default_temperature,
+        })
+    }
+
     /// Return the on-disk path for a model file.
     pub fn model_path(&self, model_id: &str) -> Result<PathBuf, ModelError> {
         let entry = find_catalog_entry(model_id)?;
@@ -992,6 +1003,29 @@ mod tests {
         assert_eq!(spec.family, ModelFamily::Gemma4);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
+    }
+
+    #[tokio::test]
+    async fn model_spec_for_returns_catalog_values() {
+        let (mgr, _tmp) = test_manager();
+
+        let spec = mgr.model_spec_for("gemma-4-e4b-q4km").unwrap();
+        assert_eq!(spec.model_id, "gemma-4-e4b-q4km");
+        assert_eq!(spec.family, ModelFamily::Gemma4);
+        assert_eq!(spec.context_window, 32_768);
+        assert!(spec.default_temperature > 0.0);
+
+        let spec = mgr.model_spec_for("ministral-3b-q4km").unwrap();
+        assert_eq!(spec.model_id, "ministral-3b-q4km");
+        assert_eq!(spec.family, ModelFamily::Ministral);
+        assert_eq!(spec.context_window, 32_768);
+    }
+
+    #[tokio::test]
+    async fn model_spec_for_unknown_returns_not_found() {
+        let (mgr, _tmp) = test_manager();
+        let result = mgr.model_spec_for("nonexistent-model");
+        assert!(matches!(result, Err(ModelError::NotFound(_))));
     }
 
     #[test]

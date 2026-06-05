@@ -80,6 +80,52 @@ fn humanize_tool_name(tool_name: &str) -> &'static str {
         .unwrap_or("the requested action")
 }
 
+/// Detect whether a response text contains claims of completed actions.
+///
+/// Used by the anti-fabrication guard to catch responses where the model
+/// narrates actions it never took via tool calls. Checks for common patterns
+/// like "I created", "I updated", "I found", etc. The check is deliberately
+/// conservative — it only fires on strong first-person action phrases to avoid
+/// false positives on legitimate conversational text.
+fn contains_action_claim(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    // First-person past/present action verbs that imply the model performed a
+    // side-effecting operation. "I can" / "I would" / "I could" intentionally
+    // excluded — those are capability expressions, not claims of past action.
+    const ACTION_PHRASES: &[&str] = &[
+        "i created",
+        "i've created",
+        "i updated",
+        "i've updated",
+        "i found",
+        "i've found",
+        "i added",
+        "i've added",
+        "i deleted",
+        "i've deleted",
+        "i removed",
+        "i've removed",
+        "i marked",
+        "i've marked",
+        "i set ",
+        "i've set",
+        "i made ",
+        "i've made",
+        "i completed",
+        "i've completed",
+        "successfully created",
+        "successfully updated",
+        "successfully added",
+        "successfully deleted",
+        "successfully removed",
+        "has been created",
+        "has been updated",
+        "has been added",
+        "has been deleted",
+    ];
+    ACTION_PHRASES.iter().any(|p| lower.contains(p))
+}
+
 // ---------------------------------------------------------------------------
 // LocalAgentLoop
 // ---------------------------------------------------------------------------
@@ -351,6 +397,73 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         strippers_fired.join(", "),
                     ));
                 }
+
+                // Anti-fabrication guard: if the model claims an action it never
+                // executed (no tool calls this iteration AND no prior tool calls),
+                // suppress the fabricated claim and ask the user to confirm instead.
+                // This catches models (e.g. 12B@8K) that narrate fictional successes
+                // like "I created invoice 104" without calling any tool.
+                let normalized = if normalized.is_empty() {
+                    normalized
+                } else if tool_calls.is_empty()
+                    && all_tool_executions.is_empty()
+                    && contains_action_claim(&normalized)
+                {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        "Anti-fabrication: model claimed action with zero tool calls — converting to confirmation request"
+                    );
+                    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.".to_string()
+                } else {
+                    normalized
+                };
+
+                // Tool-failure surfacing: if any tool failed and the model's response
+                // doesn't acknowledge the error, append a note so the user is never
+                // misled by a "success" summary when operations actually failed.
+                let failed_tools: Vec<&str> = all_tool_executions
+                    .iter()
+                    .filter(|r| r.is_error)
+                    .map(|r| r.name.as_str())
+                    .collect();
+                let normalized = if !failed_tools.is_empty() && !normalized.is_empty() {
+                    let lower = normalized.to_ascii_lowercase();
+                    let mentions_error = lower.contains("error")
+                        || lower.contains("fail")
+                        || lower.contains("couldn't")
+                        || lower.contains("could not")
+                        || lower.contains("unable");
+                    if !mentions_error {
+                        let error_labels: Vec<String> = failed_tools
+                            .iter()
+                            .map(|n| humanize_tool_name(n).to_string())
+                            .collect();
+                        let unique_labels: Vec<String> = {
+                            let mut seen = std::collections::HashSet::new();
+                            error_labels
+                                .into_iter()
+                                .filter(|l| seen.insert(l.clone()))
+                                .collect()
+                        };
+                        tracing::warn!(
+                            session_id = %session.id,
+                            failed_tools = %failed_tools.join(", "),
+                            "Tool failures not surfaced in model response — appending error note"
+                        );
+                        format!(
+                            "{}\n\n⚠️ Note: {} encountered an error during this request.",
+                            normalized,
+                            unique_labels.join(", ")
+                        )
+                    } else {
+                        normalized
+                    }
+                } else {
+                    normalized
+                };
 
                 // If the model produced no text after tool calls, synthesize a
                 // brief confirmation so the UI always shows something meaningful.
@@ -2797,6 +2910,208 @@ mod tests {
             select_calls.load(Ordering::SeqCst),
             1,
             "select_tools should be called once per turn (before first inference)"
+        );
+    }
+
+    // -- contains_action_claim tests -----------------------------------------
+
+    #[test]
+    fn action_claim_detects_creation_verbs() {
+        assert!(contains_action_claim("I created a new node for this."));
+        assert!(contains_action_claim(
+            "I've created the invoice successfully."
+        ));
+        assert!(contains_action_claim("I updated the task status."));
+        assert!(contains_action_claim("Successfully created the schema."));
+        assert!(contains_action_claim("The node has been created."));
+    }
+
+    #[test]
+    fn action_claim_does_not_fire_on_capability_statements() {
+        assert!(!contains_action_claim("I can help you create a node."));
+        assert!(!contains_action_claim(
+            "I would create a node if you'd like."
+        ));
+        assert!(!contains_action_claim(
+            "I could search for that information."
+        ));
+        assert!(!contains_action_claim("Sure, I'll look that up for you."));
+        assert!(!contains_action_claim("Hello! How can I help?"));
+    }
+
+    #[test]
+    fn action_claim_does_not_fire_on_conversational_text() {
+        assert!(!contains_action_claim("What would you like to do?"));
+        assert!(!contains_action_claim("Let me search for that."));
+        assert!(!contains_action_claim(
+            "The billing architecture node describes a system."
+        ));
+    }
+
+    // -- Anti-fabrication guard tests ----------------------------------------
+
+    /// Model claims action with zero tool calls → response should be converted
+    /// to a confirmation request.
+    #[tokio::test]
+    async fn anti_fabrication_guard_fires_on_ungrounded_action_claim() {
+        let engine = Arc::new(MockEngine::single_text(
+            "I created invoice ID 104 and marked it as paid.",
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "create an invoice for $500",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.tool_calls_made.is_empty());
+        // The fabricated claim should not reach the user verbatim.
+        assert!(
+            !result.response.to_lowercase().contains("created invoice"),
+            "fabricated claim should be suppressed: {:?}",
+            result.response
+        );
+        // Should ask for confirmation instead.
+        assert!(
+            result.response.to_lowercase().contains("confirm")
+                || result.response.to_lowercase().contains("would you like"),
+            "should ask for confirmation: {:?}",
+            result.response
+        );
+    }
+
+    /// Model produces legitimate conversational text with no tool calls →
+    /// anti-fabrication guard must NOT fire.
+    #[tokio::test]
+    async fn anti_fabrication_guard_does_not_fire_on_conversational_response() {
+        let engine = Arc::new(MockEngine::single_text(
+            "I can help you create a node. What title would you like to give it?",
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "I want to create a note",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.tool_calls_made.is_empty());
+        assert_eq!(
+            result.response, "I can help you create a node. What title would you like to give it?",
+            "conversational response should pass through unchanged"
+        );
+    }
+
+    /// Model claims action AFTER successfully executing tool calls → guard
+    /// must NOT fire (the claim is grounded in real tool executions).
+    #[tokio::test]
+    async fn anti_fabrication_guard_does_not_fire_after_real_tool_calls() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "search_nodes",
+            r#"{"query":"invoice"}"#,
+            "I found 2 invoice nodes in your workspace.",
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "find my invoice nodes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert_eq!(
+            result.response, "I found 2 invoice nodes in your workspace.",
+            "grounded response after real tool call should pass through unchanged"
+        );
+    }
+
+    // -- Tool-failure surfacing tests ----------------------------------------
+
+    /// When a tool fails and the model doesn't mention the error, an error
+    /// note should be appended to the response.
+    #[tokio::test]
+    async fn tool_failure_appended_when_model_ignores_error() {
+        // Tool executor that always reports an error
+        struct ErrorToolExecutor;
+
+        #[async_trait]
+        impl AgentToolExecutor for ErrorToolExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "update_node".into(),
+                    description: "Update a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"error": "node not found"}),
+                    is_error: true,
+                })
+            }
+        }
+
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "update_node",
+            r#"{"id":"abc"}"#,
+            // Model papers over the error with a success claim
+            "All done! The node has been updated.",
+        ));
+        let executor = Arc::new(ErrorToolExecutor);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "update node abc",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert!(
+            result.tool_calls_made[0].is_error,
+            "tool execution should be marked as error"
+        );
+        // Error note should be appended since model didn't mention the failure.
+        assert!(
+            result.response.contains("⚠️") || result.response.to_lowercase().contains("error"),
+            "error note should be present: {:?}",
+            result.response
         );
     }
 
