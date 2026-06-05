@@ -194,6 +194,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         );
 
         let mut all_tool_executions: Vec<ToolExecutionRecord> = Vec::new();
+        // Reasoning (chain-of-thought) accumulated across every ReAct iteration of
+        // this turn, joined into a single section on the final assistant message.
+        let mut accumulated_reasoning = String::new();
         let mut total_usage = InferenceUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -256,7 +259,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let guard = collected_chunks.lock().unwrap_or_else(|p| p.into_inner());
                 guard.clone()
             };
-            let (response_text, tool_calls) = Self::parse_chunks(&chunks);
+            let (response_text, iteration_reasoning, tool_calls) = Self::parse_chunks(&chunks);
+
+            // Accumulate this iteration's reasoning into the turn-wide section,
+            // separating iterations with a blank line.
+            if !iteration_reasoning.trim().is_empty() {
+                if !accumulated_reasoning.is_empty() {
+                    accumulated_reasoning.push_str("\n\n");
+                }
+                accumulated_reasoning.push_str(iteration_reasoning.trim());
+            }
 
             tracing::info!(
                 iteration,
@@ -311,16 +323,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     normalized
                 };
 
-                // Append assistant response to history
-                session
-                    .messages
-                    .push(ChatMessage::text(Role::Assistant, final_response.clone()));
+                // Collapse the accumulated reasoning into the final option.
+                let reasoning = (!accumulated_reasoning.trim().is_empty())
+                    .then(|| accumulated_reasoning.trim().to_string());
+
+                // Append assistant response to history, carrying the reasoning so
+                // it persists and round-trips on reload.
+                let mut assistant_msg = ChatMessage::text(Role::Assistant, final_response.clone());
+                assistant_msg.reasoning = reasoning.clone();
+                session.messages.push(assistant_msg);
 
                 on_status(LocalAgentStatus::Idle);
                 session.status = LocalAgentStatus::Idle;
 
                 return Ok(AgentTurnResult {
                     response: final_response,
+                    reasoning,
                     tool_calls_made: all_tool_executions,
                     usage: total_usage,
                 });
@@ -449,18 +467,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         let guard = final_chunks.lock().unwrap_or_else(|p| p.into_inner());
                         guard.clone()
                     };
-                    let (final_text, _) = Self::parse_chunks(&chunks);
+                    let (final_text, final_reasoning, _) = Self::parse_chunks(&chunks);
+                    if !final_reasoning.trim().is_empty() {
+                        if !accumulated_reasoning.is_empty() {
+                            accumulated_reasoning.push_str("\n\n");
+                        }
+                        accumulated_reasoning.push_str(final_reasoning.trim());
+                    }
                     if !final_text.is_empty() {
                         let normalized = normalize_response(&final_text);
-                        session
-                            .messages
-                            .push(ChatMessage::text(Role::Assistant, normalized.clone()));
+                        let reasoning = (!accumulated_reasoning.trim().is_empty())
+                            .then(|| accumulated_reasoning.trim().to_string());
+                        let mut assistant_msg =
+                            ChatMessage::text(Role::Assistant, normalized.clone());
+                        assistant_msg.reasoning = reasoning.clone();
+                        session.messages.push(assistant_msg);
 
                         on_status(LocalAgentStatus::Idle);
                         session.status = LocalAgentStatus::Idle;
 
                         return Ok(AgentTurnResult {
                             response: normalized,
+                            reasoning,
                             tool_calls_made: all_tool_executions,
                             usage: total_usage,
                         });
@@ -502,6 +530,8 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
                 return Ok(AgentTurnResult {
                     response: fallback,
+                    reasoning: (!accumulated_reasoning.trim().is_empty())
+                        .then(|| accumulated_reasoning.trim().to_string()),
                     tool_calls_made: all_tool_executions,
                     usage: total_usage,
                 });
@@ -516,14 +546,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
         Ok(AgentTurnResult {
             response: String::new(),
+            reasoning: (!accumulated_reasoning.trim().is_empty())
+                .then(|| accumulated_reasoning.trim().to_string()),
             tool_calls_made: all_tool_executions,
             usage: total_usage,
         })
     }
 
     /// Parse collected streaming chunks into response text and tool calls.
-    fn parse_chunks(chunks: &[StreamingChunk]) -> (String, Vec<ToolCallRaw>) {
+    /// Parse a streamed chunk sequence into `(answer_text, reasoning_text, tool_calls)`.
+    ///
+    /// Reasoning chunks (the model's chain-of-thought, already separated from the
+    /// answer at the nlp-engine parse layer) are accumulated independently of the
+    /// answer text so the answer bubble stays clean.
+    fn parse_chunks(chunks: &[StreamingChunk]) -> (String, String, Vec<ToolCallRaw>) {
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCallRaw> = Vec::new();
         // Accumulate tool call args by id
         // Use Vec to preserve tool call ordering (important for causal dependencies)
@@ -533,6 +571,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             match chunk {
                 StreamingChunk::Token { text: t } => {
                     text.push_str(t);
+                }
+                StreamingChunk::Reasoning { text: r } => {
+                    reasoning.push_str(r);
                 }
                 StreamingChunk::ToolCallStart { id, name } => {
                     pending_calls.push((id.clone(), name.clone(), String::new()));
@@ -556,7 +597,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             });
         }
 
-        (text, tool_calls)
+        (text, reasoning, tool_calls)
     }
 
     /// Summarize older history turns if the conversation exceeds the token budget.
@@ -681,7 +722,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             let guard = summary_chunks.lock().unwrap_or_else(|p| p.into_inner());
             guard.clone()
         };
-        let (summary_text, _) = Self::parse_chunks(&chunks);
+        let (summary_text, _, _) = Self::parse_chunks(&chunks);
 
         let summary_content = if summary_text.is_empty() {
             // Fallback: just note that history was truncated
@@ -1419,9 +1460,36 @@ mod tests {
                 },
             },
         ];
-        let (text, tool_calls) =
+        let (text, reasoning, tool_calls) =
             LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
         assert_eq!(text, "Hello world");
+        assert!(reasoning.is_empty());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn parse_chunks_separates_reasoning_from_answer() {
+        let chunks = vec![
+            StreamingChunk::Reasoning {
+                text: "The user said hi; ".to_string(),
+            },
+            StreamingChunk::Token {
+                text: "Hello!".to_string(),
+            },
+            StreamingChunk::Reasoning {
+                text: "I should greet back.".to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 3,
+                    completion_tokens: 2,
+                },
+            },
+        ];
+        let (text, reasoning, tool_calls) =
+            LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
+        assert_eq!(text, "Hello!");
+        assert_eq!(reasoning, "The user said hi; I should greet back.");
         assert!(tool_calls.is_empty());
     }
 
@@ -1450,7 +1518,7 @@ mod tests {
                 },
             },
         ];
-        let (text, tool_calls) =
+        let (text, _reasoning, tool_calls) =
             LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
         assert_eq!(text, "Let me search");
         assert_eq!(tool_calls.len(), 1);

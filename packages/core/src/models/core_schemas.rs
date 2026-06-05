@@ -514,6 +514,23 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_fields: None,
                         },
                         SchemaField {
+                            name: "reasoning".to_string(),
+                            field_type: "text".to_string(),
+                            protection: SchemaProtectionLevel::Core,
+                            core_values: None,
+                            user_values: None,
+                            indexed: false,
+                            required: Some(false),
+                            extensible: None,
+                            default: None,
+                            description: Some(
+                                "Model chain-of-thought reasoning toward the answer".to_string(),
+                            ),
+                            item_type: None,
+                            fields: None,
+                            item_fields: None,
+                        },
+                        SchemaField {
                             name: "timestamp".to_string(),
                             field_type: "date".to_string(),
                             protection: SchemaProtectionLevel::System,

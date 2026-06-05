@@ -7,6 +7,8 @@ export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: string;
+  /** Model chain-of-thought reasoning toward the answer, when captured. */
+  reasoning?: string;
 }
 
 /**
