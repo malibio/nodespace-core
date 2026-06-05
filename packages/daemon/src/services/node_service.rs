@@ -1355,19 +1355,9 @@ async fn convert_domain_event(
                 None
             }
         },
-        DomainEvent::NodeUpdated { node_id, .. } => match node_service.get_node(node_id).await {
-            Ok(Some(node)) => Some(NodeEvent {
-                event: Some(NodeEventKind::Updated(node_to_proto(node, None, None))),
-            }),
-            Ok(None) => {
-                tracing::debug!(node_id = %node_id, "NodeUpdated event skipped: node already gone");
-                None
-            }
-            Err(e) => {
-                tracing::warn!(node_id = %node_id, error = %e, "failed to fetch node for NodeUpdated event");
-                None
-            }
-        },
+        DomainEvent::NodeUpdated { node, .. } => Some(NodeEvent {
+            event: Some(NodeEventKind::Updated(node_to_proto(node.clone(), None, None))),
+        }),
         DomainEvent::NodeDeleted { id, node_type } => Some(NodeEvent {
             event: Some(NodeEventKind::Deleted(NodeDeleted {
                 node_id: id.clone(),

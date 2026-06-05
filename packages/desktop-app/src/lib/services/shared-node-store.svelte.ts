@@ -39,6 +39,7 @@ import type {
   UpdateOptions
 } from '$lib/types/update-protocol';
 import { conflictNotifications, type ConflictNotification } from '$lib/stores/conflict-notifications.svelte';
+import { normalizeNodeData } from './node-normalize';
 
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
@@ -1332,7 +1333,11 @@ export class SharedNodeStore {
   /**
    * Set a node (create or replace)
    */
-  setNode(node: Node, source: UpdateSource, skipPersistence = false): void {
+  setNode(rawNode: Node, source: UpdateSource, skipPersistence = false): void {
+    // Normalize typed node shapes (e.g. AiChatNode) whenever data arrives from
+    // the backend so the store always holds the typed shape, not raw wire data.
+    const node = source.type === 'database' ? normalizeNodeData(rawNode) : rawNode;
+
     const isNewNode = !this.persistedNodeIds.has(node.id);
 
     // Track hierarchy changes for logging
@@ -1386,10 +1391,17 @@ export class SharedNodeStore {
     // N+1 ahead (after writing the assistant reply), so the next user send
     // hits an OCC conflict. Always accept daemon updates for ai-chat.
     const isAiChatNode = node.nodeType === 'ai-chat';
-    if (isAiChatNode && isDatabaseSource) {
-      const msgs = (node.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-      const status = (node.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'];
-      log.info(`setNode: accepting ai-chat database update`, { nodeId: node.id, msgCount: Array.isArray(msgs) ? msgs.length : 0, status, hasPending, isFocused });
+    if (isAiChatNode && isDatabaseSource && existingNode) {
+      // AiChatNode is normalized — messages live at top-level, not properties['ai-chat']['messages']
+      type AiChatLike = Node & { messages?: unknown[] };
+      const incomingMsgs = (node as AiChatLike).messages;
+      const existingMsgs = (existingNode as AiChatLike).messages;
+      const incomingCount = Array.isArray(incomingMsgs) ? incomingMsgs.length : 0;
+      const existingCount = Array.isArray(existingMsgs) ? existingMsgs.length : 0;
+      if (incomingCount < existingCount) {
+        log.debug(`setNode: skipping ai-chat database update with fewer messages`, { nodeId: node.id, incomingCount, existingCount });
+        return;
+      }
     }
     if (isDatabaseSource && existingNode && isActivelyEdited && !isAiChatNode) {
       log.debug(
@@ -1684,8 +1696,11 @@ export class SharedNodeStore {
     // Track if any node is a hierarchy change
     let hasHierarchyChanges = false;
 
+    // Normalize typed node shapes from the backend before storing
+    const normalizedNodes = source.type === 'database' ? nodes.map(normalizeNodeData) : nodes;
+
     // Add all nodes to the store
-    for (const node of nodes) {
+    for (const node of normalizedNodes) {
       const existingNode = this.nodes.get(node.id);
       const isHierarchyChange = !existingNode;
 

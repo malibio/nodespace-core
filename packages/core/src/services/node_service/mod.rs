@@ -855,6 +855,7 @@ impl NodeService {
                     StoreOperation::Updated => DomainEvent::NodeUpdated {
                         node_id: change.node.id.clone(),
                         node_type: change.node.node_type.clone(),
+                        node: change.node.clone(),
                         changed_properties,
                     },
                     StoreOperation::Deleted => DomainEvent::NodeDeleted {

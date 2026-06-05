@@ -58,25 +58,6 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
     const node = await backendAdapter.getNode(nodeId);
     if (node) {
       const normalizedNode = normalizeNodeData(node);
-
-      // Guard: never overwrite an ai-chat node with a snapshot that has fewer
-      // messages than the current store. This prevents a stale echo (arriving
-      // after hasPending clears) from wiping an optimistically-appended user
-      // message before the daemon's next write delivers the assistant reply.
-      const currentNode = sharedNodeStore.getNode(nodeId);
-      if (currentNode?.nodeType === 'ai-chat') {
-        const currentMsgs = (currentNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-        const fetchedMsgs = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['messages'];
-        const fetchedStatus = (normalizedNode.properties?.['ai-chat'] as Record<string, unknown> | undefined)?.['status'];
-        const currentCount = Array.isArray(currentMsgs) ? currentMsgs.length : 0;
-        const fetchedCount = Array.isArray(fetchedMsgs) ? fetchedMsgs.length : 0;
-        log.info(`${eventType}: ai-chat node fetch complete`, { nodeId, fetchedCount, currentCount, fetchedStatus });
-        if (fetchedCount < currentCount) {
-          log.warn(`${eventType}: skipping stale ai-chat snapshot (fetched ${fetchedCount} msgs < current ${currentCount} msgs)`, nodeId);
-          return;
-        }
-      }
-
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
       log.info(`${eventType}: store updated for node`, nodeId);
     } else {
@@ -129,13 +110,8 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
     await listen<NodeEventData>('node:updated', (event) => {
       const nodeId = event.payload.id;
-      const inStore = sharedNodeStore.hasNode(nodeId);
-      log.info(`node:updated received`, { nodeId, inStore });
-      if (inStore) {
-        fetchAndUpdateNode(nodeId, 'node:updated');
-      } else {
-        log.warn('node:updated: node not in store, skipping fetch', nodeId);
-      }
+      log.debug(`node:updated received`, { nodeId });
+      fetchAndUpdateNode(nodeId, 'node:updated');
     });
 
     await listen<{ id: string }>('node:deleted', (event) => {

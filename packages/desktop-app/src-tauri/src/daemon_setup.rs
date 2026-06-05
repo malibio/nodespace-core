@@ -206,7 +206,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
     let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
-    let db_path = format!("{}/.nodespace/daemon-db", home_str);
+    let db_path = format!("{}/.nodespace/database/nodespace.db", home_str);
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
 

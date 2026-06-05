@@ -127,10 +127,9 @@ impl PromptAssembler {
             filters: None,
         };
 
-        match nodespace_core::ops::node_ops::query_nodes(&self.node_service, filter).await {
-            Ok(result) => {
-                // QueryNodesOutput.nodes is Vec<Value>, deserialize to Vec<Node>
-                result
+        let all_nodes: Vec<Node> =
+            match nodespace_core::ops::node_ops::query_nodes(&self.node_service, filter).await {
+                Ok(result) => result
                     .nodes
                     .into_iter()
                     .filter_map(|v| match serde_json::from_value(v) {
@@ -140,13 +139,27 @@ impl PromptAssembler {
                             None
                         }
                     })
-                    .collect()
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to fetch prompt overrides, using base only");
-                Vec::new()
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to fetch prompt overrides, using base only");
+                    return Vec::new();
+                }
+            };
+
+        // Keep only true root nodes (no parent edge pointing to them).
+        // query_nodes ignores parent_id filter, so all prompt nodes are returned;
+        // we must post-filter to avoid treating mid-hierarchy nodes as roots.
+        let mut roots = Vec::new();
+        for node in all_nodes {
+            match self.node_service.get_parent(&node.id).await {
+                Ok(None) => roots.push(node),
+                Ok(Some(_)) => {} // has a parent — skip
+                Err(e) => {
+                    tracing::warn!(error = %e, node_id = %node.id, "Failed to check parent, skipping node");
+                }
             }
         }
+        roots
     }
 
     /// Fetch children of a prompt node and concatenate their content as the body.

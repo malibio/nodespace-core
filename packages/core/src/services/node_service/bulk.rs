@@ -542,15 +542,25 @@ impl NodeService {
         // Issue #1306: Emit one NodeUpdated event per updated node.
         // `store.bulk_update` runs a single SQL transaction without per-row notify calls,
         // so we emit explicitly here rather than relying on the store notifier.
-        for (id, _) in &updates {
-            self.emit_event(DomainEvent::NodeUpdated {
-                node_id: id.clone(),
-                node_type: existing_nodes
-                    .get(id)
-                    .map(|n| n.node_type.clone())
-                    .unwrap_or_default(),
-                changed_properties: vec![],
-            });
+        for (id, update) in &updates {
+            if let Some(existing) = existing_nodes.get(id) {
+                let mut updated_node = existing.clone();
+                if let Some(nt) = &update.node_type {
+                    updated_node.node_type = nt.clone();
+                }
+                if let Some(c) = &update.content {
+                    updated_node.content = c.clone();
+                }
+                if let Some(p) = &update.properties {
+                    updated_node.properties = p.clone();
+                }
+                self.emit_event(DomainEvent::NodeUpdated {
+                    node_id: id.clone(),
+                    node_type: updated_node.node_type.clone(),
+                    node: updated_node,
+                    changed_properties: vec![],
+                });
+            }
         }
 
         Ok(())

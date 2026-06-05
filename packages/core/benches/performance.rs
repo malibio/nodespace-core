@@ -1033,6 +1033,7 @@ fn bench_event_to_rule_matching(c: &mut Criterion) {
         let property_event = DomainEvent::NodeUpdated {
             node_type: "task".to_string(),
             node_id: "bench-event-node".to_string(),
+            node: Node::new("task".to_string(), String::new(), json!({})),
             changed_properties: vec![nodespace_core::PropertyChange {
                 key: "status".to_string(),
                 old_value: Some(json!("open")),

@@ -23,6 +23,7 @@
 //! use a generic `RelationshipEvent` struct with `relationship_type` for discrimination.
 //! This allows adding new relationship types without modifying the event system.
 
+use crate::models::Node;
 use serde::{Deserialize, Serialize};
 
 /// Unified relationship event for all relationship types (Issue #811)
@@ -160,23 +161,21 @@ pub struct EventEnvelope {
 /// Source client identification is carried in `EventMetadata` (on the
 /// `EventEnvelope` wrapper), not on individual variants (Issue #995).
 ///
-/// Node events send only the `node_id` (not full payload) for efficiency.
-/// Subscribers fetch the full node data via `get_node()` if needed (Issue #724).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainEvent {
     /// A new node was created
     NodeCreated {
         node_id: String,
-        /// Node type (e.g., "collection", "task", "text") - included for reactive UI updates
-        /// that need to know the type without fetching the full node
         node_type: String,
     },
 
-    /// An existing node was updated (Issue #995: enriched with node_type and changed_properties)
+    /// An existing node was updated — carries the full committed node so
+    /// subscribers (WatchNodes, LocalAgentService) don't need a re-fetch.
     NodeUpdated {
         node_id: String,
-        /// Node type - needed for O(1) playbook trigger matching
         node_type: String,
+        /// The committed node state after the update.
+        node: Node,
         /// Properties that changed (empty if pre-mutation state unavailable)
         changed_properties: Vec<PropertyChange>,
     },
