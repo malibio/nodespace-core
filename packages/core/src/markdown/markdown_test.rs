@@ -3196,3 +3196,60 @@ mod template_tests {
         assert_eq!(wl, vec!["search_semantic"]);
     }
 }
+
+#[cfg(test)]
+mod indented_bullets_under_header_line {
+    use crate::markdown::prepare_nodes_from_markdown;
+
+    /// Regression doc for the seed-prompt body-drop bug.
+    ///
+    /// A `HEADER:` text line (e.g. `TOOL STRATEGY:`) followed by 4-space-indented
+    /// `- ` bullets parses into: the header line as a direct child of the root,
+    /// and each bullet as a child of that header line (one level deeper). All
+    /// bullet content is preserved — it is NOT dropped by the parser. The
+    /// previously-observed "lost bullets" symptom came from a consumer that only
+    /// flattened the root's *direct* children; the fix lives in that consumer
+    /// (PromptAssembler::fetch_prompt_body), which must walk the full subtree.
+    #[test]
+    fn bullets_under_header_line_are_preserved_nested_under_header() {
+        let md = "NODE MODEL: line one.\n\"DATABASE\" = SCHEMA: line two.\n\nTOOL STRATEGY:\n    - first bullet alpha\n    - second bullet beta CLARIFICATION CONTRACT\n    - third bullet BLAST-RADIUS GATE\n    - search_skills mandate here.";
+        let nodes = prepare_nodes_from_markdown(md, Some("ROOT-ID".to_string())).unwrap();
+
+        // All bullet content survives somewhere in the produced node tree.
+        let all: String = nodes
+            .iter()
+            .map(|n| n.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all.contains("search_skills"),
+            "search_skills bullet must survive"
+        );
+        assert!(
+            all.contains("CLARIFICATION CONTRACT"),
+            "CLARIFICATION bullet must survive"
+        );
+        assert!(
+            all.contains("BLAST-RADIUS GATE"),
+            "BLAST-RADIUS bullet must survive"
+        );
+
+        // The bullets are nested under the "TOOL STRATEGY:" header line, not
+        // direct children of the root — which is exactly why a direct-children-
+        // only consumer drops them.
+        let header = nodes
+            .iter()
+            .find(|n| n.content == "TOOL STRATEGY:")
+            .expect("TOOL STRATEGY: line must exist as its own node");
+        assert_eq!(header.parent_id.as_deref(), Some("ROOT-ID"));
+        let bullet = nodes
+            .iter()
+            .find(|n| n.content.contains("search_skills"))
+            .unwrap();
+        assert_eq!(
+            bullet.parent_id.as_deref(),
+            Some(header.id.as_str()),
+            "bullet should be nested under the header line, not the root"
+        );
+    }
+}
