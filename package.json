@@ -31,6 +31,7 @@
     "install:all": "bun install",
     "chat": "bun run scripts/aichat.ts",
     "eval:routing": "bun run scripts/routing-eval.ts",
+    "prompt:dump": "bun run scripts/prompt-dump.ts",
     "build:sidecars": "bun run scripts/build-sidecars.ts",
     "download:models": "bun run scripts/download-models.ts",
     "download:models:bundle": "bun run scripts/download-models.ts --bundle",
