@@ -180,14 +180,17 @@ impl PromptAssembler {
     /// only flatten silently dropped the bullet body (issue: seed prompt body
     /// dropped). Walking the subtree preserves the full intended prompt.
     async fn fetch_prompt_body(&self, node: &Node) -> String {
-        let (_root, node_map, adjacency_list) =
-            match self.node_service.get_subtree_data(&node.id).await {
-                Ok(data) => data,
-                Err(e) => {
-                    tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch prompt subtree");
-                    return String::new();
-                }
-            };
+        let (_root, node_map, adjacency_list) = match self
+            .node_service
+            .get_subtree_data(&node.id)
+            .await
+        {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch prompt subtree");
+                return String::new();
+            }
+        };
 
         // Depth-first pre-order traversal starting from the prompt node's
         // children, following adjacency_list which is already sorted by

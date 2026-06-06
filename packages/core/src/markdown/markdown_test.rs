@@ -3221,7 +3221,10 @@ mod indented_bullets_under_header_line {
             .map(|n| n.content.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(all.contains("search_skills"), "search_skills bullet must survive");
+        assert!(
+            all.contains("search_skills"),
+            "search_skills bullet must survive"
+        );
         assert!(
             all.contains("CLARIFICATION CONTRACT"),
             "CLARIFICATION bullet must survive"

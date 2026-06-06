@@ -532,7 +532,13 @@ mod full_seed_db_tests {
             names
         );
         // The two tools the seed bug previously dropped must be present.
-        assert!(names.iter().any(|n| n == "create_schema"), "create_schema must seed");
-        assert!(names.iter().any(|n| n == "search_skills"), "search_skills must seed");
+        assert!(
+            names.iter().any(|n| n == "create_schema"),
+            "create_schema must seed"
+        );
+        assert!(
+            names.iter().any(|n| n == "search_skills"),
+            "search_skills must seed"
+        );
     }
 }
