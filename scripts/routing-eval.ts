@@ -218,9 +218,13 @@ const FIXTURES: Fixture[] = [
     id: "out-of-scope-weather",
     scenario: "Out of scope: weather query → clarify or fallback, no mutating tool",
     prompt: "What's the weather like in Tokyo today?",
-    // Not routing to any mutating skill; either clarify or general response
+    // The ADR requires: out-of-scope queries should not silently fire a mutating tool.
+    // The correct guard is "no mutating tool called" — enforced via adversarial:true on
+    // a clarify fixture (see assertFixture clarify branch). The routing pipeline may or
+    // may not be entered (search_skills may still fire to confirm no skill matches),
+    // so !calledSearchSkills is not asserted here — the key invariant is no mutation.
     expected: { kind: "clarify" },
-    adversarial: true,
+    adversarial: true, // enforces calledMutatingTool check in assertFixture clarify branch
   },
 
   // ── Clarification contract: one clarification, then fall through ──────────
@@ -320,7 +324,9 @@ function isClarification(reply: string): boolean {
     lower.includes("are you looking") ||
     lower.includes("could you clarify") ||
     lower.includes("what would you like") ||
-    lower.includes("which") ||
+    lower.includes("which one") ||
+    lower.includes("which would") ||
+    lower.includes("which do") ||
     lower.includes("clarif");
   return hasQuestion && hasIntentWords;
 }
@@ -354,7 +360,18 @@ function calledSearchSkills(turns: TurnRecord[]): boolean {
 }
 
 function calledMutatingTool(turns: TurnRecord[]): boolean {
-  const mutating = ["create_schema", "update_schema", "create_node", "delete_node"];
+  // All tools that write or mutate graph state — cross-referenced against Tool::ALL
+  // in packages/agent/src/local_agent/tools.rs. Update here if the tool registry changes.
+  const mutating = [
+    "create_schema",
+    "update_schema",
+    "create_node",
+    "update_node",
+    "update_task_status",
+    "delete_node",
+    "create_relationship",
+    "create_nodes_from_markdown",
+  ];
   return turns.some((t) => t.toolsCalled.some((tc) => mutating.includes(tc)));
 }
 
@@ -488,7 +505,7 @@ for (const fixture of FIXTURES) {
     failure,
     skillsSearched: calledSearchSkills(assertionTurns),
     matchedSkill: skillNameFromTurns(assertionTurns),
-    topScore: null, // populated from log parsing in future iteration
+    topScore: null, // TODO(#1357): parse from daemon log (retrieval score is one of ADR-036's two gate signals)
     turnCount: allTurns.length,
     clarified: isClarification(assertionTurns.map((t) => t.reply).join("\n")),
     turns: allTurns,
