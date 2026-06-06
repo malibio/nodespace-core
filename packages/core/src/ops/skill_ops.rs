@@ -65,7 +65,8 @@ pub struct FindSkillsOutput {
 /// already have its `name`/`description`.
 ///
 /// Empty/childless skills return an empty string without error.
-async fn render_skill_instructions(node_service: &Arc<NodeService>, skill_id: &str) -> String {
+async fn render_skill_instructions(node_service: &NodeService, skill_id: &str) -> String {
+    // root_node unused — callers already have the skill's name/description
     let (_, node_map, adjacency_list) = match node_service.get_subtree_data(skill_id).await {
         Ok(data) => data,
         Err(e) => {
@@ -78,7 +79,9 @@ async fn render_skill_instructions(node_service: &Arc<NodeService>, skill_id: &s
         }
     };
 
-    let mut parts: Vec<String> = Vec::new();
+    // One get_subtree_data query per skill. Acceptable under MAX_SKILL_LIMIT = 10;
+    // a batch API would eliminate serial round trips if the limit grows.
+    let mut parts: Vec<String> = Vec::with_capacity(node_map.len());
     render_subtree_dfs(skill_id, &node_map, &adjacency_list, &mut parts);
     parts.join("\n\n")
 }
@@ -224,7 +227,7 @@ pub async fn find_skills(
             })
             .collect();
 
-        let instructions = render_skill_instructions(node_service, &node.id).await;
+        let instructions = render_skill_instructions(node_service.as_ref(), &node.id).await;
 
         skills.push(json!({
             "id": node.id,
@@ -333,19 +336,21 @@ mod tests {
     }
 
     #[test]
-    fn find_skills_output_includes_instructions_field() {
-        // Ensure FindSkillsOutput.skills items serialise with an "instructions" key.
-        // This is a serialisation contract test — the field must reach the caller.
-        let skill = json!({
-            "id": "skill-1",
-            "name": "Test Skill",
-            "description": "A test skill",
-            "confidence": 0.9,
-            "tools": [],
-            "schema_metadata": [],
-            "instructions": "Step one\n\nStep two",
-        });
-        assert!(skill.get("instructions").is_some());
-        assert_eq!(skill["instructions"], "Step one\n\nStep two");
+    fn render_subtree_dfs_join_produces_instructions_string() {
+        // Verify the full render_subtree_dfs → join pipeline that produces the
+        // `instructions` value delivered to the model. A regression in either
+        // function (e.g. wrong separator, missing DFS step) breaks this test.
+        let mut node_map = HashMap::new();
+        node_map.insert("c1".to_string(), make_node("c1", "Step one"));
+        node_map.insert("c2".to_string(), make_node("c2", "Step two"));
+        let mut adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        adjacency_list.insert(
+            "skill-root".to_string(),
+            vec!["c1".to_string(), "c2".to_string()],
+        );
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let instructions = parts.join("\n\n");
+        assert_eq!(instructions, "Step one\n\nStep two");
     }
 }
