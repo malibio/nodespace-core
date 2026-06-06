@@ -44,12 +44,16 @@ function createStoragePolyfill(): any {
   return storage;
 }
 
-// Apply storage polyfill when localStorage is missing or lacks the Web Storage API
-// (Node 25 exposed a partial Storage object without clear(); Node 26 exposes nothing)
+// Apply storage polyfill when localStorage is missing or lacks the Web Storage API.
+// Node's built-in localStorage has shipped several incomplete shapes across minor
+// versions — Node 25.9 exposes clear() but not getItem(), earlier 25.x exposed a
+// partial object without clear(), and Node 26 exposes nothing. Check every method
+// the app actually uses rather than probing a single one.
+const STORAGE_METHODS = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
 for (const storageKey of ['localStorage', 'sessionStorage'] as const) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const current = (globalThis as Record<string, unknown>)[storageKey] as any;
-  if (!current || typeof current.clear !== 'function') {
+  if (!current || STORAGE_METHODS.some((m) => typeof current[m] !== 'function')) {
     const polyfill = createStoragePolyfill();
     Object.defineProperty(globalThis, storageKey, { value: polyfill, writable: true, configurable: true });
     if (typeof window !== 'undefined') {

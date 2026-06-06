@@ -196,11 +196,17 @@
   // User-Defined Field Helpers
   // ============================================================================
 
-  // Get value for a user-defined field from node properties
+  // Get value for a user-defined field from node properties.
+  //
+  // Two shapes can appear in the store: the flat API shape from the backend
+  // (node_to_typed_value flattens the `properties.task` namespace away, so fields
+  // arrive under `properties.<fieldName>`), and the nested STORAGE shape left
+  // transiently by an optimistic local write below (`properties.task.<fieldName>`).
+  // Prefer the nested form so a just-edited value renders immediately, then fall
+  // back to the flat form once the backend round-trip re-flattens it.
   function getUserFieldValue(fieldName: string): unknown {
     if (!node) return undefined;
 
-    // User fields are stored in properties.task namespace
     const rawNode = sharedNodeStore.getNode(nodeId);
     if (!rawNode) return undefined;
 
@@ -208,11 +214,15 @@
     return taskProps?.[fieldName] ?? rawNode.properties?.[fieldName];
   }
 
-  // Update a user-defined field
+  // Update a user-defined field.
+  //
+  // WRITE uses the STORAGE shape: the backend stores type properties namespaced
+  // under `properties.task` (issue #838), so updates must re-nest the field there.
+  // This leaves the local node in the nested shape until the backend echo
+  // re-flattens it — getUserFieldValue above reads both forms to bridge the gap.
   function updateUserField(fieldName: string, value: unknown) {
     if (!node) return;
 
-    // User fields go through generic properties update
     const rawNode = sharedNodeStore.getNode(nodeId);
     if (!rawNode) return;
 
