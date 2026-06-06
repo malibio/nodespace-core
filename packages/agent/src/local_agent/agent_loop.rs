@@ -41,13 +41,9 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// seconds while still leaving ample room for a normal chat reply or a
 /// tool-call argument blob.
 ///
-/// This is also the ceiling on a single tool call's generated arguments:
-/// 2048 tokens comfortably covers the largest realistic blob (a full
-/// `create_schema` with many fields/enums is a few hundred tokens). If a
-/// future tool needs to emit a larger single argument payload, raise this
-/// rather than letting the call truncate into unparseable JSON. The
-/// summarization path uses its own larger cap by design (see
-/// `maybe_summarize_history`).
+/// Maximum tokens for the final text-only response (no tools). Keeps
+/// user-facing replies concise. Tool-calling iterations use `max_tokens: None`
+/// so argument JSON is never truncated mid-field.
 const MAX_RESPONSE_TOKENS: u32 = 2_048;
 
 /// Total token budget for the context window.
@@ -327,7 +323,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 messages,
                 tools: Some(tools.clone()),
                 temperature: Some(0.1),
-                max_tokens: Some(MAX_RESPONSE_TOKENS),
+                max_tokens: None, // No cap on tool-calling iterations — truncated args produce invalid JSON
             };
 
             // Run inference
