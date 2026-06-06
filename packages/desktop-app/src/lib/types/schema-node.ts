@@ -17,10 +17,11 @@
  *   "version": 1,
  *   "isCore": true,
  *   "schemaVersion": 1,
- *   "description": "Task schema",
  *   "fields": [...]
  * }
  * ```
+ *
+ * Note: `description` is optional — it is sourced from child node text and may be absent.
  *
  * Note: nodeType is NOT included in the response - it's implicit (always "schema").
  *
@@ -132,8 +133,8 @@ export interface SchemaNode {
   /** Schema version (increments on schema changes) */
   schemaVersion: number;
 
-  /** Human-readable schema description */
-  description: string;
+  /** Human-readable schema description (sourced from child node subtree, may be absent) */
+  description?: string;
 
   /** Array of field definitions */
   fields: SchemaField[];

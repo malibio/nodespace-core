@@ -906,6 +906,45 @@ impl SqliteStore {
         Ok((true, nodes_to_delete))
     }
 
+    /// Delete all descendants of `parent_id` (the full child subtree) without touching the parent.
+    ///
+    /// Uses a recursive CTE to collect all descendant IDs, then deletes them in one statement.
+    /// FK CASCADE cleans relationship and embedding rows automatically.
+    /// No OCC check — intended for internal system operations where version checks are unnecessary.
+    pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
+        self.db
+            .execute(
+                r#"WITH RECURSIVE subtree(node_id) AS (
+                    SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                    UNION ALL
+                    SELECT r.out_node FROM relationship r
+                    JOIN subtree s ON r.in_node = s.node_id
+                    WHERE r.relationship_type = 'has_child'
+                )
+                DELETE FROM node WHERE id IN (SELECT DISTINCT node_id FROM subtree)"#,
+                libsql::params![parent_id.to_string()],
+            )
+            .await
+            .context("Failed to delete children subtree")?;
+        Ok(())
+    }
+
+    /// Remove a single top-level key from a node's properties JSON in-place using `json_remove`.
+    ///
+    /// Used by migrations to clear legacy fields (e.g. `description`) after they have been
+    /// moved to the child-subtree representation, making the migration idempotent.
+    pub async fn remove_property_key(&self, node_id: &str, key: &str) -> Result<()> {
+        let json_path = format!("$.{}", key);
+        self.db
+            .execute(
+                "UPDATE node SET properties = json_remove(properties, ?1), modified_at = ?2 WHERE id = ?3",
+                libsql::params![json_path, chrono::Utc::now().to_rfc3339(), node_id.to_string()],
+            )
+            .await
+            .context("Failed to remove property key")?;
+        Ok(())
+    }
+
     pub async fn delete_with_version_check(
         &self,
         id: &str,
