@@ -1,11 +1,10 @@
-//! Skill seeding templates.
+//! Skill and tool node seeding templates.
 //!
-//! Provides the default skill nodes seeded on first run. Each [`NodeTemplate`]
-//! produces one skill root node plus any guidance prompt children defined in
-//! its markdown body. Use
-//! [`nodespace_core::markdown::prepare_nodes_from_template`]
-//! to expand a template into a flat list of `PreparedNode`s before inserting
-//! them via `NodeService::bulk_create_hierarchy`.
+//! Provides the default skill and tool nodes seeded on first run. Each
+//! [`NodeTemplate`] produces one root node plus any children. Use
+//! [`nodespace_core::markdown::prepare_nodes_from_template`] to expand a
+//! template into a flat list of `PreparedNode`s before inserting them via
+//! `NodeService::bulk_create_hierarchy`.
 //!
 //! Issue #1130: The previous push-based [`SkillPipeline`] (pre-LLM intent
 //! routing with confidence thresholds + tool whitelist scoping) has been
@@ -13,6 +12,10 @@
 //! `search_skills` tool exposed by [`crate::local_agent::tools`], so the
 //! agent loop no longer needs a pipeline object — only the seeded skill
 //! nodes themselves remain.
+//!
+//! Issue #1353: Tool nodes (`node_type='tool'`) bridge graph storage to
+//! deterministic Rust handlers. Each tool is seeded as a node carrying its
+//! handler key, typed parameter schema, description, and `source` provenance.
 
 use nodespace_core::markdown::NodeTemplate;
 
@@ -228,6 +231,48 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
     ]
 }
 
+/// Default tool node templates seeded on first run (issue #1353).
+///
+/// Each template produces one `node_type='tool'` node bridging graph storage to
+/// a deterministic Rust handler. Properties:
+/// - `handler`: stable key into the handler registry (matches `Tool::name()`)
+/// - `description`: embedded for semantic tool discovery
+/// - `parameter_schema`: typed JSON Schema the model uses when calling the tool
+/// - `source`: `"internal"` for all built-in tools
+/// - `enabled`: `true` for internal tools (external tools require explicit enablement)
+pub fn seed_tool_nodes() -> Vec<NodeTemplate> {
+    use crate::local_agent::tools::Tool;
+    Tool::ALL
+        .iter()
+        .map(|tool| {
+            let def = tool.definition();
+            NodeTemplate {
+                title: def.name.clone(),
+                content: None,
+                root_node_type: "tool".to_string(),
+                // Pre-namespace under "tool" so normalize_flat_properties_to_namespace
+                // detects the existing namespace key and returns early (crud.rs:1633),
+                // preserving the nested parameter_schema object. Without pre-namespacing
+                // the normalizer misclassifies parameter_schema (an object) as a dormant
+                // namespace, hoisting it out of the "tool" key so flatten_properties_for_api
+                // later silently drops it.
+                root_properties: serde_json::json!({
+                    "tool": {
+                        "handler": def.name,
+                        "description": def.description,
+                        "parameter_schema": def.parameters_schema,
+                        "source": "internal",
+                        "enabled": true,
+                    }
+                }),
+                child_node_type: None,
+                child_properties: None,
+                markdown_content: String::new(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use nodespace_core::markdown::prepare_nodes_from_template;
@@ -321,6 +366,98 @@ mod tests {
                     tool_name
                 );
             }
+        }
+    }
+
+    // -- Tool node seeding tests (issue #1353) --------------------------------
+
+    #[test]
+    fn seed_tool_nodes_covers_all_registered_tools() {
+        use crate::local_agent::tools::Tool;
+        let tool_seeds = seed_tool_nodes();
+        assert_eq!(
+            tool_seeds.len(),
+            Tool::ALL.len(),
+            "seed_tool_nodes() must produce one node per Tool::ALL entry"
+        );
+    }
+
+    #[test]
+    fn seed_tool_nodes_have_required_properties() {
+        for seed in seed_tool_nodes() {
+            assert_eq!(seed.root_node_type, "tool");
+
+            // Properties are pre-namespaced under "tool" to survive the normalizer
+            let ns = seed
+                .root_properties
+                .get("tool")
+                .expect("tool namespace must be present");
+
+            let handler = ns.get("handler").and_then(|v| v.as_str()).unwrap_or("");
+            assert!(
+                !handler.is_empty(),
+                "Tool '{}' must have a handler key",
+                seed.title
+            );
+
+            let source = ns.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            assert_eq!(
+                source, "internal",
+                "Built-in tool '{}' must have source='internal'",
+                seed.title
+            );
+
+            let enabled = ns.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            assert!(
+                enabled,
+                "Built-in tool '{}' must be enabled=true",
+                seed.title
+            );
+
+            assert!(
+                ns.get("parameter_schema")
+                    .map(|v| v.is_object())
+                    .unwrap_or(false),
+                "Tool '{}' must have a parameter_schema object",
+                seed.title
+            );
+
+            let desc = ns.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            assert!(
+                !desc.is_empty(),
+                "Tool '{}' must have a non-empty description",
+                seed.title
+            );
+        }
+    }
+
+    #[test]
+    fn seed_tool_nodes_handler_keys_match_registry() {
+        use crate::local_agent::tools::Tool;
+        for seed in seed_tool_nodes() {
+            let handler = seed
+                .root_properties
+                .get("tool")
+                .and_then(|ns| ns.get("handler"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            assert!(
+                Tool::from_name(handler).is_some(),
+                "Tool node '{}' has handler '{}' not in registry",
+                seed.title,
+                handler
+            );
+        }
+    }
+
+    #[test]
+    fn seed_tool_nodes_produce_valid_prepared_nodes() {
+        for seed in seed_tool_nodes() {
+            let nodes = prepare_nodes_from_template(&seed)
+                .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
+            assert!(!nodes.is_empty(), "Tool '{}' produced no nodes", seed.title);
+            let root = &nodes[0];
+            assert_eq!(root.node_type, "tool");
         }
     }
 }

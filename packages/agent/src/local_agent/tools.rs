@@ -1523,8 +1523,124 @@ const SELECT_TOOLS_CONFIDENCE_THRESHOLD: f64 = 0.3;
 
 #[async_trait]
 impl AgentToolExecutor for GraphToolExecutor {
+    /// Return typed `ToolDefinition`s generated from tool nodes in the graph.
+    ///
+    /// Reads `node_type='tool'` nodes seeded at startup (issue #1353), builds a
+    /// `ToolDefinition` from each enabled node whose handler key is present in
+    /// the deterministic registry, then preserves the canonical registry ordering.
+    /// Falls back to the hardcoded list when the node service is unavailable or
+    /// the query returns no results.
     async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
-        Ok(all_tool_definitions())
+        let ns = match &self.node_service {
+            Some(svc) => svc,
+            None => return Ok(all_tool_definitions()),
+        };
+
+        let query_result = node_ops::query_nodes(
+            ns,
+            node_ops::QueryNodesInput {
+                node_type: Some("tool".to_string()),
+                parent_id: None,
+                root_id: None,
+                limit: Some(256),
+                offset: None,
+                collection_id: None,
+                collection: None,
+                filters: None,
+            },
+        )
+        .await;
+
+        let tool_nodes = match query_result {
+            Ok(output) if !output.nodes.is_empty() => output.nodes,
+            Ok(_) => {
+                tracing::debug!("available_tools: no tool nodes in DB, using hardcoded list");
+                return Ok(all_tool_definitions());
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "available_tools: node query failed, using hardcoded list");
+                return Ok(all_tool_definitions());
+            }
+        };
+
+        // Build a map from handler key → ToolDefinition from node properties.
+        // Only enabled nodes with a valid handler key are included.
+        let mut node_defs: std::collections::HashMap<String, ToolDefinition> =
+            std::collections::HashMap::new();
+
+        for node in &tool_nodes {
+            let props = node.get("properties").unwrap_or(node);
+
+            let handler = props
+                .get("handler")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if handler.is_empty() {
+                continue;
+            }
+
+            // Enforce the trust boundary via allowlist: only internal tools or
+            // explicitly-enabled external tools may enter the inference surface.
+            // Unknown source values are treated as untrusted and require enablement —
+            // this prevents future source values from silently bypassing the gate.
+            let source = props.get("source").and_then(|v| v.as_str()).unwrap_or(""); // missing source → not "internal" → requires enabled=true
+            let enabled = props
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let is_allowed = source == "internal" || enabled;
+            if !is_allowed {
+                tracing::debug!(handler = %handler, source = %source, "available_tools: skipping unenabled tool");
+                continue;
+            }
+
+            let description = props
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let parameters_schema = props
+                .get("parameter_schema")
+                .cloned()
+                .unwrap_or(json!({"type": "object", "properties": {}}));
+
+            node_defs.insert(
+                handler.clone(),
+                ToolDefinition {
+                    name: handler,
+                    description,
+                    parameters_schema,
+                },
+            );
+        }
+
+        if node_defs.is_empty() {
+            tracing::debug!("available_tools: no valid tool nodes found, using hardcoded list");
+            return Ok(all_tool_definitions());
+        }
+
+        // Emit ToolDefinitions in canonical registry order so the model always
+        // sees tools in the same sequence (discovery tools first).
+        // Unknown handler keys in the DB (external tools not in the registry)
+        // are appended after the registered tools.
+        let mut result: Vec<ToolDefinition> = Vec::with_capacity(node_defs.len());
+        for &tool in Tool::ALL {
+            if let Some(def) = node_defs.remove(tool.name()) {
+                result.push(def);
+            }
+        }
+        // Append external tools (handler keys not in Tool::ALL) sorted by name
+        let mut extras: Vec<ToolDefinition> = node_defs.into_values().collect();
+        extras.sort_by(|a, b| a.name.cmp(&b.name));
+        result.extend(extras);
+
+        tracing::debug!(
+            count = result.len(),
+            "available_tools: generated from tool nodes"
+        );
+        Ok(result)
     }
 
     async fn select_tools(
