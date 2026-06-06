@@ -4,12 +4,12 @@
 //! exporter pointed at that URL and installs it as the global tracer provider.
 //! When unset, the default no-op provider remains — callers pay zero overhead.
 //!
-//! MLflow 3.x includes a native OTLP HTTP receiver. Point it at
-//! `http://localhost:5000/api/2.0/mlflow/otlp`. See `scripts/mlflow-dev.md`.
+//! MLflow 3.x includes a native OTLP HTTP receiver at `/v1/traces`. Point it at
+//! `http://localhost:5000`. See `scripts/mlflow-dev.md`.
 //!
 //! Issue #1341
 
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
 /// Name used for all traces emitted by the agent.
@@ -19,7 +19,10 @@ pub const TRACER_NAME: &str = "nodespace-agent";
 const ENV_MLFLOW_URL: &str = "NODESPACE_MLFLOW_URL";
 
 /// OTLP path appended to the MLflow base URL.
-const OTLP_PATH: &str = "/api/2.0/mlflow/otlp";
+///
+/// MLflow 3.x serves the OTLP HTTP receiver at `/v1/traces` (not the legacy
+/// `/api/2.0/mlflow/otlp` path which returns 404 on 3.13+).
+const OTLP_PATH: &str = "/v1/traces";
 
 /// Returns `true` when `url` resolves to a loopback address.
 ///
@@ -74,9 +77,13 @@ pub fn init_tracer() -> Option<SdkTracerProvider> {
 
     tracing::info!(endpoint = %endpoint, "OTLP tracing enabled (NODESPACE_MLFLOW_URL is set)");
 
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("x-mlflow-experiment-id".to_string(), "0".to_string());
+
     let exporter = match opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_endpoint(&endpoint)
+        .with_headers(headers)
         .build()
     {
         Ok(e) => e,
