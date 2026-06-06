@@ -1180,4 +1180,120 @@ mod tests {
     fn test_balanced_brace_unbalanced() {
         assert_eq!(find_balanced_brace(r#"{"a": 1"#), None);
     }
+
+    // -----------------------------------------------------------------------
+    // Regression fixtures — historical engine failures (issue #1355)
+    //
+    // These tests pin the two tool-call failures that were misattributed to
+    // model capability but were caused by the old vendored llama.cpp engine
+    // (pre-build-8660). The upgraded engine (llama-cpp-2 ≥ 0.1.146, vendored
+    // at a commit 123 commits past b8660) produces correct output; the tests
+    // confirm our parser handles both the broken and fixed shapes correctly.
+    // -----------------------------------------------------------------------
+
+    /// Ministral 8B regression: the old engine dropped the `type` key from a
+    /// JSON object field, producing malformed JSON:
+    ///   {"name":"amount_due","number"}
+    /// — a bare string value after a comma is not valid JSON. The parser must
+    /// reject this rather than silently swallowing it.
+    ///
+    /// With the upgraded engine the field is emitted correctly as:
+    ///   {"name":"amount_due","type":"number"}
+    #[test]
+    fn regression_ministral8b_dropped_type_key_is_rejected() {
+        // This is the exact malformed shape the old engine produced for a
+        // create_schema field definition inside a [TOOL_CALLS] response.
+        let broken = r#"[TOOL_CALLS]create_schema[ARGS]{"name":"Invoice","fields":[{"name":"amount_due","number"}]}"#;
+        let result = parse_tool_calls(broken);
+        assert!(
+            matches!(result, ParseResult::Error(_)),
+            "Malformed JSON with dropped 'type' key must be a parse Error, got: {:?}",
+            result
+        );
+    }
+
+    /// Ministral 8B regression (fixed): the upgraded engine now emits the
+    /// complete, valid `create_schema` call with both `name` and `type` keys.
+    /// This is the shape the fixed engine produces — the parser must accept it.
+    #[test]
+    fn regression_ministral8b_complete_create_schema_accepted() {
+        let fixed = r#"[TOOL_CALLS]create_schema[ARGS]{"name":"Invoice","fields":[{"name":"amount_due","type":"number","description":"Total amount due"}]}"#;
+        let result = parse_tool_calls(fixed);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "create_schema");
+                assert_eq!(calls[0].args["name"], "Invoice");
+                let fields = calls[0].args["fields"].as_array().expect("fields array");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0]["name"], "amount_due");
+                assert_eq!(fields[0]["type"], "number");
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
+
+    /// Ministral 8B streaming regression: the dropped-type failure also
+    /// occurred mid-stream. Verify the streaming parser surfaces a parse
+    /// Error (not a crash) on the malformed shape.
+    #[test]
+    fn regression_ministral8b_streaming_broken_json_errors_cleanly() {
+        let mut parser = StreamingToolCallParser::new();
+        // Feed all at once — the sentinel is present so we enter tool-call mode.
+        parser.feed(r#"[TOOL_CALLS]create_schema[ARGS]{"name":"Invoice","fields":[{"name":"amount_due","number"}]}"#);
+        let result = parser.finish();
+        assert!(
+            matches!(result, ParseResult::Error(_)),
+            "Streaming parser must surface Error for malformed JSON, got: {:?}",
+            result
+        );
+    }
+
+    /// Gemma 4 12B regression: the old engine returned chat_format=0
+    /// (CONTENT_ONLY) when tools were provided, causing tool calls to be
+    /// emitted as plain text. The upgraded engine detects COMMON_CHAT_FORMAT_PEG_GEMMA4
+    /// (format value 3) and routes calls through ChatParseStateOaicompat.
+    ///
+    /// This test pins the OAI-compat streaming delta shape that the upgraded
+    /// engine now produces for Gemma 4 tool calls, parsed by emit_oai_delta.
+    /// A chat_format=0 regression would cause `tool_calls` to never appear in
+    /// the delta stream — the parser would receive only content text instead.
+    #[test]
+    fn regression_gemma4_12b_tool_call_delta_accepted() {
+        // The OAI-compat delta shape the upgraded engine produces for a Gemma 4
+        // create_schema call. With chat_format=0 this would never appear.
+        let delta = r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"create_schema","arguments":"{\"name\":\"Invoice\",\"fields\":[]}"}}]}"#;
+
+        let v: serde_json::Value = serde_json::from_str(delta).unwrap();
+        let tool_calls = v["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+
+        let func = &tool_calls[0]["function"];
+        assert_eq!(func["name"], "create_schema");
+
+        let args: serde_json::Value =
+            serde_json::from_str(func["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["name"], "Invoice");
+    }
+
+    /// Gemma 4 12B regression: the `[TOOL_CALLS]` Mistral-format parser must
+    /// continue to handle Gemma 4 Format-C (JSON object after sentinel) exactly
+    /// as it did before the engine upgrade. The upgrade must not break this path.
+    #[test]
+    fn regression_gemma4_mistral_sentinel_format_still_works() {
+        // Gemma 4 can also emit via the [TOOL_CALLS] sentinel path (Format C).
+        // Confirm parser still handles it correctly post-upgrade.
+        let input = r#"[TOOL_CALLS]{"tool_name":"create_schema","tool_args":{"name":"Invoice","fields":[{"name":"amount_due","type":"number"}]}}"#;
+        let result = parse_tool_calls(input);
+        match result {
+            ParseResult::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "create_schema");
+                assert_eq!(calls[0].args["name"], "Invoice");
+                let fields = calls[0].args["fields"].as_array().expect("fields array");
+                assert_eq!(fields[0]["type"], "number");
+            }
+            other => panic!("Expected ToolCalls, got {:?}", other),
+        }
+    }
 }
