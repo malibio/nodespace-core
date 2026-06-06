@@ -18,7 +18,7 @@ use nodespace_agent::acp::context_assembly::GraphContextAssembler;
 use nodespace_agent::local_agent::otlp_tracer;
 use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
-use nodespace_agent::skill_pipeline::seed_skill_nodes;
+use nodespace_agent::skill_pipeline::{seed_skill_nodes, seed_tool_nodes};
 use nodespace_core::markdown::prepare_nodes_from_template;
 use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
@@ -328,13 +328,18 @@ async fn build_services(
     ))
 }
 
-/// Seed prompt and skill nodes on first launch. Idempotent — existing nodes are skipped.
+/// Seed prompt, skill, and tool nodes on first launch. Idempotent — existing nodes are skipped.
 async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
     let prompt_templates = PromptAssembler::seed_prompt_nodes();
     let skill_templates = seed_skill_nodes();
+    let tool_templates = seed_tool_nodes();
 
     let mut all_template_nodes = Vec::new();
-    for tmpl in prompt_templates.iter().chain(skill_templates.iter()) {
+    for tmpl in prompt_templates
+        .iter()
+        .chain(skill_templates.iter())
+        .chain(tool_templates.iter())
+    {
         match prepare_nodes_from_template(tmpl) {
             Ok(nodes) => all_template_nodes.push(nodes),
             Err(e) => {

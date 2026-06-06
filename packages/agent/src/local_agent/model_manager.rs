@@ -1064,7 +1064,7 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 9);
+        assert_eq!(models.len(), 10);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
