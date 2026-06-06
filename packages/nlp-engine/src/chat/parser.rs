@@ -1249,33 +1249,6 @@ mod tests {
         );
     }
 
-    /// Gemma 4 12B regression: the old engine returned chat_format=0
-    /// (CONTENT_ONLY) when tools were provided, causing tool calls to be
-    /// emitted as plain text. The upgraded engine detects COMMON_CHAT_FORMAT_PEG_GEMMA4
-    /// (format value 3) and routes calls through ChatParseStateOaicompat.
-    ///
-    /// This test pins the OAI-compat streaming delta shape that the upgraded
-    /// engine now produces for Gemma 4 tool calls, parsed by emit_oai_delta.
-    /// A chat_format=0 regression would cause `tool_calls` to never appear in
-    /// the delta stream — the parser would receive only content text instead.
-    #[test]
-    fn regression_gemma4_12b_tool_call_delta_accepted() {
-        // The OAI-compat delta shape the upgraded engine produces for a Gemma 4
-        // create_schema call. With chat_format=0 this would never appear.
-        let delta = r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"create_schema","arguments":"{\"name\":\"Invoice\",\"fields\":[]}"}}]}"#;
-
-        let v: serde_json::Value = serde_json::from_str(delta).unwrap();
-        let tool_calls = v["tool_calls"].as_array().unwrap();
-        assert_eq!(tool_calls.len(), 1);
-
-        let func = &tool_calls[0]["function"];
-        assert_eq!(func["name"], "create_schema");
-
-        let args: serde_json::Value =
-            serde_json::from_str(func["arguments"].as_str().unwrap()).unwrap();
-        assert_eq!(args["name"], "Invoice");
-    }
-
     /// Gemma 4 12B regression: the `[TOOL_CALLS]` Mistral-format parser must
     /// continue to handle Gemma 4 Format-C (JSON object after sentinel) exactly
     /// as it did before the engine upgrade. The upgrade must not break this path.

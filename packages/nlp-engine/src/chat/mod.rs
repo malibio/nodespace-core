@@ -1273,4 +1273,50 @@ mod tests {
         assert_eq!(v["tool_call_id"], "tc_1");
         assert_eq!(v["content"], "result text");
     }
+
+    // -----------------------------------------------------------------------
+    // Regression fixture — Gemma 4 12B tool-call delta (issue #1355)
+    //
+    // With the old vendored engine (pre-b8660) chat_format=0 caused tool calls
+    // to be emitted as plain content, never reaching emit_oai_delta as
+    // tool_calls arrays. With the upgraded engine (>=v0.1.146) chat_format=3
+    // (PEG_GEMMA4) routes through ChatParseStateOaicompat and produces the
+    // delta shape below. This test calls emit_oai_delta directly with that
+    // shape and verifies ToolCallStart + ToolCallArgs events are produced.
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "chat-service")]
+    #[test]
+    fn regression_gemma4_12b_oai_delta_emits_tool_call_chunks() {
+        // OAI-compat delta the upgraded engine produces for a Gemma 4 create_schema call.
+        // With chat_format=0 this `tool_calls` key would never appear in the stream.
+        let delta = r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"create_schema","arguments":"{\"name\":\"Invoice\",\"fields\":[]}"}}]}"#;
+
+        // emit_oai_delta takes `impl Fn(ChatChunk) + Send` so we collect via Mutex.
+        let chunks = std::sync::Mutex::new(Vec::<ChatChunk>::new());
+        let mut ids = std::collections::HashMap::new();
+        let mut splitter = ChannelSplitter::default();
+        emit_oai_delta(delta, &mut ids, &mut splitter, &|chunk| {
+            chunks.lock().unwrap().push(chunk);
+        });
+        let chunks = chunks.into_inner().unwrap();
+
+        let start = chunks.iter().find(
+            |c| matches!(c, ChatChunk::ToolCallStart { name, .. } if name == "create_schema"),
+        );
+        assert!(
+            start.is_some(),
+            "emit_oai_delta must emit ToolCallStart for create_schema; got: {:?}",
+            chunks
+        );
+
+        let args = chunks.iter().find(
+            |c| matches!(c, ChatChunk::ToolCallArgs { json, .. } if json.contains("Invoice")),
+        );
+        assert!(
+            args.is_some(),
+            "emit_oai_delta must emit ToolCallArgs containing 'Invoice'; got: {:?}",
+            chunks
+        );
+    }
 }
