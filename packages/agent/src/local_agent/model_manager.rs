@@ -115,6 +115,61 @@ const QWEN3_8B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
+/// Qwen3.5 9B (Unsloth) -- Feb 2026 step-up from Qwen3-8B; same weight class
+/// (~5.3 GB Q4_K_M), newer training. Unsloth GGUF for llama.cpp compatibility.
+const QWEN35_9B: CatalogEntry = CatalogEntry {
+    id: "qwen35-9b-q4km",
+    family: ModelFamily::Qwen35,
+    name: "Qwen3.5 9B Instruct Q4_K_M",
+    filename: "Qwen3.5-9B-Q4_K_M.gguf",
+    size_bytes: 5_680_522_464, // ~5.3 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+    sha256: "", // Unsloth repo — policy exception, trial only; populate hash before promoting
+    context_window: 32_768,
+    default_temperature: 0.6,
+    type_k: None,
+    type_v: None,
+    min_memory_gb: 16,
+};
+
+/// Qwen3.6 35B-A3B -- MoE: 35B total parameters, 3B active. Fast inference
+/// (similar speed to a 3B dense model) with large-model capacity.
+/// ~22 GB on disk; fits on 48 GB Apple Silicon. Trial only.
+const QWEN36_35B_A3B: CatalogEntry = CatalogEntry {
+    id: "qwen36-35b-a3b-q4km",
+    family: ModelFamily::Qwen36,
+    name: "Qwen3.6 35B-A3B Instruct Q4_K_M (MoE)",
+    filename: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+    size_bytes: 22_134_528_992, // ~22.1 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+    sha256: "", // Unsloth repo — policy exception, trial only
+    context_window: 32_768,
+    default_temperature: 0.6,
+    type_k: None,
+    type_v: None,
+    min_memory_gb: 48,
+};
+
+/// Mistral Small 3.2 -- Mistral's 24B dense small model (June 2026); strong
+/// reasoning and tool calling. ~13.4 GB Q4_K_M; fits on 24GB+ Apple Silicon.
+const MISTRAL_SMALL_3_2: CatalogEntry = CatalogEntry {
+    id: "mistral-small-3-2-q4km",
+    family: ModelFamily::MistralSmall,
+    name: "Mistral Small 3.2 24B Instruct Q4_K_M",
+    filename: "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
+    size_bytes: 14_333_922_848, // ~13.4 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/main/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
+    sha256: "", // Unsloth repo — policy exception; populate before promoting to default
+    context_window: 32_768,
+    default_temperature: 0.3,
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    min_memory_gb: 24,
+};
+
 /// Gemma 4 E4B -- Google's efficient ~4B-effective model; stronger reasoning
 /// than Ministral 3B/8B at competitive speed (16GB+ Apple Silicon).
 const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
@@ -204,7 +259,10 @@ const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
 const CATALOG: &[&CatalogEntry] = &[
     &MINISTRAL_3B,
     &MINISTRAL_8B,
+    &MISTRAL_SMALL_3_2,
     &QWEN3_8B,
+    &QWEN35_9B,
+    &QWEN36_35B_A3B,
     &GEMMA_4_E4B,
     &GEMMA_4_12B,
     &GEMMA_4_12B_UNSLOTH,
@@ -342,6 +400,9 @@ impl GgufModelManager {
                 }
             }
             ModelFamily::Qwen3 => QWEN3_8B.id,
+            ModelFamily::Qwen35 => QWEN35_9B.id,
+            ModelFamily::Qwen36 => QWEN36_35B_A3B.id,
+            ModelFamily::MistralSmall => MISTRAL_SMALL_3_2.id,
             ModelFamily::Ollama => {
                 if large {
                     GEMMA_4_31B.id
@@ -1003,7 +1064,7 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 6);
+        assert_eq!(models.len(), 9);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
