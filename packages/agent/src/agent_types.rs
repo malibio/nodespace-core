@@ -245,6 +245,8 @@ pub enum ModelFamily {
     Ministral,
     /// Gemma 4 -- Google's multimodal model series (E4B, 31B).
     Gemma4,
+    /// Qwen3 -- Alibaba's Qwen3 model series (strong tool calling, 0.6B–8B+).
+    Qwen3,
     /// Model served via Ollama (family determined by Ollama).
     Ollama,
 }
