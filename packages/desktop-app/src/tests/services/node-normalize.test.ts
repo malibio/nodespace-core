@@ -20,11 +20,17 @@ describe('normalizeNodeData', () => {
     expect(normalizeNodeData(node)).toBe(node);
   });
 
-  it('converts a task node with nested properties to flat TaskNode', () => {
+  // The backend (`node_to_typed_value`) promotes type-specific fields to the TOP
+  // LEVEL of the node for every transport — see the `wire_contract` tests in
+  // `nodespace-types/src/convert.rs`. These tests pin that flat contract on the TS
+  // side; the converters intentionally no longer accept the nested `properties.task`
+  // shape, which no live producer emits.
+  it('passes through a flat task node, preserving promoted fields', () => {
     const node = makeNode({
       nodeType: 'task',
-      properties: { task: { status: 'done', priority: 'high' } } as Record<string, unknown>
-    });
+      status: 'done',
+      priority: 'high'
+    } as Partial<Node>);
     const result = normalizeNodeData(node);
     expect(result.nodeType).toBe('task');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -33,7 +39,7 @@ describe('normalizeNodeData', () => {
     expect((result as any).priority).toBe('high');
   });
 
-  it('task node with no properties gets default status "open"', () => {
+  it('task node with no status gets default "open"', () => {
     const node = makeNode({ nodeType: 'task' });
     const result = normalizeNodeData(node);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,13 +49,13 @@ describe('normalizeNodeData', () => {
   // Drift guard: both sync paths (Tauri + browser) call this single function, so the
   // transformation contract below applies identically to both runtime modes. Adding a
   // future type branch here is the one-place change that covers both paths.
-  it('normalizes full task node with status, priority, and dueDate', () => {
+  it('normalizes a full flat task node with status, priority, and dueDate', () => {
     const node = makeNode({
       nodeType: 'task',
-      properties: {
-        task: { status: 'in_progress', priority: 'low', dueDate: '2024-12-31' }
-      } as Record<string, unknown>
-    });
+      status: 'in_progress',
+      priority: 'low',
+      dueDate: '2024-12-31'
+    } as Partial<Node>);
     const result = normalizeNodeData(node);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const r = result as any;

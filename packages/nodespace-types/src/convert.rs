@@ -13,7 +13,11 @@ use crate::task::{TaskNode, TaskPriority, TaskStatus};
 /// node shape. Adds a `nodespace://` URI field for rich client rendering.
 ///
 /// This is the single canonical implementation used by all entry points
-/// (Tauri commands, MCP, HTTP).
+/// (Tauri commands, MCP, HTTP) and the SOLE authority for property flattening
+/// and `nodespace://` URI production. Do NOT re-implement either in another layer
+/// (e.g. a TypeScript-side flatten in the frontend converters) — the frontend
+/// `nodeTo*` converters trust the flat, top-level shape this function guarantees.
+/// The `wire_contract` tests below pin that shape.
 pub fn node_to_typed_value(node: Node) -> Result<serde_json::Value, String> {
     let mut node = node;
     flatten_properties_for_api(&mut node);
@@ -180,4 +184,80 @@ fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
     };
 
     serde_json::to_value(&chat).map_err(|e| format!("Failed to serialize ai-chat node: {}", e))
+}
+
+#[cfg(test)]
+mod wire_contract {
+    use super::*;
+    use crate::node::Node;
+
+    // These tests pin the wire contract that the frontend TS converters trust:
+    // for typed nodes, type-specific fields are promoted to TOP-LEVEL and the
+    // namespaced `properties.<type>` form is flattened away. If this contract
+    // ever changes, the frontend nodeTo* converters must change in lockstep.
+
+    #[test]
+    fn task_promotes_fields_top_level_and_flattens_properties() {
+        let node = Node::new(
+            "task".to_string(),
+            "Buy milk".to_string(),
+            serde_json::json!({
+                "task": { "status": "in_progress", "priority": "high", "custom:store": "Costco" }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        // Core fields promoted to top level.
+        assert_eq!(out["status"], "in_progress");
+        assert_eq!(out["priority"], "high");
+        // `properties` is flattened: no `task` namespace survives.
+        assert!(out["properties"].get("task").is_none());
+        // User/custom fields remain in flat `properties`.
+        assert_eq!(out["properties"]["custom:store"], "Costco");
+        // URI is injected by the backend.
+        assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
+
+    #[test]
+    fn ai_chat_promotes_fields_top_level_and_flattens_properties() {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            serde_json::json!({
+                "ai-chat": {
+                    "status": "active",
+                    "provider": "ollama",
+                    "messages": [{ "role": "user", "content": "hi" }]
+                }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        assert_eq!(out["status"], "active");
+        assert_eq!(out["provider"], "ollama");
+        assert_eq!(out["messages"][0]["content"], "hi");
+        assert!(out["properties"].get("ai-chat").is_none());
+        assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
+
+    #[test]
+    fn schema_promotes_fields_top_level_and_injects_uri() {
+        let node = Node::new(
+            "schema".to_string(),
+            "Task schema".to_string(),
+            serde_json::json!({
+                "isCore": true,
+                "schemaVersion": 2,
+                "description": "Task type",
+                "fields": []
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        // Schema fields are promoted to the top level by SchemaNode.
+        assert_eq!(out["isCore"], true);
+        assert_eq!(out["schemaVersion"], 2);
+        assert_eq!(out["description"], "Task type");
+        assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
 }

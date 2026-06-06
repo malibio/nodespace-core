@@ -54,9 +54,8 @@ export type TaskPriority = CoreTaskPriority | string;
  * Use this interface instead of the generic `Node` type when you need type-safe
  * access to task-specific fields (status, priority, dueDate, assignee).
  *
- * The generic `Node` interface does NOT include these fields - they must be
- * accessed through `TaskNode` for type safety or via `properties.task.*` for
- * dynamic access.
+ * The generic `Node` interface does NOT include these fields - they are promoted
+ * to the top level of the node by the backend and accessed through `TaskNode`.
  *
  * Flat structure matching Rust backend serialization:
  * ```json
@@ -253,36 +252,17 @@ export interface TaskNodeUpdate {
 /**
  * Convert a generic Node to a TaskNode by extracting type-specific fields from properties
  *
- * SSE events send generic Node objects where task-specific fields are stored in
- * `properties.status`, `properties.priority`, etc. This function normalizes them
- * to the flat TaskNode structure expected by the frontend.
+ * The backend (`node_to_typed_value` in `nodespace-types`) is the single typing
+ * authority: for every transport (Tauri IPC and HTTP/SSE) it promotes task fields
+ * to the TOP LEVEL of the node and flattens the `properties.task` namespace away.
+ * See the `wire_contract` tests in `nodespace-types/src/convert.rs`. This converter
+ * therefore trusts the flat contract and only fills defaults for missing fields.
  *
- * Handles both formats:
- * - Nested: `properties.task.status` (legacy)
- * - Flat: `properties.status` (current)
- * - Already flat: `node.status` (already a TaskNode)
- *
- * @param node - Generic Node with task data in properties
+ * @param node - Generic Node carrying a task (fields promoted to top level)
  * @returns TaskNode with flat type-specific fields
  */
 export function nodeToTaskNode(node: Node): TaskNode {
-  // If already has flat status, it's already a TaskNode
-  if ('status' in node && typeof (node as TaskNode).status === 'string') {
-    return node as TaskNode;
-  }
-
-  // Extract from properties (Issue #794: namespaced under properties.task)
-  // Per naming conventions: API returns camelCase (dueDate, startedAt, completedAt)
-  const props = node.properties as Record<string, unknown> | undefined;
-  const taskProps = (props?.task as Record<string, unknown>) ?? {};
-
-  const status = (taskProps.status as TaskStatus) ?? 'open';
-  const priority = taskProps.priority as TaskPriority | undefined;
-  const dueDate = taskProps.dueDate as string | null | undefined;
-  const assignee = taskProps.assignee as string | null | undefined;
-  const startedAt = taskProps.startedAt as string | null | undefined;
-  const completedAt = taskProps.completedAt as string | null | undefined;
-
+  const task = node as unknown as Partial<TaskNode>;
   return {
     id: node.id,
     nodeType: 'task',
@@ -290,12 +270,12 @@ export function nodeToTaskNode(node: Node): TaskNode {
     version: node.version,
     createdAt: node.createdAt,
     modifiedAt: node.modifiedAt,
-    status,
-    priority,
-    dueDate: dueDate ?? null,
-    assignee: assignee ?? null,
-    startedAt: startedAt ?? null,
-    completedAt: completedAt ?? null
+    status: task.status ?? 'open',
+    priority: task.priority,
+    dueDate: task.dueDate ?? null,
+    assignee: task.assignee ?? null,
+    startedAt: task.startedAt ?? null,
+    completedAt: task.completedAt ?? null
   };
 }
 
