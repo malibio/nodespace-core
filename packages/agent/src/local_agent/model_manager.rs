@@ -158,12 +158,32 @@ const GEMMA_4_12B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
+/// Gemma 4 12B (Unsloth) -- April 11 updated GGUF with corrected chat template.
+/// The ggml-org GGUF has `<turn|>` not marked as EOG, causing generation to
+/// never stop after tool calls. Unsloth's re-upload fixes this. Trial only (#1329).
+const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
+    id: "gemma-4-12b-unsloth-q4km",
+    family: ModelFamily::Gemma4,
+    name: "Gemma 4 12B Instruct Q4_K_M (Unsloth)",
+    filename: "gemma-4-12b-it-unsloth-Q4_K_M.gguf",
+    size_bytes: 7_121_860_000,
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+    sha256: "",
+    context_window: 32_768,
+    default_temperature: 0.3,
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    min_memory_gb: 16,
+};
+
 /// All catalog entries, in preference order.
 const CATALOG: &[&CatalogEntry] = &[
     &MINISTRAL_3B,
     &MINISTRAL_8B,
     &GEMMA_4_E4B,
     &GEMMA_4_12B,
+    &GEMMA_4_12B_UNSLOTH,
     &GEMMA_4_31B,
 ];
 

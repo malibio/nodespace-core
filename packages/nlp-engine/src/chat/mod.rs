@@ -447,6 +447,7 @@ impl ChatEngine {
         let mut tool_call_ids: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
 
+
         // Route the model's `<|channel> … <channel|>` reasoning out of the answer
         // stream. Held across the whole loop so a span (or marker) that straddles
         // a delta boundary is resolved correctly.

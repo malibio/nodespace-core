@@ -141,11 +141,17 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                 .collect()
         });
 
+        // Ollama does not deliver tool_calls through its streaming API for Gemma 4
+        // (and likely other models) — tool calls only appear in the final
+        // non-streaming response. Use stream:false so tool calls are reliably
+        // returned, then emit the response content as a single chunk to preserve
+        // the on_chunk streaming interface for callers.
+        let use_stream = tools.is_none();
         let ollama_request = OllamaChatRequest {
             model: &self.model_name,
             messages,
             tools,
-            stream: true,
+            stream: use_stream,
             think: false,
             options: OllamaOptions {
                 temperature: request.temperature,
@@ -198,65 +204,92 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
             )));
         }
 
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
         let mut final_usage = InferenceUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
         };
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| InferenceError::Engine(e.to_string()))?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        if use_stream {
+            // Streaming path: used when no tools are present.
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim().to_string();
-                buffer = buffer[pos + 1..].to_string();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| InferenceError::Engine(e.to_string()))?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                if line.is_empty() {
-                    continue;
-                }
+                while let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].trim().to_string();
+                    buffer = buffer[pos + 1..].to_string();
 
-                match serde_json::from_str::<OllamaChatChunk>(&line) {
-                    Ok(chunk_data) => {
-                        // Process message content
-                        if let Some(msg) = &chunk_data.message {
-                            if let Some(content) = &msg.content {
-                                if !content.is_empty() {
-                                    on_chunk(StreamingChunk::Token {
-                                        text: content.clone(),
-                                    });
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    match serde_json::from_str::<OllamaChatChunk>(&line) {
+                        Ok(chunk_data) => {
+                            if let Some(msg) = &chunk_data.message {
+                                if let Some(content) = &msg.content {
+                                    if !content.is_empty() {
+                                        on_chunk(StreamingChunk::Token {
+                                            text: content.clone(),
+                                        });
+                                    }
                                 }
                             }
+                            if chunk_data.done {
+                                final_usage = InferenceUsage {
+                                    prompt_tokens: chunk_data.prompt_eval_count,
+                                    completion_tokens: chunk_data.eval_count,
+                                };
+                                on_chunk(StreamingChunk::Done { usage: final_usage });
+                            }
+                        }
+                        Err(e) => tracing::warn!("Failed to parse Ollama chunk: {e}"),
+                    }
+                }
+            }
+        } else {
+            // Non-streaming path: used when tools are present. Ollama does not
+            // deliver tool_calls in the streaming API for Gemma 4 — the full
+            // response must be read at once to get structured tool_calls.
+            let body = response
+                .text()
+                .await
+                .map_err(|e| InferenceError::Engine(e.to_string()))?;
 
-                            // Process tool calls
-                            for (i, tool_call) in msg.tool_calls.iter().enumerate() {
-                                let call_id = format!("call_{}", i);
-                                on_chunk(StreamingChunk::ToolCallStart {
-                                    id: call_id.clone(),
-                                    name: tool_call.function.name.clone(),
-                                });
-
-                                let args_json =
-                                    serde_json::to_string(&tool_call.function.arguments)
-                                        .unwrap_or_default();
-                                on_chunk(StreamingChunk::ToolCallArgs {
-                                    id: call_id,
-                                    args_json,
+            match serde_json::from_str::<OllamaChatChunk>(&body) {
+                Ok(chunk_data) => {
+                    if let Some(msg) = &chunk_data.message {
+                        if let Some(content) = &msg.content {
+                            if !content.is_empty() {
+                                on_chunk(StreamingChunk::Token {
+                                    text: content.clone(),
                                 });
                             }
                         }
-
-                        if chunk_data.done {
-                            final_usage = InferenceUsage {
-                                prompt_tokens: chunk_data.prompt_eval_count,
-                                completion_tokens: chunk_data.eval_count,
-                            };
-                            on_chunk(StreamingChunk::Done { usage: final_usage });
+                        for (i, tool_call) in msg.tool_calls.iter().enumerate() {
+                            let call_id = format!("call_{}", i);
+                            on_chunk(StreamingChunk::ToolCallStart {
+                                id: call_id.clone(),
+                                name: tool_call.function.name.clone(),
+                            });
+                            let args_json =
+                                serde_json::to_string(&tool_call.function.arguments)
+                                    .unwrap_or_default();
+                            on_chunk(StreamingChunk::ToolCallArgs {
+                                id: call_id,
+                                args_json,
+                            });
                         }
                     }
-                    Err(e) => tracing::warn!("Failed to parse Ollama chunk: {e}"),
+                    final_usage = InferenceUsage {
+                        prompt_tokens: chunk_data.prompt_eval_count,
+                        completion_tokens: chunk_data.eval_count,
+                    };
+                    on_chunk(StreamingChunk::Done { usage: final_usage });
                 }
+                Err(e) => tracing::warn!("Failed to parse Ollama non-streaming response: {e}"),
             }
         }
 
