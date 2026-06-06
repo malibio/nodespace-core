@@ -321,7 +321,7 @@ impl PromptAssembler {
                     - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
                     - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
-                    - Empty/error tool result: state it in one sentence and stop. Do NOT retry the same tool, and do NOT call another tool to compensate — just answer.\n\
+                    - Tool call error: read the error message, fix your arguments, and retry ONCE. If the retry also fails, tell the user what went wrong in one sentence and stop — do NOT keep retrying. Empty search result: state it in one sentence and stop, do NOT retry or call another tool to compensate.\n\
                     - Keep responses to 1-2 sentences unless the user asks for detail. No preamble, no sign-off.",
                     NODE_REFERENCE_FORMAT
                 ),
@@ -395,7 +395,7 @@ mod tests {
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
             - Listing: **Title** (nodespace://id) — description. Search results: \"Found N nodes...\" then top results.\n\
-            - Empty/error tool result: state it in one sentence and stop. Do NOT retry the same tool, and do NOT call another tool to compensate — just answer.\n\
+            - Tool call error: read the error message, fix your arguments, and retry ONCE. If the retry also fails, tell the user what went wrong in one sentence and stop — do NOT keep retrying. Empty search result: state it in one sentence and stop, do NOT retry or call another tool to compensate.\n\
             - Keep responses to 1-2 sentences unless the user asks for detail. No preamble, no sign-off.";
 
         assert_eq!(
