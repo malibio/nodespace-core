@@ -97,6 +97,24 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
+/// Qwen3 8B -- Alibaba's Qwen3 dense 8B; strong tool-calling training,
+/// competitive with Ministral 8B at similar footprint (16GB+ Apple Silicon).
+const QWEN3_8B: CatalogEntry = CatalogEntry {
+    id: "qwen3-8b-q4km",
+    family: ModelFamily::Qwen3,
+    name: "Qwen3 8B Instruct Q4_K_M",
+    filename: "Qwen3-8B-Q4_K_M.gguf",
+    size_bytes: 5_027_783_872, // ~4.7 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/ggml-org/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    context_window: 32_768,
+    default_temperature: 0.6,
+    type_k: None,
+    type_v: None,
+    min_memory_gb: 16,
+};
+
 /// Gemma 4 E4B -- Google's efficient ~4B-effective model; stronger reasoning
 /// than Ministral 3B/8B at competitive speed (16GB+ Apple Silicon).
 const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
@@ -186,6 +204,7 @@ const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
 const CATALOG: &[&CatalogEntry] = &[
     &MINISTRAL_3B,
     &MINISTRAL_8B,
+    &QWEN3_8B,
     &GEMMA_4_E4B,
     &GEMMA_4_12B,
     &GEMMA_4_12B_UNSLOTH,
@@ -322,6 +341,7 @@ impl GgufModelManager {
                     GEMMA_4_E4B.id
                 }
             }
+            ModelFamily::Qwen3 => QWEN3_8B.id,
             ModelFamily::Ollama => {
                 if large {
                     GEMMA_4_31B.id
@@ -983,7 +1003,7 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 6);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
