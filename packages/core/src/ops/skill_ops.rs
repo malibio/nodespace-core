@@ -7,10 +7,12 @@
 //! scan against the small skill embedding set instead of going through HNSW
 //! + post-filter — faster *and* exact when the candidate set is small.
 //!
-//! Issues #1051, #1130, #1283.
+//! Issues #1051, #1130, #1283, #1356.
 
+use crate::models::Node;
 use crate::services::{NodeEmbeddingService, NodeService};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::OpsError;
@@ -55,15 +57,65 @@ pub struct FindSkillsOutput {
     pub total_results: usize,
 }
 
+/// Render a skill node's child subtree as flat markdown.
+///
+/// Fetches the full subtree in a single DB query, then walks it depth-first
+/// (root children first, their children next) and joins each node's content
+/// with a blank line separator. The skill root itself is excluded — callers
+/// already have its `name`/`description`.
+///
+/// Empty/childless skills return an empty string without error.
+async fn render_skill_instructions(node_service: &NodeService, skill_id: &str) -> String {
+    // root_node unused — callers already have the skill's name/description
+    let (_, node_map, adjacency_list) = match node_service.get_subtree_data(skill_id).await {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                skill_id = %skill_id,
+                "render_skill_instructions: failed to fetch subtree"
+            );
+            return String::new();
+        }
+    };
+
+    // One get_subtree_data query per skill. Acceptable under MAX_SKILL_LIMIT = 10;
+    // a batch API would eliminate serial round trips if the limit grows.
+    let mut parts: Vec<String> = Vec::with_capacity(node_map.len());
+    render_subtree_dfs(skill_id, &node_map, &adjacency_list, &mut parts);
+    parts.join("\n\n")
+}
+
+/// Depth-first walk of the subtree adjacency list, collecting node content.
+/// Skips the root (skill node itself); visits all descendants in child order.
+fn render_subtree_dfs(
+    parent_id: &str,
+    node_map: &HashMap<String, Node>,
+    adjacency_list: &HashMap<String, Vec<String>>,
+    parts: &mut Vec<String>,
+) {
+    let Some(children) = adjacency_list.get(parent_id) else {
+        return;
+    };
+    for child_id in children {
+        if let Some(node) = node_map.get(child_id) {
+            if !node.content.is_empty() {
+                parts.push(node.content.clone());
+            }
+            render_subtree_dfs(child_id, node_map, adjacency_list, parts);
+        }
+    }
+}
+
 /// Search for skill nodes via semantic search and return flat results with
 /// schema metadata for the matched skill's scoped types.
 ///
 /// Returns up to `limit` matches (default 3) with `id`, `name`, `description`,
-/// `confidence`, `tools`, and `schema_metadata`. The `schema_metadata` field
-/// contains type IDs, field names, and enum values for entity types associated
-/// with the skill's `tool_whitelist` scope — giving the model exactly the schema
-/// context it needs for the current intent without injecting the full type list
-/// every turn (#1283).
+/// `confidence`, `tools`, `schema_metadata`, and `instructions`. The `instructions`
+/// field is the skill's child subtree rendered to markdown — the actual procedure
+/// the model must follow (#1356). The `schema_metadata` field contains type IDs,
+/// field names, and enum values for entity types associated with the skill's
+/// `tool_whitelist` scope (#1283).
 ///
 /// No filtering or bucketing — the caller (model or MCP client) inspects the
 /// raw confidence score and decides how to act. An empty `skills` array is a
@@ -175,6 +227,8 @@ pub async fn find_skills(
             })
             .collect();
 
+        let instructions = render_skill_instructions(node_service.as_ref(), &node.id).await;
+
         skills.push(json!({
             "id": node.id,
             "name": node.content,
@@ -182,6 +236,7 @@ pub async fn find_skills(
             "confidence": confidence,
             "tools": tool_whitelist,
             "schema_metadata": schema_metadata,
+            "instructions": instructions,
         }));
     }
 
@@ -197,4 +252,105 @@ pub async fn find_skills(
         query: input.query,
         total_results,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Node;
+    use serde_json::json;
+
+    fn make_node(id: &str, content: &str) -> Node {
+        Node {
+            id: id.to_string(),
+            node_type: "text".to_string(),
+            content: content.to_string(),
+            version: 1,
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            properties: json!({}),
+            mentions: vec![],
+            mentioned_in: vec![],
+            title: None,
+            lifecycle_status: "active".to_string(),
+        }
+    }
+
+    #[test]
+    fn render_subtree_dfs_empty_skill() {
+        let node_map: HashMap<String, Node> = HashMap::new();
+        let adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn render_subtree_dfs_flat_children() {
+        let mut node_map = HashMap::new();
+        node_map.insert("c1".to_string(), make_node("c1", "Step one"));
+        node_map.insert("c2".to_string(), make_node("c2", "Step two"));
+        let mut adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        adjacency_list.insert(
+            "skill-root".to_string(),
+            vec!["c1".to_string(), "c2".to_string()],
+        );
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        assert_eq!(parts, vec!["Step one", "Step two"]);
+    }
+
+    #[test]
+    fn render_subtree_dfs_nested_children() {
+        let mut node_map = HashMap::new();
+        node_map.insert("c1".to_string(), make_node("c1", "Section header"));
+        node_map.insert("c1a".to_string(), make_node("c1a", "Sub-step A"));
+        node_map.insert("c2".to_string(), make_node("c2", "Another section"));
+        let mut adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        adjacency_list.insert(
+            "skill-root".to_string(),
+            vec!["c1".to_string(), "c2".to_string()],
+        );
+        adjacency_list.insert("c1".to_string(), vec!["c1a".to_string()]);
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        assert_eq!(
+            parts,
+            vec!["Section header", "Sub-step A", "Another section"]
+        );
+    }
+
+    #[test]
+    fn render_subtree_dfs_skips_empty_content() {
+        let mut node_map = HashMap::new();
+        node_map.insert("c1".to_string(), make_node("c1", ""));
+        node_map.insert("c2".to_string(), make_node("c2", "Has content"));
+        let mut adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        adjacency_list.insert(
+            "skill-root".to_string(),
+            vec!["c1".to_string(), "c2".to_string()],
+        );
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        assert_eq!(parts, vec!["Has content"]);
+    }
+
+    #[test]
+    fn render_subtree_dfs_join_produces_instructions_string() {
+        // Verify the full render_subtree_dfs → join pipeline that produces the
+        // `instructions` value delivered to the model. A regression in either
+        // function (e.g. wrong separator, missing DFS step) breaks this test.
+        let mut node_map = HashMap::new();
+        node_map.insert("c1".to_string(), make_node("c1", "Step one"));
+        node_map.insert("c2".to_string(), make_node("c2", "Step two"));
+        let mut adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
+        adjacency_list.insert(
+            "skill-root".to_string(),
+            vec!["c1".to_string(), "c2".to_string()],
+        );
+        let mut parts = Vec::new();
+        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let instructions = parts.join("\n\n");
+        assert_eq!(instructions, "Step one\n\nStep two");
+    }
 }
