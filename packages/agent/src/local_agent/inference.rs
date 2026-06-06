@@ -74,10 +74,16 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
         });
 
         let temperature = request.temperature.unwrap_or(self.default_temperature);
-        // 4096 fallback for GGUF path when no cap is requested (tool-calling iterations
-        // pass max_tokens: None). Ollama uses stream:false for tool turns so its
-        // effective cap is the model's own EOS — the two backends diverge here intentionally.
-        let max_tokens = request.max_tokens.unwrap_or(4096);
+        // 2048 fallback for GGUF path when no cap is requested (tool-calling iterations
+        // pass max_tokens: None to avoid truncating argument JSON mid-field). Ollama uses
+        // stream:false for tool turns so its effective cap is the model's own EOS — the two
+        // backends diverge here intentionally.
+        //
+        // 2048 is sufficient for any realistic tool-call argument blob and bounds runaway
+        // generation (e.g. Gemma 4 12B hitting the old 4096 ceiling on every turn). This
+        // mirrors MAX_RESPONSE_TOKENS (agent_loop.rs) so the per-turn token budget is
+        // symmetric: tool iterations and final replies are both capped at 2048.
+        let max_tokens = request.max_tokens.unwrap_or(2048);
 
         // Bridge ChatChunk → StreamingChunk
         let usage_result = self
