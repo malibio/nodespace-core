@@ -359,12 +359,6 @@ impl ChatEngine {
         // is detected as PEG_GEMMA4, guarding against incomplete vocabulary metadata.
         let mut additional_stops = tmpl_result.additional_stops.clone();
         augment_gemma4_stops(tmpl_result.chat_format, &mut additional_stops);
-        if tmpl_result.chat_format == 3 {
-            tracing::debug!(
-                "Gemma 4 (chat_format=3): augmented additional_stops = {:?}",
-                additional_stops
-            );
-        }
 
         // --- Prepare context and batch ---
         // Find the longest token prefix shared with the last decoded prompt.
@@ -582,6 +576,9 @@ impl ChatEngine {
         }
 
         // Finalize: signal end-of-stream with empty string and is_partial=false.
+        // Best-effort — if generation exited via the consecutive-error circuit breaker
+        // the parser may be in an unrecoverable state; the warn-and-continue below
+        // is intentional (we still want to drain the channel splitter and emit Done).
         match oai_parser.update("", false) {
             Ok(deltas) => {
                 for delta_json in deltas {
@@ -735,21 +732,30 @@ fn partial_marker_suffix_len(text: &str, marker: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// llama.cpp `common_chat_format` value for Gemma 4's PEG-based chat template.
+/// Used to detect when Gemma 4-specific stop tokens must be injected.
+#[cfg(any(feature = "chat-service", test))]
+const CHAT_FORMAT_PEG_GEMMA4: i32 = 3;
+
 #[cfg(any(feature = "chat-service", test))]
 /// Augment `additional_stops` with the full set of Gemma 4 turn-end tokens when
-/// `chat_format` indicates PEG_GEMMA4 (value 3).
+/// `chat_format` indicates PEG_GEMMA4.
 ///
 /// The ggml-org Gemma 4 12B GGUF does not mark `<turn|>` as an EOG token in its
 /// vocabulary, so llama.cpp's template engine may omit it from `additional_stops`.
 /// Injecting the full token set here ensures we stop on both `<end_of_turn>` and
 /// `<turn|>` regardless of vocabulary metadata quality.
 fn augment_gemma4_stops(chat_format: i32, stops: &mut Vec<String>) {
-    if chat_format == 3 {
+    if chat_format == CHAT_FORMAT_PEG_GEMMA4 {
         for stop in &["<end_of_turn>", "<turn|>"] {
             if !stops.iter().any(|s| s == stop) {
                 stops.push(stop.to_string());
             }
         }
+        tracing::debug!(
+            "Gemma 4 (PEG_GEMMA4): augmented additional_stops = {:?}",
+            stops
+        );
     }
 }
 
@@ -1380,7 +1386,7 @@ mod tests {
     fn augment_gemma4_injects_missing_turn_tokens() {
         // Neither token present — both must be added.
         let mut stops: Vec<String> = vec![];
-        augment_gemma4_stops(3, &mut stops);
+        augment_gemma4_stops(CHAT_FORMAT_PEG_GEMMA4, &mut stops);
         assert!(
             stops.iter().any(|s| s == "<end_of_turn>"),
             "must inject <end_of_turn>"
@@ -1390,14 +1396,19 @@ mod tests {
 
     #[test]
     fn augment_gemma4_does_not_duplicate_existing_stops() {
-        // Template already included <end_of_turn> — must not be duplicated.
+        // Template already included <end_of_turn> at index 0 — must not be duplicated
+        // and its position must be preserved.
         let mut stops = vec!["<end_of_turn>".to_string()];
-        augment_gemma4_stops(3, &mut stops);
+        augment_gemma4_stops(CHAT_FORMAT_PEG_GEMMA4, &mut stops);
         let eot_count = stops
             .iter()
             .filter(|s| s.as_str() == "<end_of_turn>")
             .count();
         assert_eq!(eot_count, 1, "<end_of_turn> must not be duplicated");
+        assert_eq!(
+            stops[0], "<end_of_turn>",
+            "pre-existing entry must stay at its original index"
+        );
         assert!(
             stops.iter().any(|s| s == "<turn|>"),
             "<turn|> must still be added"
