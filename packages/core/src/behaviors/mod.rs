@@ -1808,7 +1808,8 @@ impl NodeBehavior for ToolNodeBehavior {
             ));
         }
 
-        if let Some(source) = get_namespaced_prop_str(&node.properties, "tool", "source") {
+        let source = get_namespaced_prop_str(&node.properties, "tool", "source");
+        if let Some(source) = source {
             if source != "internal" && source != "external" {
                 return Err(NodeValidationError::InvalidProperties(
                     "tool source must be 'internal' or 'external'".to_string(),
@@ -1822,9 +1823,18 @@ impl NodeBehavior for ToolNodeBehavior {
                     "parameter_schema must be a JSON object".to_string(),
                 ));
             }
-            // Enforce trust boundary constraints on schema
-            if let Some(obj) = schema.as_object() {
-                validate_parameter_schema_depth(obj, 0)?;
+            // The depth / additionalProperties guard is a trust-boundary check
+            // for UNTRUSTED external tool schemas. Internal tools are generated
+            // from compile-time-validated typed `ToolDefinition`s and may
+            // legitimately nest deeper than the external limit (e.g.
+            // create_schema's object → array-of-objects → enum-array-of-objects
+            // reaches depth 5 via the structural `properties`/`items` keys). Only
+            // enforce the guard for non-internal (external/untrusted) tools, so
+            // valid internal tools are never rejected during seeding.
+            if source != Some("internal") {
+                if let Some(obj) = schema.as_object() {
+                    validate_parameter_schema_depth(obj, 0)?;
+                }
             }
         }
 
@@ -4520,11 +4530,12 @@ mod tests {
             "tool": {
                 "handler": "deep_tool",
                 "parameter_schema": deep,
+                "source": "external",
             }
         }));
         assert!(
             behavior.validate(&node).is_err(),
-            "Schema exceeding depth limit should be rejected"
+            "External schema exceeding depth limit should be rejected"
         );
     }
 
@@ -4538,11 +4549,63 @@ mod tests {
                     "type": "object",
                     "additionalProperties": true,
                 },
+                "source": "external",
             }
         }));
         assert!(
             behavior.validate(&node).is_err(),
-            "Schema with additionalProperties:true should be rejected"
+            "External schema with additionalProperties:true should be rejected"
+        );
+    }
+
+    /// Internal tools are compile-time-validated typed definitions and are
+    /// exempt from the external-tool depth / additionalProperties guard. A deep
+    /// (or unbounded) internal schema must still validate, otherwise legitimate
+    /// internal tools like `create_schema` (whose schema reaches depth 5 via the
+    /// structural object→array→object→enum-array nesting) are dropped during
+    /// seeding. Regression for the seed body-drop / missing-tools bug.
+    #[test]
+    fn tool_node_accepts_deep_internal_schema() {
+        let behavior = ToolNodeBehavior;
+        // Same 7-level-deep schema as the external rejection test, plus an
+        // unbounded additionalProperties — both rejected for external tools.
+        let deep = json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "a": {
+                    "type": "object",
+                    "properties": {
+                        "b": {
+                            "type": "object",
+                            "properties": {
+                                "c": {
+                                    "type": "object",
+                                    "properties": {
+                                        "d": {
+                                            "type": "object",
+                                            "properties": {
+                                                "e": { "type": "string" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "create_schema",
+                "parameter_schema": deep,
+                "source": "internal",
+            }
+        }));
+        assert!(
+            behavior.validate(&node).is_ok(),
+            "Internal tool schema must not be rejected by the external depth guard"
         );
     }
 
