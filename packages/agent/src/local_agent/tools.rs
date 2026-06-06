@@ -445,7 +445,14 @@ fn def_search_skills() -> ToolDefinition {
 fn def_create_schema() -> ToolDefinition {
     ToolDefinition {
         name: "create_schema".into(),
-        description: "Create a new entity type (schema) with custom fields and relationships. The schema ID is auto-generated as lowercase kebab-case (e.g., 'Customer Profile' becomes 'customer-profile'). After creation, use this ID as node_type when creating instances. IMPORTANT: Do NOT include a 'name' or 'title' field — every node already has a content/title. EXCEPTION: if title_template uses a 'name' placeholder (e.g. '{name} ({status})'), you MUST define 'name' as a text field. Only define type-specific fields. If a field maps to an existing node type (e.g., 'tasks' maps to 'task'), define it as a relationship instead of an array field.".into(),
+        description: "Create a new entity type (schema) with custom fields and relationships. \
+            The top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. 'Invoice', 'Project'). \
+            The schema ID is auto-generated as lowercase kebab-case from name (e.g. 'Customer Profile' → 'customer-profile'). \
+            After creation, use this ID as node_type when creating instances. \
+            FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. \
+            EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), \
+            you MUST define 'name' as a text field so the template can reference it. \
+            Only define type-specific fields. If a field maps to an existing node type, define it as a relationship instead.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
