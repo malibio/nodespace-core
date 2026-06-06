@@ -41,38 +41,25 @@ export function isAiChatNode(node: Node | AiChatNode): node is AiChatNode {
 /**
  * Convert a generic Node to AiChatNode.
  *
- * Handles both:
- * - Flat wire format: properties.messages, properties.status, etc. (from daemon)
- * - Already promoted: node.messages, node.status (already an AiChatNode)
+ * The backend (`node_to_typed_value` in `nodespace-types`) is the single typing
+ * authority: for every transport (Tauri IPC and HTTP/SSE) it promotes ai-chat
+ * fields to the TOP LEVEL of the node and flattens the `properties.ai-chat`
+ * namespace away. See the `wire_contract` tests in `nodespace-types/src/convert.rs`.
+ * This converter therefore trusts the flat contract and only fills defaults.
  */
 export function nodeToAiChatNode(node: Node): AiChatNode {
-  // Already promoted (messages already at top level)
-  const nodeAsAny = node as unknown as AiChatNode;
-  if ('messages' in node && Array.isArray(nodeAsAny.messages)) {
-    return nodeAsAny;
-  }
-
-  const props = node.properties as Record<string, unknown> | undefined;
-
-  // Flat wire format (after flatten_properties_for_api)
-  const status = (props?.['status'] as AiChatStatus) ?? 'active';
-  const provider = props?.['provider'] as AiChatProvider | undefined;
-  const model = props?.['model'] as string | undefined;
-  const messages = Array.isArray(props?.['messages'])
-    ? (props['messages'] as AiChatMessage[])
-    : [];
-
+  const chat = node as unknown as Partial<AiChatNode> & { lifecycleStatus?: string };
   return {
     id: node.id,
     nodeType: 'ai-chat',
     content: node.content,
     version: node.version,
-    lifecycleStatus: (node as unknown as { lifecycleStatus?: string }).lifecycleStatus,
+    lifecycleStatus: chat.lifecycleStatus,
     createdAt: node.createdAt,
     modifiedAt: node.modifiedAt,
-    status,
-    provider,
-    model,
-    messages,
+    status: chat.status ?? 'active',
+    provider: chat.provider,
+    model: chat.model,
+    messages: Array.isArray(chat.messages) ? chat.messages : [],
   };
 }

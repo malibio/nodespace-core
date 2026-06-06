@@ -46,17 +46,23 @@ const isProd =
   (typeof import.meta !== 'undefined' && import.meta.env?.PROD === true) ||
   (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production');
 
+// Read a localStorage key defensively. Some runtimes (e.g. Node 25's built-in
+// localStorage) expose a partial Storage object where `getItem` is not a function,
+// so a bare `typeof localStorage !== 'undefined'` guard is insufficient.
+function readStorage(key: string): string | null {
+  if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') {
+    return null;
+  }
+  return localStorage.getItem(key);
+}
+
 // Default log level based on environment
 // Production: only warn/error
 // Development: warn/error by default; set localStorage.debug='*' to enable debug
-const _storedLevel =
-  typeof localStorage !== 'undefined' ? localStorage.getItem('nodespace:logLevel') : null;
+const _storedLevel = readStorage('nodespace:logLevel');
 const DEFAULT_LEVEL: LogLevel = isProd
   ? 'warn'
-  : (_storedLevel as LogLevel | null) ??
-    (typeof localStorage !== 'undefined' && localStorage.getItem('nodespace:debug')
-      ? 'debug'
-      : 'warn');
+  : (_storedLevel as LogLevel | null) ?? (readStorage('nodespace:debug') ? 'debug' : 'warn');
 
 /**
  * Logger class with environment-aware configuration.
