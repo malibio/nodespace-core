@@ -1771,6 +1771,142 @@ impl NodeBehavior for SkillNodeBehavior {
     }
 }
 
+/// Behavior for tool nodes (`node_type='tool'`).
+///
+/// Tool nodes bridge the graph/LLM layer to deterministic Rust handlers.
+/// They store the tool's stable handler key, typed parameter schema,
+/// description (embeddable for discovery), and a `source` provenance marker
+/// (`"internal"` for built-in tools, `"external"` for user-registered tools).
+///
+/// The handler key points at a deterministic function in the tool registry;
+/// the node never contains logic — only metadata.
+///
+/// Properties:
+/// - `handler`: stable key resolving to the deterministic handler (e.g. `"search_nodes"`)
+/// - `description`: human-readable description embedded for semantic discovery
+/// - `parameter_schema`: JSON Schema for the tool's parameters (typed, bounded)
+/// - `source`: provenance — `"internal"` (generated) or `"external"` (user-registered)
+/// - `enabled`: bool — external tools require explicit user enablement before use
+pub struct ToolNodeBehavior;
+
+impl NodeBehavior for ToolNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "tool"
+    }
+
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        if node.content.trim().is_empty() {
+            return Err(NodeValidationError::MissingField(
+                "Tool display name (content) cannot be empty".to_string(),
+            ));
+        }
+
+        let handler = get_namespaced_prop_str(&node.properties, "tool", "handler");
+        if handler.map(|s| s.trim().is_empty()).unwrap_or(true) {
+            return Err(NodeValidationError::MissingField(
+                "tool handler key is required".to_string(),
+            ));
+        }
+
+        if let Some(source) = get_namespaced_prop_str(&node.properties, "tool", "source") {
+            if source != "internal" && source != "external" {
+                return Err(NodeValidationError::InvalidProperties(
+                    "tool source must be 'internal' or 'external'".to_string(),
+                ));
+            }
+        }
+
+        if let Some(schema) = get_namespaced_prop(&node.properties, "tool", "parameter_schema") {
+            if !schema.is_object() && !schema.is_null() {
+                return Err(NodeValidationError::InvalidProperties(
+                    "parameter_schema must be a JSON object".to_string(),
+                ));
+            }
+            // Enforce trust boundary constraints on schema
+            if let Some(obj) = schema.as_object() {
+                validate_parameter_schema_depth(obj, 0)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn can_have_children(&self) -> bool {
+        false
+    }
+
+    fn supports_markdown(&self) -> bool {
+        false
+    }
+
+    fn default_metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "handler": "",
+            "description": "",
+            "parameter_schema": {},
+            "source": "internal",
+            "enabled": true,
+        })
+    }
+
+    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
+        let desc = get_namespaced_prop_str(&node.properties, "tool", "description").unwrap_or("");
+        let name = &node.content;
+        if desc.is_empty() && name.trim().is_empty() {
+            None
+        } else if desc.is_empty() {
+            Some(name.clone())
+        } else {
+            Some(format!("{}\n\n{}", name, desc))
+        }
+    }
+
+    fn get_parent_contribution(&self, _node: &Node) -> Option<String> {
+        None
+    }
+}
+
+/// Maximum allowed nesting depth for tool parameter schemas.
+///
+/// Bounded nesting prevents external tools from registering schemas that could
+/// trigger pathological processing or obscure type confusion via deeply nested
+/// `additionalProperties`. Internal tools are not constrained by this limit
+/// (they are validated at compile time via typed `ToolDefinition`s), but the
+/// guard runs unconditionally so the same code path covers both cases.
+const MAX_SCHEMA_DEPTH: usize = 5;
+
+/// Validate that a parameter schema object does not exceed the depth limit
+/// and does not use unbounded `additionalProperties: true`.
+fn validate_parameter_schema_depth(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+) -> Result<(), NodeValidationError> {
+    if depth > MAX_SCHEMA_DEPTH {
+        return Err(NodeValidationError::InvalidProperties(format!(
+            "parameter_schema exceeds maximum nesting depth of {}",
+            MAX_SCHEMA_DEPTH
+        )));
+    }
+
+    // Reject unbounded additionalProperties: true at any depth
+    if let Some(additional) = obj.get("additionalProperties") {
+        if additional == &serde_json::Value::Bool(true) {
+            return Err(NodeValidationError::InvalidProperties(
+                "parameter_schema must not use additionalProperties: true".to_string(),
+            ));
+        }
+    }
+
+    // Recurse into nested schema objects (properties, items, etc.)
+    for (_, v) in obj.iter() {
+        if let Some(child) = v.as_object() {
+            validate_parameter_schema_depth(child, depth + 1)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Fallback behavior for schema-defined custom types
 ///
 /// This behavior is used for node types that have a schema definition but no
@@ -1952,6 +2088,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(AiChatNodeBehavior));
         registry.register(Arc::new(PromptNodeBehavior));
         registry.register(Arc::new(SkillNodeBehavior));
+        registry.register(Arc::new(ToolNodeBehavior));
 
         registry
     }
@@ -2649,7 +2786,8 @@ mod tests {
         assert!(types.contains(&"ai-chat".to_string()));
         assert!(types.contains(&"prompt".to_string()));
         assert!(types.contains(&"skill".to_string()));
-        assert_eq!(types.len(), 15);
+        assert!(types.contains(&"tool".to_string()));
+        assert_eq!(types.len(), 16);
     }
 
     #[test]
