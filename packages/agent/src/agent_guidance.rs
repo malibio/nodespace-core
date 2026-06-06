@@ -27,8 +27,10 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// search_semantic, and canonical create/update/connect patterns. Parameter-level
 /// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
-    - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool, not even search_skills. Only reach for tools when the user asks you to find, create, update, delete, or connect something in their graph.\n\
-    - For a real graph action: call search_skills(query) first to find a matching skill. Empty result = no skill, proceed with general tools.\n\
+    - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool.\n\
+    - For a real graph action: call search_skills(query) to find a matching skill. Then in the same response: pick the best match and emit its typed action call, OR ask the user to clarify (offering the concrete candidates). Empty result = no skill — proceed with general tools or semantic_search.\n\
+    - CLARIFICATION CONTRACT: at most one clarification per intent. If the user clarifies and the request is still ambiguous, fall through to semantic_search and answer with what's available. Never clarify twice.\n\
+    - BLAST-RADIUS GATE: mutating skills (schema creation, deletion) require higher confidence than read-only skills (search). When borderline on a mutating skill, clarify first.\n\
     - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
     - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\

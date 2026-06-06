@@ -188,19 +188,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .messages
             .push(ChatMessage::text(Role::User, user_message.to_string()));
 
-        // Get available tools, then scope to query-relevant tools.
-        // select_tools runs a pre-inference semantic skill search to narrow
-        // the list to baseline + matched skill whitelists. Falls back to the
-        // full list when skill search is unavailable or returns too few tools.
-        let all_tools = self
+        // Full tool list including search_skills — the model calls search_skills
+        // itself to discover capabilities (ADR-036 pull model). No pre-filtering:
+        // the model receives all tools and judges which skill applies after retrieval.
+        // Degraded path: if embedding service is unavailable, search_skills returns
+        // an error result and the model falls through to general tools — acceptable.
+        let tools = self
             .tool_executor
             .available_tools()
             .await
             .unwrap_or_default();
-        let tools = self
-            .tool_executor
-            .select_tools(user_message, all_tools)
-            .await;
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -2901,70 +2898,6 @@ mod tests {
                 || result.response.to_lowercase().contains("didn't find"),
             "model response should reference what it searched: {:?}",
             result.response
-        );
-    }
-
-    // -- select_tools integration (issue #1289) ---------------------------------
-
-    /// Verify that `run_turn` calls `select_tools` so a custom executor can
-    /// scope the tool list before each inference pass.
-    #[tokio::test]
-    async fn run_turn_calls_select_tools_on_executor() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        struct TrackingExecutor {
-            inner: MockToolExecutor,
-            select_calls: Arc<AtomicUsize>,
-        }
-
-        #[async_trait]
-        impl AgentToolExecutor for TrackingExecutor {
-            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
-                self.inner.available_tools().await
-            }
-
-            async fn execute(
-                &self,
-                name: &str,
-                args: serde_json::Value,
-            ) -> Result<ToolResult, ToolError> {
-                self.inner.execute(name, args).await
-            }
-
-            async fn select_tools(
-                &self,
-                _query: &str,
-                all_tools: Vec<ToolDefinition>,
-            ) -> Vec<ToolDefinition> {
-                self.select_calls.fetch_add(1, Ordering::SeqCst);
-                all_tools
-            }
-        }
-
-        let select_calls = Arc::new(AtomicUsize::new(0));
-        let engine = Arc::new(MockEngine::single_text("Here is your answer."));
-        let executor = Arc::new(TrackingExecutor {
-            inner: MockToolExecutor::new(),
-            select_calls: Arc::clone(&select_calls),
-        });
-        let agent_loop = LocalAgentLoop::new(engine, executor);
-
-        let mut session = new_session();
-        let _ = agent_loop
-            .run_turn(
-                &mut session,
-                "what did I write about billing?",
-                |_| {},
-                |_| {},
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            select_calls.load(Ordering::SeqCst),
-            1,
-            "select_tools should be called once per turn (before first inference)"
         );
     }
 
