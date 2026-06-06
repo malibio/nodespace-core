@@ -1823,18 +1823,12 @@ impl NodeBehavior for ToolNodeBehavior {
                     "parameter_schema must be a JSON object".to_string(),
                 ));
             }
-            // The depth / additionalProperties guard is a trust-boundary check
-            // for UNTRUSTED external tool schemas. Internal tools are generated
-            // from compile-time-validated typed `ToolDefinition`s and may
-            // legitimately nest deeper than the external limit (e.g.
-            // create_schema's object → array-of-objects → enum-array-of-objects
-            // reaches depth 5 via the structural `properties`/`items` keys). Only
-            // enforce the guard for non-internal (external/untrusted) tools, so
-            // valid internal tools are never rejected during seeding.
-            if source != Some("internal") {
-                if let Some(obj) = schema.as_object() {
-                    validate_parameter_schema_depth(obj, 0)?;
-                }
+            // Trust-boundary guard: bound nesting depth and reject unbounded
+            // `additionalProperties`. Per ADR-036 this is ONE trust model applied
+            // to all origins (internal-generated AND external-registered) — the
+            // boundary is single-sourced, never forked per `source`.
+            if let Some(obj) = schema.as_object() {
+                validate_parameter_schema_depth(obj, 0)?;
             }
         }
 
@@ -1883,7 +1877,16 @@ impl NodeBehavior for ToolNodeBehavior {
 /// `additionalProperties`. Internal tools are not constrained by this limit
 /// (they are validated at compile time via typed `ToolDefinition`s), but the
 /// guard runs unconditionally so the same code path covers both cases.
-const MAX_SCHEMA_DEPTH: usize = 5;
+/// Maximum object-nesting depth allowed in a tool's `parameter_schema`.
+///
+/// `validate_parameter_schema_depth` increments depth on every object-valued
+/// key (structural keys like `properties`/`items` included), so a legitimately
+/// shaped tool schema nests deeper than its conceptual field nesting suggests.
+/// The deepest valid internal tool is `create_schema`, whose enum-field path
+/// `properties → fields → items → properties → coreValues → items → properties
+/// → label` reaches depth 8. The limit is 9 to admit that and leave a small
+/// margin, while still rejecting pathological/unbounded external schemas.
+const MAX_SCHEMA_DEPTH: usize = 9;
 
 /// Validate that a parameter schema object does not exceed the depth limit
 /// and does not use unbounded `additionalProperties: true`.
@@ -4526,22 +4529,25 @@ mod tests {
                 }
             }
         });
+        // No `source` set — exercises the default: the guard applies regardless
+        // of origin (ADR-036 "one trust model, both origins"). A tool with no
+        // declared source must still be guarded (the safe default).
         let node = tool_node_with_props(json!({
             "tool": {
                 "handler": "deep_tool",
                 "parameter_schema": deep,
-                "source": "external",
             }
         }));
         assert!(
             behavior.validate(&node).is_err(),
-            "External schema exceeding depth limit should be rejected"
+            "Schema exceeding depth limit should be rejected (no source = guarded default)"
         );
     }
 
     #[test]
     fn tool_node_rejects_unbounded_additional_properties() {
         let behavior = ToolNodeBehavior;
+        // `source: external` — the guard applies to external origins too.
         let node = tool_node_with_props(json!({
             "tool": {
                 "handler": "bad_tool",
@@ -4554,40 +4560,38 @@ mod tests {
         }));
         assert!(
             behavior.validate(&node).is_err(),
-            "External schema with additionalProperties:true should be rejected"
+            "Schema with additionalProperties:true should be rejected"
         );
     }
 
-    /// Internal tools are compile-time-validated typed definitions and are
-    /// exempt from the external-tool depth / additionalProperties guard. A deep
-    /// (or unbounded) internal schema must still validate, otherwise legitimate
-    /// internal tools like `create_schema` (whose schema reaches depth 5 via the
-    /// structural object→array→object→enum-array nesting) are dropped during
-    /// seeding. Regression for the seed body-drop / missing-tools bug.
+    /// The depth limit must admit the deepest LEGITIMATE tool schema. The real
+    /// `create_schema` enum-field path
+    /// `properties → fields → items → properties → coreValues → items →
+    /// properties → label` reaches object-nesting depth 8 (the recursion counts
+    /// every object-valued key). `MAX_SCHEMA_DEPTH` was 5, which rejected it and
+    /// aborted seeding of create_schema + all tools after it. The guard is NOT
+    /// origin-exempt (ADR-036: one trust model, both origins) — the fix is a
+    /// limit that fits real tools. Regression for the seed missing-tools bug.
     #[test]
-    fn tool_node_accepts_deep_internal_schema() {
+    fn tool_node_accepts_create_schema_real_depth() {
         let behavior = ToolNodeBehavior;
-        // Same 7-level-deep schema as the external rejection test, plus an
-        // unbounded additionalProperties — both rejected for external tools.
-        let deep = json!({
+        // Mirrors create_schema's deepest valid path: an enum field whose
+        // coreValues items have a `label` — bounded (no additionalProperties),
+        // depth 8.
+        let create_schema_shaped = json!({
             "type": "object",
-            "additionalProperties": true,
             "properties": {
-                "a": {
-                    "type": "object",
-                    "properties": {
-                        "b": {
-                            "type": "object",
-                            "properties": {
-                                "c": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "coreValues": {
+                                "type": "array",
+                                "items": {
                                     "type": "object",
                                     "properties": {
-                                        "d": {
-                                            "type": "object",
-                                            "properties": {
-                                                "e": { "type": "string" }
-                                            }
-                                        }
+                                        "label": { "type": "string" }
                                     }
                                 }
                             }
@@ -4599,13 +4603,35 @@ mod tests {
         let node = tool_node_with_props(json!({
             "tool": {
                 "handler": "create_schema",
-                "parameter_schema": deep,
+                "parameter_schema": create_schema_shaped,
                 "source": "internal",
             }
         }));
         assert!(
             behavior.validate(&node).is_ok(),
-            "Internal tool schema must not be rejected by the external depth guard"
+            "A real-shaped create_schema parameter_schema (depth 8) must validate under the limit"
+        );
+    }
+
+    /// `additionalProperties: true` is rejected regardless of origin, including
+    /// for `source: internal` — the trust boundary is single-sourced (ADR-036),
+    /// not bypassable by claiming internal origin.
+    #[test]
+    fn tool_node_rejects_unbounded_additional_properties_even_when_internal() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "sneaky_tool",
+                "parameter_schema": {
+                    "type": "object",
+                    "additionalProperties": true,
+                },
+                "source": "internal",
+            }
+        }));
+        assert!(
+            behavior.validate(&node).is_err(),
+            "additionalProperties:true must be rejected even for source:internal (no origin bypass)"
         );
     }
 
