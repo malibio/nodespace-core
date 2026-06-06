@@ -1881,7 +1881,7 @@ fn validate_parameter_schema_depth(
     obj: &serde_json::Map<String, serde_json::Value>,
     depth: usize,
 ) -> Result<(), NodeValidationError> {
-    if depth > MAX_SCHEMA_DEPTH {
+    if depth >= MAX_SCHEMA_DEPTH {
         return Err(NodeValidationError::InvalidProperties(format!(
             "parameter_schema exceeds maximum nesting depth of {}",
             MAX_SCHEMA_DEPTH
@@ -4394,5 +4394,189 @@ mod tests {
             behavior.get_embeddable_content(&empty).is_none(),
             "Custom type with empty content should NOT be embeddable"
         );
+    }
+
+    // ToolNodeBehavior tests (issue #1353) ------------------------------------
+
+    fn tool_node_with_props(props: serde_json::Value) -> Node {
+        Node::new("tool".to_string(), "search_nodes".to_string(), props)
+    }
+
+    #[test]
+    fn tool_node_valid_accepts_well_formed_node() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "search_nodes",
+                "description": "Search nodes by keyword",
+                "parameter_schema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } }
+                },
+                "source": "internal",
+                "enabled": true,
+            }
+        }));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn tool_node_rejects_empty_handler() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "",
+                "description": "A tool",
+                "source": "internal",
+            }
+        }));
+        let err = behavior.validate(&node).unwrap_err();
+        assert!(
+            format!("{}", err).contains("handler"),
+            "Error should mention handler: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn tool_node_rejects_missing_handler() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({ "tool": { "description": "A tool" } }));
+        assert!(behavior.validate(&node).is_err());
+    }
+
+    #[test]
+    fn tool_node_rejects_empty_content() {
+        let behavior = ToolNodeBehavior;
+        let mut node = tool_node_with_props(json!({
+            "tool": { "handler": "search_nodes" }
+        }));
+        node.content = "".to_string();
+        assert!(behavior.validate(&node).is_err());
+    }
+
+    #[test]
+    fn tool_node_rejects_invalid_source() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "search_nodes",
+                "source": "marketplace",
+            }
+        }));
+        let err = behavior.validate(&node).unwrap_err();
+        assert!(
+            format!("{}", err).contains("source"),
+            "Error should mention source: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn tool_node_accepts_external_source() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "my_external_tool",
+                "description": "An external tool",
+                "source": "external",
+                "enabled": false,
+            }
+        }));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn tool_node_rejects_schema_depth_exceeded() {
+        let behavior = ToolNodeBehavior;
+        // Nest 7 levels deep — exceeds MAX_SCHEMA_DEPTH (5)
+        let deep = json!({
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "object",
+                    "properties": {
+                        "b": {
+                            "type": "object",
+                            "properties": {
+                                "c": {
+                                    "type": "object",
+                                    "properties": {
+                                        "d": {
+                                            "type": "object",
+                                            "properties": {
+                                                "e": { "type": "string" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "deep_tool",
+                "parameter_schema": deep,
+            }
+        }));
+        assert!(
+            behavior.validate(&node).is_err(),
+            "Schema exceeding depth limit should be rejected"
+        );
+    }
+
+    #[test]
+    fn tool_node_rejects_unbounded_additional_properties() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "bad_tool",
+                "parameter_schema": {
+                    "type": "object",
+                    "additionalProperties": true,
+                },
+            }
+        }));
+        assert!(
+            behavior.validate(&node).is_err(),
+            "Schema with additionalProperties:true should be rejected"
+        );
+    }
+
+    #[test]
+    fn tool_node_embeddable_content_uses_name_and_description() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({
+            "tool": {
+                "handler": "search_nodes",
+                "description": "Search nodes by keyword",
+            }
+        }));
+        let content = behavior.get_embeddable_content(&node).unwrap();
+        assert!(content.contains("search_nodes"));
+        assert!(content.contains("Search nodes by keyword"));
+    }
+
+    #[test]
+    fn tool_node_embeddable_content_none_when_empty() {
+        let behavior = ToolNodeBehavior;
+        let mut node = tool_node_with_props(json!({}));
+        node.content = "".to_string();
+        assert!(behavior.get_embeddable_content(&node).is_none());
+    }
+
+    #[test]
+    fn tool_node_does_not_have_children() {
+        assert!(!ToolNodeBehavior.can_have_children());
+    }
+
+    #[test]
+    fn tool_node_parent_contribution_is_none() {
+        let behavior = ToolNodeBehavior;
+        let node = tool_node_with_props(json!({ "tool": { "handler": "search_nodes" } }));
+        assert!(behavior.get_parent_contribution(&node).is_none());
     }
 }

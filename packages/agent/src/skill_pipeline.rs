@@ -250,12 +250,20 @@ pub fn seed_tool_nodes() -> Vec<NodeTemplate> {
                 title: def.name.clone(),
                 content: None,
                 root_node_type: "tool".to_string(),
+                // Pre-namespace under "tool" so normalize_flat_properties_to_namespace
+                // detects the existing namespace key and returns early (crud.rs:1633),
+                // preserving the nested parameter_schema object. Without pre-namespacing
+                // the normalizer misclassifies parameter_schema (an object) as a dormant
+                // namespace, hoisting it out of the "tool" key so flatten_properties_for_api
+                // later silently drops it.
                 root_properties: serde_json::json!({
-                    "handler": def.name,
-                    "description": def.description,
-                    "parameter_schema": def.parameters_schema,
-                    "source": "internal",
-                    "enabled": true,
+                    "tool": {
+                        "handler": def.name,
+                        "description": def.description,
+                        "parameter_schema": def.parameters_schema,
+                        "source": "internal",
+                        "enabled": true,
+                    }
                 }),
                 child_node_type: None,
                 child_properties: None,
@@ -377,27 +385,29 @@ mod tests {
     #[test]
     fn seed_tool_nodes_have_required_properties() {
         for seed in seed_tool_nodes() {
-            let props = &seed.root_properties;
             assert_eq!(seed.root_node_type, "tool");
 
-            let handler = props.get("handler").and_then(|v| v.as_str()).unwrap_or("");
+            // Properties are pre-namespaced under "tool" to survive the normalizer
+            let ns = seed
+                .root_properties
+                .get("tool")
+                .expect("tool namespace must be present");
+
+            let handler = ns.get("handler").and_then(|v| v.as_str()).unwrap_or("");
             assert!(
                 !handler.is_empty(),
                 "Tool '{}' must have a handler key",
                 seed.title
             );
 
-            let source = props.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let source = ns.get("source").and_then(|v| v.as_str()).unwrap_or("");
             assert_eq!(
                 source, "internal",
                 "Built-in tool '{}' must have source='internal'",
                 seed.title
             );
 
-            let enabled = props
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let enabled = ns.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
             assert!(
                 enabled,
                 "Built-in tool '{}' must be enabled=true",
@@ -405,18 +415,14 @@ mod tests {
             );
 
             assert!(
-                props
-                    .get("parameter_schema")
+                ns.get("parameter_schema")
                     .map(|v| v.is_object())
                     .unwrap_or(false),
                 "Tool '{}' must have a parameter_schema object",
                 seed.title
             );
 
-            let desc = props
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let desc = ns.get("description").and_then(|v| v.as_str()).unwrap_or("");
             assert!(
                 !desc.is_empty(),
                 "Tool '{}' must have a non-empty description",
@@ -431,7 +437,8 @@ mod tests {
         for seed in seed_tool_nodes() {
             let handler = seed
                 .root_properties
-                .get("handler")
+                .get("tool")
+                .and_then(|ns| ns.get("handler"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             assert!(

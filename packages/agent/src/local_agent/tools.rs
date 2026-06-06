@@ -1580,8 +1580,10 @@ impl AgentToolExecutor for GraphToolExecutor {
                 continue;
             }
 
-            // Enforce the trust boundary: external tools require enabled=true
-            // (internal tools default enabled; external tools start disabled).
+            // Enforce the trust boundary via allowlist: only internal tools or
+            // explicitly-enabled external tools may enter the inference surface.
+            // Unknown source values are treated as untrusted and require enablement —
+            // this prevents future source values from silently bypassing the gate.
             let source = props
                 .get("source")
                 .and_then(|v| v.as_str())
@@ -1589,9 +1591,10 @@ impl AgentToolExecutor for GraphToolExecutor {
             let enabled = props
                 .get("enabled")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            if source == "external" && !enabled {
-                tracing::debug!(handler = %handler, "available_tools: skipping disabled external tool");
+                .unwrap_or(false);
+            let is_allowed = source == "internal" || enabled;
+            if !is_allowed {
+                tracing::debug!(handler = %handler, source = %source, "available_tools: skipping unenabled tool");
                 continue;
             }
 
