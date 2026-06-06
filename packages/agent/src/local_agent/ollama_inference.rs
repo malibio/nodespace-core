@@ -274,9 +274,8 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                                 id: call_id.clone(),
                                 name: tool_call.function.name.clone(),
                             });
-                            let args_json =
-                                serde_json::to_string(&tool_call.function.arguments)
-                                    .unwrap_or_default();
+                            let args_json = serde_json::to_string(&tool_call.function.arguments)
+                                .unwrap_or_default();
                             on_chunk(StreamingChunk::ToolCallArgs {
                                 id: call_id,
                                 args_json,
@@ -289,7 +288,13 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                     };
                     on_chunk(StreamingChunk::Done { usage: final_usage });
                 }
-                Err(e) => tracing::warn!("Failed to parse Ollama non-streaming response: {e}"),
+                Err(e) => {
+                    tracing::warn!("Failed to parse Ollama non-streaming response: {e}");
+                    // Emit Done so callers are not left waiting for a terminal chunk.
+                    on_chunk(StreamingChunk::Done {
+                        usage: InferenceUsage::default(),
+                    });
+                }
             }
         }
 

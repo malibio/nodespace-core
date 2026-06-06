@@ -278,7 +278,7 @@ pub struct InferenceRequest {
 }
 
 /// Token usage statistics for a completed inference turn.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct InferenceUsage {
     /// Number of tokens in the input prompt.
     pub prompt_tokens: u32,

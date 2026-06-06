@@ -41,11 +41,9 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// seconds while still leaving ample room for a normal chat reply or a
 /// tool-call argument blob.
 ///
-/// This is also the ceiling on a single tool call's generated arguments:
-/// 2048 tokens comfortably covers the largest realistic blob (a full
 /// Maximum tokens for the final text-only response (no tools). Keeps
-/// user-facing replies concise. Tool-calling iterations are uncapped so
-/// argument JSON is never truncated mid-field.
+/// user-facing replies concise. Tool-calling iterations use `max_tokens: None`
+/// so argument JSON is never truncated mid-field.
 const MAX_RESPONSE_TOKENS: u32 = 2_048;
 
 /// Total token budget for the context window.
