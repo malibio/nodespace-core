@@ -655,3 +655,41 @@ async fn test_schema_behavior_can_have_children_is_true() {
         "SchemaNodeBehavior should allow children (description subtree)"
     );
 }
+
+#[tokio::test]
+async fn test_schema_get_aggregated_content_returns_description_text() {
+    use crate::behaviors::{NodeBehavior, SchemaNodeBehavior};
+
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Billing",
+            "description": "Tracks invoices and payment records for clients.",
+            "fields": []
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let schema_node = svc
+        .get_node("billing")
+        .await
+        .expect("get_node failed")
+        .expect("schema node not found");
+
+    let behavior = SchemaNodeBehavior;
+    let aggregated = behavior.get_aggregated_content(&schema_node, &*svc).await;
+
+    assert!(
+        aggregated.is_some(),
+        "get_aggregated_content should return Some when description subtree exists"
+    );
+    let text = aggregated.unwrap();
+    assert!(
+        text.contains("invoices") || text.contains("payment"),
+        "Aggregated content should include description text for semantic search: {:?}",
+        text
+    );
+}

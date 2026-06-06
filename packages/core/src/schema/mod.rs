@@ -786,32 +786,25 @@ async fn create_description_subtree(
 
 /// Replace the description child subtree of a schema node with new content.
 ///
-/// Deletes all existing direct children of the schema node, then creates
-/// a fresh subtree from the new markdown description.
+/// Atomically deletes the entire existing subtree (all descendants, not just direct children),
+/// then creates a fresh subtree from the new markdown description.
 async fn replace_description_subtree(
     node_service: &Arc<NodeService>,
     schema_id: &str,
     new_description: &str,
 ) -> Result<(), MarkdownError> {
-    // Delete existing description children (cascade — each deletes its own subtree)
-    let children = node_service.get_children(schema_id).await.map_err(|e| {
-        MarkdownError::internal_error(format!(
-            "Failed to fetch description children for schema '{}': {}",
-            schema_id, e
-        ))
-    })?;
-
-    for child in children {
-        node_service
-            .delete_node_unchecked(&child.id)
-            .await
-            .map_err(|e| {
-                MarkdownError::internal_error(format!(
-                    "Failed to delete description child '{}': {}",
-                    child.id, e
-                ))
-            })?;
-    }
+    // Delete the entire descendant subtree in one statement (recursive CTE).
+    // This correctly handles nested markdown structures (e.g. header → text children).
+    node_service
+        .store()
+        .delete_children_subtree_unchecked(schema_id)
+        .await
+        .map_err(|e| {
+            MarkdownError::internal_error(format!(
+                "Failed to delete description subtree for schema '{}': {}",
+                schema_id, e
+            ))
+        })?;
 
     // Create new description subtree
     create_description_subtree(node_service, schema_id, new_description).await

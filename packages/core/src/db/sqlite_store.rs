@@ -906,6 +906,29 @@ impl SqliteStore {
         Ok((true, nodes_to_delete))
     }
 
+    /// Delete all descendants of `parent_id` (the full child subtree) without touching the parent.
+    ///
+    /// Uses a recursive CTE to collect all descendant IDs, then deletes them in one statement.
+    /// FK CASCADE cleans relationship and embedding rows automatically.
+    /// No OCC check — intended for internal system operations where version checks are unnecessary.
+    pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
+        self.db
+            .execute(
+                r#"WITH RECURSIVE subtree(node_id) AS (
+                    SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                    UNION ALL
+                    SELECT r.out_node FROM relationship r
+                    JOIN subtree s ON r.in_node = s.node_id
+                    WHERE r.relationship_type = 'has_child'
+                )
+                DELETE FROM node WHERE id IN (SELECT node_id FROM subtree)"#,
+                libsql::params![parent_id.to_string()],
+            )
+            .await
+            .context("Failed to delete children subtree")?;
+        Ok(())
+    }
+
     pub async fn delete_with_version_check(
         &self,
         id: &str,

@@ -1129,13 +1129,10 @@ impl NodeService {
         let mut backfilled = 0usize;
 
         for schema in schemas {
-            // Skip schemas that already have child description nodes
-            let children = self.get_children(&schema.id).await.unwrap_or_default();
-            if !children.is_empty() {
-                continue;
-            }
-
-            // Read the legacy description from properties (may be absent in new schemas)
+            // Read the legacy description from properties — its presence is the migration trigger.
+            // Using child count as the check would be incorrect: schemas can now legitimately
+            // have non-description children, and would permanently skip backfill if any child
+            // exists before the description is migrated.
             let description = self
                 .store
                 .get_node(&schema.id)
@@ -1151,7 +1148,7 @@ impl NodeService {
 
             let description = match description {
                 Some(d) => d,
-                None => continue, // No legacy description to migrate
+                None => continue, // No legacy description to migrate (already migrated or never had one)
             };
 
             let prepared = match prepare_nodes_from_markdown(&description, Some(schema.id.clone()))
@@ -1207,7 +1204,7 @@ impl NodeService {
         if backfilled > 0 {
             tracing::info!(
                 count = backfilled,
-                "✅ Backfilled schema description subtrees (Issue #1351)"
+                "Backfilled schema description subtrees (Issue #1351)"
             );
         }
 
