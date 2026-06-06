@@ -13,7 +13,6 @@ use nodespace_core::schema::handle_create_schema;
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -421,10 +420,10 @@ fn def_get_related_nodes() -> ToolDefinition {
 fn def_search_skills() -> ToolDefinition {
     ToolDefinition {
         name: "search_skills".into(),
-        description: "Search registered skills by describing what you want to accomplish. \
-            Returns up to 3 matches by default (max 10), sorted by relevance, each with name, description, confidence (0-1), and tools. \
-            Empty matches mean no skill is even loosely related — judge whether to proceed without one, ask the user, or respond directly. \
-            Call this when a request might be served by a known skill; skip it for conversational replies.".into(),
+        description: "Search registered skills by describing your intent. Returns up to 3 matches sorted by relevance, each with name, description, confidence (0-1), tools, and instructions. \
+            When you receive results: judge each candidate against the understood intent — pick one and emit its typed action in this same turn, OR ask the user to clarify (offering the candidates as concrete options). \
+            Empty result = no skill matches — proceed with general tools or fall through to semantic_search. \
+            Skip this tool for conversational replies; call it when the user wants to find, create, update, delete, or connect something.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -669,8 +668,7 @@ fn def_update_task_status() -> ToolDefinition {
 /// This enum is the *single source of truth* for the tool surface. Everything
 /// that used to be a separate hand-maintained list is derived from it:
 /// - the wire name ([`Tool::name`]) and JSON schema ([`Tool::definition`]),
-/// - the user-facing display label ([`Tool::humanized`]),
-/// - baseline always-on membership ([`Tool::is_baseline`]).
+/// - the user-facing display label ([`Tool::humanized`]).
 ///
 /// Adding a tool means adding one variant and filling in its arms; the compiler
 /// then forces every derivation to account for it. There are no drift-detector
@@ -777,18 +775,6 @@ impl Tool {
             Tool::DeleteNode => "node deletion",
             Tool::CreateNodesFromMarkdown => "markdown import",
         }
-    }
-
-    /// Whether this tool is always passed to the model regardless of query.
-    ///
-    /// Baseline tools cover the core read/discover path every query may need:
-    /// basic retrieval (`search_nodes`/`search_semantic`/`get_node`) plus
-    /// `search_skills` so the model can discover narrower skill-specific tools.
-    pub(crate) fn is_baseline(self) -> bool {
-        matches!(
-            self,
-            Tool::SearchNodes | Tool::SearchSemantic | Tool::GetNode | Tool::SearchSkills
-        )
     }
 }
 
@@ -1512,15 +1498,6 @@ impl GraphToolExecutor {
     }
 }
 
-/// Minimum confidence score for a skill match to contribute tools to the
-/// scoped set on the automated pre-filter path.
-///
-/// Different from `SKILL_SEARCH_THRESHOLD` (0.0) used in the model-facing
-/// `search_skills` tool — there the model judges relevance from raw scores.
-/// Here we filter automatically, so a non-zero floor avoids injecting tools
-/// from loosely-related skills that would undermine the focus improvement.
-const SELECT_TOOLS_CONFIDENCE_THRESHOLD: f64 = 0.3;
-
 #[async_trait]
 impl AgentToolExecutor for GraphToolExecutor {
     /// Return typed `ToolDefinition`s generated from tool nodes in the graph.
@@ -1641,96 +1618,6 @@ impl AgentToolExecutor for GraphToolExecutor {
             "available_tools: generated from tool nodes"
         );
         Ok(result)
-    }
-
-    async fn select_tools(
-        &self,
-        query: &str,
-        all_tools: Vec<ToolDefinition>,
-    ) -> Vec<ToolDefinition> {
-        let emb = match self.embedding_service.read().await.clone() {
-            Some(svc) => svc,
-            None => {
-                tracing::debug!("select_tools: no embedding service, using full tool list");
-                return all_tools;
-            }
-        };
-
-        let ns = match &self.node_service {
-            Some(svc) => svc,
-            None => {
-                tracing::debug!("select_tools: no node service, using full tool list");
-                return all_tools;
-            }
-        };
-
-        use nodespace_core::ops::skill_ops;
-        let skill_result = skill_ops::find_skills(
-            &emb,
-            ns,
-            skill_ops::FindSkillsInput {
-                query: query.to_string(),
-                limit: Some(3),
-            },
-        )
-        .await;
-
-        let matched_skills = match skill_result {
-            Ok(output) => output.skills,
-            Err(e) => {
-                tracing::warn!(error = %e, "select_tools: skill search failed, using full tool list");
-                return all_tools;
-            }
-        };
-
-        // Collect tool names: baseline always-on + whitelists from skills that
-        // meet the confidence threshold. Low-confidence matches are excluded to
-        // avoid injecting irrelevant tools from loosely-related skills.
-        let baseline_count = Tool::ALL.iter().filter(|t| t.is_baseline()).count();
-        let mut selected_names: HashSet<&str> = Tool::ALL
-            .iter()
-            .filter(|t| t.is_baseline())
-            .map(|t| t.name())
-            .collect();
-
-        for skill in &matched_skills {
-            let confidence = skill
-                .get("confidence")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            if confidence < SELECT_TOOLS_CONFIDENCE_THRESHOLD {
-                continue;
-            }
-            if let Some(tools_arr) = skill.get("tools").and_then(|v| v.as_array()) {
-                for t in tools_arr {
-                    if let Some(name) = t.as_str() {
-                        selected_names.insert(name);
-                    }
-                }
-            }
-        }
-
-        // Fall back to full list if no skill contributed any tools beyond baseline
-        // (all matches were below the confidence threshold or had empty whitelists).
-        if selected_names.len() <= baseline_count {
-            tracing::debug!("select_tools: no confident skill matches, using full tool list");
-            return all_tools;
-        }
-
-        // Filter all_tools to selected names, preserving original order
-        let selected: Vec<ToolDefinition> = all_tools
-            .into_iter()
-            .filter(|t| selected_names.contains(t.name.as_str()))
-            .collect();
-
-        tracing::debug!(
-            query_preview = %query.chars().take(80).collect::<String>(),
-            selected_count = selected.len(),
-            selected_tools = %selected.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "),
-            "select_tools: scoped tool list for inference"
-        );
-
-        selected
     }
 
     async fn execute(&self, name: &str, args: Value) -> Result<ToolResult, ToolError> {
@@ -1909,25 +1796,6 @@ mod tests {
                 tool
             );
         }
-    }
-
-    #[test]
-    fn registry_baseline_membership() {
-        // Baseline is derived from the registry; lock in the intended set.
-        let baseline: std::collections::HashSet<&str> = Tool::ALL
-            .iter()
-            .filter(|t| t.is_baseline())
-            .map(|t| t.name())
-            .collect();
-        let expected: std::collections::HashSet<&str> = [
-            "search_nodes",
-            "search_semantic",
-            "get_node",
-            "search_skills",
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(baseline, expected);
     }
 
     #[test]
@@ -2288,38 +2156,6 @@ mod tests {
         assert!(names.contains(&"update_task_status"));
         assert!(names.contains(&"delete_node"));
         assert!(names.contains(&"create_nodes_from_markdown"));
-    }
-
-    // -- select_tools fallback (no embedding service) --
-
-    #[tokio::test]
-    async fn select_tools_no_embedding_service_returns_all() {
-        let executor = test_executor(); // no embedding_service
-        let all = all_tool_definitions();
-        let count_before = all.len();
-        let selected = executor
-            .select_tools("what did I write about embeddings?", all)
-            .await;
-        assert_eq!(
-            selected.len(),
-            count_before,
-            "Without embedding service, select_tools must return all tools unchanged"
-        );
-    }
-
-    #[tokio::test]
-    async fn select_tools_baseline_tools_always_present() {
-        let executor = test_executor(); // no embedding_service → falls back to all
-        let all = all_tool_definitions();
-        let selected = executor.select_tools("search for billing info", all).await;
-        let names: Vec<&str> = selected.iter().map(|t| t.name.as_str()).collect();
-        for baseline in Tool::ALL.iter().filter(|t| t.is_baseline()) {
-            assert!(
-                names.contains(&baseline.name()),
-                "Baseline tool '{}' must always be present in selected tools",
-                baseline.name()
-            );
-        }
     }
 
     // -- Embedding handle is read live (race fix, #1328) --
