@@ -239,4 +239,25 @@ mod wire_contract {
         assert!(out["properties"].get("ai-chat").is_none());
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
     }
+
+    #[test]
+    fn schema_promotes_fields_top_level_and_injects_uri() {
+        let node = Node::new(
+            "schema".to_string(),
+            "Task schema".to_string(),
+            serde_json::json!({
+                "isCore": true,
+                "schemaVersion": 2,
+                "description": "Task type",
+                "fields": []
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        // Schema fields are promoted to the top level by SchemaNode.
+        assert_eq!(out["isCore"], true);
+        assert_eq!(out["schemaVersion"], 2);
+        assert_eq!(out["description"], "Task type");
+        assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
 }
