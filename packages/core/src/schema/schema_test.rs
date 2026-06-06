@@ -611,6 +611,8 @@ async fn test_update_schema_replaces_description_subtree() {
         !initial_children.is_empty(),
         "Schema should have initial description children"
     );
+    let initial_ids: std::collections::HashSet<String> =
+        initial_children.iter().map(|c| c.id.clone()).collect();
 
     // Update description
     handle_update_schema(
@@ -631,6 +633,16 @@ async fn test_update_schema_replaces_description_subtree() {
         !updated_children.is_empty(),
         "Schema should still have description children after update"
     );
+
+    // None of the original child IDs should survive — replace_description_subtree must
+    // delete the full old subtree before creating a new one.
+    for child in &updated_children {
+        assert!(
+            !initial_ids.contains(&child.id),
+            "Stale child node {:?} should have been deleted by replace_description_subtree",
+            child.id
+        );
+    }
 
     // The combined text should reflect the new description
     let combined: String = updated_children

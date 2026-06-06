@@ -1115,10 +1115,10 @@ impl NodeService {
     }
 
     /// Backfill description child subtrees for schemas that still have `properties.description`
-    /// but no child nodes (Issue #1351).
+    /// (Issue #1351).
     ///
-    /// This runs once at startup to migrate databases created before descriptions were moved
-    /// to the child subtree. Idempotent: schemas that already have children are skipped.
+    /// Runs at every startup; idempotent because `properties.description` is removed from the
+    /// schema node after a successful backfill. Schemas without that key are skipped in O(1).
     async fn backfill_schema_description_subtrees(&self) -> Result<(), NodeServiceError> {
         use crate::markdown::prepare_nodes_from_markdown;
 
@@ -1196,6 +1196,20 @@ impl NodeService {
                     "Failed to backfill description subtree, skipping"
                 );
                 continue;
+            }
+
+            // Clear the legacy properties.description so this schema is not re-migrated
+            // on the next startup (the subtree's existence is now the canonical description).
+            if let Err(e) = self
+                .store
+                .remove_property_key(&schema.id, "description")
+                .await
+            {
+                tracing::warn!(
+                    schema_id = %schema.id,
+                    error = %e,
+                    "Failed to clear legacy description property after backfill"
+                );
             }
 
             backfilled += 1;

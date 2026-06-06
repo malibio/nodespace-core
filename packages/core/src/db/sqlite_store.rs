@@ -921,11 +921,27 @@ impl SqliteStore {
                     JOIN subtree s ON r.in_node = s.node_id
                     WHERE r.relationship_type = 'has_child'
                 )
-                DELETE FROM node WHERE id IN (SELECT node_id FROM subtree)"#,
+                DELETE FROM node WHERE id IN (SELECT DISTINCT node_id FROM subtree)"#,
                 libsql::params![parent_id.to_string()],
             )
             .await
             .context("Failed to delete children subtree")?;
+        Ok(())
+    }
+
+    /// Remove a single top-level key from a node's properties JSON in-place using `json_remove`.
+    ///
+    /// Used by migrations to clear legacy fields (e.g. `description`) after they have been
+    /// moved to the child-subtree representation, making the migration idempotent.
+    pub async fn remove_property_key(&self, node_id: &str, key: &str) -> Result<()> {
+        let json_path = format!("$.{}", key);
+        self.db
+            .execute(
+                "UPDATE node SET properties = json_remove(properties, ?1), modified_at = ?2 WHERE id = ?3",
+                libsql::params![json_path, chrono::Utc::now().to_rfc3339(), node_id.to_string()],
+            )
+            .await
+            .context("Failed to remove property key")?;
         Ok(())
     }
 
