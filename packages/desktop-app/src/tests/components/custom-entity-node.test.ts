@@ -278,8 +278,8 @@ describe('CustomEntityNode Logic', () => {
       });
 
       expect(getEntityName(schemaNode, 'invoice')).toBe('💰 Invoice Management');
-      // Access typed field directly
-      expect(extractIconFromDescription(schemaNode.description)).toBe('💰');
+      // Access typed field directly (description is optional, provide fallback)
+      expect(extractIconFromDescription(schemaNode.description ?? '')).toBe('💰');
     });
 
     it('should handle schema with fields array', () => {

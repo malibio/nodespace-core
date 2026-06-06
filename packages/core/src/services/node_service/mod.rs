@@ -912,6 +912,10 @@ impl NodeService {
             embedding_waker: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
 
+        // Issue #1351: backfill description subtrees for schemas that still have
+        // properties.description but no child nodes (databases created before this change).
+        service.backfill_schema_description_subtrees().await?;
+
         Ok(service)
     }
 
@@ -1104,6 +1108,106 @@ impl NodeService {
                 created_children,
                 skipped,
                 "Agent nodes seeded from templates"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Backfill description child subtrees for schemas that still have `properties.description`
+    /// but no child nodes (Issue #1351).
+    ///
+    /// This runs once at startup to migrate databases created before descriptions were moved
+    /// to the child subtree. Idempotent: schemas that already have children are skipped.
+    async fn backfill_schema_description_subtrees(&self) -> Result<(), NodeServiceError> {
+        use crate::markdown::prepare_nodes_from_markdown;
+
+        let schemas = self.get_all_schemas().await.map_err(|e| {
+            NodeServiceError::QueryFailed(format!("Failed to fetch schemas for migration: {}", e))
+        })?;
+
+        let mut backfilled = 0usize;
+
+        for schema in schemas {
+            // Skip schemas that already have child description nodes
+            let children = self.get_children(&schema.id).await.unwrap_or_default();
+            if !children.is_empty() {
+                continue;
+            }
+
+            // Read the legacy description from properties (may be absent in new schemas)
+            let description = self
+                .store
+                .get_node(&schema.id)
+                .await
+                .unwrap_or(None)
+                .and_then(|n| {
+                    n.properties
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                });
+
+            let description = match description {
+                Some(d) => d,
+                None => continue, // No legacy description to migrate
+            };
+
+            let prepared = match prepare_nodes_from_markdown(&description, Some(schema.id.clone()))
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        schema_id = %schema.id,
+                        error = %e,
+                        "Failed to prepare description subtree during migration, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            if prepared.is_empty() {
+                continue;
+            }
+
+            let bulk_nodes: Vec<(
+                String,
+                String,
+                String,
+                Option<String>,
+                f64,
+                serde_json::Value,
+            )> = prepared
+                .into_iter()
+                .map(|n| {
+                    (
+                        n.id,
+                        n.node_type,
+                        n.content,
+                        n.parent_id,
+                        n.order,
+                        n.properties,
+                    )
+                })
+                .collect();
+
+            if let Err(e) = self.bulk_create_hierarchy(bulk_nodes).await {
+                tracing::warn!(
+                    schema_id = %schema.id,
+                    error = %e,
+                    "Failed to backfill description subtree, skipping"
+                );
+                continue;
+            }
+
+            backfilled += 1;
+        }
+
+        if backfilled > 0 {
+            tracing::info!(
+                count = backfilled,
+                "✅ Backfilled schema description subtrees (Issue #1351)"
             );
         }
 

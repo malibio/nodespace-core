@@ -503,3 +503,155 @@ async fn test_rename_field_migrates_node_data() {
         "old_field should be removed after rename"
     );
 }
+
+// ============================================================================
+// Issue #1351: Description subtree tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_schema_stores_description_as_child_subtree() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "description": "Tracks money owed by clients for goods or services rendered.",
+            "fields": []
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let schema_id = result["schemaId"].as_str().expect("schemaId missing");
+    assert_eq!(schema_id, "invoice");
+
+    // Description must NOT be stored in properties
+    let node = svc
+        .get_node(schema_id)
+        .await
+        .expect("get_node failed")
+        .expect("schema node not found");
+    assert!(
+        node.properties.get("description").is_none(),
+        "description should not be in properties after #1351"
+    );
+
+    // Description must be stored as child text node(s)
+    let children = svc
+        .get_children(schema_id)
+        .await
+        .expect("get_children failed");
+    assert!(
+        !children.is_empty(),
+        "Schema should have child description nodes"
+    );
+
+    // The child content should contain the description text
+    let combined: String = children
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        combined.contains("money owed") || combined.contains("clients"),
+        "Description text should appear in children: {:?}",
+        combined
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_description_not_in_properties() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "description": "Organizes work into milestones and tasks.",
+            "fields": []
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let node = svc
+        .get_node("project")
+        .await
+        .expect("get_node failed")
+        .expect("schema node not found");
+
+    // properties.description must be absent
+    assert!(
+        node.properties.get("description").is_none(),
+        "description must not be written to properties (Issue #1351)"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_replaces_description_subtree() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Contact",
+            "description": "Original description.",
+            "fields": []
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let initial_children = svc
+        .get_children("contact")
+        .await
+        .expect("get_children failed");
+    assert!(
+        !initial_children.is_empty(),
+        "Schema should have initial description children"
+    );
+
+    // Update description
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "contact",
+            "description": "Updated description with new content."
+        }),
+    )
+    .await
+    .expect("update_schema should succeed");
+
+    let updated_children = svc
+        .get_children("contact")
+        .await
+        .expect("get_children failed");
+    assert!(
+        !updated_children.is_empty(),
+        "Schema should still have description children after update"
+    );
+
+    // The combined text should reflect the new description
+    let combined: String = updated_children
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        combined.contains("Updated description") || combined.contains("new content"),
+        "Updated description should appear in children: {:?}",
+        combined
+    );
+}
+
+#[tokio::test]
+async fn test_schema_behavior_can_have_children_is_true() {
+    use crate::behaviors::{NodeBehavior, SchemaNodeBehavior};
+
+    let behavior = SchemaNodeBehavior;
+    assert!(
+        behavior.can_have_children(),
+        "SchemaNodeBehavior should allow children (description subtree)"
+    );
+}

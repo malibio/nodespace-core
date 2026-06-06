@@ -116,7 +116,7 @@ export function createPluginFromSchema(schema: SchemaNode): PluginDefinition {
   // Display name comes from schema content (the schema's name, e.g. "Customer").
   // description is for human-readable purpose/context, not the display name.
   const displayName = schema.content || humanizeSchemaId(schemaId);
-  const description = schema.description;
+  const description = schema.description ?? '';
 
   return {
     id: schemaId,

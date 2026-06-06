@@ -132,8 +132,8 @@ export interface SchemaNode {
   /** Schema version (increments on schema changes) */
   schemaVersion: number;
 
-  /** Human-readable schema description */
-  description: string;
+  /** Human-readable schema description (sourced from child node subtree, may be absent) */
+  description?: string;
 
   /** Array of field definitions */
   fields: SchemaField[];

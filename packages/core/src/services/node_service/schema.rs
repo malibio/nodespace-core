@@ -290,7 +290,6 @@ impl NodeService {
         let mut properties = serde_json::json!({
             "isCore": schema.is_core,
             "schemaVersion": schema.schema_version,
-            "description": schema.description,
             "fields": updated_fields,
             "relationships": schema.relationships,
         });

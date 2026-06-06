@@ -231,7 +231,6 @@ mod tests {
             modified_at: chrono::Utc::now(),
             is_core: false,
             schema_version: 1,
-            description: String::new(),
             fields: fields
                 .iter()
                 .map(|name| SchemaField {
