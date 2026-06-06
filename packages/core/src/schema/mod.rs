@@ -179,7 +179,7 @@ pub async fn handle_create_schema(
         )));
     }
 
-    // Schema properties (flat structure matching SchemaNode)
+    // Schema properties (description is stored as child node subtree, not in properties)
     let description_text = params
         .description
         .clone()
@@ -187,7 +187,6 @@ pub async fn handle_create_schema(
     let mut properties = serde_json::json!({
         "isCore": false,
         "schemaVersion": 1,
-        "description": &description_text,
         "fields": &namespaced_fields,
         "relationships": &relationships
     });
@@ -209,7 +208,7 @@ pub async fn handle_create_schema(
     };
 
     // Store the schema node
-    node_service
+    let created_schema_id = node_service
         .create_node_with_parent(schema_node_params)
         .await
         .map_err(|e| {
@@ -218,6 +217,10 @@ pub async fn handle_create_schema(
                 schema_id, e
             ))
         })?;
+
+    // Store the description as a child node subtree so it is included in the
+    // schema's embedding and enables synonym-based semantic discovery.
+    create_description_subtree(node_service, &created_schema_id, &description_text).await?;
 
     let output = CreateSchemaOutput {
         schema_id: schema_id.clone(),
@@ -375,7 +378,6 @@ pub async fn handle_add_schema_relationship(
     let properties = serde_json::json!({
         "isCore": schema.is_core,
         "version": schema.schema_version,
-        "description": schema.description,
         "fields": schema.fields,
         "relationships": relationships
     });
@@ -447,7 +449,6 @@ pub async fn handle_remove_schema_relationship(
     let properties = serde_json::json!({
         "isCore": schema.is_core,
         "version": schema.schema_version,
-        "description": schema.description,
         "fields": schema.fields,
         "relationships": relationships
     });
@@ -637,9 +638,6 @@ pub async fn handle_update_schema(
         relationships.extend(add_rels.clone());
     }
 
-    // Update description if provided
-    let description = params.description.unwrap_or(schema.description);
-
     // Resolve title_template: use new value if provided, otherwise keep existing
     let title_template = params.title_template.or(schema.title_template);
 
@@ -648,11 +646,10 @@ pub async fn handle_update_schema(
         .properties_header_summary_template
         .or(schema.properties_header_summary_template);
 
-    // Build updated properties
+    // Build updated properties (description is stored as child subtree, not in properties)
     let mut properties = serde_json::json!({
         "isCore": schema.is_core,
         "schemaVersion": schema.schema_version,
-        "description": description,
         "fields": fields,
         "relationships": relationships
     });
@@ -667,7 +664,7 @@ pub async fn handle_update_schema(
     // pipeline, so we run SchemaNodeBehavior validation explicitly here)
     let temp_node = Node::new(
         "schema".to_string(),
-        description.clone(),
+        schema.content.clone(),
         properties.clone(),
     );
     let updated_schema = SchemaNode::from_node(temp_node).map_err(|e| {
@@ -686,6 +683,11 @@ pub async fn handle_update_schema(
         .update_node_unchecked(&params.schema_id, update)
         .await
         .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
+
+    // If a new description was provided, replace the description child subtree
+    if let Some(ref new_description) = params.description {
+        replace_description_subtree(node_service, &params.schema_id, new_description).await?;
+    }
 
     let output = SchemaUpdateOutput {
         schema_id: params.schema_id,
@@ -720,6 +722,92 @@ pub async fn handle_update_schema(
 
     serde_json::to_value(&output)
         .map_err(|e| MarkdownError::internal_error(format!("Failed to serialize output: {}", e)))
+}
+
+// ============================================================================
+// Description Subtree Helpers
+// ============================================================================
+
+/// Create a description child subtree under a schema node.
+///
+/// Parses the markdown description into node types (text, header, etc.) and
+/// inserts them as children of the schema node via bulk insert. The subtree
+/// is then included in the schema's embedding via `get_aggregated_content`,
+/// enabling synonym-based semantic discovery of schemas.
+async fn create_description_subtree(
+    node_service: &Arc<NodeService>,
+    schema_id: &str,
+    description: &str,
+) -> Result<(), MarkdownError> {
+    use crate::markdown::prepare_nodes_from_markdown;
+
+    if description.trim().is_empty() {
+        return Ok(());
+    }
+
+    let prepared = prepare_nodes_from_markdown(description, Some(schema_id.to_string()))?;
+    if prepared.is_empty() {
+        return Ok(());
+    }
+
+    let bulk_nodes: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        f64,
+        serde_json::Value,
+    )> = prepared
+        .into_iter()
+        .map(|n| {
+            (
+                n.id,
+                n.node_type,
+                n.content,
+                n.parent_id,
+                n.order,
+                n.properties,
+            )
+        })
+        .collect();
+
+    node_service
+        .bulk_create_hierarchy(bulk_nodes)
+        .await
+        .map_err(|e| {
+            MarkdownError::internal_error(format!(
+                "Failed to create description subtree for schema '{}': {}",
+                schema_id, e
+            ))
+        })?;
+
+    Ok(())
+}
+
+/// Replace the description child subtree of a schema node with new content.
+///
+/// Atomically deletes the entire existing subtree (all descendants, not just direct children),
+/// then creates a fresh subtree from the new markdown description.
+async fn replace_description_subtree(
+    node_service: &Arc<NodeService>,
+    schema_id: &str,
+    new_description: &str,
+) -> Result<(), MarkdownError> {
+    // Delete the entire descendant subtree in one statement (recursive CTE).
+    // This correctly handles nested markdown structures (e.g. header → text children).
+    node_service
+        .store()
+        .delete_children_subtree_unchecked(schema_id)
+        .await
+        .map_err(|e| {
+            MarkdownError::internal_error(format!(
+                "Failed to delete description subtree for schema '{}': {}",
+                schema_id, e
+            ))
+        })?;
+
+    // Create new description subtree
+    create_description_subtree(node_service, schema_id, new_description).await
 }
 
 /// Parse natural language description and extract fields

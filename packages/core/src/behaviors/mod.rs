@@ -1271,7 +1271,7 @@ impl NodeBehavior for SchemaNodeBehavior {
     }
 
     fn can_have_children(&self) -> bool {
-        false // Schemas are metadata nodes, not containers
+        true // Description is stored as a child node subtree
     }
 
     fn supports_markdown(&self) -> bool {
@@ -1282,8 +1282,23 @@ impl NodeBehavior for SchemaNodeBehavior {
         serde_json::json!({
             "is_core": false,
             "version": 1,
-            "description": "",
             "fields": []
+        })
+    }
+
+    /// Schema nodes aggregate their description child subtree for embedding.
+    ///
+    /// The description is stored as a markdown node subtree under the schema node.
+    /// Aggregating it gives semantic search the full descriptive text, enabling
+    /// synonym discovery (e.g. "billing" → existing "Invoice" schema).
+    fn get_aggregated_content<'a>(
+        &'a self,
+        node: &'a Node,
+        accessor: &'a dyn NodeAccessor,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let registry = NodeBehaviorRegistry::new();
+            aggregate_children_content(node, accessor, &registry).await
         })
     }
 }

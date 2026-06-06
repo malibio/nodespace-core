@@ -14,7 +14,6 @@
 //!     record::id(id) AS id,
 //!     properties.isCore AS isCore,
 //!     properties.version AS schemaVersion,
-//!     properties.description AS description,
 //!     properties.fields AS fields,
 //!     properties.relationships AS relationships,
 //!     content,
@@ -23,6 +22,17 @@
 //!     modified_at AS modifiedAt
 //! FROM node:`task` WHERE node_type = 'schema';
 //! ```
+//!
+//! ## Description Storage (Issue #1351)
+//!
+//! Schema descriptions are stored as a **child node subtree** (markdown parsed into text/header
+//! nodes), not as `properties.description`. This enables:
+//! - Semantic search: the subtree is aggregated into the schema's embedding via `get_aggregated_content`
+//! - Rich content: descriptions can contain headers, lists, code blocks, etc.
+//!
+//! The `description` field on `SchemaNode` is a **transient/computed field** — it is NOT stored
+//! in `properties` and NOT populated by `from_node()`. Callers that need the description text
+//! must fetch it from the child subtree separately.
 //!
 //! # Examples
 //!
@@ -81,10 +91,6 @@ pub struct SchemaNode {
     /// Schema version number (increments on schema changes)
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-
-    /// Human-readable description of this schema
-    #[serde(default)]
-    pub description: String,
 
     /// List of fields in this schema
     #[serde(default)]
@@ -155,13 +161,6 @@ impl SchemaNode {
             .map(|v| v as u32)
             .unwrap_or(1);
 
-        let description = node
-            .properties
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-
         let fields: Vec<SchemaField> = node
             .properties
             .get("fields")
@@ -194,7 +193,6 @@ impl SchemaNode {
             modified_at: node.modified_at,
             is_core,
             schema_version,
-            description,
             fields,
             relationships,
             title_template,
@@ -209,7 +207,6 @@ impl SchemaNode {
         let mut properties = serde_json::json!({
             "isCore": self.is_core,
             "schemaVersion": self.schema_version,
-            "description": self.description,
             "fields": self.fields,
             "relationships": self.relationships,
         });
@@ -361,7 +358,6 @@ mod tests {
             json!({
                 "isCore": true,
                 "schemaVersion": 2,
-                "description": "Task tracking schema",
                 "fields": [
                     {
                         "name": "status",
@@ -399,7 +395,6 @@ mod tests {
 
         assert!(schema.is_core);
         assert_eq!(schema.schema_version, 2);
-        assert_eq!(schema.description, "Task tracking schema");
         assert_eq!(schema.fields.len(), 1);
         assert_eq!(schema.fields[0].name, "status");
     }
@@ -436,10 +431,8 @@ mod tests {
         let mut schema = SchemaNode::from_node(node).unwrap();
 
         // Direct field mutation
-        schema.description = "Updated description".to_string();
         schema.schema_version += 1;
 
-        assert_eq!(schema.description, "Updated description");
         assert_eq!(schema.schema_version, 3);
     }
 
@@ -512,7 +505,6 @@ mod tests {
         let json = serde_json::to_value(&schema).unwrap();
         assert_eq!(json["isCore"], true);
         assert_eq!(json["schemaVersion"], 2);
-        assert_eq!(json["description"], "Task tracking schema");
     }
 
     #[test]
@@ -526,7 +518,6 @@ mod tests {
             "modifiedAt": "2025-01-01T00:00:00Z",
             "isCore": false,
             "schemaVersion": 1,
-            "description": "A test schema",
             "fields": []
         });
 
@@ -535,7 +526,6 @@ mod tests {
         assert_eq!(schema.content, "Test Schema");
         assert!(!schema.is_core);
         assert_eq!(schema.schema_version, 1);
-        assert_eq!(schema.description, "A test schema");
         assert!(schema.fields.is_empty());
     }
 }

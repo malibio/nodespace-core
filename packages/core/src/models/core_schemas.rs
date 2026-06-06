@@ -43,7 +43,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Task tracking schema".to_string(),
             fields: vec![
                 SchemaField {
                     name: "status".to_string(),
@@ -179,7 +178,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Plain text content".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -194,7 +192,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Date node schema".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -209,7 +206,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Markdown header (h1-h6)".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -224,7 +220,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Code block with syntax highlighting".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -239,7 +234,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Blockquote for citations".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -254,7 +248,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Numbered list item".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -269,7 +262,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Horizontal rule / thematic break".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -284,7 +276,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "GFM markdown table with alignment support".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -299,7 +290,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Hierarchical label for organizing nodes into groups".to_string(),
             fields: vec![],        // Uses content for name
             relationships: vec![], // member_of is a native edge, not schema-defined
             title_template: None,
@@ -314,7 +304,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Checkbox item — markdown annotation, not a managed task".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -329,8 +318,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "AI conversation node with messages stored as nested properties"
-                .to_string(),
             fields: vec![
                 SchemaField {
                     name: "provider".to_string(),
@@ -671,7 +658,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Query definition for filtering and searching nodes".to_string(),
             fields: vec![
                 SchemaField {
                     name: "target_type".to_string(),
@@ -816,7 +802,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "AI agent prompt template".to_string(),
             fields: vec![],
             relationships: vec![],
             title_template: None,
@@ -831,7 +816,6 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            description: "Agent skill with tool whitelisting and guidance".to_string(),
             fields: vec![
                 SchemaField {
                     name: "description".to_string(),
