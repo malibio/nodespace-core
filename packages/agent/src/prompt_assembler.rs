@@ -168,20 +168,65 @@ impl PromptAssembler {
         roots
     }
 
-    /// Fetch children of a prompt node and concatenate their content as the body.
-    /// Uses get_children for edge-based graph traversal in natural fractional order.
+    /// Fetch the full descendant subtree of a prompt node and concatenate every
+    /// descendant's content as the body, in natural document (depth-first,
+    /// fractional-order) order.
+    ///
+    /// This walks the **entire** subtree, not just the prompt node's direct
+    /// children. Seeded prompt bodies that contain a `HEADER:` line followed by
+    /// indented bullets (e.g. the Tool Strategy Guide's `TOOL STRATEGY:` block)
+    /// parse into a nested tree: the header line is a direct child of the prompt
+    /// node and the bullets are children of that header line. A direct-children-
+    /// only flatten silently dropped the bullet body (issue: seed prompt body
+    /// dropped). Walking the subtree preserves the full intended prompt.
     async fn fetch_prompt_body(&self, node: &Node) -> String {
-        match self.node_service.get_children(&node.id).await {
-            Ok(children) => children
-                .iter()
-                .map(|c| c.content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+        let (_root, node_map, adjacency_list) = match self
+            .node_service
+            .get_subtree_data(&node.id)
+            .await
+        {
+            Ok(data) => data,
             Err(e) => {
-                tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch prompt children");
-                String::new()
+                tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch prompt subtree");
+                return String::new();
+            }
+        };
+
+        // Depth-first pre-order traversal starting from the prompt node's
+        // children, following adjacency_list which is already sorted by
+        // fractional order. The prompt node itself is excluded (its content is
+        // the short title/label, not prompt body).
+        let mut sections: Vec<String> = Vec::new();
+        let mut stack: Vec<String> = adjacency_list
+            .get(&node.id)
+            .map(|children| children.iter().rev().cloned().collect())
+            .unwrap_or_default();
+
+        while let Some(id) = stack.pop() {
+            if let Some(child) = node_map.get(&id) {
+                sections.push(child.content.clone());
+            } else {
+                // adjacency_list and node_map come from one consolidated
+                // get_subtree_data query, so they should never disagree. If they
+                // ever drift, an id with children but no node would silently drop
+                // its own content while still emitting descendants — a quieter
+                // version of the body-drop bug this method fixes. Surface it.
+                tracing::warn!(
+                    node_id = %id,
+                    "prompt_dump subtree: id in adjacency_list missing from node_map"
+                );
+            }
+            // Push this node's children (reversed so first child is popped first).
+            // The subtree is a single-parent `has_child` tree (acyclic by
+            // construction), so no visited-set is needed.
+            if let Some(grandchildren) = adjacency_list.get(&id) {
+                for gc in grandchildren.iter().rev() {
+                    stack.push(gc.clone());
+                }
             }
         }
+
+        sections.join("\n\n")
     }
 
     /// Render a Minijinja template with the given context.
@@ -467,6 +512,69 @@ mod tests {
         let result = PromptAssembler::render_template(bad_template, &ctx);
         // Should fall back to raw template on error
         assert_eq!(result, bad_template);
+    }
+
+    /// End-to-end regression for the seed-prompt body-drop bug.
+    ///
+    /// Seeds the real prompt templates into a fresh DB exactly the way the
+    /// daemon does (`prepare_nodes_from_template` → `seed_nodes_from_templates`),
+    /// then assembles the system prompt through the real graph path. Before the
+    /// fix, `fetch_prompt_body` flattened only the prompt node's direct children,
+    /// so the `TOOL STRATEGY:` bullets (nested one level under the header line)
+    /// were dropped and the assembled prompt was missing the search_skills
+    /// mandate, CLARIFICATION CONTRACT, and BLAST-RADIUS GATE. The fix walks the
+    /// full subtree, so all of that text must now reach the assembled prompt.
+    #[tokio::test]
+    async fn assembled_prompt_contains_full_tool_strategy_body() {
+        use nodespace_core::db::SqliteStore;
+        use nodespace_core::markdown::prepare_nodes_from_template;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("seed-test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        // Seed prompt nodes the same way the daemon does.
+        let groups: Vec<_> = PromptAssembler::seed_prompt_nodes()
+            .iter()
+            .map(|t| prepare_nodes_from_template(t).expect("template expands"))
+            .collect();
+        node_service
+            .seed_nodes_from_templates(groups)
+            .await
+            .expect("seed succeeds");
+
+        let assembler = PromptAssembler::new(node_service.clone());
+        let ctx = TemplateContext {
+            current_date: "2026-06-06".to_string(),
+            model_name: "test".to_string(),
+            workspace_context: "Entity types: (none)".to_string(),
+        };
+        let assembled = assembler.assemble(&ctx, Vec::new()).await;
+        let prompt = assembled.system_prompt;
+
+        // The full TOOL_STRATEGY_RULES body must be present in the assembled prompt.
+        for needle in [
+            "TOOL STRATEGY:",
+            "search_skills",
+            "CLARIFICATION CONTRACT",
+            "BLAST-RADIUS GATE",
+            "ALWAYS search first",
+            "NEVER use placeholder IDs",
+            // SCHEMA_CREATION_RULES, sharing the same prompt node, must also survive.
+            "NODE MODEL:",
+            "DATABASE\" = SCHEMA",
+            // Response Formatting Rules node body.
+            "RESPONSE RULES:",
+            "nodespace://",
+        ] {
+            assert!(
+                prompt.contains(needle),
+                "assembled prompt missing {:?}.\n--- PROMPT ---\n{}",
+                needle,
+                prompt
+            );
+        }
     }
 
     #[test]

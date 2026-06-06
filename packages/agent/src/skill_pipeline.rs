@@ -461,3 +461,84 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod full_seed_db_tests {
+    use super::*;
+    use crate::local_agent::tools::Tool;
+    use crate::prompt_assembler::PromptAssembler;
+    use nodespace_core::db::SqliteStore;
+    use nodespace_core::markdown::prepare_nodes_from_template;
+    use nodespace_core::services::NodeService;
+    use std::sync::Arc;
+
+    /// End-to-end regression for the missing-tools half of the seed bug.
+    ///
+    /// `seed_nodes_from_templates` inserts every template group with a single
+    /// `?` error path: if any node fails validation, the whole remaining batch
+    /// is aborted. Previously the `create_schema` tool node (the 6th tool) was
+    /// rejected by the external-tool `parameter_schema` depth guard, which
+    /// silently dropped it AND every tool seeded after it (update_schema,
+    /// update_task_status, create_relationship, get_related_nodes,
+    /// search_skills, delete_node, create_nodes_from_markdown). The model was
+    /// then offered only the first 5 tools — no create_schema, no search_skills.
+    ///
+    /// This seeds exactly the way the daemon does (prompts + skills + tools in
+    /// one batch) and asserts every registered tool lands in the DB.
+    #[tokio::test]
+    async fn full_daemon_seed_inserts_all_tool_nodes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("t.db");
+        let mut store = Arc::new(SqliteStore::new(db).await.unwrap());
+        let ns = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        let prompts = PromptAssembler::seed_prompt_nodes();
+        let skills = seed_skill_nodes();
+        let tools = seed_tool_nodes();
+        let mut groups = Vec::new();
+        for t in prompts.iter().chain(skills.iter()).chain(tools.iter()) {
+            groups.push(prepare_nodes_from_template(t).expect("template expands"));
+        }
+        ns.seed_nodes_from_templates(groups)
+            .await
+            .expect("full daemon seed must succeed (no tool dropped by validation)");
+
+        let q = nodespace_core::ops::node_ops::query_nodes(
+            &ns,
+            nodespace_core::ops::node_ops::QueryNodesInput {
+                node_type: Some("tool".to_string()),
+                parent_id: None,
+                root_id: None,
+                limit: Some(256),
+                offset: None,
+                collection_id: None,
+                collection: None,
+                filters: None,
+            },
+        )
+        .await
+        .unwrap();
+        let names: Vec<String> = q
+            .nodes
+            .iter()
+            .filter_map(|n| n.get("content").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        assert_eq!(
+            names.len(),
+            Tool::ALL.len(),
+            "all {} tool nodes should be seeded, got {:?}",
+            Tool::ALL.len(),
+            names
+        );
+        // The two tools the seed bug previously dropped must be present.
+        assert!(
+            names.iter().any(|n| n == "create_schema"),
+            "create_schema must seed"
+        );
+        assert!(
+            names.iter().any(|n| n == "search_skills"),
+            "search_skills must seed"
+        );
+    }
+}
