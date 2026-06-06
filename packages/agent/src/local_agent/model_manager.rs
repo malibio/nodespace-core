@@ -901,18 +901,18 @@ async fn sha256_file(path: &PathBuf) -> Result<String, ModelError> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve the platform-appropriate models directory.
+/// Resolve the models directory.
 ///
-/// macOS: `~/Library/Application Support/NodeSpace/models/`
-/// Linux: `~/.local/share/NodeSpace/models/`
-/// Windows: `%APPDATA%/NodeSpace/models/`
+/// Always `~/.nodespace/models/` — consistent with the database path
+/// (`~/.nodespace/database/`) resolved by `resolve_db_path` in the daemon.
+/// Both paths honour `$HOME`; override with `NODESPACED_DB_PATH` for tests.
 fn default_models_dir() -> Result<PathBuf, ModelError> {
-    let data_dir = dirs::data_dir().ok_or_else(|| {
+    let home = std::env::var("HOME").map_err(|_| {
         ModelError::Other(anyhow::anyhow!(
-            "could not determine platform data directory"
+            "could not determine models directory: $HOME is unset"
         ))
     })?;
-    Ok(data_dir.join("NodeSpace").join("models"))
+    Ok(PathBuf::from(home).join(".nodespace").join("models"))
 }
 
 /// Look up a catalog entry by model ID, returning `ModelError::NotFound` if absent.
