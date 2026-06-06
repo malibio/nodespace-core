@@ -1584,10 +1584,7 @@ impl AgentToolExecutor for GraphToolExecutor {
             // explicitly-enabled external tools may enter the inference surface.
             // Unknown source values are treated as untrusted and require enablement —
             // this prevents future source values from silently bypassing the gate.
-            let source = props
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("internal");
+            let source = props.get("source").and_then(|v| v.as_str()).unwrap_or(""); // missing source → not "internal" → requires enabled=true
             let enabled = props
                 .get("enabled")
                 .and_then(|v| v.as_bool())
