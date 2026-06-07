@@ -1863,7 +1863,10 @@ mod tests {
         assert_eq!(params.query, "Review quarterly report");
         assert_eq!(params.node_type, Some("task".to_string()));
         let filters = params.filters.expect("filters should be present");
-        assert_eq!(filters.get("status").map(|s| s.as_str()), Some(Some("open")));
+        assert_eq!(
+            filters.get("status").map(|s| s.as_str()),
+            Some(Some("open"))
+        );
     }
 
     #[test]
