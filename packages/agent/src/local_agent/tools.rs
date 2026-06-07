@@ -1880,10 +1880,7 @@ mod tests {
         });
         let params: SearchNodesParams = serde_json::from_value(args).unwrap();
         let filters = params.filters.expect("filters should be present");
-        assert_eq!(
-            filters.get("amount").map(|v| v.as_u64()),
-            Some(Some(500))
-        );
+        assert_eq!(filters.get("amount").map(|v| v.as_u64()), Some(Some(500)));
     }
 
     #[test]
