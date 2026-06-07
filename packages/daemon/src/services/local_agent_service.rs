@@ -325,12 +325,7 @@ impl LocalAgentServiceImpl {
 
         // Refresh workspace context before creating the session.
         let emb = self.inner.embedding_service.read().await.clone();
-        let ctx = build_workspace_context(
-            &self.inner.node_service,
-            emb,
-            Some(&user_message),
-        )
-        .await;
+        let ctx = build_workspace_context(&self.inner.node_service, emb, Some(&user_message)).await;
 
         // Create an ephemeral session seeded with prior history.
         let session_id = service.create_session(None, prior_history).await;
