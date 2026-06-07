@@ -212,8 +212,8 @@ fn def_search_nodes() -> ToolDefinition {
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Property filters as key-value pairs, e.g. {\"status\": \"open\"} or {\"amount\": \"500\"}. Keys are property names, values matched with equals. Always pass values as strings.",
-                    "additionalProperties": { "type": "string" }
+                    "description": "Property filters as key-value pairs, e.g. {\"status\": \"open\"} or {\"amount\": 500}. Keys are property names, values matched with equals. String and numeric values are both accepted.",
+                    "additionalProperties": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
                 },
                 "limit": {
                     "type": "integer",
@@ -1866,6 +1866,23 @@ mod tests {
         assert_eq!(
             filters.get("status").map(|s| s.as_str()),
             Some(Some("open"))
+        );
+    }
+
+    #[test]
+    fn search_nodes_params_filters_numeric_value_coerced() {
+        // Models may emit numeric values even when instructed to use strings.
+        // The executor coerces them to strings before the DB equality match.
+        let args = json!({
+            "query": "",
+            "node_type": "invoice",
+            "filters": { "amount": 500 }
+        });
+        let params: SearchNodesParams = serde_json::from_value(args).unwrap();
+        let filters = params.filters.expect("filters should be present");
+        assert_eq!(
+            filters.get("amount").map(|v| v.as_u64()),
+            Some(Some(500))
         );
     }
 
