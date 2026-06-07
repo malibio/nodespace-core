@@ -323,13 +323,12 @@ impl LocalAgentServiceImpl {
 
         let service = self.get_service().await;
 
-        // Refresh workspace context before creating the session (needs history reference).
+        // Refresh workspace context before creating the session.
         let emb = self.inner.embedding_service.read().await.clone();
         let ctx = build_workspace_context(
             &self.inner.node_service,
             emb,
             Some(&user_message),
-            &prior_history,
         )
         .await;
 
@@ -1192,7 +1191,6 @@ async fn build_workspace_context(
     node_service: &Arc<NodeService>,
     embedding_service: Option<Arc<NodeEmbeddingService>>,
     query: Option<&str>,
-    _history: &[ChatMessage],
 ) -> Result<String, ()> {
     let mut context = nodespace_core::ops::context_ops::build_workspace_context(
         node_service,
@@ -1205,6 +1203,9 @@ async fn build_workspace_context(
     // Inject schemas created in the last 5 minutes that may not yet be indexed
     // in the embedding store (30s debounce). This ensures the model sees custom
     // types it just created when composing the next turn in the same session.
+    // Capped at MAX_SEMANTIC_SCHEMAS total to prevent unbounded context growth
+    // during batch schema creation sessions.
+    const MAX_SCHEMAS: usize = 5;
     if let Ok(all_schemas) = node_service.get_all_schemas().await {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(5);
         let existing_ids: std::collections::HashSet<String> = context
@@ -1212,7 +1213,12 @@ async fn build_workspace_context(
             .iter()
             .map(|s| s.id.clone())
             .collect();
+        let remaining_slots = MAX_SCHEMAS.saturating_sub(context.relevant_schemas.len());
+        let mut injected = 0;
         for schema in all_schemas {
+            if injected >= remaining_slots {
+                break;
+            }
             if schema.is_core {
                 continue; // skip built-in types
             }
@@ -1225,6 +1231,7 @@ async fn build_workspace_context(
                     "workspace_context: injecting recently-created schema (debounce bypass)"
                 );
                 context.relevant_schemas.push(schema);
+                injected += 1;
             }
         }
     }
