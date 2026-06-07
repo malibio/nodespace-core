@@ -80,7 +80,7 @@ LISTING BY TYPE OR PROPERTY: To list all nodes of a type or filtered by a proper
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.",
-                "tool_whitelist": ["create_node", "get_node"],
+                "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -89,7 +89,7 @@ LISTING BY TYPE OR PROPERTY: To list all nodes of a type or filtered by a proper
 
 When creating a new node or record:
 
-CALL create_node ONCE: Gather all needed values from the user message, then call create_node in a single call. Do not search before creating unless you need an existing node's ID (e.g. to set a relationship field).
+CALL create_node ONCE: Gather all needed values from the user message, then call create_node in a single call. Only search first if you need an existing node's ID (e.g. to set a relationship field).
 
 TYPE MAPPING FROM schema_metadata: When search_skills returned schema_metadata for this skill, set node_type to the type_id from that metadata (e.g. "invoice", "customer", "project"). For generic text notes use node_type="text". For tasks use node_type="task".
 
@@ -198,7 +198,7 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use update_task_status to change status.",
-                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes"],
+                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -207,7 +207,7 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
 
 When updating an existing node:
 
-FIND THEN UPDATE: If you don't have the node's ID, call search_nodes or search_semantic first to locate it. Then call update_node with the ID and only the fields that need changing.
+FIND THEN UPDATE: If you don't have the node's ID, call search_semantic or search_nodes first to locate it. Then call update_node with the ID and only the fields that need changing.
 
 TASK STATUS: To change a task's status (open, in_progress, done, cancelled), call update_task_status with the task ID and the new status string. Do NOT use update_node for task status changes.
 
@@ -223,7 +223,7 @@ SUCCESS: After update_node or update_task_status returns, confirm the change to 
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Create connections between nodes, explore relationships, and traverse the knowledge graph.",
-                "tool_whitelist": ["create_relationship", "get_related_nodes", "get_node"],
+                "tool_whitelist": ["create_relationship", "get_related_nodes", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -246,7 +246,7 @@ SUCCESS: After create_relationship returns, confirm the link to the user. Do NOT
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record.",
-                "tool_whitelist": ["delete_node", "get_node"],
+                "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -257,7 +257,7 @@ When deleting a node:
 
 FIND THEN DELETE: If you don't have the node's ID, call search_semantic or search_nodes to locate it. Confirm the title matches what the user described, then call delete_node with the ID.
 
-SINGLE DELETE: Call delete_node once per node. Do NOT batch or loop; if the user asks to delete multiple nodes, delete them one at a time and report after each.
+SINGLE DELETE: Call delete_node once per node. Confirm each deletion before proceeding to the next.
 
 SUCCESS: After delete_node returns, confirm to the user what was deleted. Do NOT search again to verify deletion."#.to_string(),
         },
@@ -290,7 +290,7 @@ SUCCESS: After create_nodes_from_markdown returns, report the number of nodes cr
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Organize nodes into collections and categories. Use when user wants to add to a collection, categorize, or group nodes.",
-                "tool_whitelist": ["create_relationship", "get_node"],
+                "tool_whitelist": ["create_relationship", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -301,7 +301,7 @@ When organizing nodes into collections or categories:
 
 FIND THE NODE: If you don't have the node's ID, call search_semantic to locate it.
 
-ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". If the collection doesn't exist as a node yet, ask the user to create it first or create it with create_node(node_type="collection").
+ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". If the collection doesn't exist as a node yet, ask the user to create it first using the Node Creation skill.
 
 SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#.to_string(),
         },
