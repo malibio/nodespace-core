@@ -1207,8 +1207,11 @@ async fn build_workspace_context(
     // types it just created when composing the next turn in the same session.
     if let Ok(all_schemas) = node_service.get_all_schemas().await {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(5);
-        let existing_ids: std::collections::HashSet<String> =
-            context.relevant_schemas.iter().map(|s| s.id.clone()).collect();
+        let existing_ids: std::collections::HashSet<String> = context
+            .relevant_schemas
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         for schema in all_schemas {
             if schema.is_core {
                 continue; // skip built-in types

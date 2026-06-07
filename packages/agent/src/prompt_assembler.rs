@@ -421,7 +421,8 @@ mod tests {
 
         // This string is the live output of SCHEMA_CREATION_RULES + "\n\n" + TOOL_STRATEGY_RULES.
         // Keep it in sync with agent_guidance.rs whenever those constants change.
-        let expected_tool_strategy = format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES);
+        let expected_tool_strategy =
+            format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES);
 
         let expected_response_rules = "RESPONSE RULES:\n\
             - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
