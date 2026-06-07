@@ -6,6 +6,7 @@
 //! the agent tool executor is now their only consumer.
 
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Parameters for the `search_nodes` (keyword/title search) tool.
@@ -24,9 +25,9 @@ pub struct SearchNodesParams {
     pub limit: Option<usize>,
 
     /// Property filters as key-value pairs matched with equals.
-    /// e.g. {"status": "open"} or {"company": "Acme"}.
+    /// e.g. {"status": "open"} or {"amount": "500"}. Numeric values are coerced to strings.
     #[serde(default)]
-    pub filters: Option<HashMap<String, String>>,
+    pub filters: Option<HashMap<String, Value>>,
 }
 
 /// Parameters for the `search_semantic` tool.

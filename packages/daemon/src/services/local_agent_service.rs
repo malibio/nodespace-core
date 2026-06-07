@@ -323,15 +323,21 @@ impl LocalAgentServiceImpl {
 
         let service = self.get_service().await;
 
+        // Refresh workspace context before creating the session (needs history reference).
+        let emb = self.inner.embedding_service.read().await.clone();
+        let ctx = build_workspace_context(
+            &self.inner.node_service,
+            emb,
+            Some(&user_message),
+            &prior_history,
+        )
+        .await;
+
         // Create an ephemeral session seeded with prior history.
         let session_id = service.create_session(None, prior_history).await;
 
-        // Refresh workspace context.
-        let emb = self.inner.embedding_service.read().await.clone();
-        if let Ok(ctx) =
-            build_workspace_context(&self.inner.node_service, emb, Some(&user_message)).await
-        {
-            service.set_session_context(&session_id, ctx).await;
+        if let Ok(ctx_str) = ctx {
+            service.set_session_context(&session_id, ctx_str).await;
         }
 
         let token_tx = self.inner.token_tx.clone();
@@ -1186,14 +1192,40 @@ async fn build_workspace_context(
     node_service: &Arc<NodeService>,
     embedding_service: Option<Arc<NodeEmbeddingService>>,
     query: Option<&str>,
+    _history: &[ChatMessage],
 ) -> Result<String, ()> {
-    let context = nodespace_core::ops::context_ops::build_workspace_context(
+    let mut context = nodespace_core::ops::context_ops::build_workspace_context(
         node_service,
         embedding_service.as_ref(),
         query,
     )
     .await
     .map_err(|_| ())?;
+
+    // Inject schemas created in the last 5 minutes that may not yet be indexed
+    // in the embedding store (30s debounce). This ensures the model sees custom
+    // types it just created when composing the next turn in the same session.
+    if let Ok(all_schemas) = node_service.get_all_schemas().await {
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let existing_ids: std::collections::HashSet<String> =
+            context.relevant_schemas.iter().map(|s| s.id.clone()).collect();
+        for schema in all_schemas {
+            if schema.is_core {
+                continue; // skip built-in types
+            }
+            if existing_ids.contains(&schema.id) {
+                continue; // already present from semantic search
+            }
+            if schema.created_at >= cutoff {
+                tracing::debug!(
+                    schema_id = %schema.id,
+                    "workspace_context: injecting recently-created schema (debounce bypass)"
+                );
+                context.relevant_schemas.push(schema);
+            }
+        }
+    }
+
     Ok(context.format_for_prompt(4000))
 }
 

@@ -361,7 +361,7 @@ impl PromptAssembler {
                 child_properties: None,
                 markdown_content: format!(
                     "RESPONSE RULES:\n\
-                    - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
+                    - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
                     - After tool results: respond in natural language. Never paste raw JSON.\n\
                     - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
@@ -419,25 +419,12 @@ mod tests {
             .map(|s| (s.title.as_str(), s.markdown_content.as_str()))
             .collect();
 
-        let expected_tool_strategy = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\
-            \"DATABASE\" = SCHEMA: When the user asks to set up a tracker, database, system, or \"a way to track X\" (e.g. \"create an invoice tracking database\", \"set up a CRM\"), they want a new entity TYPE — call create_schema to define it, not search or create_node. The singular entity name is the schema (an \"invoice tracking database\" → an Invoice schema).\n\n\
-            TOOL STRATEGY:\n\
-            - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool.\n\
-            - For a real graph action: call search_skills(query) to find a matching skill. Then in the same response: pick the best match and emit its typed action call, OR ask the user to clarify (offering the concrete candidates). Empty result = no skill — proceed with general tools or semantic_search.\n\
-            - CLARIFICATION CONTRACT: at most one clarification per intent. If the user clarifies and the request is still ambiguous, fall through to semantic_search and answer with what's available. Never clarify twice.\n\
-            - BLAST-RADIUS GATE: mutating skills (schema creation, deletion) require higher confidence than read-only skills (search). When borderline on a mutating skill, clarify first.\n\
-            - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
-            - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
-            - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
-            - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-            - To update task status: search_nodes for it, then update_task_status with the real ID. To update node content: search_nodes first, then update_node with the real ID.\n\
-            - To create a node: create_node(content, node_type). Pass 'properties' only if ENTITY TYPES shows fields. Include title_template fields in properties.\n\
-            - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
-            - To connect nodes: create_relationship with names from schemas above.\n\
-            - Tool arguments must be valid JSON. No comments (#) in JSON.";
+        // This string is the live output of SCHEMA_CREATION_RULES + "\n\n" + TOOL_STRATEGY_RULES.
+        // Keep it in sync with agent_guidance.rs whenever those constants change.
+        let expected_tool_strategy = format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES);
 
         let expected_response_rules = "RESPONSE RULES:\n\
-            - Call tools immediately when intent is clear. Do NOT narrate your plan or reasoning first.\n\
+            - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
             - After tool results: respond in natural language. Never paste raw JSON.\n\
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
@@ -447,7 +434,7 @@ mod tests {
 
         assert_eq!(
             by_title.get("Tool Strategy Guide").copied(),
-            Some(expected_tool_strategy),
+            Some(expected_tool_strategy.as_str()),
             "Tool Strategy Guide body drifted — review agent_guidance.rs edits"
         );
         assert_eq!(

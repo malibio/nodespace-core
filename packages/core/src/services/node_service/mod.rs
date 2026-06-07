@@ -585,14 +585,14 @@ pub fn is_valid_node_id(node_id: &str) -> bool {
 /// predictably by type name rather than an opaque UUID.
 pub(crate) fn normalize_schema_id(name: &str) -> String {
     name.to_lowercase()
-        .replace([' ', '_'], "-")
+        .replace([' ', '-'], "_")
         .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect::<String>()
-        .split('-')
+        .split('_')
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
-        .join("-")
+        .join("_")
 }
 
 #[cfg(test)]
@@ -602,16 +602,16 @@ mod normalize_schema_id_tests {
     #[test]
     fn test_normalize_schema_id_basic() {
         assert_eq!(normalize_schema_id("Invoice"), "invoice");
-        assert_eq!(normalize_schema_id("Customer Profile"), "customer-profile");
-        assert_eq!(normalize_schema_id("code_block"), "code-block");
-        assert_eq!(normalize_schema_id("My Widget"), "my-widget");
+        assert_eq!(normalize_schema_id("Customer Profile"), "customer_profile");
+        assert_eq!(normalize_schema_id("code_block"), "code_block");
+        assert_eq!(normalize_schema_id("My Widget"), "my_widget");
     }
 
     #[test]
     fn test_normalize_schema_id_edge_cases() {
         assert_eq!(normalize_schema_id("  spaces  "), "spaces");
-        assert_eq!(normalize_schema_id("already-kebab"), "already-kebab");
-        assert_eq!(normalize_schema_id("UPPER CASE"), "upper-case");
+        assert_eq!(normalize_schema_id("already-kebab"), "already_kebab");
+        assert_eq!(normalize_schema_id("UPPER CASE"), "upper_case");
     }
 }
 

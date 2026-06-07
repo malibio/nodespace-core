@@ -87,9 +87,9 @@ LISTING BY TYPE OR PROPERTY: To list all nodes of a type or filtered by a proper
             child_properties: None,
             markdown_content: r#"# Node Creation Guidance
 
-When creating a new node or record:
+⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
 
-CALL create_node ONCE: Gather all needed values from the user message, then call create_node in a single call. Only search first if you need an existing node's ID (e.g. to set a relationship field).
+CALL create_node NOW: You received this instruction because search_skills was called. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
 
 TYPE MAPPING FROM schema_metadata: When search_skills returned schema_metadata for this skill, set node_type to the type_id from that metadata (e.g. "invoice", "customer", "project"). For generic text notes use node_type="text". For tasks use node_type="task".
 
@@ -110,7 +110,7 @@ EXAMPLE — create an invoice for $500 due next Friday (schema_metadata type_id=
   }
 }
 
-SUCCESS: After create_node returns a node ID, confirm to the user what was created. Do NOT call get_node or search afterwards — the create response is sufficient."#.to_string(),
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call search_skills, get_node, or any other tool — the create response is sufficient. The task is complete."#.to_string(),
         },
         NodeTemplate {
             title: "Schema Creation".to_string(),
@@ -128,6 +128,8 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
 CREATING A SCHEMA — call create_schema:
 
 ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "Invoice", do not also create "Customer" or "Product"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.
+
+SUCCESS: After create_schema returns a schema object (with fields, type_id, etc.), the schema was created. Respond to the user immediately — do NOT call create_schema again. If create_schema returns an error saying the schema already exists, stop and tell the user the type already exists and they can create instances with create_node.
 
 EDITING A SCHEMA — call update_schema:
 
@@ -208,6 +210,10 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
 When updating an existing node:
 
 FIND THEN UPDATE: If you don't have the node's ID, call search_semantic or search_nodes first to locate it. Then call update_node with the ID and only the fields that need changing.
+
+AMBIGUITY: If search returns 0 results or multiple results that don't clearly match what the user described, ask one specific clarifying question rather than retrying. Examples:
+- 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
+- Multiple results: "I found 3 invoices — which one did you mean: Invoice #001 ($500), Invoice #002 ($750), or Invoice #003 ($500 overdue)?"
 
 TASK STATUS: To change a task's status (open, in_progress, done, cancelled), call update_task_status with the task ID and the new status string. Do NOT use update_node for task status changes.
 

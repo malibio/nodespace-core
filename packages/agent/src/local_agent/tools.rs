@@ -212,7 +212,7 @@ fn def_search_nodes() -> ToolDefinition {
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Property filters as key-value pairs, e.g. {\"status\": \"open\"} or {\"company\": \"Acme\"}. Keys are property names, values matched with equals.",
+                    "description": "Property filters as key-value pairs, e.g. {\"status\": \"open\"} or {\"amount\": \"500\"}. Keys are property names, values matched with equals. Always pass values as strings.",
                     "additionalProperties": { "type": "string" }
                 },
                 "limit": {
@@ -446,7 +446,7 @@ fn def_create_schema() -> ToolDefinition {
         name: "create_schema".into(),
         description: "Create a new entity type (schema) with custom fields and relationships. \
             The top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. 'Invoice', 'Project'). \
-            The schema ID is auto-generated as lowercase kebab-case from name (e.g. 'Customer Profile' → 'customer-profile'). \
+            The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Customer Profile' → 'customer_profile'). \
             After creation, use this ID as node_type when creating instances. \
             FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. \
             EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), \
@@ -821,15 +821,24 @@ impl GraphToolExecutor {
 
         let ns = self.node_service()?;
 
-        // Build property filters from the `filters` map (key=value pairs, operator=equals)
+        // Build property filters from the `filters` map (key=value pairs, operator=equals).
+        // Coerce numeric/boolean values to their string representation for equality matching.
         let mut filter_items: Vec<node_ops::QueryFilterItem> = params
             .filters
             .unwrap_or_default()
             .into_iter()
-            .map(|(field, val)| node_ops::QueryFilterItem {
-                field,
-                operator: "equals".to_string(),
-                value: Value::String(val),
+            .map(|(field, val)| {
+                let str_val = match &val {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    other => other.to_string(),
+                };
+                node_ops::QueryFilterItem {
+                    field,
+                    operator: "equals".to_string(),
+                    value: Value::String(str_val),
+                }
             })
             .collect();
 
@@ -1854,7 +1863,7 @@ mod tests {
         assert_eq!(params.query, "Review quarterly report");
         assert_eq!(params.node_type, Some("task".to_string()));
         let filters = params.filters.expect("filters should be present");
-        assert_eq!(filters.get("status").map(|s| s.as_str()), Some("open"));
+        assert_eq!(filters.get("status").map(|s| s.as_str()), Some(Some("open")));
     }
 
     #[test]

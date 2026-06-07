@@ -17,8 +17,14 @@
 /// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
 /// should be consolidated here when that path is unified — tracked separately
 /// from #1089.
-pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in ENTITY TYPES.\n\
-    \"DATABASE\" = SCHEMA: When the user asks to set up a tracker, database, system, or \"a way to track X\" (e.g. \"create an invoice tracking database\", \"set up a CRM\"), they want a new entity TYPE — call create_schema to define it, not search or create_node. The singular entity name is the schema (an \"invoice tracking database\" → an Invoice schema).";
+pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in RELEVANT ENTITY TYPES.\n\
+    \"DATABASE\" = SCHEMA: When the user says \"create a database\", \"set up a tracker\", or \"track X\", call create_schema IMMEDIATELY — no confirmation, no search_skills, no planning text. The entity name is the schema (\"a contacts database\" → call create_schema with name=\"Contact\").\n\
+    INSTANCE vs TYPE: \"Add an invoice for $500\", \"add a contact named Jane Doe\", \"log a project called X\" — these ask for a specific INSTANCE of an existing type. Call search_skills(query=\"add contact\") then call create_node(node_type=\"contact\", ...). Never ask for confirmation — just execute.\n\
+    NO CONFIRMATION FOR KNOWN TYPES: If a type appears in RELEVANT ENTITY TYPES, you have all the information you need. Do NOT say \"Could you confirm\" or \"I want to make sure\" or \"Would you like me to\" — just call search_skills then create_node immediately. Confirmation is NEVER required when the schema already exists.\n\
+    SCHEMA SUCCESS/FAILURE: After create_schema returns a schema object, respond to the user and STOP — do NOT call create_schema again. If create_schema returns an \"already exists\" error, stop immediately and tell the user the type already exists.\n\
+    TITLE TEMPLATE: Every {field_name} in title_template MUST appear in the fields array. If you want {invoice_number} in a template, you MUST add a field named invoice_number. Never reference a placeholder that is not in fields — this causes a validation error.\n\
+    FIELD RULES: Every field object MUST have both \"name\" AND \"type\". Missing either causes a validation error that will never self-correct — stop retrying and fix the field. Valid: {\"name\":\"amount\",\"type\":\"number\",\"required\":true}.\n\
+    ENUM FIELDS: type=\"enum\" requires a non-empty \"core_values\" array: [{\"value\":\"pending\",\"label\":\"Pending\"},{\"value\":\"paid\",\"label\":\"Paid\"}]. An enum with empty core_values always fails. If you don't have predefined values ready, use type=\"text\" instead — you can always add enum values later with update_schema.";
 
 /// Tool strategy guidance.
 ///
@@ -28,15 +34,19 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool.\n\
-    - For a real graph action: call search_skills(query) to find a matching skill. Then in the same response: pick the best match and emit its typed action call, OR ask the user to clarify (offering the concrete candidates). Empty result = no skill — proceed with general tools or semantic_search.\n\
+    - For create_node (adding an instance): call search_skills(query) THEN immediately call create_node in the SAME turn — no text between them. After search_skills returns, your next step MUST be create_node, not a planning message.\n\
+    - For create_schema (new entity type): call create_schema DIRECTLY — no search_skills needed. See DATABASE=SCHEMA rule above.\n\
+    - SKILL COMPLETION: Once create_node, update_node, create_schema, or delete_node returns successfully, respond to the user immediately. Do NOT call search_skills again or call create_schema again — the task is done.\n\
+    - NEVER CLAIM ACTION WITHOUT TOOL RESULT: Never tell the user a node was created, updated, or deleted without a successful tool result in this turn. If no tool was called, no action happened — call the tool.\n\
     - CLARIFICATION CONTRACT: at most one clarification per intent. If the user clarifies and the request is still ambiguous, fall through to semantic_search and answer with what's available. Never clarify twice.\n\
-    - BLAST-RADIUS GATE: mutating skills (schema creation, deletion) require higher confidence than read-only skills (search). When borderline on a mutating skill, clarify first.\n\
-    - ALWAYS search first before updating or getting a node. NEVER use placeholder IDs like \"abc-123\".\n\
+    - AMBIGUITY: If a search returns 0 results or multiple results that don't clearly match, ask the user one specific clarifying question (e.g. \"Are you looking for the invoice with amount $500?\") rather than retrying the search.\n\
+    - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.\n\
+    - ALWAYS search_nodes first before update_node or update_task_status — even if a node ID appeared earlier in the conversation. Never skip the search step.\n\
     - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
     - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-    - To update task status: search_nodes for it, then update_task_status with the real ID. To update node content: search_nodes first, then update_node with the real ID.\n\
-    - To create a node: create_node(content, node_type). Pass 'properties' only if ENTITY TYPES shows fields. Include title_template fields in properties.\n\
+    - To update a CUSTOM schema node's property (e.g. mark invoice as paid): search_nodes(node_type=<type>) then update_node(id=<found_id>, properties={\"status\": \"paid\"}). Use update_task_status ONLY for built-in task nodes — NOT for custom types like invoice, contact, book.\n\
+    - To create a node: call search_skills first to get schema_metadata, then call create_node(content, node_type=<type_id>, properties=<fields from schema_metadata>). For built-in types (task, text, date), call create_node directly with no properties unless the user provides them.\n\
     - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
     - To connect nodes: create_relationship with names from schemas above.\n\
     - Tool arguments must be valid JSON. No comments (#) in JSON.";
@@ -63,8 +73,8 @@ mod tests {
     #[test]
     fn tool_strategy_rules_non_empty() {
         assert!(TOOL_STRATEGY_RULES.contains("TOOL STRATEGY:"));
-        assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search first"));
-        assert!(TOOL_STRATEGY_RULES.contains("NEVER use placeholder IDs"));
+        assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search_nodes first"));
+        assert!(TOOL_STRATEGY_RULES.contains("Never skip the search step"));
     }
 
     #[test]

@@ -97,6 +97,25 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
+/// Ministral 14B -- Mistral's mid-tier edge model (Dec 2025); 13.5B language +
+/// 0.4B vision encoder, Apache 2.0. Same [TOOL_CALLS] format as Ministral 3B/8B.
+/// ~8.2 GB Q4_K_M; fits on 16GB+ Apple Silicon with Q8_0 KV cache.
+const MINISTRAL_14B: CatalogEntry = CatalogEntry {
+    id: "ministral-14b-q4km",
+    family: ModelFamily::Ministral,
+    name: "Ministral 3 14B Instruct Q4_K_M",
+    filename: "Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
+    size_bytes: 8_835_080_032, // ~8.2 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
+    sha256: "", // Skip verification — official Mistral repo, Xet storage
+    context_window: 32_768,
+    default_temperature: 0.3,
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    min_memory_gb: 16,
+};
+
 /// Qwen3 8B -- Alibaba's Qwen3 dense 8B; strong tool-calling training,
 /// competitive with Ministral 8B at similar footprint (16GB+ Apple Silicon).
 const QWEN3_8B: CatalogEntry = CatalogEntry {
@@ -150,6 +169,26 @@ const QWEN36_35B_A3B: CatalogEntry = CatalogEntry {
     type_k: None,
     type_v: None,
     min_memory_gb: 48,
+};
+
+/// Mistral NeMo 12B -- Mistral+NVIDIA collaboration (July 2024); native
+/// [TOOL_CALLS] handler in llama.cpp (grammar-constrained). ~7.5 GB Q4_K_M;
+/// fits on 16GB Apple Silicon. The only Mistral-family model with a confirmed
+/// native tool-call handler in llama.cpp.
+const MISTRAL_NEMO_12B: CatalogEntry = CatalogEntry {
+    id: "mistral-nemo-12b-q4km",
+    family: ModelFamily::Ministral, // same [TOOL_CALLS] format, same parser
+    name: "Mistral NeMo 12B Instruct Q4_K_M",
+    filename: "Mistral-Nemo-Instruct-2407.Q4_K_M.gguf",
+    size_bytes: 7_477_204_928, // ~7.5 GB
+    quantization: "Q4_K_M",
+    url: "https://huggingface.co/MaziyarPanahi/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407.Q4_K_M.gguf",
+    sha256: "", // Third-party repo but widely used; populate before promoting to default
+    context_window: 128_000,
+    default_temperature: 0.3,
+    type_k: None, // F16 — 7.5GB leaves plenty of headroom on 16GB
+    type_v: None,
+    min_memory_gb: 16,
 };
 
 /// Mistral Small 3.2 -- Mistral's 24B dense small model (June 2026); strong
@@ -259,6 +298,8 @@ const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
 const CATALOG: &[&CatalogEntry] = &[
     &MINISTRAL_3B,
     &MINISTRAL_8B,
+    &MINISTRAL_14B,
+    &MISTRAL_NEMO_12B,
     &MISTRAL_SMALL_3_2,
     &QWEN3_8B,
     &QWEN35_9B,

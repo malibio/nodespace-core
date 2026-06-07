@@ -1321,8 +1321,8 @@ mod tests {
     fn test_normalize_schema_id() {
         use crate::services::node_service::normalize_schema_id;
         assert_eq!(normalize_schema_id("Invoice"), "invoice");
-        assert_eq!(normalize_schema_id("Customer Profile"), "customer-profile");
-        assert_eq!(normalize_schema_id("code_block"), "code-block");
+        assert_eq!(normalize_schema_id("Customer Profile"), "customer_profile");
+        assert_eq!(normalize_schema_id("code_block"), "code_block");
         assert_eq!(normalize_schema_id("Project"), "project");
     }
 

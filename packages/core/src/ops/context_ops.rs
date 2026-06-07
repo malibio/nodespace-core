@@ -41,18 +41,19 @@ pub struct PlaybookInfo {
 
 /// Similarity threshold for schema semantic search.
 ///
-/// 0.4 is empirically chosen to suppress false matches from short or ambiguous
-/// queries while still catching clear synonyms (e.g. "clients" → `customer`).
-/// `skill_ops` uses 0.0 (no threshold) because that search is over a smaller,
-/// curated set of skill nodes; schemas are more numerous and noisier.
-const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.4;
+/// 0.2 is intentionally permissive — the full user message is embedded verbatim
+/// (not entity-extracted), so action-oriented phrasing like "Add an invoice for
+/// $500 due next Friday" produces a noisier embedding than a bare entity name.
+/// At 0.4 the Invoice schema was missed for that query. The MAX_SEMANTIC_SCHEMAS
+/// cap keeps the prompt compact even with a lower threshold.
+const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.2;
 
 /// Maximum number of schemas to inject per turn.
 ///
-/// Keeps the injected context compact. Three schemas cover the common case of a
-/// query that spans a primary type plus one or two related types; more would
-/// bloat the prompt for marginal gain.
-const MAX_SEMANTIC_SCHEMAS: usize = 3;
+/// Five covers the common multi-entity case (primary type + related types).
+/// The lower threshold above means more candidates pass; the cap keeps the
+/// injected ENTITY TYPES section from bloating in large workspaces.
+const MAX_SEMANTIC_SCHEMAS: usize = 5;
 
 /// Build workspace context by querying collections and playbooks.
 ///
