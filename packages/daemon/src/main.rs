@@ -328,8 +328,33 @@ async fn build_services(
     ))
 }
 
-/// Seed prompt, skill, and tool nodes on first launch. Idempotent — existing nodes are skipped.
+/// Seed prompt, skill, and tool nodes on startup.
+///
+/// Skill and prompt nodes are wiped and reseeded every startup so that
+/// instruction updates in code take effect on existing databases without a
+/// manual DB reset (issue #1368). Tool nodes are left untouched — they carry
+/// only handler metadata that doesn't change between runs.
 async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
+    // Wipe skill and prompt nodes so updated markdown_content is always applied.
+    for node_type in &["skill", "prompt"] {
+        let filter = nodespace_core::models::NodeFilter {
+            node_type: Some(node_type.to_string()),
+            ..Default::default()
+        };
+        match node_service.query_nodes(filter).await {
+            Ok(nodes) => {
+                for node in nodes {
+                    if let Err(e) = node_service.delete_node_unchecked(&node.id).await {
+                        tracing::warn!(error = %e, node_id = %node.id, node_type, "Failed to wipe seed node");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, node_type, "Failed to query nodes for wipe-reseed")
+            }
+        }
+    }
+
     let prompt_templates = PromptAssembler::seed_prompt_nodes();
     let skill_templates = seed_skill_nodes();
     let tool_templates = seed_tool_nodes();

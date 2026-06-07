@@ -85,24 +85,53 @@ LISTING BY TYPE OR PROPERTY: To list all nodes of a type or filtered by a proper
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Node Creation Guidance
+
+When creating a new node or record:
+
+CALL create_node ONCE: Gather all needed values from the user message, then call create_node in a single call. Do not search before creating unless you need an existing node's ID (e.g. to set a relationship field).
+
+TYPE MAPPING FROM schema_metadata: When search_skills returned schema_metadata for this skill, set node_type to the type_id from that metadata (e.g. "invoice", "customer", "project"). For generic text notes use node_type="text". For tasks use node_type="task".
+
+REQUIRED FIELDS: Read the fields array from schema_metadata. Required fields (required=true) MUST be included in the properties map. Optional fields should be included if the user provided a value for them.
+
+TITLE: The node title is the content field. If schema_metadata has a title_template, the title is auto-generated from properties — set content to a brief descriptive label (e.g. the most identifying property value). If there is no title_template, set content to the best human-readable name the user provided.
+
+PROPERTY KEYS: Use the field name exactly as it appears in schema_metadata fields[].name. Do NOT add namespace prefixes for schema-defined fields.
+
+EXAMPLE — create an invoice for $500 due next Friday (schema_metadata type_id="invoice"):
+{
+  "node_type": "invoice",
+  "content": "Invoice #001",
+  "properties": {
+    "amount": 500,
+    "due_date": "2026-06-14",
+    "status": "draft"
+  }
+}
+
+SUCCESS: After create_node returns a node ID, confirm to the user what was created. Do NOT call get_node or search afterwards — the create response is sufficient."#.to_string(),
         },
         NodeTemplate {
             title: "Schema Creation".to_string(),
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Define a new entity type or schema with custom fields, enums, and relationships. Use when user says 'new type', 'node type', 'define fields', 'create schema', or wants to design a new kind of entity like Project, Customer, or Invoice.",
-                "tool_whitelist": ["create_schema", "get_node"],
+                "description": "Define a new entity type or schema with custom fields, enums, and relationships, or modify an existing schema. Use when user says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice.",
+                "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Schema Creation Guidance
+            markdown_content: r#"# Schema Creation & Editing Guidance
 
-When creating a schema:
+CREATING A SCHEMA — call create_schema:
 
 ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "Invoice", do not also create "Customer" or "Product"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.
+
+EDITING A SCHEMA — call update_schema:
+
+When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.
 
 FIELDS: Only define type-specific fields. Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field. EXCEPTION: if you use a 'name' placeholder in title_template (e.g. "{name} ({status})"), you MUST define 'name' as a text field so title generation works. A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
 
@@ -174,7 +203,19 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Graph Editing Guidance
+
+When updating an existing node:
+
+FIND THEN UPDATE: If you don't have the node's ID, call search_nodes or search_semantic first to locate it. Then call update_node with the ID and only the fields that need changing.
+
+TASK STATUS: To change a task's status (open, in_progress, done, cancelled), call update_task_status with the task ID and the new status string. Do NOT use update_node for task status changes.
+
+update_node FIELDS: Pass only the properties that need to change. Omit properties that should stay the same. Use the exact property key from the node's schema.
+
+CONTENT vs PROPERTIES: Use the content field to update the node's title/main text. Use properties for typed fields (status, due_date, amount, etc.).
+
+SUCCESS: After update_node or update_task_status returns, confirm the change to the user. Do NOT re-fetch the node to confirm — the update response confirms success."#.to_string(),
         },
         NodeTemplate {
             title: "Relationship Management".to_string(),
@@ -187,7 +228,17 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Relationship Management Guidance
+
+When linking nodes or exploring connections:
+
+CREATING A RELATIONSHIP: Call create_relationship with the source node ID, target node ID, and a relation_type label (e.g. "has_task", "billed_to", "related_to"). Both node IDs must exist — search for them first if you don't have them.
+
+TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relation_type to narrow results.
+
+FIND BEFORE LINK: If the user says "link X to Y" and you don't have both IDs, call search_semantic or search_nodes once per entity to resolve them, then call create_relationship.
+
+SUCCESS: After create_relationship returns, confirm the link to the user. Do NOT call get_related_nodes to verify — the create response confirms success."#.to_string(),
         },
         NodeTemplate {
             title: "Node Deletion".to_string(),
@@ -200,7 +251,15 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Node Deletion Guidance
+
+When deleting a node:
+
+FIND THEN DELETE: If you don't have the node's ID, call search_semantic or search_nodes to locate it. Confirm the title matches what the user described, then call delete_node with the ID.
+
+SINGLE DELETE: Call delete_node once per node. Do NOT batch or loop; if the user asks to delete multiple nodes, delete them one at a time and report after each.
+
+SUCCESS: After delete_node returns, confirm to the user what was deleted. Do NOT search again to verify deletion."#.to_string(),
         },
         NodeTemplate {
             title: "Bulk Import".to_string(),
@@ -213,7 +272,17 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Bulk Import Guidance
+
+When importing a document or creating multiple nodes from markdown:
+
+CALL create_nodes_from_markdown ONCE: Pass the markdown content directly. The tool parses headings into a node hierarchy — top-level headings become root nodes, sub-headings become children.
+
+COLLECTION: If the user specifies a collection or folder name, pass it as the collection parameter.
+
+NODE TYPE: Default to node_type="text" for general documents. Use a specific type if the user names one.
+
+SUCCESS: After create_nodes_from_markdown returns, report the number of nodes created. Do NOT follow up with search calls."#.to_string(),
         },
         NodeTemplate {
             title: "Organization".to_string(),
@@ -226,7 +295,15 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: String::new(),
+            markdown_content: r#"# Organization Guidance
+
+When organizing nodes into collections or categories:
+
+FIND THE NODE: If you don't have the node's ID, call search_semantic to locate it.
+
+ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". If the collection doesn't exist as a node yet, ask the user to create it first or create it with create_node(node_type="collection").
+
+SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#.to_string(),
         },
     ]
 }
@@ -324,6 +401,11 @@ mod tests {
                 "Skill '{}' must have max_iterations > 0",
                 seed.title
             );
+            assert!(
+                !seed.markdown_content.is_empty(),
+                "Skill '{}' must have non-empty markdown_content (instructions for the model)",
+                seed.title
+            );
         }
     }
 
@@ -367,6 +449,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn update_schema_is_reachable_via_search_skills() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        assert!(
+            tmpl_tool_whitelist(schema_skill).contains(&"update_schema".to_string()),
+            "update_schema must be in Schema Creation tool_whitelist so the model can reach it"
+        );
     }
 
     // -- Tool node seeding tests (issue #1353) --------------------------------
