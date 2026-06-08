@@ -66,8 +66,8 @@ Use this to pick the right tool when querying or searching:
 
 **`execute_query` is the primary tool for structured property queries.** Examples:
 - "find all my open tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])`
-- "tasks due tomorrow" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"YYYY-MM-DD"}], sorting=[{"field":"due_date","direction":"asc"}])`
-- "tasks due this week" → `execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<start>"},{"type":"property","operator":"lte","property":"due_date","value":"<end>"}])`
+- "tasks due tomorrow" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])`
+- "tasks due this week" → `execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<YYYY-MM-DD start>"},{"type":"property","operator":"lte","property":"due_date","value":"<YYYY-MM-DD end>"}])`
 - "high priority tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"priority","value":"high"}])`
 - "cancelled tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"cancelled"}])`
 
@@ -230,7 +230,7 @@ NodeSpace agents route tasks through named skills. Each skill has a focused set 
 | **Research & Search** | Search and explore the knowledge graph to find relevant information, discover connections, and answer questions about stored knowledge. |
 | **Node Creation** | Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type. |
 | **Schema Creation** | Define a new entity type or schema with custom fields, enums, and relationships, or modify an existing schema. Use when user says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice. |
-| **Graph Editing** | Modify existing nodes in the knowledge graph — update content, properties, titles, and metadata. For tasks, use `update_task_status` to change status. |
+| **Graph Editing** | Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use `update_task_status` to change status. |
 | **Relationship Management** | Create connections between nodes, explore relationships, and traverse the knowledge graph. |
 | **Node Deletion** | Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record. |
 | **Bulk Import** | Import documents and create node hierarchies from markdown. Use when user wants to import, bulk create, or create nodes from a markdown document. |
