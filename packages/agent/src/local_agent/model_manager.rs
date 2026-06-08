@@ -403,29 +403,29 @@ impl GgufModelManager {
 
     /// Get the recommended model based on system RAM.
     ///
-    /// Family choice (Gemma vs Ministral) is a user decision; size within a
-    /// family is RAM-based. This default returns Gemma 4 — our flagship — for
-    /// first-launch when no user choice has been made. Callers that already
-    /// know the user's preferred family should use [`Self::recommended_model_id_for`].
+    /// Returns Ministral 8B as the primary llama.cpp default. Ministral 8B
+    /// requires at least 16 GB RAM; on lower-RAM machines the 3B variant is
+    /// returned instead. Callers that already know the user's preferred family
+    /// should use [`Self::recommended_model_id_for`].
     fn recommended_model_id() -> &'static str {
-        Self::recommended_model_id_for(ModelFamily::Gemma4)
+        Self::recommended_model_id_for(ModelFamily::Ministral)
     }
 
     /// Recommend the appropriately-sized model within a given family for the
     /// current system's RAM.
     ///
-    /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_LARGE`], otherwise 3B.
+    /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_MEDIUM`] (16 GB), otherwise 3B.
     /// - `Gemma4`:    three-tier — 31B at or above [`RAM_THRESHOLD_LARGE`],
     ///   12B at or above [`RAM_THRESHOLD_MEDIUM`], otherwise E4B.
     /// - `Ollama`:    has no GGUF catalog entries; falls back to the default
-    ///   Gemma 4 recommendation.
+    ///   Ministral recommendation.
     pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
         let large = total_ram >= RAM_THRESHOLD_LARGE;
         let medium = total_ram >= RAM_THRESHOLD_MEDIUM;
         match family {
             ModelFamily::Ministral => {
-                if large {
+                if medium {
                     MINISTRAL_8B.id
                 } else {
                     MINISTRAL_3B.id
@@ -445,12 +445,10 @@ impl GgufModelManager {
             ModelFamily::Qwen36 => QWEN36_35B_A3B.id,
             ModelFamily::MistralSmall => MISTRAL_SMALL_3_2.id,
             ModelFamily::Ollama => {
-                if large {
-                    GEMMA_4_31B.id
-                } else if medium {
-                    GEMMA_4_12B.id
+                if medium {
+                    MINISTRAL_8B.id
                 } else {
-                    GEMMA_4_E4B.id
+                    MINISTRAL_3B.id
                 }
             }
         }
@@ -1194,7 +1192,7 @@ mod tests {
         let (mgr, _tmp) = test_manager();
         let rec = mgr.recommended_model().await.unwrap();
         assert!(
-            rec == "gemma-4-e4b-q4km" || rec == "gemma-4-12b-q4km" || rec == "gemma-4-31b-q4km",
+            rec == "ministral-3b-q4km" || rec == "ministral-8b-q4km",
             "unexpected recommendation: {}",
             rec
         );
@@ -1204,11 +1202,9 @@ mod tests {
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
         assert!(
-            spec.model_id == "gemma-4-e4b-q4km"
-                || spec.model_id == "gemma-4-12b-q4km"
-                || spec.model_id == "gemma-4-31b-q4km"
+            spec.model_id == "ministral-3b-q4km" || spec.model_id == "ministral-8b-q4km"
         );
-        assert_eq!(spec.family, ModelFamily::Gemma4);
+        assert_eq!(spec.family, ModelFamily::Ministral);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
     }

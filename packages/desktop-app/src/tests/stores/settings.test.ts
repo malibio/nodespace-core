@@ -24,7 +24,9 @@ describe('Settings Store', () => {
     display: {
       renderMarkdown: true,
       theme: 'light'
-    }
+    },
+    openAiConfigs: [],
+    defaultModelSelection: null,
   };
 
   beforeEach(() => {
@@ -40,11 +42,17 @@ describe('Settings Store', () => {
 
   describe('loadSettings', () => {
     it('should call invoke and set store', async () => {
-      mockInvoke.mockResolvedValueOnce(mockSettings);
+      // Backend only returns the persisted (non-localStorage) subset.
+      const backendSettings = {
+        activeDatabasePath: mockSettings.activeDatabasePath,
+        display: mockSettings.display,
+      };
+      mockInvoke.mockResolvedValueOnce(backendSettings);
 
       await loadSettings();
 
       expect(mockInvoke).toHaveBeenCalledWith('get_settings');
+      // Store merges backend fields with localStorage defaults.
       expect(get(appSettings)).toEqual(mockSettings);
     });
 

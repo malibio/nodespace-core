@@ -37,10 +37,12 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
     }
 }
 
-/// List all models in the catalog with their current status.
+/// List models in the catalog with their current status.
 ///
-/// Returns built-in GGUF models plus `ollama:`-prefixed models when the
-/// Ollama daemon is running.
+/// Returns a filtered set of GGUF models (Ministral 8B as the primary model,
+/// Ministral 3B as the low-RAM fallback) plus any `ollama:`-prefixed models
+/// when the Ollama daemon is running. Other GGUF models remain in the Rust
+/// catalog for internal use but are not exposed to the frontend.
 #[tauri::command]
 pub async fn chat_model_list(
     grpc: State<'_, GrpcClient>,
@@ -55,6 +57,12 @@ pub async fn chat_model_list(
         .into_inner()
         .models
         .into_iter()
+        .filter(|entry| {
+            // Ollama models always pass through; GGUF models are filtered to
+            // the Ministral family only (8B primary, 3B low-RAM fallback).
+            entry.backend == "gguf" && entry.id.starts_with("ministral-")
+                || entry.backend != "gguf"
+        })
         .map(|entry| {
             serde_json::json!({
                 "id": entry.id,
