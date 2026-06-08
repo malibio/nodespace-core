@@ -60,8 +60,7 @@ pub async fn chat_model_list(
         .into_iter()
         .filter(|entry| {
             // Only Ministral 8B for the local GGUF path; all Ollama models pass through.
-            (entry.backend == "gguf" && entry.id == "ministral-8b-q4km")
-                || entry.backend != "gguf"
+            entry.backend != "gguf" || entry.id == "ministral-8b-q4km"
         })
         .map(|entry| {
             serde_json::json!({
