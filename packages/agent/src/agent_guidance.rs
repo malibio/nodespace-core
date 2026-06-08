@@ -34,6 +34,9 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool.\n\
+    - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
+    - SCHEMA CLAIMS WITHOUT VERIFICATION: Never state that a node type has or lacks a specific property (e.g. \"task has no due_date field\") without first calling a tool to verify. If you have not called get_node or search_nodes on the schema in this turn, you do not know its fields — say so.\n\
+    - IDENTICAL TOOL CALLS: Never call the same tool with the exact same arguments twice in one turn. If a tool returned a result and you are about to call it again identically, you already have the answer — produce your response using the result you have.\n\
     - For create_node (adding an instance): call search_skills(query) THEN immediately call create_node in the SAME turn — no text between them. After search_skills returns, your next step MUST be create_node, not a planning message.\n\
     - For create_schema (new entity type): call create_schema DIRECTLY — no search_skills needed. See DATABASE=SCHEMA rule above.\n\
     - SKILL COMPLETION: Once create_node, update_node, create_schema, or delete_node returns successfully, respond to the user immediately. Do NOT call search_skills again or call create_schema again — the task is done.\n\
@@ -75,6 +78,29 @@ mod tests {
         assert!(TOOL_STRATEGY_RULES.contains("TOOL STRATEGY:"));
         assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search_nodes first"));
         assert!(TOOL_STRATEGY_RULES.contains("Never skip the search step"));
+    }
+
+    #[test]
+    fn tool_strategy_rules_cover_issue_1374() {
+        // Meta-question accuracy (confabulation fix)
+        assert!(
+            TOOL_STRATEGY_RULES.contains("META QUESTIONS"),
+            "must instruct agent to answer meta-questions from conversation history only"
+        );
+        assert!(
+            TOOL_STRATEGY_RULES.contains("tool call history"),
+            "must refer to tool call history as the source of truth"
+        );
+        // Schema verification (hallucination fix)
+        assert!(
+            TOOL_STRATEGY_RULES.contains("SCHEMA CLAIMS WITHOUT VERIFICATION"),
+            "must prohibit unverified schema claims"
+        );
+        // Duplicate-call prevention (loop fix)
+        assert!(
+            TOOL_STRATEGY_RULES.contains("IDENTICAL TOOL CALLS"),
+            "must prohibit identical repeated tool calls"
+        );
     }
 
     #[test]
