@@ -1449,17 +1449,34 @@ fn parse_task_priority(value: &str) -> Result<TaskPriority, String> {
 fn parse_optional_timestamp(
     wrapper: Option<OptionalTimestampClear>,
     field_name: &str,
-) -> Result<Option<Option<DateTime<Utc>>>, String> {
+) -> Result<Option<Option<String>>, String> {
     match wrapper {
         None => Ok(None),
         Some(w) if w.clear => Ok(Some(None)),
         Some(w) => {
-            let parsed = DateTime::parse_from_rfc3339(&w.value)
-                .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| format!("Invalid RFC3339 timestamp for {}: {}", field_name, e))?;
-            Ok(Some(Some(parsed)))
+            let date_str = normalize_date_for_storage(&w.value).ok_or_else(|| {
+                format!(
+                    "Invalid date format for {}: '{}'. Expected YYYY-MM-DD or ISO8601",
+                    field_name, w.value
+                )
+            })?;
+            Ok(Some(Some(date_str)))
         }
     }
+}
+
+fn normalize_date_for_storage(s: &str) -> Option<String> {
+    use chrono::NaiveDate;
+    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return Some(s.to_string());
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.format("%Y-%m-%d").to_string());
+    }
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return Some(dt.format("%Y-%m-%d").to_string());
+    }
+    None
 }
 
 #[cfg(test)]

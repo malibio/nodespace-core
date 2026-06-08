@@ -1,10 +1,23 @@
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, Utc};
 use std::str::FromStr;
 
 use crate::ai_chat::{AiChatMessage, AiChatNode};
 use crate::node::Node;
 use crate::schema::SchemaNode;
 use crate::task::{TaskNode, TaskPriority, TaskStatus};
+
+fn normalize_date_field(s: &str) -> String {
+    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return s.to_string();
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    s.to_string()
+}
 
 /// Convert a `Node` to its strongly-typed JSON representation for the frontend.
 ///
@@ -98,8 +111,7 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .get("dueDate")
         .or_else(|| props.get("due_date"))
         .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        .map(normalize_date_field);
 
     let assignee = props
         .get("assignee")
@@ -111,15 +123,13 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .get("startedAt")
         .or_else(|| props.get("started_at"))
         .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        .map(normalize_date_field);
 
     let completed_at = props
         .get("completedAt")
         .or_else(|| props.get("completed_at"))
         .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        .map(normalize_date_field);
 
     let lifecycle_status = node.lifecycle_status.clone();
     let task = TaskNode {

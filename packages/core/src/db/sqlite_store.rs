@@ -1,13 +1,29 @@
 use crate::db::fractional_ordering::FractionalOrderCalculator;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+
+/// Normalise a stored date string to YYYY-MM-DD on read.
+/// Accepts YYYY-MM-DD (pass-through) or RFC 3339 (extract date portion).
+/// Returns the original string for unrecognised values so callers can surface them.
+fn normalize_date_field(s: &str) -> String {
+    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return s.to_string();
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    s.to_string()
+}
 
 const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
 /// KNN over-fetch factor: vec0 returns top-k *chunks*, but search results are grouped
@@ -2172,7 +2188,7 @@ impl SqliteStore {
                 due_date: task_props
                     .get("due_date")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok()),
+                    .map(normalize_date_field),
                 assignee: task_props
                     .get("assignee")
                     .and_then(|v| v.as_str())
@@ -2180,11 +2196,11 @@ impl SqliteStore {
                 started_at: task_props
                     .get("started_at")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok()),
+                    .map(normalize_date_field),
                 completed_at: task_props
                     .get("completed_at")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok()),
+                    .map(normalize_date_field),
             })
         }))
     }
@@ -2235,9 +2251,8 @@ impl SqliteStore {
         }
         if let Some(ref due_date_opt) = update.due_date {
             match due_date_opt {
-                Some(dt) => {
-                    task_obj_owned
-                        .insert("due_date".to_string(), serde_json::json!(dt.to_rfc3339()));
+                Some(s) => {
+                    task_obj_owned.insert("due_date".to_string(), serde_json::json!(s));
                 }
                 None => {
                     task_obj_owned.remove("due_date");
@@ -2256,9 +2271,8 @@ impl SqliteStore {
         }
         if let Some(ref started_at_opt) = update.started_at {
             match started_at_opt {
-                Some(dt) => {
-                    task_obj_owned
-                        .insert("started_at".to_string(), serde_json::json!(dt.to_rfc3339()));
+                Some(s) => {
+                    task_obj_owned.insert("started_at".to_string(), serde_json::json!(s));
                 }
                 None => {
                     task_obj_owned.remove("started_at");
@@ -2267,11 +2281,8 @@ impl SqliteStore {
         }
         if let Some(ref completed_at_opt) = update.completed_at {
             match completed_at_opt {
-                Some(dt) => {
-                    task_obj_owned.insert(
-                        "completed_at".to_string(),
-                        serde_json::json!(dt.to_rfc3339()),
-                    );
+                Some(s) => {
+                    task_obj_owned.insert("completed_at".to_string(), serde_json::json!(s));
                 }
                 None => {
                     task_obj_owned.remove("completed_at");

@@ -748,9 +748,9 @@ fn task_update_to_proto(id: &str, version: i64, update: TaskNodeUpdate) -> Updat
                 clear: true,
                 value: String::new(),
             },
-            Some(dt) => OptionalTimestampClear {
+            Some(s) => OptionalTimestampClear {
                 clear: false,
-                value: dt.to_rfc3339(),
+                value: s,
             },
         }),
         assignee: update.assignee.map(|opt| match opt {
@@ -768,9 +768,9 @@ fn task_update_to_proto(id: &str, version: i64, update: TaskNodeUpdate) -> Updat
                 clear: true,
                 value: String::new(),
             },
-            Some(dt) => OptionalTimestampClear {
+            Some(s) => OptionalTimestampClear {
                 clear: false,
-                value: dt.to_rfc3339(),
+                value: s,
             },
         }),
         completed_at: update.completed_at.map(|opt| match opt {
@@ -778,9 +778,9 @@ fn task_update_to_proto(id: &str, version: i64, update: TaskNodeUpdate) -> Updat
                 clear: true,
                 value: String::new(),
             },
-            Some(dt) => OptionalTimestampClear {
+            Some(s) => OptionalTimestampClear {
                 clear: false,
-                value: dt.to_rfc3339(),
+                value: s,
             },
         }),
         content: update.content,

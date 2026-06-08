@@ -120,13 +120,13 @@ pub struct TaskNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<TaskPriority>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub due_date: Option<DateTime<Utc>>,
+    pub due_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<DateTime<Utc>>,
+    pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<String>,
 }
 
 /// Partial update for task-specific properties, received from the frontend.
@@ -142,7 +142,7 @@ pub struct TaskNodeUpdate {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub due_date: Option<Option<DateTime<Utc>>>,
+    pub due_date: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Option<String>>,
     #[serde(
@@ -150,13 +150,13 @@ pub struct TaskNodeUpdate {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub started_at: Option<Option<DateTime<Utc>>>,
+    pub started_at: Option<Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub completed_at: Option<Option<DateTime<Utc>>>,
+    pub completed_at: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
 }
@@ -173,34 +173,31 @@ pub struct TaskNodeUpdate {
 /// the intermediate which caused JSON `null` to map to `None` (no-op) instead
 /// of `Some(None)` (clear). This is the corrected implementation.
 pub(crate) mod flexible_date {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use chrono::{DateTime, NaiveDate, Utc};
     use serde::{Deserialize, Deserializer};
 
     pub fn deserialize_with_null<'de, D>(
         deserializer: D,
-    ) -> Result<Option<Option<DateTime<Utc>>>, D::Error>
+    ) -> Result<Option<Option<String>>, D::Error>
     where
         D: Deserializer<'de>,
     {
         let opt: Option<String> = Option::deserialize(deserializer)?;
         match opt {
             None => Ok(Some(None)),
-            Some(s) => parse_date_string(&s).map_err(serde::de::Error::custom),
+            Some(s) => normalize_to_date(&s).map_err(serde::de::Error::custom),
         }
     }
 
-    fn parse_date_string(s: &str) -> Result<Option<Option<DateTime<Utc>>>, String> {
+    fn normalize_to_date(s: &str) -> Result<Option<Option<String>>, String> {
+        if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+            return Ok(Some(Some(s.to_string())));
+        }
         if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-            return Ok(Some(Some(dt.with_timezone(&Utc))));
+            return Ok(Some(Some(dt.format("%Y-%m-%d").to_string())));
         }
         if let Ok(dt) = s.parse::<DateTime<Utc>>() {
-            return Ok(Some(Some(dt)));
-        }
-        if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-            let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-            return Ok(Some(Some(DateTime::from_naive_utc_and_offset(
-                datetime, Utc,
-            ))));
+            return Ok(Some(Some(dt.format("%Y-%m-%d").to_string())));
         }
         Err(format!(
             "Invalid date format: '{}'. Expected YYYY-MM-DD or ISO8601",
@@ -228,16 +225,37 @@ mod tests {
     }
 
     #[test]
-    fn task_node_update_iso8601_due_date() {
+    fn task_node_update_iso8601_due_date_normalizes_to_date_only() {
         let json = r#"{"dueDate": "2025-06-15T00:00:00Z"}"#;
         let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
-        assert!(matches!(update.due_date, Some(Some(_))));
+        assert_eq!(update.due_date, Some(Some("2025-06-15".to_string())));
     }
 
     #[test]
-    fn task_node_update_date_only_due_date() {
+    fn task_node_update_date_only_due_date_passes_through() {
         let json = r#"{"dueDate": "2025-06-15"}"#;
         let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
-        assert!(matches!(update.due_date, Some(Some(_))));
+        assert_eq!(update.due_date, Some(Some("2025-06-15".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_iso8601_started_at_normalizes() {
+        let json = r#"{"startedAt": "2025-06-15T08:30:00Z"}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.started_at, Some(Some("2025-06-15".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_iso8601_completed_at_normalizes() {
+        let json = r#"{"completedAt": "2025-06-16T23:59:59Z"}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.completed_at, Some(Some("2025-06-16".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_null_started_at_clears() {
+        let json = r#"{"startedAt": null}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.started_at, Some(None));
     }
 }
