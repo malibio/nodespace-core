@@ -1,7 +1,14 @@
 import type { Node } from './node';
 
 export type AiChatStatus = 'active' | 'processing' | 'archived';
-export type AiChatProvider = 'native' | 'ollama' | 'openai' | 'pty';
+export type AiChatProvider = 'native' | 'ollama' | 'openai' | 'openai-compat' | 'pty';
+
+export interface OpenAiCompatConfig {
+  id: string;       // uuid, generated client-side
+  name: string;     // user-provided display name
+  baseUrl: string;  // e.g. "https://api.openai.com/v1"
+  apiKey: string;   // stored locally
+}
 
 export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system';

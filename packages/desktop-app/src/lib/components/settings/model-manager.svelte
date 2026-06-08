@@ -1,38 +1,160 @@
 <script lang="ts">
+  /* global HTMLSelectElement */
   import { onMount } from 'svelte';
   import { modelStore, formatBytes } from '$lib/stores/model-store.svelte';
+  import {
+    getOpenAiConfigs,
+    saveOpenAiConfigs,
+    getDefaultModelSelection,
+    saveDefaultModelSelection,
+    type ModelSelection,
+  } from '$lib/stores/settings';
+  import { ollamaAvailable, chatModelList } from '$lib/services/tauri-commands';
+  import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ModelManager');
 
+  // --- Local model state (Ministral 8B only) ---
   const models = $derived(modelStore.models);
   const downloadProgress = $derived(modelStore.downloadProgress);
-  const loadedModelId = $derived(modelStore.loadedModelId);
-  const recommendedModel = $derived(modelStore.recommendedModel);
   const isLoading = $derived(modelStore.isLoading);
   const systemRamGb = $derived(modelStore.systemRamGb);
+  const MIN_RAM_GB = 16;
+  const ramTooLow = $derived(systemRamGb > 0 && systemRamGb < MIN_RAM_GB);
 
-  onMount(() => {
-    if (models.length === 0) {
-      modelStore.refreshModels();
+  // We only show Ministral models in settings (catalog is already filtered at Tauri layer)
+  const localModels = $derived(models.filter((m) => m.family === 'ministral'));
+
+  // --- Ollama state ---
+  let ollamaRunning = $state(false);
+  let ollamaModels = $state<{ id: string; name: string }[]>([]);
+  let ollamaChecking = $state(true);
+
+  // --- OpenAI-compat configs ---
+  let openAiConfigs = $state<OpenAiCompatConfig[]>([]);
+  let editingConfig = $state<OpenAiCompatConfig | null>(null);
+  let editForm = $state({ name: '', baseUrl: '', apiKey: '' });
+  let isNewConfig = $state(false);
+
+  // --- Default model ---
+  let defaultModel = $state<ModelSelection | null>(null);
+  let availableSelectionsForDefault = $state<{ label: string; value: string }[]>([]);
+
+  function encodeSelection(s: ModelSelection): string {
+    // openai-compat: "openai-compat:<uuid>" (configId == modelId, no need to append twice)
+    // ollama: raw daemon ID, e.g. "ollama:llama3.2:latest" — stored as-is
+    // native: "native:<model-id>"
+    if (s.provider === 'openai-compat') return `openai-compat:${s.configId ?? s.modelId}`;
+    if (s.provider === 'ollama') return s.modelId; // already "ollama:<name>"
+    return `native:${s.modelId}`;
+  }
+  function decodeSelection(v: string): ModelSelection | null {
+    if (v.startsWith('native:')) {
+      return { provider: 'native', modelId: v.slice('native:'.length) };
     }
-    log.debug('ModelManager mounted');
+    if (v.startsWith('openai-compat:')) {
+      const configId = v.slice('openai-compat:'.length);
+      return { provider: 'openai-compat', modelId: configId, configId };
+    }
+    if (v.startsWith('ollama:')) {
+      // Full daemon ID including any colons in the Ollama model name.
+      return { provider: 'ollama', modelId: v };
+    }
+    return null;
+  }
+
+  onMount(async () => {
+    if (models.length === 0) modelStore.refreshModels();
+    openAiConfigs = getOpenAiConfigs();
+    defaultModel = getDefaultModelSelection();
+
+    ollamaChecking = true;
+    try {
+      ollamaRunning = await ollamaAvailable();
+      if (ollamaRunning) {
+        const list = await chatModelList();
+        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => ({ id: m.id, name: m.name }));
+      }
+    } catch (e) {
+      log.warn('Ollama check failed', e);
+      ollamaRunning = false;
+    } finally {
+      ollamaChecking = false;
+    }
+
+    buildDefaultOptions();
   });
 
-  async function handleDownload(modelId: string) {
-    await modelStore.downloadModel(modelId);
+  function buildDefaultOptions() {
+    const opts: { label: string; value: string }[] = [];
+    // Local models
+    for (const m of models.filter((m) => m.family === 'ministral')) {
+      if (m.status.status === 'ready' || m.status.status === 'loaded') {
+        opts.push({ label: `Local — ${m.name}`, value: encodeSelection({ provider: 'native', modelId: m.id }) });
+      }
+    }
+    // Ollama models — use daemon ID (already "ollama:<name>") as modelId
+    for (const m of ollamaModels) {
+      opts.push({ label: `Ollama — ${m.name}`, value: encodeSelection({ provider: 'ollama', modelId: m.id }) });
+    }
+    // OpenAI-compat configs
+    for (const c of openAiConfigs) {
+      opts.push({ label: c.name, value: encodeSelection({ provider: 'openai-compat', modelId: c.id, configId: c.id }) });
+    }
+    availableSelectionsForDefault = opts;
   }
 
-  async function handleLoad(modelId: string) {
-    await modelStore.loadModel(modelId);
+  // --- OpenAI-compat CRUD ---
+  function startAdd() {
+    isNewConfig = true;
+    editForm = { name: '', baseUrl: '', apiKey: '' };
+    editingConfig = { id: globalThis.crypto.randomUUID(), name: '', baseUrl: '', apiKey: '' };
   }
 
-  async function handleUnload() {
-    await modelStore.unloadModel();
+  function startEdit(config: OpenAiCompatConfig) {
+    isNewConfig = false;
+    editingConfig = config;
+    editForm = { name: config.name, baseUrl: config.baseUrl, apiKey: config.apiKey };
   }
 
-  async function handleDelete(modelId: string) {
-    await modelStore.deleteModel(modelId);
+  function saveConfig() {
+    if (!editingConfig) return;
+    const updated = { ...editingConfig, ...editForm };
+    if (isNewConfig) {
+      openAiConfigs = [...openAiConfigs, updated];
+    } else {
+      openAiConfigs = openAiConfigs.map((c) => (c.id === updated.id ? updated : c));
+    }
+    saveOpenAiConfigs(openAiConfigs);
+    editingConfig = null;
+    buildDefaultOptions();
+  }
+
+  function deleteConfig(id: string) {
+    openAiConfigs = openAiConfigs.filter((c) => c.id !== id);
+    saveOpenAiConfigs(openAiConfigs);
+    if (defaultModel?.configId === id) {
+      defaultModel = null;
+      saveDefaultModelSelection(null);
+    }
+    buildDefaultOptions();
+  }
+
+  function cancelEdit() {
+    editingConfig = null;
+  }
+
+  function handleDefaultChange(e: Event) {
+    const val = (e.target as HTMLSelectElement).value;
+    if (!val) {
+      defaultModel = null;
+      saveDefaultModelSelection(null);
+      return;
+    }
+    const decoded = decodeSelection(val);
+    defaultModel = decoded;
+    saveDefaultModelSelection(decoded);
   }
 
   function getStatusLabel(status: string): string {
@@ -47,7 +169,7 @@
     }
   }
 
-  function getStatusColor(status: string): string {
+  function getStatusClass(status: string): string {
     switch (status) {
       case 'loaded': return 'status-loaded';
       case 'ready': return 'status-ready';
@@ -60,261 +182,305 @@
 </script>
 
 <div class="model-manager">
-  <div class="model-manager-header">
-    <h3>Local Models</h3>
-    <button class="refresh-button" onclick={() => modelStore.refreshModels()} disabled={isLoading} aria-label="Refresh models">
-      <svg class:spinning={isLoading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-      </svg>
-    </button>
-  </div>
 
-  {#if models.length === 0 && !isLoading}
-    <div class="empty-state">
-      <p>No models in catalog. Click refresh to load available models.</p>
+  <!-- ── Local ──────────────────────────────────────────────────── -->
+  <section class="mm-section">
+    <div class="mm-section-header">
+      <h3>Local</h3>
+      <button
+        class="refresh-btn"
+        onclick={() => modelStore.refreshModels()}
+        disabled={isLoading}
+        aria-label="Refresh"
+      >
+        <svg class:spinning={isLoading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+        </svg>
+      </button>
     </div>
-  {:else}
-    <div class="model-list">
-      {#each models as model (model.id)}
-        {@const isRecommended = recommendedModel?.id === model.id}
-        {@const isLoaded = model.id === loadedModelId}
-        {@const progress = downloadProgress[model.id]}
 
-        {@const insufficientRam = systemRamGb > 0 && model.min_memory_gb > 0 && systemRamGb < model.min_memory_gb}
-        <div class="model-card" class:model-loaded={isLoaded} class:model-insufficient-ram={insufficientRam}>
-          <div class="model-card-header">
-            <div class="model-card-title">
-              <span class="model-name">{model.name}</span>
-              {#if isRecommended}
-                <span class="recommended-badge">Recommended</span>
-              {/if}
+    {#if ramTooLow}
+      <p class="mm-notice mm-notice--warn">
+        Your machine has {systemRamGb} GB RAM. Local models require at least {MIN_RAM_GB} GB.
+        Use Ollama or an external provider instead.
+      </p>
+    {/if}
+
+    {#if localModels.length === 0 && !isLoading}
+      <p class="mm-empty">No local models found.</p>
+    {:else}
+      {#each localModels as m (m.id)}
+        {@const progress = downloadProgress[m.id]}
+        <div class="model-card" class:model-card--dim={ramTooLow}>
+          <div class="model-card-top">
+            <div class="model-card-info">
+              <span class="model-name">{m.name}</span>
+              <span class="model-meta">
+                {formatBytes(m.size_bytes)}{m.quantization ? ` · ${m.quantization}` : ''}
+                {#if m.min_memory_gb > 0} · Requires {m.min_memory_gb} GB RAM{/if}
+              </span>
             </div>
-            <span class="status-badge {getStatusColor(model.status.status)}">
-              {getStatusLabel(model.status.status)}
+            <span class="status-badge {getStatusClass(m.status.status)}">
+              {getStatusLabel(m.status.status)}
             </span>
           </div>
 
-          <div class="model-card-meta">
-            <span>{formatBytes(model.size_bytes)}</span>
-            <span>&middot;</span>
-            <span>{model.quantization}</span>
-            {#if model.min_memory_gb > 0}
-              <span>&middot;</span>
-              <span>Requires {model.min_memory_gb} GB RAM</span>
-              {#if insufficientRam}
-                <span class="ram-warning-chip">Insufficient RAM</span>
-              {/if}
-            {/if}
-          </div>
-
           {#if progress !== undefined}
-            <div class="model-progress">
-              <div class="progress-bar">
-                <div class="progress-fill" style="width: {progress}%"></div>
-              </div>
-              <span class="progress-text">{Math.round(progress)}%</span>
+            <div class="progress-row">
+              <div class="progress-bar"><div class="progress-fill" style="width: {progress}%"></div></div>
+              <span class="progress-label">{Math.round(progress)}%</span>
             </div>
           {/if}
 
           <div class="model-card-actions">
-            {#if model.status.status === 'not_downloaded'}
-              <button class="action-button primary" onclick={() => handleDownload(model.id)}>
-                Download
-              </button>
-            {:else if model.status.status === 'downloading'}
-              <button class="action-button" onclick={() => modelStore.cancelDownload(model.id)}>
-                Cancel
-              </button>
-            {:else if model.status.status === 'ready'}
-              <button class="action-button primary" onclick={() => handleLoad(model.id)}>
-                Load
-              </button>
-              <button class="action-button destructive" onclick={() => handleDelete(model.id)}>
-                Delete
-              </button>
-            {:else if model.status.status === 'loaded'}
-              <button class="action-button" onclick={handleUnload}>
-                Unload
-              </button>
-            {:else if model.status.status === 'error'}
-              <button class="action-button primary" onclick={() => handleDownload(model.id)}>
-                Retry
-              </button>
+            {#if m.status.status === 'not_downloaded'}
+              <button class="btn btn--primary" disabled={ramTooLow} onclick={() => modelStore.downloadModel(m.id)}>Download</button>
+            {:else if m.status.status === 'downloading'}
+              <button class="btn" onclick={() => modelStore.cancelDownload(m.id)}>Cancel</button>
+            {:else if m.status.status === 'ready'}
+              <button class="btn btn--ghost btn--danger" onclick={() => modelStore.deleteModel(m.id)}>Delete</button>
+            {:else if m.status.status === 'loaded'}
+              <button class="btn" onclick={() => modelStore.unloadModel()}>Unload</button>
+            {:else if m.status.status === 'error'}
+              <button class="btn btn--primary" onclick={() => modelStore.downloadModel(m.id)}>Retry</button>
             {/if}
           </div>
         </div>
       {/each}
+    {/if}
+  </section>
+
+  <hr class="mm-divider" />
+
+  <!-- ── Ollama ─────────────────────────────────────────────────── -->
+  <section class="mm-section">
+    <h3>Ollama</h3>
+
+    {#if ollamaChecking}
+      <p class="mm-empty">Checking…</p>
+    {:else if ollamaRunning}
+      <p class="mm-notice mm-notice--ok">Running at localhost:11434</p>
+      {#if ollamaModels.length === 0}
+        <p class="mm-empty">No models found in Ollama.</p>
+      {:else}
+        <ul class="ollama-list">
+          {#each ollamaModels as m (m.id)}
+            <li class="ollama-item">{m.name}</li>
+          {/each}
+        </ul>
+      {/if}
+    {:else}
+      <p class="mm-notice">
+        Ollama is not running.
+        <a href="https://ollama.com/" target="_blank" rel="noopener noreferrer" class="mm-link">Download and install Ollama</a>
+      </p>
+    {/if}
+  </section>
+
+  <hr class="mm-divider" />
+
+  <!-- ── OpenAI-compatible ──────────────────────────────────────── -->
+  <section class="mm-section">
+    <div class="mm-section-header">
+      <h3>OpenAI-compatible providers</h3>
+      <button class="btn btn--primary btn--sm" onclick={startAdd}>Add</button>
     </div>
-  {/if}
+
+    {#if openAiConfigs.length === 0 && !editingConfig}
+      <p class="mm-empty">No providers configured. Add an API key to use external models.</p>
+    {/if}
+
+    {#each openAiConfigs as config (config.id)}
+      <div class="config-card">
+        <div class="config-card-info">
+          <span class="config-name">{config.name}</span>
+          <span class="config-url">{config.baseUrl}</span>
+        </div>
+        <div class="config-card-actions">
+          <button class="btn btn--sm" onclick={() => startEdit(config)}>Edit</button>
+          <button class="btn btn--sm btn--ghost btn--danger" onclick={() => deleteConfig(config.id)}>Remove</button>
+        </div>
+      </div>
+    {/each}
+
+    {#if editingConfig}
+      <div class="config-form">
+        <h4 class="config-form-title">{isNewConfig ? 'Add provider' : 'Edit provider'}</h4>
+        <label class="form-label">
+          Name
+          <input class="form-input" type="text" bind:value={editForm.name} placeholder="e.g. My OpenAI Key" />
+        </label>
+        <label class="form-label">
+          Base URL
+          <input class="form-input" type="url" bind:value={editForm.baseUrl} placeholder="https://api.openai.com/v1" />
+        </label>
+        <label class="form-label">
+          API Key
+          <input class="form-input" type="password" bind:value={editForm.apiKey} placeholder="sk-…" />
+        </label>
+        <div class="form-actions">
+          <button class="btn btn--primary btn--sm" onclick={saveConfig} disabled={!editForm.name || !editForm.baseUrl}>Save</button>
+          <button class="btn btn--sm" onclick={cancelEdit}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </section>
+
+  <hr class="mm-divider" />
+
+  <!-- ── Default model ─────────────────────────────────────────── -->
+  <section class="mm-section">
+    <h3>Default model</h3>
+    <p class="mm-desc">New conversations start with this model pre-selected.</p>
+    {#if availableSelectionsForDefault.length === 0}
+      <p class="mm-empty">No ready models available. Download a local model or add a provider above.</p>
+    {:else}
+      <select
+        class="form-select"
+        value={defaultModel ? encodeSelection(defaultModel) : ''}
+        onchange={handleDefaultChange}
+      >
+        <option value="">None</option>
+        {#each availableSelectionsForDefault as opt (opt.value)}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+    {/if}
+  </section>
+
 </div>
 
 <style>
   .model-manager {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0;
   }
 
-  .model-manager-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .model-manager-header h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    margin: 0;
-    color: hsl(var(--foreground));
-  }
-
-  .refresh-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    border-radius: 0.375rem;
-    border: 1px solid hsl(var(--border));
-    background: hsl(var(--background));
-    cursor: pointer;
-    color: hsl(var(--muted-foreground));
-    transition: color 0.15s;
-  }
-
-  .refresh-button:hover:not(:disabled) {
-    color: hsl(var(--foreground));
-  }
-
-  .refresh-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .spinning {
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 2rem 1rem;
-    color: hsl(var(--muted-foreground));
-    font-size: 0.875rem;
-  }
-
-  .empty-state p {
-    margin: 0;
-  }
-
-  .model-list {
+  .mm-section {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    padding: 1.5rem 0;
   }
 
+  .mm-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .mm-section h3 {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .mm-section h4.config-form-title {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .mm-divider {
+    border: none;
+    border-top: 1px solid hsl(var(--border));
+    margin: 0;
+  }
+
+  .mm-notice {
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+    margin: 0;
+  }
+
+  .mm-notice--warn {
+    color: hsl(32 95% 44%);
+    background: hsl(38 92% 50% / 0.08);
+    border: 1px solid hsl(38 92% 50% / 0.2);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .mm-notice--ok {
+    color: hsl(142 76% 36%);
+  }
+
+  .mm-link {
+    color: hsl(var(--primary));
+    text-decoration: underline;
+  }
+
+  .mm-empty {
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+    margin: 0;
+    font-style: italic;
+  }
+
+  .mm-desc {
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+    margin: 0;
+  }
+
+  /* Model card */
   .model-card {
     border: 1px solid hsl(var(--border));
     border-radius: 0.5rem;
-    padding: 1rem;
+    padding: 0.875rem 1rem;
     background: hsl(var(--background));
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
 
-  .model-loaded {
-    border-color: hsl(var(--primary) / 0.5);
-    background: hsl(var(--primary) / 0.03);
+  .model-card--dim {
+    opacity: 0.55;
   }
 
-  .model-insufficient-ram {
-    opacity: 0.6;
-  }
-
-  .model-card-header {
+  .model-card-top {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
 
-  .model-card-title {
+  .model-card-info {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
   }
 
   .model-name {
-    font-weight: 500;
     font-size: 0.875rem;
+    font-weight: 500;
     color: hsl(var(--foreground));
   }
 
-  .recommended-badge {
-    font-size: 0.6875rem;
-    background: hsl(var(--primary) / 0.1);
-    color: hsl(var(--primary));
-    padding: 0.0625rem 0.375rem;
-    border-radius: 9999px;
-    font-weight: 500;
+  .model-meta {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
   }
 
   .status-badge {
-    font-size: 0.75rem;
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    font-weight: 500;
     padding: 0.125rem 0.5rem;
     border-radius: 9999px;
-    font-weight: 500;
   }
 
-  .status-default {
-    background: hsl(var(--muted));
-    color: hsl(var(--muted-foreground));
-  }
+  .status-default { background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
+  .status-ready   { background: hsl(142 76% 36% / 0.1); color: hsl(142 76% 36%); }
+  .status-loaded  { background: hsl(var(--primary) / 0.1); color: hsl(var(--primary)); }
+  .status-progress { background: hsl(45 93% 47% / 0.1); color: hsl(45 93% 47%); }
+  .status-error   { background: hsl(var(--destructive) / 0.1); color: hsl(var(--destructive)); }
 
-  .status-ready {
-    background: hsl(142 76% 36% / 0.1);
-    color: hsl(142 76% 36%);
-  }
-
-  .status-loaded {
-    background: hsl(var(--primary) / 0.1);
-    color: hsl(var(--primary));
-  }
-
-  .status-progress {
-    background: hsl(45 93% 47% / 0.1);
-    color: hsl(45 93% 47%);
-  }
-
-  .status-error {
-    background: hsl(var(--destructive) / 0.1);
-    color: hsl(var(--destructive));
-  }
-
-  .model-card-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: 0.8125rem;
-    color: hsl(var(--muted-foreground));
-    flex-wrap: wrap;
-  }
-
-  .ram-warning-chip {
-    font-size: 0.6875rem;
-    background: hsl(var(--destructive) / 0.1);
-    color: hsl(var(--destructive));
-    padding: 0.0625rem 0.375rem;
-    border-radius: 9999px;
-    font-weight: 500;
-  }
-
-  .model-progress {
+  .progress-row {
     display: flex;
     align-items: center;
     gap: 0.625rem;
@@ -322,7 +488,7 @@
 
   .progress-bar {
     flex: 1;
-    height: 6px;
+    height: 5px;
     border-radius: 9999px;
     background: hsl(var(--muted));
     overflow: hidden;
@@ -335,52 +501,191 @@
     transition: width 0.2s ease;
   }
 
-  .progress-text {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: hsl(var(--foreground));
-    min-width: 2rem;
+  .progress-label {
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+    min-width: 2.5rem;
     text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   .model-card-actions {
     display: flex;
     gap: 0.5rem;
-    margin-top: 0.25rem;
   }
 
-  .action-button {
-    padding: 0.375rem 0.75rem;
+  /* Ollama list */
+  .ollama-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .ollama-item {
     font-size: 0.8125rem;
-    border-radius: 0.25rem;
+    color: hsl(var(--foreground));
+    padding: 0.375rem 0.625rem;
     border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--muted) / 0.3);
+  }
+
+  /* Config card */
+  .config-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+  }
+
+  .config-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+
+  .config-name {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  .config-url {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-card-actions {
+    display: flex;
+    gap: 0.375rem;
+    flex-shrink: 0;
+  }
+
+  /* Config form */
+  .config-form {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    padding: 1rem;
+    background: hsl(var(--muted) / 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .form-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  .form-input {
+    padding: 0.375rem 0.625rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
     background: hsl(var(--background));
     color: hsl(var(--foreground));
-    cursor: pointer;
+    font-size: 0.8125rem;
+    outline: none;
+  }
+
+  .form-input:focus {
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
+  }
+
+  .form-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  /* Default model select */
+  .form-select {
+    padding: 0.375rem 0.625rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.8125rem;
+    outline: none;
+    max-width: 24rem;
+  }
+
+  .form-select:focus {
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 0.375rem 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.8125rem;
     font-weight: 500;
-    transition: background 0.15s;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    white-space: nowrap;
   }
 
-  .action-button:hover {
-    background: hsl(var(--accent));
-  }
+  .btn:hover:not(:disabled) { background: hsl(var(--accent)); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .action-button.primary {
+  .btn--sm { padding: 0.25rem 0.625rem; font-size: 0.75rem; }
+
+  .btn--primary {
     background: hsl(var(--primary));
     color: hsl(var(--primary-foreground));
     border-color: hsl(var(--primary));
   }
+  .btn--primary:hover:not(:disabled) { opacity: 0.9; }
 
-  .action-button.primary:hover {
-    opacity: 0.9;
+  .btn--ghost {
+    border: none;
+    background: none;
+    color: hsl(var(--muted-foreground));
+  }
+  .btn--ghost:hover:not(:disabled) { background: hsl(var(--accent)); }
+
+  .btn--danger { color: hsl(var(--destructive)); }
+  .btn--danger:hover:not(:disabled) { background: hsl(var(--destructive) / 0.08); }
+
+  /* Refresh button */
+  .refresh-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    transition: color 0.15s;
   }
 
-  .action-button.destructive {
-    color: hsl(var(--destructive));
-    border-color: hsl(var(--destructive) / 0.5);
+  .refresh-btn:hover:not(:disabled) { color: hsl(var(--foreground)); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
-  .action-button.destructive:hover {
-    background: hsl(var(--destructive) / 0.1);
-  }
+  .spinning { animation: spin 1s linear infinite; }
 </style>

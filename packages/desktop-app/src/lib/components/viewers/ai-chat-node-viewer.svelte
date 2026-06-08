@@ -1,16 +1,15 @@
 <!--
   AiChatNodeViewer - Page-level viewer for AI chat conversation nodes
 
-  Per ADR-034, `ai-chat` is one node type with four provider modes. This is THE
-  single dispatcher for the type. It renders a header (title + provider dropdown)
+  Per ADR-034, `ai-chat` is one node type with multiple provider modes. This is THE
+  single dispatcher for the type. It renders a header (title + unified model selector)
   and routes on `properties.provider` (+ `properties.model`):
-    - unset                         → just the dropdown prompt (a fresh `/ai-chat`
-      node hasn't chosen a mode yet).
-    - pty                           → embedded terminal session (AiChatPtySession):
-      the terminal IS the node's viewer; capture backfills the node.
-    - native | ollama, no model     → model picker (AiChatModelPicker).
-    - native | ollama, with model   → message UI (chat input + streamed messages[]).
-    - openai                        → disabled in the dropdown (no backend yet).
+    - pty                           → embedded terminal session (AiChatPtySession).
+    - native | ollama | openai-compat → message UI (chat input + streamed messages[]).
+    - model not yet set             → prompt to select a model via the header selector.
+
+  The header selector (AiChatModelSelector) replaces the two-step provider → model
+  picker flow. It is locked (disabled) after the first user message is sent.
 
   Node-as-message-queue architecture: the node is the single source of truth.
   - Frontend only writes `updateNode` to append user messages.
@@ -22,41 +21,29 @@
 -->
 
 <script lang="ts">
-  /* global HTMLSelectElement */
   import { onMount, onDestroy, tick } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import ChatMessage from '$lib/components/chat/chat-message.svelte';
   import ChatInput from '$lib/components/chat/chat-input.svelte';
   import AiChatPtySession from './ai-chat-pty-session.svelte';
-  import AiChatModelPicker from './ai-chat-model-picker.svelte';
+  import AiChatModelSelector from './ai-chat-model-selector.svelte';
+  import type { ModelSelection } from './ai-chat-model-selector.svelte';
   import type { DisplayMessage } from '$lib/components/chat/types';
   import type { StreamingChunk } from '$lib/types/agent-types';
   import { AGENT_EVENTS } from '$lib/types/agent-types';
-  import type { AiChatNode, AiChatProvider } from '$lib/types/ai-chat-node';
+  import type { AiChatNode } from '$lib/types/ai-chat-node';
   import {
     localAgentCancelTurn,
     ensureModelReady,
-    ollamaAvailable,
   } from '$lib/services/tauri-commands';
   import { statusBar } from '$lib/stores/status-bar';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('AiChatNodeViewer');
 
-  /** Provider modes that render the message UI (ADR-034 modes 2a/2b/2c). */
-  const MESSAGE_PROVIDERS = ['native', 'ollama', 'openai'] as const;
-  type Provider = AiChatProvider;
-
-  const PROVIDER_OPTIONS: {
-    id: Provider;
-    label: string;
-    unavailable?: boolean;
-  }[] = [
-    { id: 'native', label: 'Built-in model' },
-    { id: 'ollama', label: 'Ollama' },
-    { id: 'openai', label: 'OpenAI endpoint', unavailable: true },
-    { id: 'pty', label: 'Agent (terminal)' },
-  ];
+  /** Provider modes that render the message UI. */
+  const MESSAGE_PROVIDERS = ['native', 'ollama', 'openai', 'openai-compat'] as const;
 
   let {
     nodeId,
@@ -72,8 +59,9 @@
   let streamingContent = $state('');
   let sendError = $state<string | null>(null);
   let nodeReady = $state(false);
-  let ollamaReady = $state(false);
   let eventUnlisteners: Array<() => void> = [];
+  /** True while ensureModelReady is running (may include download time for local models). */
+  let isEnsuringModel = $state(false);
 
   const SOFT_MESSAGE_CAP = 500;
 
@@ -89,6 +77,25 @@
 
   /** True while the daemon is processing an inference turn for this node. */
   const isProcessing = $derived(node?.status === 'processing');
+
+  /** True once the first user message has been sent — locks model selector. */
+  const hasMessages = $derived(
+    (node?.messages ?? []).filter((m) => m.role === 'user').length > 0
+  );
+
+  /**
+   * Value string for the AiChatModelSelector <select>.
+   * Mirrors the encoding used inside the component (provider:modelId).
+   */
+  const selectorCurrentValue = $derived(
+    provider && model
+      ? provider === 'openai-compat'
+        ? `openai-compat:${model}`    // model = config UUID
+        : provider === 'ollama'
+          ? model                      // model = full daemon ID "ollama:<name>"
+          : `native:${model}`
+      : ''
+  );
 
   /** Messages from the persisted node, mapped to DisplayMessage for rendering. */
   const persistedMessages: DisplayMessage[] = $derived.by(() => {
@@ -124,9 +131,36 @@
 
   const showMessageCap = $derived(persistedMessages.length >= SOFT_MESSAGE_CAP);
 
-  /** Persist a provider mode change onto the node. */
-  function selectProvider(p: Provider): void {
-    if (p === provider) return;
+  /**
+   * Handle a model selection from the AiChatModelSelector dropdown.
+   *
+   * For native models: if the model is not yet downloaded (no status in the
+   * catalog list) this shows the download modal. The download modal listens for
+   * MODEL_DOWNLOAD_PROGRESS events and clears itself on MODEL_DOWNLOAD_READY.
+   * For ollama / openai-compat: write provider + model to the node immediately.
+   */
+  function handleModelSelect(selection: ModelSelection): void {
+    if (selection.provider === 'native') {
+      // Persist the selection regardless of download status so the node
+      // remembers what model was chosen. The send path (handleSend) calls
+      // ensureModelReady which also triggers download if needed.
+      const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
+      sharedNodeStore.updateNode(
+        nodeId,
+        {
+          properties: {
+            messages: current?.messages ?? [],
+            status: current?.status ?? 'active',
+            provider: 'native',
+            model: selection.modelId,
+          },
+        },
+        { type: 'viewer', viewerId: 'ai-chat-viewer' }
+      );
+      return;
+    }
+
+    // ollama / openai-compat: write directly.
     const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
     sharedNodeStore.updateNode(
       nodeId,
@@ -134,17 +168,12 @@
         properties: {
           messages: current?.messages ?? [],
           status: current?.status ?? 'active',
-          model: current?.model,
-          provider: p,
+          provider: selection.provider,
+          model: selection.modelId,
         },
       },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }
     );
-  }
-
-  function onProviderChange(e: Event): void {
-    const value = (e.currentTarget as HTMLSelectElement).value as Provider;
-    selectProvider(value);
   }
 
   function isTauri(): boolean {
@@ -187,8 +216,9 @@
     };
 
     // Ensure the model is loaded before writing status:processing to the node.
-    // The daemon starts inference immediately on NodeUpdated, so the model must
-    // be in memory before the write triggers the event.
+    // For local models this may trigger a download — isEnsuringModel shows an
+    // overlay so the user sees progress rather than a frozen UI.
+    isEnsuringModel = true;
     try {
       await ensureModelReady(model);
     } catch (err) {
@@ -197,6 +227,8 @@
       sendError = msg;
       statusBar.error(`Model error: ${msg}`);
       return;
+    } finally {
+      isEnsuringModel = false;
     }
 
     // Set status:'processing' so the typing indicator appears and the daemon
@@ -255,17 +287,9 @@
       if (currentNode?.content) onTitleChange?.(currentNode.content);
 
       if (isTauri()) {
-        try {
-          ollamaReady = await ollamaAvailable();
-        } catch (err) {
-          log.debug('Ollama availability check failed', { error: String(err) });
-        }
-
         if (destroyed) return;
 
         // Subscribe to streaming token events for this node.
-        const { listen } = await import('@tauri-apps/api/event');
-
         const unlistenChunk = await listen<StreamingChunk & { node_id?: string }>(
           AGENT_EVENTS.LOCAL_AGENT_CHUNK,
           (event) => {
@@ -298,6 +322,7 @@
           streamingContent = '';
         });
         eventUnlisteners.push(unlistenError);
+
       }
     } finally {
       if (hydrationSucceeded) nodeReady = true;
@@ -330,40 +355,25 @@
 </script>
 
 <div class="ai-chat-viewer">
-  <!-- Header (shown in every mode): title + provider dropdown. -->
+  <!-- Header (shown in every mode): title + unified model selector. -->
   <div class="chat-viewer-header">
     <div class="chat-viewer-header-left">
       <h2 class="chat-viewer-title">{node?.content ?? 'AI Chat'}</h2>
       <div class="chat-viewer-meta">
-        {#if model}
-          <span class="meta-badge meta-model">{model}</span>
-        {/if}
         <span class="meta-badge" class:meta-archived={lifecycleStatus === 'archived'}>
           {lifecycleStatus}
         </span>
       </div>
     </div>
     <div class="chat-viewer-header-right">
-      <select
-        class="provider-select"
-        aria-label="Conversation provider"
-        value={provider ?? ''}
-        onchange={onProviderChange}
-      >
-        {#if provider === undefined}
-          <option value="" disabled selected>Choose a provider…</option>
-        {/if}
-        {#each PROVIDER_OPTIONS as opt (opt.id)}
-          {@const ollamaUnavailable = opt.id === 'ollama' && !ollamaReady}
-          <option value={opt.id} disabled={opt.unavailable || ollamaUnavailable}>
-            {opt.label}{opt.unavailable
-              ? ' (coming soon)'
-              : ollamaUnavailable
-                ? ' (not running)'
-                : ''}
-          </option>
-        {/each}
-      </select>
+      {#if provider !== 'pty'}
+        <AiChatModelSelector
+          {nodeId}
+          disabled={hasMessages}
+          currentValue={selectorCurrentValue}
+          onSelect={handleModelSelect}
+        />
+      {/if}
     </div>
   </div>
 
@@ -373,25 +383,20 @@
     </div>
   {:else if provider === undefined}
     <div class="provider-prompt">
-      <p class="provider-prompt-text">Choose how this conversation is powered</p>
+      <p class="provider-prompt-text">Choose a model to get started</p>
       <p class="provider-prompt-hint">
-        Pick a provider from the dropdown in the top-right to get started.
+        Select a model from the dropdown above to begin the conversation.
       </p>
     </div>
   {:else if provider === 'pty'}
     <AiChatPtySession {nodeId} />
   {:else if isMessageProvider && !model}
-    <AiChatModelPicker
-      {nodeId}
-      provider={provider as 'native' | 'ollama'}
-      onSelect={(modelId) => {
-        sharedNodeStore.updateNode(
-          nodeId,
-          { properties: { provider: provider ?? 'native', model: modelId, status: 'active' } },
-          { type: 'viewer', viewerId: 'ai-chat-viewer' }
-        );
-      }}
-    />
+    <div class="provider-prompt">
+      <p class="provider-prompt-text">Choose a model to get started</p>
+      <p class="provider-prompt-hint">
+        Select a model from the dropdown above to begin the conversation.
+      </p>
+    </div>
   {:else if isMessageProvider}
     <div
       class="chat-viewer-messages"
@@ -457,6 +462,17 @@
       <div class="archived-notice">This conversation is archived and read-only.</div>
     {/if}
   {/if}
+
+  <!-- Model-load overlay: shown while ensureModelReady is running (covers downloads too). -->
+  {#if isEnsuringModel}
+    <div class="ensure-model-overlay" role="status" aria-label="Preparing model">
+      <div class="ensure-model-box">
+        <span class="ensure-model-spinner" aria-hidden="true"></span>
+        <span class="ensure-model-label">Preparing model…</span>
+      </div>
+    </div>
+  {/if}
+
 </div>
 
 <style>
@@ -465,6 +481,7 @@
     flex-direction: column;
     height: 100%;
     background: hsl(var(--background));
+    position: relative;
   }
 
   .chat-viewer-header {
@@ -517,29 +534,9 @@
     text-transform: lowercase;
   }
 
-  .meta-model {
-    font-family: monospace;
-    font-size: 0.625rem;
-  }
-
   .meta-archived {
     color: hsl(var(--destructive));
     background: hsl(var(--destructive) / 0.1);
-  }
-
-  .provider-select {
-    font-size: 0.8125rem;
-    padding: 0.3125rem 0.5rem;
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.375rem;
-    background: hsl(var(--background));
-    color: hsl(var(--foreground));
-    cursor: pointer;
-    max-width: 12rem;
-  }
-
-  .provider-select:hover {
-    border-color: hsl(var(--ring));
   }
 
   .provider-prompt {
@@ -684,4 +681,47 @@
     background: hsl(var(--muted) / 0.5);
     border-top: 1px solid hsl(var(--border));
   }
+
+  /* Model-load overlay */
+  .ensure-model-overlay {
+    position: absolute;
+    inset: 0;
+    background: hsl(var(--background) / 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+  }
+
+  .ensure-model-box {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.75rem;
+    padding: 1.25rem 1.75rem;
+    box-shadow: 0 8px 32px hsl(0 0% 0% / 0.12);
+  }
+
+  .ensure-model-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2.5px solid hsl(var(--muted-foreground) / 0.3);
+    border-top-color: hsl(var(--primary));
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+  }
+
+  .ensure-model-label {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
 </style>
