@@ -379,11 +379,25 @@ export class TextareaController {
         // This prevents the cursor from being positioned at 0 before the action can apply
         // the correct position (e.g., 'absolute' position from Enter key node creation)
         if (!hasPendingCursorPosition) {
-          cursorService.setCursorAtBeginningOfLine(this.element, 0, {
-            focus: true,
-            delay: 0,
-            skipSyntax: true
-          });
+          // An empty/new node gets the cursor at the beginning. But when the
+          // textarea (re)initializes while it ALREADY has content and no explicit
+          // cursor position was requested — e.g. a remount the moment a freshly
+          // created node first persists, while the user is mid-typing its first
+          // word — snapping to position 0 makes the next keystrokes land BEFORE the
+          // existing text ("Hello" -> "lloHe"). Put the cursor at the end of the
+          // existing content (where the user was typing) instead.
+          if (content.length > 0) {
+            cursorService.setCursorAtPosition(this.element, content.length, {
+              focus: true,
+              delay: 0
+            });
+          } else {
+            cursorService.setCursorAtBeginningOfLine(this.element, 0, {
+              focus: true,
+              delay: 0,
+              skipSyntax: true
+            });
+          }
         }
       }
 
