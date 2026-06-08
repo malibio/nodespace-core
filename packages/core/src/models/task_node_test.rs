@@ -422,4 +422,37 @@ mod tests {
             "critical"
         );
     }
+
+    #[test]
+    fn test_started_at_rfc3339_normalizes_to_date_only() {
+        let node = Node::new(
+            "task".to_string(),
+            "Test".to_string(),
+            json!({"started_at": "2025-03-10T08:00:00Z"}),
+        );
+        let task = TaskNode::from_node(node).unwrap();
+        assert_eq!(task.started_at, Some("2025-03-10".to_string()));
+    }
+
+    #[test]
+    fn test_completed_at_rfc3339_normalizes_to_date_only() {
+        let node = Node::new(
+            "task".to_string(),
+            "Test".to_string(),
+            json!({"completed_at": "2025-04-20T23:59:59+05:30"}),
+        );
+        let task = TaskNode::from_node(node).unwrap();
+        assert_eq!(task.completed_at, Some("2025-04-20".to_string()));
+    }
+
+    #[test]
+    fn test_due_date_date_only_format_passes_through() {
+        let node = Node::new(
+            "task".to_string(),
+            "Test".to_string(),
+            json!({"due_date": "2025-06-09"}),
+        );
+        let task = TaskNode::from_node(node).unwrap();
+        assert_eq!(task.due_date, Some("2025-06-09".to_string()));
+    }
 }

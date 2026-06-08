@@ -772,9 +772,10 @@ impl TaskNodeUpdate {
         self
     }
 
-    /// Set due date update (Some(value) to set, None to clear)
-    pub fn with_due_date(mut self, due_date: Option<String>) -> Self {
-        self.due_date = Some(due_date);
+    /// Set due date update (Some(value) to set, None to clear).
+    /// Accepts YYYY-MM-DD or RFC 3339; normalizes to YYYY-MM-DD.
+    pub fn with_due_date(mut self, due_date: Option<&str>) -> Self {
+        self.due_date = Some(due_date.and_then(parse_to_date_string));
         self
     }
 

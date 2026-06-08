@@ -225,16 +225,37 @@ mod tests {
     }
 
     #[test]
-    fn task_node_update_iso8601_due_date() {
+    fn task_node_update_iso8601_due_date_normalizes_to_date_only() {
         let json = r#"{"dueDate": "2025-06-15T00:00:00Z"}"#;
         let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
-        assert!(matches!(update.due_date, Some(Some(_))));
+        assert_eq!(update.due_date, Some(Some("2025-06-15".to_string())));
     }
 
     #[test]
-    fn task_node_update_date_only_due_date() {
+    fn task_node_update_date_only_due_date_passes_through() {
         let json = r#"{"dueDate": "2025-06-15"}"#;
         let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
-        assert!(matches!(update.due_date, Some(Some(_))));
+        assert_eq!(update.due_date, Some(Some("2025-06-15".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_iso8601_started_at_normalizes() {
+        let json = r#"{"startedAt": "2025-06-15T08:30:00Z"}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.started_at, Some(Some("2025-06-15".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_iso8601_completed_at_normalizes() {
+        let json = r#"{"completedAt": "2025-06-16T23:59:59Z"}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.completed_at, Some(Some("2025-06-16".to_string())));
+    }
+
+    #[test]
+    fn task_node_update_null_started_at_clears() {
+        let json = r#"{"startedAt": null}"#;
+        let update: TaskNodeUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.started_at, Some(None));
     }
 }

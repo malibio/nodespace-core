@@ -9,8 +9,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-/// Normalise a stored date string to YYYY-MM-DD.
-/// Accepts both YYYY-MM-DD and RFC 3339; returns the value unchanged if already date-only.
+/// Normalise a stored date string to YYYY-MM-DD on read.
+/// Accepts YYYY-MM-DD (pass-through) or RFC 3339 (extract date portion).
+/// Returns the original string for unrecognised values so callers can surface them.
 fn normalize_date_field(s: &str) -> String {
     if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
         return s.to_string();
