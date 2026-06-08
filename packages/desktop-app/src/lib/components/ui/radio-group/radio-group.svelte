@@ -6,7 +6,7 @@
     ref = $bindable(null),
     class: className,
     ...restProps
-  }: RadioGroupPrimitive.RootProps & { ref?: HTMLElement | null } = $props();
+  }: RadioGroupPrimitive.RootProps = $props();
 </script>
 
 <RadioGroupPrimitive.Root

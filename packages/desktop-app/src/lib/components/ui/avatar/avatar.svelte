@@ -4,6 +4,7 @@
   import { avatarVariants, type AvatarProps } from './types.js';
 
   let {
+    ref = $bindable(null),
     class: className,
     size = 'md',
     shape = 'circle',
@@ -13,6 +14,7 @@
 </script>
 
 <AvatarPrimitive.Root
+  bind:ref
   data-slot="avatar"
   class={cn(avatarVariants({ size, shape }), className)}
   {...restProps}

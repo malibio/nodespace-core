@@ -16,7 +16,6 @@
   data-slot="breadcrumb-page"
   aria-current="page"
   aria-disabled="true"
-  role="link"
   class={cn('font-normal text-foreground', className)}
   {...restProps}
 >
