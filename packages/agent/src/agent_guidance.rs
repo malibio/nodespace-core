@@ -42,7 +42,7 @@ pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - AMBIGUITY: If a search returns 0 results or multiple results that don't clearly match, ask the user one specific clarifying question (e.g. \"Are you looking for the invoice with amount $500?\") rather than retrying the search.\n\
     - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.\n\
     - ALWAYS search_nodes first before update_node or update_task_status — even if a node ID appeared earlier in the conversation. Never skip the search step.\n\
-    - By keyword/type/property: search_nodes(query, node_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
+    - By keyword/title: search_nodes(query, node_type). By structured property filter (status, due_date, operators): execute_query(target_type, filters). By meaning: search_semantic(query, node_types, scope, threshold, graph_boost).\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
     - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
     - To update a CUSTOM schema node's property (e.g. mark invoice as paid): search_nodes(node_type=<type>) then update_node(id=<found_id>, properties={\"status\": \"paid\"}). Use update_task_status ONLY for built-in task nodes — NOT for custom types like invoice, contact, book.\n\

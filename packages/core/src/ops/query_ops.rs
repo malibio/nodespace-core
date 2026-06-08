@@ -1,0 +1,295 @@
+//! Execute-query ops wrapper.
+//!
+//! Bridges agent tool calls to `QueryService`. The agent passes a
+//! flat-property filter shape; this module maps it to `QueryDefinition`
+//! and delegates to `QueryService::execute`.
+
+use crate::models::Node;
+use crate::ops::OpsError;
+use crate::services::node_service::NodeService;
+use crate::services::query_service::{
+    FilterOperator, FilterType, QueryDefinition, QueryFilter, QueryService, SortConfig,
+    SortDirection,
+};
+use serde::Deserialize;
+use serde_json::Value;
+use std::sync::Arc;
+
+// ============================================================================
+// Agent-facing filter shape
+// ============================================================================
+
+/// A single filter item as passed by the agent tool.
+#[derive(Debug, Deserialize)]
+pub struct AgentFilterItem {
+    /// Filter category: "property", "content", "relationship", "metadata".
+    #[serde(rename = "type")]
+    pub filter_type: String,
+    /// Comparison operator: "equals", "contains", "gt", "lt", "gte", "lte",
+    /// "in", "exists".
+    pub operator: String,
+    /// Property key (for property and metadata filters).
+    #[serde(default)]
+    pub property: Option<String>,
+    /// Value to compare against.
+    #[serde(default)]
+    pub value: Option<Value>,
+    /// Case sensitivity for text comparisons (default: true).
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+    /// Relationship type for relationship filters.
+    #[serde(default)]
+    pub relationship_type: Option<String>,
+    /// Target node ID for relationship filters.
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+
+/// A single sort config item as passed by the agent tool.
+#[derive(Debug, Deserialize)]
+pub struct AgentSortItem {
+    pub field: String,
+    #[serde(default)]
+    pub direction: Option<String>,
+}
+
+// ============================================================================
+// Input / Output
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ExecuteQueryInput {
+    /// Target node type ("task", "text", etc.) or "*" for all types.
+    pub target_type: String,
+    /// List of filter conditions.
+    #[serde(default)]
+    pub filters: Vec<AgentFilterItem>,
+    /// Optional sorting.
+    #[serde(default)]
+    pub sorting: Option<Vec<AgentSortItem>>,
+    /// Max results to return (default: 50).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+pub type ExecuteQueryOutput = crate::ops::node_ops::QueryNodesOutput;
+
+// ============================================================================
+// Conversion helpers
+// ============================================================================
+
+fn parse_filter_type(s: &str) -> Result<FilterType, OpsError> {
+    match s {
+        "property" => Ok(FilterType::Property),
+        "content" => Ok(FilterType::Content),
+        "relationship" => Ok(FilterType::Relationship),
+        "metadata" => Ok(FilterType::Metadata),
+        other => Err(OpsError::InvalidParams(format!(
+            "Unknown filter type '{}'. Supported: property, content, relationship, metadata",
+            other
+        ))),
+    }
+}
+
+fn parse_filter_operator(s: &str) -> Result<FilterOperator, OpsError> {
+    match s {
+        "equals" => Ok(FilterOperator::Equals),
+        "contains" => Ok(FilterOperator::Contains),
+        "gt" => Ok(FilterOperator::GreaterThan),
+        "lt" => Ok(FilterOperator::LessThan),
+        "gte" => Ok(FilterOperator::GreaterThanOrEqual),
+        "lte" => Ok(FilterOperator::LessThanOrEqual),
+        "in" => Ok(FilterOperator::In),
+        "exists" => Ok(FilterOperator::Exists),
+        other => Err(OpsError::InvalidParams(format!(
+            "Unknown operator '{}'. Supported: equals, contains, gt, lt, gte, lte, in, exists",
+            other
+        ))),
+    }
+}
+
+fn parse_sort_direction(s: &str) -> SortDirection {
+    match s {
+        "desc" => SortDirection::Descending,
+        _ => SortDirection::Ascending,
+    }
+}
+
+fn parse_relationship_type(
+    s: &str,
+) -> Result<crate::services::query_service::RelationshipType, OpsError> {
+    use crate::services::query_service::RelationshipType;
+    match s {
+        "parent" => Ok(RelationshipType::Parent),
+        "children" => Ok(RelationshipType::Children),
+        "mentions" => Ok(RelationshipType::Mentions),
+        "mentioned_by" => Ok(RelationshipType::MentionedBy),
+        other => Err(OpsError::InvalidParams(format!(
+            "Unknown relationship type '{}'. Supported: parent, children, mentions, mentioned_by",
+            other
+        ))),
+    }
+}
+
+fn to_query_filter(item: AgentFilterItem) -> Result<QueryFilter, OpsError> {
+    let filter_type = parse_filter_type(&item.filter_type)?;
+    let operator = parse_filter_operator(&item.operator)?;
+
+    let relationship_type = match &item.relationship_type {
+        Some(rt) => Some(parse_relationship_type(rt)?),
+        None => None,
+    };
+
+    Ok(QueryFilter {
+        filter_type,
+        operator,
+        property: item.property,
+        value: item.value,
+        case_sensitive: item.case_sensitive,
+        relationship_type,
+        node_id: item.node_id,
+    })
+}
+
+fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, OpsError> {
+    crate::models::nodes_to_typed_values(nodes).map_err(OpsError::Internal)
+}
+
+// ============================================================================
+// Operation
+// ============================================================================
+
+/// Execute a structured property query via `QueryService`.
+///
+/// Converts the agent's flat filter shape into a `QueryDefinition` and
+/// delegates to `QueryService::execute`, which generates proper SQL
+/// `json_extract` conditions against SQLite.
+pub async fn execute_query(
+    node_service: &Arc<NodeService>,
+    input: ExecuteQueryInput,
+) -> Result<ExecuteQueryOutput, OpsError> {
+    let limit = input.limit.unwrap_or(50);
+
+    let filters: Vec<QueryFilter> = input
+        .filters
+        .into_iter()
+        .map(to_query_filter)
+        .collect::<Result<_, _>>()?;
+
+    let sorting: Option<Vec<SortConfig>> = input.sorting.map(|items| {
+        items
+            .into_iter()
+            .map(|s| SortConfig {
+                field: s.field,
+                direction: parse_sort_direction(s.direction.as_deref().unwrap_or("asc")),
+            })
+            .collect()
+    });
+
+    let query = QueryDefinition {
+        target_type: input.target_type,
+        filters,
+        sorting,
+        limit: Some(limit),
+    };
+
+    let query_service = QueryService::new(node_service.store().clone());
+    let nodes = query_service
+        .execute(&query)
+        .await
+        .map_err(|e| OpsError::Internal(format!("execute_query failed: {}", e)))?;
+
+    let count = nodes.len();
+    let typed_nodes = nodes_to_typed_values(nodes)?;
+
+    Ok(ExecuteQueryOutput {
+        nodes: typed_nodes,
+        count,
+        collection_id: None,
+    })
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_all_operators() {
+        for (s, expected) in [
+            ("equals", FilterOperator::Equals),
+            ("contains", FilterOperator::Contains),
+            ("gt", FilterOperator::GreaterThan),
+            ("lt", FilterOperator::LessThan),
+            ("gte", FilterOperator::GreaterThanOrEqual),
+            ("lte", FilterOperator::LessThanOrEqual),
+            ("in", FilterOperator::In),
+            ("exists", FilterOperator::Exists),
+        ] {
+            let parsed = parse_filter_operator(s).unwrap();
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn parse_unknown_operator_is_error() {
+        let err = parse_filter_operator("like").unwrap_err();
+        assert!(matches!(err, OpsError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn parse_all_filter_types() {
+        for s in ["property", "content", "relationship", "metadata"] {
+            assert!(parse_filter_type(s).is_ok());
+        }
+        assert!(parse_filter_type("unknown").is_err());
+    }
+
+    #[test]
+    fn to_query_filter_property() {
+        let item = AgentFilterItem {
+            filter_type: "property".to_string(),
+            operator: "equals".to_string(),
+            property: Some("status".to_string()),
+            value: Some(json!("open")),
+            case_sensitive: None,
+            relationship_type: None,
+            node_id: None,
+        };
+        let qf = to_query_filter(item).unwrap();
+        assert_eq!(qf.filter_type, FilterType::Property);
+        assert_eq!(qf.operator, FilterOperator::Equals);
+        assert_eq!(qf.property.as_deref(), Some("status"));
+        assert_eq!(qf.value, Some(json!("open")));
+    }
+
+    #[test]
+    fn execute_query_input_deserializes_minimal() {
+        let v = json!({"target_type": "task"});
+        let input: ExecuteQueryInput = serde_json::from_value(v).unwrap();
+        assert_eq!(input.target_type, "task");
+        assert!(input.filters.is_empty());
+        assert!(input.sorting.is_none());
+        assert!(input.limit.is_none());
+    }
+
+    #[test]
+    fn execute_query_input_deserializes_full() {
+        let v = json!({
+            "target_type": "task",
+            "filters": [
+                {"type": "property", "operator": "equals", "property": "status", "value": "open"}
+            ],
+            "sorting": [{"field": "due_date", "direction": "asc"}],
+            "limit": 25
+        });
+        let input: ExecuteQueryInput = serde_json::from_value(v).unwrap();
+        assert_eq!(input.filters.len(), 1);
+        assert_eq!(input.sorting.as_ref().unwrap().len(), 1);
+        assert_eq!(input.limit, Some(25));
+    }
+}

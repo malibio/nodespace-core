@@ -6,14 +6,12 @@
 //! the agent tool executor is now their only consumer.
 
 use serde::Deserialize;
-use serde_json::Value;
-use std::collections::HashMap;
 
 /// Parameters for the `search_nodes` (keyword/title search) tool.
 #[derive(Debug, Deserialize)]
 pub struct SearchNodesParams {
     /// Keyword or phrase to search for in node titles. Pass an empty string to
-    /// skip the title filter (useful when filtering only by node_type or filters).
+    /// skip the title filter (useful when filtering only by node_type).
     pub query: String,
 
     /// Filter by node type (e.g., "task", "text").
@@ -23,11 +21,6 @@ pub struct SearchNodesParams {
     /// Maximum number of results. Default: 10.
     #[serde(default)]
     pub limit: Option<usize>,
-
-    /// Property filters as key-value pairs matched with equals.
-    /// e.g. {"status": "open"} or {"amount": "500"}. Numeric values are coerced to strings.
-    #[serde(default)]
-    pub filters: Option<HashMap<String, Value>>,
 }
 
 /// Parameters for the `search_semantic` tool.

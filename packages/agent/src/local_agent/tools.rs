@@ -8,7 +8,7 @@
 use crate::agent_types::{AgentToolExecutor, ToolDefinition, ToolError, ToolResult};
 use async_trait::async_trait;
 use nodespace_core::agent_params::{SearchNodesParams, SearchSemanticParams};
-use nodespace_core::ops::{node_ops, rel_ops, search_ops, OpsError};
+use nodespace_core::ops::{node_ops, query_ops, rel_ops, search_ops, OpsError};
 use nodespace_core::schema::handle_create_schema;
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use serde::Deserialize;
@@ -192,12 +192,12 @@ fn strip_node_uri(id: &str) -> &str {
 fn def_search_nodes() -> ToolDefinition {
     ToolDefinition {
         name: "search_nodes".into(),
-        description: "Search nodes by title keyword and/or filter by type and properties. \
+        description: "Search nodes by title keyword and/or filter by type. \
             Searches the title field (indexed, populated for root and task nodes). \
             Pass an empty query string to skip the title filter (e.g. to list all tasks). \
             Use node_type to filter by type (e.g. node_type='task'). \
-            Use filters for property key-value pairs (e.g. filters={\"status\":\"open\"}). \
-            Prefer this over search_semantic when you know the node name or need to list nodes by type/property."
+            For structured property queries (status, due_date, operators like gt/lt), use execute_query instead. \
+            Prefer this over search_semantic when you know the node name or need to list nodes by type."
             .into(),
         parameters_schema: json!({
             "type": "object",
@@ -210,17 +210,89 @@ fn def_search_nodes() -> ToolDefinition {
                     "type": "string",
                     "description": "Optional filter by node type (text, task, date, etc.)"
                 },
-                "filters": {
-                    "type": "object",
-                    "description": "Property filters as key-value pairs, e.g. {\"status\": \"open\"} or {\"amount\": 500}. Keys are property names, values matched with equals. String and numeric values are both accepted.",
-                    "additionalProperties": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
-                },
                 "limit": {
                     "type": "integer",
                     "description": "Max results to return (default 10)"
                 }
             },
             "required": ["query"]
+        }),
+    }
+}
+
+fn def_execute_query() -> ToolDefinition {
+    ToolDefinition {
+        name: "execute_query".into(),
+        description: "Execute a structured property query backed by SQL. Use for filtering nodes by \
+            typed properties with operators (equals, gt, lt, gte, lte, in, exists, contains). \
+            Examples: tasks due this week, open invoices over $500, all contacts added this month. \
+            Property filters use SQL json_extract — far more reliable than search_nodes filters. \
+            For date fields, use YYYY-MM-DD format. Operators: equals, contains, gt, lt, gte, lte, in, exists. \
+            Keep search_nodes for title/keyword lookup; use execute_query for any structured filtering."
+            .into(),
+        parameters_schema: json!({
+            "type": "object",
+            "properties": {
+                "target_type": {
+                    "type": "string",
+                    "description": "Node type to query ('task', 'text', or a custom schema ID). Use '*' for all types."
+                },
+                "filters": {
+                    "type": "array",
+                    "description": "Filter conditions. Each item specifies a filter type, operator, and value.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["property", "content", "metadata"],
+                                "description": "Filter category: 'property' for schema fields, 'content' for node text, 'metadata' for built-in fields (created_at, modified_at, node_type)"
+                            },
+                            "operator": {
+                                "type": "string",
+                                "enum": ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"],
+                                "description": "Comparison operator"
+                            },
+                            "property": {
+                                "type": "string",
+                                "description": "Property key for property/metadata filters (e.g. 'status', 'due_date')"
+                            },
+                            "value": {
+                                "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
+                            },
+                            "case_sensitive": {
+                                "type": "boolean",
+                                "description": "For 'contains' operator: case sensitivity (default: true)"
+                            }
+                        },
+                        "required": ["type", "operator"]
+                    }
+                },
+                "sorting": {
+                    "type": "array",
+                    "description": "Sort configuration. Applied in order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {
+                                "type": "string",
+                                "description": "Field to sort by (e.g. 'due_date', 'created_at', 'status')"
+                            },
+                            "direction": {
+                                "type": "string",
+                                "enum": ["asc", "desc"],
+                                "description": "Sort direction (default: asc)"
+                            }
+                        },
+                        "required": ["field"]
+                    }
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (default 50)"
+                }
+            },
+            "required": ["target_type"]
         }),
     }
 }
@@ -676,6 +748,7 @@ fn def_update_task_status() -> ToolDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tool {
     SearchNodes,
+    ExecuteQuery,
     SearchSemantic,
     GetNode,
     CreateNode,
@@ -695,6 +768,7 @@ impl Tool {
     /// presented to the model, so keep retrieval/discovery tools first.
     pub(crate) const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
+        Tool::ExecuteQuery,
         Tool::SearchSemantic,
         Tool::GetNode,
         Tool::CreateNode,
@@ -713,6 +787,7 @@ impl Tool {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Tool::SearchNodes => "search_nodes",
+            Tool::ExecuteQuery => "execute_query",
             Tool::SearchSemantic => "search_semantic",
             Tool::GetNode => "get_node",
             Tool::CreateNode => "create_node",
@@ -739,6 +814,7 @@ impl Tool {
     pub(crate) fn definition(self) -> ToolDefinition {
         match self {
             Tool::SearchNodes => def_search_nodes(),
+            Tool::ExecuteQuery => def_execute_query(),
             Tool::SearchSemantic => def_search_semantic(),
             Tool::GetNode => def_get_node(),
             Tool::CreateNode => def_create_node(),
@@ -762,6 +838,7 @@ impl Tool {
     pub(crate) fn humanized(self) -> &'static str {
         match self {
             Tool::SearchNodes => "node search",
+            Tool::ExecuteQuery => "property query",
             Tool::SearchSemantic => "semantic search",
             Tool::GetNode => "node lookup",
             Tool::CreateNode => "node creation",
@@ -821,41 +898,16 @@ impl GraphToolExecutor {
 
         let ns = self.node_service()?;
 
-        // Build property filters from the `filters` map (key=value pairs, operator=equals).
-        // Coerce numeric/boolean values to their string representation for equality matching.
-        let mut filter_items: Vec<node_ops::QueryFilterItem> = params
-            .filters
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(field, val)| {
-                let str_val = match &val {
-                    Value::String(s) => s.clone(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    other => other.to_string(),
-                };
-                node_ops::QueryFilterItem {
-                    field,
-                    operator: "equals".to_string(),
-                    value: Value::String(str_val),
-                }
-            })
-            .collect();
-
         // Title search filter — only added when query is non-empty.
         // title is populated for root nodes and task nodes only.
-        if !query.is_empty() {
-            filter_items.push(node_ops::QueryFilterItem {
+        let filters = if !query.is_empty() {
+            Some(vec![node_ops::QueryFilterItem {
                 field: "title".to_string(),
                 operator: "contains".to_string(),
                 value: Value::String(query),
-            });
-        }
-
-        let filters = if filter_items.is_empty() {
-            None
+            }])
         } else {
-            Some(filter_items)
+            None
         };
 
         let input = node_ops::QueryNodesInput {
@@ -896,6 +948,50 @@ impl GraphToolExecutor {
         Ok(ok_result(
             tool_call_id,
             "search_nodes",
+            json!({ "count": summaries.len(), "nodes": summaries }),
+        ))
+    }
+
+    async fn exec_execute_query(
+        &self,
+        tool_call_id: &str,
+        args: Value,
+    ) -> Result<ToolResult, ToolError> {
+        let input: query_ops::ExecuteQueryInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
+                tool: "execute_query".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let ns = self.node_service()?;
+
+        let output = query_ops::execute_query(&ns, input)
+            .await
+            .map_err(|e| ops_error_to_tool(e, "execute_query"))?;
+
+        let summaries: Vec<Value> = output
+            .nodes
+            .iter()
+            .map(|v| {
+                json!({
+                    "id": node_uri(v.get("id").and_then(|v| v.as_str()).unwrap_or("")),
+                    "title": truncate(
+                        v.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                        100
+                    ),
+                    "type": v.get("node_type").or(v.get("type")).and_then(|v| v.as_str()).unwrap_or(""),
+                    "snippet": truncate(
+                        v.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                        BODY_TRUNCATE_SUMMARY
+                    ),
+                    "properties": v.get("properties").cloned().unwrap_or(json!({})),
+                })
+            })
+            .collect();
+
+        Ok(ok_result(
+            tool_call_id,
+            "execute_query",
             json!({ "count": summaries.len(), "nodes": summaries }),
         ))
     }
@@ -1641,6 +1737,7 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         match tool {
             Tool::SearchNodes => self.exec_search_nodes(&tool_call_id, args).await,
+            Tool::ExecuteQuery => self.exec_execute_query(&tool_call_id, args).await,
             Tool::SearchSemantic => self.exec_search_semantic(&tool_call_id, args).await,
             Tool::GetNode => self.exec_get_node(&tool_call_id, args).await,
             Tool::CreateNode => self.exec_create_node(&tool_call_id, args).await,
@@ -1765,6 +1862,7 @@ mod tests {
     fn definitions_count() {
         // Derived from the registry: one definition per `Tool::ALL` entry.
         assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
+        assert_eq!(all_tool_definitions().len(), 14);
     }
 
     // -- Tool registry invariants --
@@ -1839,48 +1937,47 @@ mod tests {
     }
 
     #[test]
-    fn search_nodes_schema_has_filters_property() {
+    fn search_nodes_schema_has_no_filters_property() {
+        // filters removed — use execute_query for property filtering
         let def = def_search_nodes();
         let props = def.parameters_schema["properties"]
             .as_object()
             .expect("properties must be object");
         assert!(
-            props.contains_key("filters"),
-            "schema must expose 'filters' property"
+            !props.contains_key("filters"),
+            "search_nodes schema must not expose 'filters' — use execute_query"
         );
-        let filters_type = props["filters"]["type"].as_str().unwrap_or("");
-        assert_eq!(filters_type, "object", "filters must be of type object");
     }
 
     #[test]
-    fn search_nodes_params_parses_filters() {
+    fn execute_query_schema_requires_target_type() {
+        let def = def_execute_query();
+        let required = def.parameters_schema["required"]
+            .as_array()
+            .expect("required must be array");
+        assert!(required.contains(&json!("target_type")));
+    }
+
+    #[test]
+    fn execute_query_schema_has_filters_and_sorting() {
+        let def = def_execute_query();
+        let props = def.parameters_schema["properties"]
+            .as_object()
+            .expect("properties must be object");
+        assert!(props.contains_key("filters"), "must expose filters");
+        assert!(props.contains_key("sorting"), "must expose sorting");
+        assert!(props.contains_key("limit"), "must expose limit");
+    }
+
+    #[test]
+    fn search_nodes_params_parses_node_type() {
         let args = json!({
             "query": "Review quarterly report",
             "node_type": "task",
-            "filters": { "status": "open" }
         });
         let params: SearchNodesParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.query, "Review quarterly report");
         assert_eq!(params.node_type, Some("task".to_string()));
-        let filters = params.filters.expect("filters should be present");
-        assert_eq!(
-            filters.get("status").map(|s| s.as_str()),
-            Some(Some("open"))
-        );
-    }
-
-    #[test]
-    fn search_nodes_params_filters_numeric_value_coerced() {
-        // Models may emit numeric values even when instructed to use strings.
-        // The executor coerces them to strings before the DB equality match.
-        let args = json!({
-            "query": "",
-            "node_type": "invoice",
-            "filters": { "amount": 500 }
-        });
-        let params: SearchNodesParams = serde_json::from_value(args).unwrap();
-        let filters = params.filters.expect("filters should be present");
-        assert_eq!(filters.get("amount").map(|v| v.as_u64()), Some(Some(500)));
     }
 
     #[test]
@@ -1889,14 +1986,14 @@ mod tests {
         let params: SearchNodesParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.query, "");
         assert_eq!(params.node_type, Some("task".to_string()));
-        assert!(params.filters.is_none());
     }
 
     #[test]
-    fn search_nodes_params_filters_absent_is_none() {
+    fn search_nodes_params_no_node_type() {
         let args = json!({ "query": "hello" });
         let params: SearchNodesParams = serde_json::from_value(args).unwrap();
-        assert!(params.filters.is_none());
+        assert_eq!(params.query, "hello");
+        assert!(params.node_type.is_none());
     }
 
     #[test]
@@ -2167,9 +2264,10 @@ mod tests {
     async fn available_tools_returns_all() {
         let executor = test_executor();
         let tools = executor.available_tools().await.unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_nodes"));
+        assert!(names.contains(&"execute_query"));
         assert!(names.contains(&"search_semantic"));
         assert!(names.contains(&"get_node"));
         assert!(names.contains(&"create_node"));
