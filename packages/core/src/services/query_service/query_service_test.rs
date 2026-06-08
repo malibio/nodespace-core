@@ -1336,4 +1336,57 @@ mod tests {
         assert_eq!(results[1].content, "Alpha Task"); // open, comes before Beta
         assert_eq!(results[2].content, "Beta Task"); // open
     }
+
+    #[tokio::test]
+    async fn test_content_filter_contains_wildcards_treated_as_literals() {
+        let (query_service, node_service, _temp) = create_test_services().await;
+
+        // Node whose content contains SQL LIKE wildcards and a backslash
+        let node = CreateNodeParams {
+            id: None,
+            node_type: "text".to_string(),
+            content: "50% off sale".to_string(),
+            parent_id: None,
+            position: crate::services::InsertPositionOwned::End,
+            properties: json!({}),
+        };
+        node_service.create_node_with_parent(node).await.unwrap();
+
+        let unrelated = CreateNodeParams {
+            id: None,
+            node_type: "text".to_string(),
+            content: "full price item".to_string(),
+            parent_id: None,
+            position: crate::services::InsertPositionOwned::End,
+            properties: json!({}),
+        };
+        node_service
+            .create_node_with_parent(unrelated)
+            .await
+            .unwrap();
+
+        // Case-insensitive contains with '%' — must be treated as a literal, not a wildcard
+        let query = QueryDefinition {
+            target_type: "text".to_string(),
+            filters: vec![QueryFilter {
+                filter_type: FilterType::Content,
+                operator: FilterOperator::Contains,
+                property: None,
+                value: Some(serde_json::Value::String("50%".to_string())),
+                case_sensitive: Some(false),
+                relationship_type: None,
+                node_id: None,
+            }],
+            sorting: None,
+            limit: None,
+        };
+
+        let results = query_service.execute(&query).await.unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "'%' in search value must match literally, not as a LIKE wildcard"
+        );
+        assert_eq!(results[0].content, "50% off sale");
+    }
 }
