@@ -400,6 +400,18 @@ export class TextareaController {
         return;
       }
 
+      // While the textarea is focused, the user's keystrokes ARE the content —
+      // the DOM is the source of truth. A reactive content update that lags
+      // behind fast typing (the store hasn't caught up to the latest keystroke)
+      // would reset element.value to a stale string and reposition the cursor,
+      // scrambling characters ("Tests" → "stsTE"). Skip the soft update while
+      // focused: cross-window updates for the edited node are already dropped by
+      // the SharedNodeStore skip-while-editing guard, and forceUpdateContent()
+      // remains for explicit programmatic overrides (paste, blur-sync, etc.).
+      if (typeof document !== 'undefined' && document.activeElement === this.element) {
+        return;
+      }
+
       // Preserve cursor position when updating content from external source
       // Setting element.value resets cursor to position 0
       const cursorPosition = this.element.selectionStart;
