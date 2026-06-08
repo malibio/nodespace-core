@@ -606,11 +606,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // a loop. Break out now so the final-inference path can produce a
             // response from the results already in session history, rather than
             // burning iterations re-executing the same query.
-            let all_duplicate = tool_calls.iter().all(|tc| {
-                let canonical = serde_json::from_str::<serde_json::Value>(&tc.arguments_json)
+            //
+            // Args are round-tripped through serde to normalise JSON key order
+            // so {"b":1,"a":2} and {"a":2,"b":1} are treated as the same call.
+            let canonical_args = |args_json: &str| {
+                serde_json::from_str::<serde_json::Value>(args_json)
                     .map(|v| v.to_string())
-                    .unwrap_or_else(|_| tc.arguments_json.clone());
-                seen_calls.contains(&(tc.function_name.clone(), canonical))
+                    .unwrap_or_else(|_| args_json.to_owned())
+            };
+            let all_duplicate = tool_calls.iter().all(|tc| {
+                seen_calls.contains(&(tc.function_name.clone(), canonical_args(&tc.arguments_json)))
             });
             if all_duplicate {
                 tracing::warn!(
@@ -626,10 +631,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             }
             // Register each call in the seen set so later iterations can detect repeats.
             for tc in &tool_calls {
-                let canonical = serde_json::from_str::<serde_json::Value>(&tc.arguments_json)
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|_| tc.arguments_json.clone());
-                seen_calls.insert((tc.function_name.clone(), canonical));
+                seen_calls.insert((tc.function_name.clone(), canonical_args(&tc.arguments_json)));
             }
 
             // Execute each tool call
@@ -822,9 +824,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Otherwise loop back for another inference round
         }
 
-        // Reached after either hitting the max-iteration cap (handled above) or a
-        // duplicate-call break. Run one final text-only inference so the session
-        // always produces a response from the tool results already in history.
+        // Reached only via the duplicate-call guard's `break` above. The
+        // max-iteration path (iteration == effective_max_iterations - 1) always
+        // returns early and never falls through here. Run one final text-only
+        // inference so the session always produces a response from the tool
+        // results already in history.
         on_status(LocalAgentStatus::Thinking);
 
         let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];

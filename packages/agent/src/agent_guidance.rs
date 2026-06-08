@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_strategy_rules_cover_issue_1374() {
+    fn tool_strategy_rules_cover_meta_question_schema_and_duplicate_call_guidance() {
         // Meta-question accuracy (confabulation fix)
         assert!(
             TOOL_STRATEGY_RULES.contains("META QUESTIONS"),
