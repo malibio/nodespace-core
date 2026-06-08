@@ -263,6 +263,15 @@ fn def_execute_query() -> ToolDefinition {
                             "case_sensitive": {
                                 "type": "boolean",
                                 "description": "For 'contains' operator: case sensitivity (default: true)"
+                            },
+                            "relationship_type": {
+                                "type": "string",
+                                "enum": ["parent", "children", "mentions", "mentioned_by"],
+                                "description": "For 'relationship' filters: which graph edge direction to traverse"
+                            },
+                            "node_id": {
+                                "type": "string",
+                                "description": "For 'relationship' filters: the anchor node ID to traverse from"
                             }
                         },
                         "required": ["type", "operator"]
