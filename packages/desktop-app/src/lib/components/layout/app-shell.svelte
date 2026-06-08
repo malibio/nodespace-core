@@ -19,6 +19,7 @@
   import { MCP_EVENTS } from '$lib/constants';
   import type { Node } from '$lib/types';
   import { collectionsData } from '$lib/stores/collections';
+  import { schemasData } from '$lib/stores/schemas';
   import { loadPersistedState, addTab, tabState, setActiveTab } from '$lib/stores/navigation';
   import { get } from 'svelte/store';
   import { settingsInitialCategory } from '$lib/stores/settings';
@@ -177,6 +178,7 @@
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
     let cleanupProSync: (() => void) | null = null;
+    let unlistenTier: Promise<() => void> | null = null;
 
     if (
       typeof window !== 'undefined' &&
@@ -202,6 +204,13 @@
         .catch((err) => {
           log.debug('Could not sync theme from backend preferences:', err);
         });
+
+      // Re-load schemas and collections once the daemon signals it is ready (pro:tier-detected).
+      // This handles the case where the initial load in NavigationSidebar fired before gRPC was available.
+      unlistenTier = listen('pro:tier-detected', () => {
+        schemasData.loadSchemas();
+        collectionsData.loadCollections();
+      });
 
       // Show a warning if the nodespace CLI is not on $PATH after skill install (Issue #1199).
       unlistenSkillCliMissing = listen<{ warning: string }>('skill:cli-missing', (event) => {
@@ -529,6 +538,9 @@
       }
       if (unlistenSkillCliMissing) {
         (await unlistenSkillCliMissing)();
+      }
+      if (unlistenTier) {
+        (await unlistenTier)();
       }
       cleanupProSync?.();
       if (cleanupMCP) {

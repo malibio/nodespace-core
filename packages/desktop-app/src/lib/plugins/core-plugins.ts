@@ -160,6 +160,8 @@ export const taskNodePlugin: PluginDefinition = {
       taskState = 'completed';
     } else if (status === 'OPEN' || status === 'open') {
       taskState = 'pending';
+    } else if (status === 'CANCELLED' || status === 'cancelled') {
+      taskState = 'completed';
     }
 
     // Spread properties first, then override with resolved top-level values
