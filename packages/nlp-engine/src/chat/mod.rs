@@ -804,11 +804,17 @@ fn strip_gemma_special_tokens(s: &str) -> String {
 ///   non-object (empty, malformed) is normalized to `"{}"`.
 fn chat_message_to_oai_value(msg: &ChatMessage) -> serde_json::Value {
     if msg.role == Role::Tool {
-        serde_json::json!({
+        // Ministral's Jinja template requires "name" (the function name) on tool-result
+        // messages — absent → C++ exception → ffi error -3.
+        let mut v = serde_json::json!({
             "role": "tool",
             "tool_call_id": msg.tool_call_id.as_deref().unwrap_or("unknown"),
             "content": msg.content,
-        })
+        });
+        if let Some(name) = msg.name.as_deref().filter(|n| !n.is_empty()) {
+            v["name"] = serde_json::Value::String(name.to_string());
+        }
+        v
     } else if msg.role == Role::Assistant && !msg.tool_calls.is_empty() {
         let tool_calls: Vec<serde_json::Value> = msg
             .tool_calls
@@ -1326,6 +1332,46 @@ mod tests {
         assert_eq!(v["role"], "tool");
         assert_eq!(v["tool_call_id"], "tc_1");
         assert_eq!(v["content"], "result text");
+        assert_eq!(v["name"], "my_tool");
+    }
+
+    #[test]
+    fn oai_value_tool_result_includes_name_for_ministral() {
+        // Ministral's Jinja template requires "name" on tool-result messages.
+        // Missing "name" → Jinja exception → ffi error -3 (issue #1373).
+        let m = ChatMessage::tool_result("[]", "tc_1", "search_nodes");
+        let v = chat_message_to_oai_value(&m);
+        assert_eq!(
+            v["name"], "search_nodes",
+            "tool-result must carry \"name\" for Ministral Jinja template"
+        );
+        assert_eq!(v["tool_call_id"], "tc_1");
+        assert_eq!(v["content"], "[]");
+    }
+
+    #[test]
+    fn oai_value_multi_turn_tool_calls_have_name_on_every_result() {
+        // Regression: ffi error -3 on Ministral 8B after 6+ tool-call round-trips.
+        // Each tool-result message must carry "name" regardless of conversation depth.
+        let results = [
+            ("tc_1", "search_nodes"),
+            ("tc_2", "search_nodes"),
+            ("tc_3", "search_nodes"),
+            ("tc_4", "search_nodes"),
+            ("tc_5", "search_nodes"),
+            ("tc_6", "get_node"),
+            ("tc_7", "search_nodes"),
+        ];
+        for (i, (call_id, tool_name)) in results.iter().enumerate() {
+            let msg = ChatMessage::tool_result(format!("r{}", i + 1), *call_id, *tool_name);
+            let v = chat_message_to_oai_value(&msg);
+            assert_eq!(
+                v["name"],
+                *tool_name,
+                "tool-result #{} missing \"name\" field",
+                i + 1
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
