@@ -245,8 +245,8 @@ fn def_execute_query() -> ToolDefinition {
                         "properties": {
                             "type": {
                                 "type": "string",
-                                "enum": ["property", "content", "metadata"],
-                                "description": "Filter category: 'property' for schema fields, 'content' for node text, 'metadata' for built-in fields (created_at, modified_at, node_type)"
+                                "enum": ["property", "content", "metadata", "relationship"],
+                                "description": "Filter category: 'property' for schema fields, 'content' for node text, 'metadata' for built-in fields (created_at, modified_at, node_type), 'relationship' for graph edges"
                             },
                             "operator": {
                                 "type": "string",

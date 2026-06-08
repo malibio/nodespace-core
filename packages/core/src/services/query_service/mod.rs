@@ -420,12 +420,19 @@ impl QueryService {
                     .as_ref()
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Contains requires string value"))?;
-                let escaped = self.escape_string(value);
                 if filter.case_sensitive.unwrap_or(true) {
-                    // INSTR is case-sensitive in SQLite
-                    Ok(format!("INSTR({}, '{}') > 0", field, escaped))
+                    // INSTR is case-sensitive in SQLite; no LIKE wildcards needed
+                    Ok(format!(
+                        "INSTR({}, '{}') > 0",
+                        field,
+                        self.escape_string(value)
+                    ))
                 } else {
-                    Ok(format!("LOWER({}) LIKE LOWER('%{}%')", field, escaped))
+                    Ok(format!(
+                        "LOWER({}) LIKE LOWER('%{}%') ESCAPE '\\'",
+                        field,
+                        self.escape_string_for_like(value)
+                    ))
                 }
             }
             FilterOperator::GreaterThan => {
@@ -470,13 +477,17 @@ impl QueryService {
 
         match filter.operator {
             FilterOperator::Contains => {
-                let escaped = self.escape_string(value);
                 if filter.case_sensitive.unwrap_or(true) {
-                    Ok(format!("INSTR({}, '{}') > 0", content_field, escaped))
+                    Ok(format!(
+                        "INSTR({}, '{}') > 0",
+                        content_field,
+                        self.escape_string(value)
+                    ))
                 } else {
                     Ok(format!(
-                        "LOWER({}) LIKE LOWER('%{}%')",
-                        content_field, escaped
+                        "LOWER({}) LIKE LOWER('%{}%') ESCAPE '\\'",
+                        content_field,
+                        self.escape_string_for_like(value)
                     ))
                 }
             }
@@ -537,9 +548,24 @@ impl QueryService {
         }
     }
 
-    /// Escape single quotes in strings for SQL safety
+    /// Escape single quotes in a string for safe embedding in SQL string literals.
+    ///
+    /// Use this for equality comparisons (`=`, `IN`). For LIKE patterns, call
+    /// `escape_string_for_like` instead, which additionally escapes wildcards.
     fn escape_string(&self, s: &str) -> String {
         s.replace('\'', "''")
+    }
+
+    /// Escape a string for use inside a SQL LIKE pattern.
+    ///
+    /// In addition to single-quote escaping, escapes `\`, `%`, and `_` so the
+    /// value is treated as a literal substring. Callers must append
+    /// `ESCAPE '\\'` to the LIKE expression.
+    fn escape_string_for_like(&self, s: &str) -> String {
+        s.replace('\'', "''")
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     }
 }
 

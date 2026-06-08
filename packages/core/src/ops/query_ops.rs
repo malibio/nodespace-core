@@ -156,6 +156,37 @@ fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, OpsError> {
 }
 
 // ============================================================================
+// Identifier validation
+// ============================================================================
+
+/// Validate that an identifier (node type, property name, sort field) only
+/// contains characters that are safe to interpolate into a SQL identifier
+/// position. The allowlist is `[A-Za-z0-9_:-]` which covers all real node
+/// types, property keys, and metadata fields while blocking injection vectors.
+fn validate_identifier(value: &str, label: &str) -> Result<(), OpsError> {
+    if value == "*" {
+        return Ok(());
+    }
+    if value.is_empty() {
+        return Err(OpsError::InvalidParams(format!(
+            "{} must not be empty",
+            label
+        )));
+    }
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
+    {
+        Ok(())
+    } else {
+        Err(OpsError::InvalidParams(format!(
+            "{} '{}' contains invalid characters; only [A-Za-z0-9_:-] are allowed",
+            label, value
+        )))
+    }
+}
+
+// ============================================================================
 // Operation
 // ============================================================================
 
@@ -168,6 +199,20 @@ pub async fn execute_query(
     node_service: &Arc<NodeService>,
     input: ExecuteQueryInput,
 ) -> Result<ExecuteQueryOutput, OpsError> {
+    validate_identifier(&input.target_type, "target_type")?;
+
+    for item in &input.filters {
+        if let Some(prop) = &item.property {
+            validate_identifier(prop, "filter property")?;
+        }
+    }
+
+    if let Some(sorting) = &input.sorting {
+        for sort in sorting {
+            validate_identifier(&sort.field, "sort field")?;
+        }
+    }
+
     let limit = input.limit.unwrap_or(50);
 
     let filters: Vec<QueryFilter> = input
@@ -291,5 +336,105 @@ mod tests {
         assert_eq!(input.filters.len(), 1);
         assert_eq!(input.sorting.as_ref().unwrap().len(), 1);
         assert_eq!(input.limit, Some(25));
+    }
+
+    #[test]
+    fn validate_identifier_accepts_valid() {
+        assert!(validate_identifier("task", "t").is_ok());
+        assert!(validate_identifier("due_date", "t").is_ok());
+        assert!(validate_identifier("custom:field", "t").is_ok());
+        assert!(validate_identifier("my-type", "t").is_ok());
+        assert!(validate_identifier("*", "t").is_ok());
+    }
+
+    #[test]
+    fn validate_identifier_rejects_injection() {
+        assert!(validate_identifier("'; DROP TABLE node; --", "t").is_err());
+        assert!(validate_identifier("a b", "t").is_err());
+        assert!(validate_identifier("a.b", "t").is_err());
+        assert!(validate_identifier("", "t").is_err());
+    }
+
+    mod integration {
+        use super::*;
+        use crate::db::SqliteStore;
+        use crate::models::Node;
+        use crate::services::NodeService;
+        use tempfile::TempDir;
+
+        async fn make_test_service() -> (Arc<NodeService>, TempDir) {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("test.db");
+            let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+            let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+            (svc, tmp)
+        }
+
+        fn task_node(id: &str, status: &str, due_date: Option<&str>) -> Node {
+            let mut props = json!({"status": status});
+            if let Some(d) = due_date {
+                props["due_date"] = json!(d);
+            }
+            Node {
+                id: id.to_string(),
+                node_type: "task".to_string(),
+                content: format!("Task {}", id),
+                version: 1,
+                created_at: chrono::Utc::now(),
+                modified_at: chrono::Utc::now(),
+                properties: props,
+                mentions: vec![],
+                mentioned_in: vec![],
+                title: Some(format!("Task {}", id)),
+                lifecycle_status: "active".to_string(),
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn execute_query_filters_by_status() {
+            let (svc, _tmp) = make_test_service().await;
+
+            svc.create_node(task_node("t1", "open", None))
+                .await
+                .unwrap();
+            svc.create_node(task_node("t2", "done", None))
+                .await
+                .unwrap();
+            svc.create_node(task_node("t3", "open", None))
+                .await
+                .unwrap();
+
+            let input: ExecuteQueryInput = serde_json::from_value(json!({
+                "target_type": "task",
+                "filters": [
+                    {"type": "property", "operator": "equals", "property": "status", "value": "open"}
+                ]
+            }))
+            .unwrap();
+
+            let output = execute_query(&svc, input).await.unwrap();
+            assert_eq!(
+                output.count, 2,
+                "expected 2 open tasks, got {}",
+                output.count
+            );
+            for node in &output.nodes {
+                assert_eq!(node.get("status").and_then(|v| v.as_str()), Some("open"));
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn execute_query_rejects_invalid_identifier() {
+            let (svc, _tmp) = make_test_service().await;
+
+            let input: ExecuteQueryInput = serde_json::from_value(json!({
+                "target_type": "task'; DROP TABLE node; --",
+                "filters": []
+            }))
+            .unwrap();
+
+            let err = execute_query(&svc, input).await.unwrap_err();
+            assert!(matches!(err, OpsError::InvalidParams(_)));
+        }
     }
 }

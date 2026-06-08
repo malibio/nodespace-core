@@ -75,8 +75,8 @@ LISTING BY TYPE: To list all nodes of a type, use search_nodes with an empty que
 
 STRUCTURED PROPERTY QUERIES: For filtering by property values (status, due_date, etc.) or using comparison operators (gt, lt, gte, lte, in), use execute_query — NOT search_nodes. Examples:
 - "find all my open tasks" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])
-- "tasks due tomorrow" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"2026-06-09"}], sorting=[{"field":"due_date","direction":"asc"}])
-- "tasks due this week" → execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"2026-06-08"},{"type":"property","operator":"lte","property":"due_date","value":"2026-06-14"}])
+- "tasks due tomorrow" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])
+- "tasks due this week" → execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])
 - "find tasks for Acme" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])
 - Date format: always YYYY-MM-DD. Operators: equals, contains, gt, lt, gte, lte, in, exists."#.to_string(),
         },
