@@ -1,5 +1,5 @@
 <script lang="ts">
-  import SchemaPropertyFormDemo from './lib/SchemaPropertyFormDemo.svelte';
+  import SchemaPropertyFormDemo from './examples/SchemaPropertyFormDemo.svelte';
 </script>
 
 <div class="style-guide">
