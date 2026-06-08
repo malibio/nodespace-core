@@ -3,7 +3,6 @@
 #[cfg(test)]
 mod tests {
     use crate::models::{task_node::TaskPriority, task_node::TaskStatus, Node, TaskNode};
-    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     #[test]
@@ -97,15 +96,13 @@ mod tests {
 
     #[test]
     fn test_due_date_getter() {
-        // Use RFC3339 format for proper parsing
         let node = Node::new(
             "task".to_string(),
             "Test".to_string(),
             json!({"due_date": "2025-01-15T00:00:00Z"}),
         );
         let task = TaskNode::from_node(node).unwrap();
-        assert!(task.due_date().is_some());
-        assert!(task.due_date().unwrap().contains("2025-01-15"));
+        assert_eq!(task.due_date(), Some("2025-01-15".to_string()));
     }
 
     #[test]
@@ -120,13 +117,9 @@ mod tests {
         let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
         let mut task = TaskNode::from_node(node).unwrap();
 
-        let due_date = DateTime::parse_from_rfc3339("2025-02-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        task.set_due_date(Some(due_date));
+        task.set_due_date(Some("2025-02-01T00:00:00Z"));
 
-        assert!(task.due_date().is_some());
-        assert!(task.due_date().unwrap().contains("2025-02-01"));
+        assert_eq!(task.due_date(), Some("2025-02-01".to_string()));
     }
 
     #[test]
@@ -141,7 +134,7 @@ mod tests {
         task.set_due_date(None);
 
         assert_eq!(task.due_date(), None);
-        assert!(task.as_node().properties.get("due_date").is_none());
+        assert!(task.as_node().properties.get("dueDate").is_none());
     }
 
     #[test]
@@ -271,21 +264,16 @@ mod tests {
 
     #[test]
     fn test_builder_full() {
-        let due_date = DateTime::parse_from_rfc3339("2025-12-31T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-
         let task = TaskNode::builder("Complete project".to_string())
             .with_status(TaskStatus::InProgress)
             .with_priority(TaskPriority::High)
-            .with_due_date(due_date)
+            .with_due_date("2025-12-31T00:00:00Z")
             .with_assignee("user-789".to_string())
             .build();
 
         assert_eq!(task.status(), TaskStatus::InProgress);
         assert_eq!(task.get_priority(), TaskPriority::High);
-        assert!(task.due_date().is_some());
-        assert!(task.due_date().unwrap().contains("2025-12-31"));
+        assert_eq!(task.due_date(), Some("2025-12-31".to_string()));
         assert_eq!(task.assignee_id(), Some("user-789".to_string()));
     }
 
@@ -295,8 +283,7 @@ mod tests {
             .with_due_date_str("2025-12-31T00:00:00Z")
             .build();
 
-        assert!(task.due_date().is_some());
-        assert!(task.due_date().unwrap().contains("2025-12-31"));
+        assert_eq!(task.due_date(), Some("2025-12-31".to_string()));
     }
 
     #[test]
@@ -361,21 +348,16 @@ mod tests {
         let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
         let mut task = TaskNode::from_node(node).unwrap();
 
-        let due_date = DateTime::parse_from_rfc3339("2025-03-15T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-
         // Update multiple properties
         task.set_status(TaskStatus::InProgress);
         task.set_priority(TaskPriority::Low);
-        task.set_due_date(Some(due_date));
+        task.set_due_date(Some("2025-03-15T00:00:00Z"));
         task.set_assignee_id(Some("user-999".to_string()));
 
         // Verify all updates
         assert_eq!(task.status(), TaskStatus::InProgress);
         assert_eq!(task.get_priority(), TaskPriority::Low);
-        assert!(task.due_date().is_some());
-        assert!(task.due_date().unwrap().contains("2025-03-15"));
+        assert_eq!(task.due_date(), Some("2025-03-15".to_string()));
         assert_eq!(task.assignee_id(), Some("user-999".to_string()));
     }
 
