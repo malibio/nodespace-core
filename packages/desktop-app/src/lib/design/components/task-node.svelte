@@ -19,9 +19,6 @@
   import type { NodeState } from '$lib/design/icons/registry';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
-  import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
-  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { isTaskNode, getTaskStatus, type TaskStatus } from '$lib/types/task-node';
 
   // Get paneId from context (set by PaneContent) - identifies which pane this node is in
   const sourcePaneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -29,10 +26,10 @@
   // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
     nodeId,
-    nodeType: propsNodeType = 'task',
+    nodeType = 'task',
     autoFocus = false,
-    content: propsContent = '',
-    children: propsChildren = [],
+    content = $bindable(''),
+    children = [],
     metadata = {}
   }: {
     nodeId: string;
@@ -44,16 +41,6 @@
   } = $props();
 
   const dispatch = createEventDispatcher();
-
-  // Use sharedNodeStore as single source of truth for cross-pane reactivity
-  // This ensures property changes (like status) from other panes are immediately reflected
-  let sharedNode = $derived(sharedNodeStore.getNode(nodeId));
-  let childIds = $derived(structureTree.getChildren(nodeId));
-
-  // Derive props from sharedNodeStore with fallback to passed props for backward compatibility
-  let content = $derived(sharedNode?.content ?? propsContent);
-  let nodeType = $derived(sharedNode?.nodeType ?? propsNodeType);
-  let children = $derived(childIds ?? propsChildren);
 
   // Track if user is actively typing (hide button during typing)
   let isTyping = $state(false);
@@ -77,37 +64,17 @@
     }
   }
 
-  // REFACTOR (Issue #316): Removed $effect for prop sync, will use bind:content instead
-  // Replaced $effect with $derived.by() for task state detection
-
-  /**
-   * Map TaskStatus to NodeState for icon rendering
-   */
-  function taskStatusToNodeState(status: TaskStatus): NodeState {
-    switch (status) {
-      case 'in_progress':
-        return 'inProgress';
-      case 'done':
-      case 'cancelled':
-        return 'completed';
-      case 'open':
-      default:
-        return 'pending';
-    }
-  }
-
   // Task-specific state management using $derived.by() for reactive computation
-  // Priority: 1) Schema status property, 2) Content task syntax, 3) Metadata, 4) Default
+  // Priority: 1) metadata.taskState (pre-computed by extractNodeMetadata), 2) Content syntax, 3) Default
   let taskState = $derived.by(() => {
-    // First check schema properties using type-safe helpers (cross-pane reactive via sharedNodeStore)
-    if (sharedNode && isTaskNode(sharedNode)) {
-      const status = getTaskStatus(sharedNode);
-      return taskStatusToNodeState(status);
+    // metadata.taskState is set by extractNodeMetadata in base-node-viewer (from schema status property)
+    if (metadata.taskState) {
+      return metadata.taskState as NodeState;
     }
 
     // Fall back to content-based task syntax
     const hasTaskSyntax = /^\s*-?\s*\[(x|X|~|o|\s)\]/i.test(content.trim());
-    return hasTaskSyntax ? parseTaskState(content) : (metadata.taskState as NodeState) || 'pending';
+    return hasTaskSyntax ? parseTaskState(content) : 'pending';
   });
 
   // TaskNodes use default single-line editing
@@ -152,9 +119,6 @@
 
   /**
    * Update task state and sync with node manager
-   *
-   * REFACTOR (Issue #316): Removed direct taskState assignment since it's now $derived
-   * State updates flow through content/metadata changes, and taskState derives reactively
    *
    * WHY THIS FUNCTION STILL EXISTS:
    * Even though taskState is now a derived value (computed automatically from content/metadata),
@@ -214,11 +178,6 @@
   }
 
   /**
-   * REFACTOR (Issue #316): Removed $effect - taskState now derives automatically via $derived.by()
-   * No need for manual synchronization - state updates reactively from content/metadata changes
-   */
-
-  /**
    * Handle open button click to navigate to task viewer
    */
   async function handleOpenClick(event: MouseEvent) {
@@ -248,7 +207,6 @@
 </script>
 
 <!-- Wrap BaseNode with task-specific styling -->
-<!-- REFACTOR (Issue #316): Using bind:content and on:contentChanged instead of internalContent and handleContentChange -->
 <div
   class="task-node-wrapper"
   class:task-completed={taskState === 'completed'}

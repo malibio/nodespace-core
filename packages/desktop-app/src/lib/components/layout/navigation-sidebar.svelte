@@ -21,7 +21,6 @@
   import { onMount, onDestroy } from 'svelte';
   import { schemasData, builtInSchemas as builtInSchemasStore, customSchemas as customSchemasStore } from '$lib/stores/schemas';
   import { clearCollectionRefreshTimer, clearSchemaRefreshTimer } from '$lib/utils/collection-refresh';
-  import { listen } from '@tauri-apps/api/event';
 
   // Subscribe to stores using Svelte 5 runes
   let isCollapsed = $derived($layoutState.sidebarCollapsed);
@@ -47,21 +46,9 @@
   let customSchemas = $derived($customSchemasStore);
 
   // Load collections and schemas from backend on mount
-  let unlistenTier: (() => void) | undefined;
-  onMount(async () => {
+  onMount(() => {
     collectionsData.loadCollections();
     schemasData.loadSchemas();
-
-    // In Tauri, gRPC connects asynchronously after the webview loads.
-    // Re-load schemas once the daemon signals it is ready so the initial
-    // loadSchemas() call (which may have fired before gRPC was available)
-    // does not leave the sidebar empty.
-    if (typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)) {
-      unlistenTier = await listen('pro:tier-detected', () => {
-        schemasData.loadSchemas();
-        collectionsData.loadCollections();
-      });
-    }
   });
 
   // Cancel any pending debounced refreshes when the sidebar is destroyed
@@ -69,7 +56,6 @@
   onDestroy(() => {
     clearCollectionRefreshTimer();
     clearSchemaRefreshTimer();
-    unlistenTier?.();
   });
 
   // Element references for click-outside detection

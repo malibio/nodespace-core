@@ -456,7 +456,8 @@ describe('Core Plugins Integration', () => {
         { status: 'IN_PROGRESS', expectedTaskState: 'inProgress' },
         { status: 'done', expectedTaskState: 'completed' },
         { status: 'DONE', expectedTaskState: 'completed' },
-        { status: 'cancelled', expectedTaskState: 'pending' }, // Unknown status defaults to pending
+        { status: 'cancelled', expectedTaskState: 'completed' },
+        { status: 'CANCELLED', expectedTaskState: 'completed' },
         { status: undefined, expectedTaskState: 'pending' }
       ];
 
