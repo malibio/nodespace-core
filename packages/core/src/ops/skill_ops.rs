@@ -123,19 +123,29 @@ pub async fn find_skills(
 ) -> Result<FindSkillsOutput, OpsError> {
     let limit = input.limit.unwrap_or(3).min(MAX_SKILL_LIMIT);
 
+    // Skills are a small fraction of the total corpus (~8-20 nodes in a workspace
+    // of potentially thousands). `semantic_search_nodes` applies a 3× over-fetch
+    // when filters are active, but that still yields only `limit * 3` KNN candidates
+    // from the global embedding space. At low skill density, most of those slots will
+    // be occupied by non-skill nodes and discarded. Pre-inflating here ensures the
+    // inner KNN window is large enough to contain the requested number of skill nodes
+    // before post-filtering. `semantic_search_nodes` already truncates to the limit
+    // it receives, so we truncate the final result ourselves.
+    let search_limit = (limit * 5).max(limit + 15);
     let skill_filter = SearchNodeFilters {
         node_types: Some(vec!["skill".to_string()]),
         property_filters: None,
     };
-    let skill_results = embedding_service
+    let mut skill_results = embedding_service
         .semantic_search_nodes(
             &input.query,
-            limit,
+            search_limit,
             SKILL_SEARCH_THRESHOLD,
             Some(&skill_filter),
         )
         .await
         .map_err(|e| OpsError::Internal(format!("Skill search failed: {}", e)))?;
+    skill_results.truncate(limit);
 
     // Fetch all schemas once; used to attach metadata to each matched skill.
     let all_schemas = node_service
@@ -342,9 +352,11 @@ mod tests {
 
     #[test]
     fn skill_filter_matches_only_skill_nodes() {
-        // Validates that the SearchNodeFilters used in find_skills correctly
-        // selects skill-typed nodes and excludes others (BM25+KNN path relies
-        // on this post-filter for node_type restriction).
+        // Validates the post-filter predicate used in find_skills. The hybrid
+        // BM25+KNN routing (semantic_search_nodes) requires a live DB and is
+        // not unit-testable here; integration coverage lives in embedding_service
+        // tests. This test only validates that the SearchNodeFilters predicate
+        // correctly restricts results to skill-typed nodes.
         use crate::services::SearchNodeFilters;
         let filter = SearchNodeFilters {
             node_types: Some(vec!["skill".to_string()]),
