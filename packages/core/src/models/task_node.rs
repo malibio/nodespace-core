@@ -46,57 +46,51 @@
 //! ```
 
 use crate::models::{Node, ValidationError};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::str::FromStr;
 
-/// Custom deserializer for flexible date parsing
-/// Accepts both "YYYY-MM-DD" (date only) and "YYYY-MM-DDTHH:MM:SSZ" (full ISO8601)
+/// Parse a date string (YYYY-MM-DD or RFC 3339) into a YYYY-MM-DD string.
+/// Returns None if the input is empty or unparseable.
+pub(crate) fn parse_to_date_string(s: &str) -> Option<String> {
+    // Already YYYY-MM-DD
+    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return Some(s.to_string());
+    }
+    // RFC 3339 / ISO 8601 — extract the date portion
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.format("%Y-%m-%d").to_string());
+    }
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return Some(dt.format("%Y-%m-%d").to_string());
+    }
+    None
+}
+
+/// Custom deserializer for schema `date` fields.
+/// Accepts YYYY-MM-DD or RFC 3339 on input; always stores/returns YYYY-MM-DD.
+/// Handles the double-Option pattern: None = field absent (no change), Some(None) = clear.
 mod flexible_date {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use serde::{self, Deserialize, Deserializer};
 
-    /// Deserialize with explicit null handling for `#[serde(deserialize_with = "...")]`
-    ///
-    /// When using `deserialize_with` with `default`, serde calls this function only when
-    /// the field is present. This function properly maps JSON `null` to `Some(None)`.
     pub fn deserialize_with_null<'de, D>(
         deserializer: D,
-    ) -> Result<Option<Option<DateTime<Utc>>>, D::Error>
+    ) -> Result<Option<Option<String>>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // When using deserialize_with, we receive the raw value (null or string)
-        // wrapped in Option only once (not Option<Option<String>>)
         let opt: Option<String> = Option::deserialize(deserializer)?;
         match opt {
-            None => Ok(Some(None)), // Field is null - clear value (the key insight!)
-            Some(s) => parse_date_string(&s).map_err(serde::de::Error::custom),
+            None => Ok(Some(None)),
+            Some(s) => match super::parse_to_date_string(&s) {
+                Some(date_str) => Ok(Some(Some(date_str))),
+                None => Err(serde::de::Error::custom(format!(
+                    "Invalid date format: '{}'. Expected YYYY-MM-DD or ISO8601",
+                    s
+                ))),
+            },
         }
-    }
-
-    /// Parse a date string into DateTime<Utc>
-    fn parse_date_string(s: &str) -> Result<Option<Option<DateTime<Utc>>>, String> {
-        // Try full ISO8601 first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-            return Ok(Some(Some(dt.with_timezone(&Utc))));
-        }
-        // Try "YYYY-MM-DDTHH:MM:SSZ" format
-        if let Ok(dt) = s.parse::<DateTime<Utc>>() {
-            return Ok(Some(Some(dt)));
-        }
-        // Try date-only "YYYY-MM-DD" format
-        if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-            let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-            return Ok(Some(Some(DateTime::from_naive_utc_and_offset(
-                datetime, Utc,
-            ))));
-        }
-        Err(format!(
-            "Invalid date format: '{}'. Expected YYYY-MM-DD or ISO8601",
-            s
-        ))
     }
 }
 
@@ -351,21 +345,21 @@ pub struct TaskNode {
     #[serde(default)]
     pub priority: Option<TaskPriority>,
 
-    /// Due date for the task
+    /// Due date for the task (YYYY-MM-DD)
     #[serde(default)]
-    pub due_date: Option<DateTime<Utc>>,
+    pub due_date: Option<String>,
 
     /// Assignee node ID
     #[serde(default)]
     pub assignee: Option<String>,
 
-    /// Started at timestamp (when task moved to in_progress)
+    /// Started at date (YYYY-MM-DD, when task moved to in_progress)
     #[serde(default)]
-    pub started_at: Option<DateTime<Utc>>,
+    pub started_at: Option<String>,
 
-    /// Completed at timestamp (when task moved to done)
+    /// Completed at date (YYYY-MM-DD, when task moved to done)
     #[serde(default)]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<String>,
 }
 
 fn default_version() -> i64 {
@@ -419,12 +413,11 @@ impl TaskNode {
             .and_then(|v| v.as_str())
             .map(|s| TaskPriority::from_str(s).unwrap_or_default());
 
-        // Extract due_date from properties (try parsing as DateTime)
+        // Extract due_date from properties — normalize to YYYY-MM-DD (accept RFC 3339 for migration)
         let due_date = props
             .get("due_date")
             .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+            .and_then(parse_to_date_string);
 
         // Extract assignee from properties
         // Note: Supports both "assignee_id" (legacy) and "assignee" (canonical) field names.
@@ -436,19 +429,17 @@ impl TaskNode {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // Extract started_at from properties
+        // Extract started_at from properties — normalize to YYYY-MM-DD
         let started_at = props
             .get("started_at")
             .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+            .and_then(parse_to_date_string);
 
-        // Extract completed_at from properties
+        // Extract completed_at from properties — normalize to YYYY-MM-DD
         let completed_at = props
             .get("completed_at")
             .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+            .and_then(parse_to_date_string);
 
         // Build properties object for schema-driven UI compatibility
         // Use camelCase keys per naming conventions (snake_case in DB, camelCase in JSON API)
@@ -458,16 +449,16 @@ impl TaskNode {
             props.insert("priority".to_string(), json!(p.as_str()));
         }
         if let Some(ref d) = due_date {
-            props.insert("dueDate".to_string(), json!(d.to_rfc3339()));
+            props.insert("dueDate".to_string(), json!(d));
         }
         if let Some(ref a) = assignee {
             props.insert("assignee".to_string(), json!(a));
         }
         if let Some(ref s) = started_at {
-            props.insert("startedAt".to_string(), json!(s.to_rfc3339()));
+            props.insert("startedAt".to_string(), json!(s));
         }
         if let Some(ref c) = completed_at {
-            props.insert("completedAt".to_string(), json!(c.to_rfc3339()));
+            props.insert("completedAt".to_string(), json!(c));
         }
         props.insert("_schemaVersion".to_string(), json!(1));
 
@@ -512,7 +503,7 @@ impl TaskNode {
         }
 
         if let Some(due_date) = self.due_date {
-            properties.insert("dueDate".to_string(), json!(due_date.to_rfc3339()));
+            properties.insert("dueDate".to_string(), json!(due_date));
         }
 
         if let Some(assignee) = self.assignee {
@@ -520,11 +511,11 @@ impl TaskNode {
         }
 
         if let Some(started_at) = self.started_at {
-            properties.insert("startedAt".to_string(), json!(started_at.to_rfc3339()));
+            properties.insert("startedAt".to_string(), json!(started_at));
         }
 
         if let Some(completed_at) = self.completed_at {
-            properties.insert("completedAt".to_string(), json!(completed_at.to_rfc3339()));
+            properties.insert("completedAt".to_string(), json!(completed_at));
         }
 
         Node {
@@ -576,14 +567,14 @@ impl TaskNode {
         self.modified_at = Utc::now();
     }
 
-    /// Get the task's due date as string (for API compatibility)
+    /// Get the task's due date as a YYYY-MM-DD string
     pub fn due_date(&self) -> Option<String> {
-        self.due_date.map(|dt| dt.to_rfc3339())
+        self.due_date.clone()
     }
 
-    /// Set the task's due date
-    pub fn set_due_date(&mut self, due_date: Option<DateTime<Utc>>) {
-        self.due_date = due_date;
+    /// Set the task's due date from a YYYY-MM-DD or RFC 3339 string
+    pub fn set_due_date(&mut self, due_date: Option<&str>) {
+        self.due_date = due_date.and_then(parse_to_date_string);
         self.modified_at = Utc::now();
     }
 
@@ -604,7 +595,7 @@ pub struct TaskNodeBuilder {
     content: String,
     status: Option<TaskStatus>,
     priority: Option<TaskPriority>,
-    due_date: Option<DateTime<Utc>>,
+    due_date: Option<String>,
     assignee: Option<String>,
 }
 
@@ -621,17 +612,15 @@ impl TaskNodeBuilder {
         self
     }
 
-    /// Set the task due date
-    pub fn with_due_date(mut self, due_date: DateTime<Utc>) -> Self {
-        self.due_date = Some(due_date);
+    /// Set the task due date from a YYYY-MM-DD or RFC 3339 string
+    pub fn with_due_date(mut self, due_date: &str) -> Self {
+        self.due_date = parse_to_date_string(due_date);
         self
     }
 
-    /// Set the task due date from string (for convenience)
+    /// Set the task due date from string (alias for with_due_date)
     pub fn with_due_date_str(mut self, due_date: &str) -> Self {
-        if let Ok(dt) = DateTime::parse_from_rfc3339(due_date) {
-            self.due_date = Some(dt.with_timezone(&Utc));
-        }
+        self.due_date = parse_to_date_string(due_date);
         self
     }
 
@@ -656,7 +645,7 @@ impl TaskNodeBuilder {
             props.insert("priority".to_string(), json!(p.as_str()));
         }
         if let Some(d) = &self.due_date {
-            props.insert("dueDate".to_string(), json!(d.to_rfc3339()));
+            props.insert("dueDate".to_string(), json!(d));
         }
         if let Some(a) = &self.assignee {
             props.insert("assignee".to_string(), json!(a));
@@ -723,15 +712,13 @@ pub struct TaskNodeUpdate {
     /// Update due date (task property)
     /// - `None` - Don't change
     /// - `Some(None)` - Clear due date
-    /// - `Some(Some(dt))` - Set to specific date
-    ///
-    /// Accepts both "YYYY-MM-DD" and full ISO8601 formats
+    /// - `Some(Some(s))` - Set to YYYY-MM-DD date (also accepts RFC 3339, normalised on write)
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub due_date: Option<Option<DateTime<Utc>>>,
+    pub due_date: Option<Option<String>>,
 
     /// Update assignee (task property)
     /// - `None` - Don't change
@@ -743,28 +730,24 @@ pub struct TaskNodeUpdate {
     /// Update started_at date (task property)
     /// - `None` - Don't change
     /// - `Some(None)` - Clear started_at
-    /// - `Some(Some(dt))` - Set to specific date
-    ///
-    /// Accepts both "YYYY-MM-DD" and full ISO8601 formats
+    /// - `Some(Some(s))` - Set to YYYY-MM-DD date (also accepts RFC 3339, normalised on write)
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub started_at: Option<Option<DateTime<Utc>>>,
+    pub started_at: Option<Option<String>>,
 
     /// Update completed_at date (task property)
     /// - `None` - Don't change
     /// - `Some(None)` - Clear completed_at
-    /// - `Some(Some(dt))` - Set to specific date
-    ///
-    /// Accepts both "YYYY-MM-DD" and full ISO8601 formats
+    /// - `Some(Some(s))` - Set to YYYY-MM-DD date (also accepts RFC 3339, normalised on write)
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
-    pub completed_at: Option<Option<DateTime<Utc>>>,
+    pub completed_at: Option<Option<String>>,
 
     /// Update content (node field)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -789,9 +772,10 @@ impl TaskNodeUpdate {
         self
     }
 
-    /// Set due date update (Some(value) to set, None to clear)
-    pub fn with_due_date(mut self, due_date: Option<DateTime<Utc>>) -> Self {
-        self.due_date = Some(due_date);
+    /// Set due date update (Some(value) to set, None to clear).
+    /// Accepts YYYY-MM-DD or RFC 3339; normalizes to YYYY-MM-DD.
+    pub fn with_due_date(mut self, due_date: Option<&str>) -> Self {
+        self.due_date = Some(due_date.and_then(parse_to_date_string));
         self
     }
 
@@ -851,7 +835,7 @@ mod tests {
             "started_at should be Some(None) for null value, but got None"
         );
         assert!(
-            update.started_at.unwrap().is_none(),
+            update.started_at.clone().unwrap().is_none(),
             "Inner value should be None (clear the field)"
         );
 

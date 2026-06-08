@@ -392,7 +392,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "last_active".to_string(),
-                    field_type: "date".to_string(),
+                    field_type: "datetime".to_string(),
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -519,7 +519,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "timestamp".to_string(),
-                            field_type: "date".to_string(),
+                            field_type: "datetime".to_string(),
                             protection: SchemaProtectionLevel::System,
                             core_values: None,
                             user_values: None,
@@ -775,7 +775,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "last_executed".to_string(),
-                    field_type: "date".to_string(),
+                    field_type: "datetime".to_string(),
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
