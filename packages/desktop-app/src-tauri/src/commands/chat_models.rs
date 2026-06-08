@@ -48,20 +48,38 @@ pub async fn chat_model_list(
     grpc: State<'_, GrpcClient>,
 ) -> Result<Vec<serde_json::Value>, CommandError> {
     let mut client = grpc.local_agent_client().await;
+
     let resp = client
         .list_models(ListModelsRequest {})
         .await
         .map_err(|e| grpc_err(e.message()))?;
+
+    // Fetch system RAM to decide whether to show the low-RAM fallback (3B).
+    let mut ram_client = grpc.local_agent_client().await;
+    let ram_gb = ram_client
+        .get_system_ram(GetSystemRamRequest {})
+        .await
+        .map(|r| r.into_inner().ram_bytes / (1024 * 1024 * 1024))
+        .unwrap_or(0);
 
     let models = resp
         .into_inner()
         .models
         .into_iter()
         .filter(|entry| {
-            // Ollama models always pass through; GGUF models are filtered to
-            // the Ministral family only (8B primary, 3B low-RAM fallback).
-            entry.backend == "gguf" && entry.id.starts_with("ministral-")
-                || entry.backend != "gguf"
+            if entry.backend != "gguf" {
+                return true; // Ollama models always pass through
+            }
+            if !entry.id.starts_with("ministral-") {
+                return false; // hide all non-Ministral GGUF models
+            }
+            // Hide the 3B fallback on machines with enough RAM for 8B.
+            // min_memory_gb == 8 identifies the 3B model; hide it when
+            // RAM >= 16 GB so users aren't confused by the smaller option.
+            if entry.min_memory_gb <= 8 && ram_gb >= 16 {
+                return false;
+            }
+            true
         })
         .map(|entry| {
             serde_json::json!({
