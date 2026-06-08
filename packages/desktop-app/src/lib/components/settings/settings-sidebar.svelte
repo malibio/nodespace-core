@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { cn } from '$lib/utils';
+
     interface Props {
         activeCategory: string;
         onCategoryChange: (_category: string) => void;
@@ -16,58 +18,19 @@
     ];
 </script>
 
-<nav class="settings-sidebar">
-    <h2 class="sidebar-title">Settings</h2>
+<nav class="border-border bg-muted/30 min-w-[200px] w-[200px] border-r py-4">
+    <h2 class="text-muted-foreground px-4 py-2 text-xs font-semibold uppercase tracking-widest">Settings</h2>
     {#each categories as category}
         <button
-            class="sidebar-item"
-            class:active={activeCategory === category.id}
+            class={cn(
+                'block w-full cursor-pointer border-none bg-transparent px-4 py-2 text-left text-sm',
+                activeCategory === category.id
+                    ? 'text-primary bg-primary/10 font-medium'
+                    : 'text-foreground hover:bg-muted/50'
+            )}
             onclick={() => onCategoryChange(category.id)}
         >
             {category.label}
         </button>
     {/each}
 </nav>
-
-<style>
-    .settings-sidebar {
-        width: 200px;
-        min-width: 200px;
-        border-right: 1px solid hsl(var(--border));
-        padding: 1rem 0;
-        background: hsl(var(--muted) / 0.3);
-    }
-
-    .sidebar-title {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: hsl(var(--muted-foreground));
-        padding: 0.5rem 1rem;
-        margin: 0;
-    }
-
-    .sidebar-item {
-        display: block;
-        width: 100%;
-        text-align: left;
-        padding: 0.5rem 1rem;
-        border: none;
-        background: none;
-        color: hsl(var(--foreground));
-        font-size: 0.875rem;
-        cursor: pointer;
-        border-radius: 0;
-    }
-
-    .sidebar-item:hover {
-        background: hsl(var(--muted) / 0.5);
-    }
-
-    .sidebar-item.active {
-        background: hsl(var(--primary) / 0.1);
-        color: hsl(var(--primary));
-        font-weight: 500;
-    }
-</style>

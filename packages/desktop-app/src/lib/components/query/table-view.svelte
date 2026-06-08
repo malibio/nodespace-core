@@ -11,6 +11,8 @@
 <script lang="ts">
   import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
   import TableRow from '$lib/components/query/table-row.svelte';
+  import { Table, TableHeader, TableBody, TableHead, TableRow as UiTableRow } from '$lib/components/ui/table';
+  import { Button } from '$lib/components/ui/button';
 
   let {
     nodeIds,
@@ -62,106 +64,39 @@
 
 </script>
 
-<div class="table-wrapper">
-  <table>
-    <thead>
-      <tr>
-        {#each columns as col (col.field)}
-          <th>{col.label}</th>
-        {/each}
-      </tr>
-    </thead>
-    <tbody>
-      {#each pageIds as id (id)}
-        <TableRow {id} {columns} {fieldSchemaMap} {onRowClick} />
+<Table>
+  <TableHeader>
+    <UiTableRow>
+      {#each columns as col (col.field)}
+        <TableHead>{col.label}</TableHead>
       {/each}
-    </tbody>
-  </table>
+    </UiTableRow>
+  </TableHeader>
+  <TableBody>
+    {#each pageIds as id (id)}
+      <TableRow {id} {columns} {fieldSchemaMap} {onRowClick} />
+    {/each}
+  </TableBody>
+</Table>
 
-  {#if totalPages > 1}
-    <div class="pagination">
-      <button
-        class="page-btn"
-        onclick={() => currentPage--}
-        disabled={currentPage === 0}
-      >
-        ‹
-      </button>
-      <span class="page-info">{currentPage + 1} / {totalPages}</span>
-      <button
-        class="page-btn"
-        onclick={() => currentPage++}
-        disabled={currentPage >= totalPages - 1}
-      >
-        ›
-      </button>
-    </div>
-  {/if}
-</div>
-
-<style>
-  .table-wrapper {
-    width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none; /* Firefox */
-  }
-
-  .table-wrapper::-webkit-scrollbar {
-    display: none; /* Chrome/Safari */
-  }
-
-  table {
-    width: max-content;
-    min-width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
-
-  thead {
-    position: sticky;
-    top: 0;
-    background: hsl(var(--background));
-    z-index: 1;
-  }
-
-  th {
-    padding: 0.75rem 1rem;
-    text-align: left;
-    font-weight: 600;
-    font-size: 0.75rem;
-    letter-spacing: 0.03em;
-    color: hsl(var(--muted-foreground));
-    border-bottom: 2px solid hsl(var(--border));
-    white-space: nowrap;
-  }
-
-  .pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 1rem;
-    border-top: 1px solid hsl(var(--border));
-  }
-
-  .page-btn {
-    background: hsl(var(--secondary));
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.375rem;
-    padding: 0.25rem 0.625rem;
-    cursor: pointer;
-    font-size: 1rem;
-    color: hsl(var(--foreground));
-    line-height: 1;
-  }
-
-  .page-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .page-info {
-    font-size: 0.875rem;
-    color: hsl(var(--muted-foreground));
-  }
-</style>
+{#if totalPages > 1}
+  <div class="border-border flex items-center justify-center gap-3 border-t p-4">
+    <Button
+      variant="outline"
+      size="sm"
+      onclick={() => currentPage--}
+      disabled={currentPage === 0}
+    >
+      ‹
+    </Button>
+    <span class="text-muted-foreground text-sm">{currentPage + 1} / {totalPages}</span>
+    <Button
+      variant="outline"
+      size="sm"
+      onclick={() => currentPage++}
+      disabled={currentPage >= totalPages - 1}
+    >
+      ›
+    </Button>
+  </div>
+{/if}
