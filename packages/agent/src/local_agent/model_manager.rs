@@ -1201,9 +1201,7 @@ mod tests {
     #[test]
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
-        assert!(
-            spec.model_id == "ministral-3b-q4km" || spec.model_id == "ministral-8b-q4km"
-        );
+        assert!(spec.model_id == "ministral-3b-q4km" || spec.model_id == "ministral-8b-q4km");
         assert_eq!(spec.family, ModelFamily::Ministral);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
