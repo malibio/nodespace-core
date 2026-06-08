@@ -60,6 +60,8 @@
   let sendError = $state<string | null>(null);
   let nodeReady = $state(false);
   let eventUnlisteners: Array<() => void> = [];
+  /** True while ensureModelReady is running (may include download time for local models). */
+  let isEnsuringModel = $state(false);
 
   const SOFT_MESSAGE_CAP = 500;
 
@@ -88,9 +90,9 @@
   const selectorCurrentValue = $derived(
     provider && model
       ? provider === 'openai-compat'
-        ? `openai-compat:${model}`
+        ? `openai-compat:${model}`    // model = config UUID
         : provider === 'ollama'
-          ? `ollama:${model}`
+          ? model                      // model = full daemon ID "ollama:<name>"
           : `native:${model}`
       : ''
   );
@@ -214,8 +216,9 @@
     };
 
     // Ensure the model is loaded before writing status:processing to the node.
-    // The daemon starts inference immediately on NodeUpdated, so the model must
-    // be in memory before the write triggers the event.
+    // For local models this may trigger a download — isEnsuringModel shows an
+    // overlay so the user sees progress rather than a frozen UI.
+    isEnsuringModel = true;
     try {
       await ensureModelReady(model);
     } catch (err) {
@@ -224,6 +227,8 @@
       sendError = msg;
       statusBar.error(`Model error: ${msg}`);
       return;
+    } finally {
+      isEnsuringModel = false;
     }
 
     // Set status:'processing' so the typing indicator appears and the daemon
@@ -458,6 +463,16 @@
     {/if}
   {/if}
 
+  <!-- Model-load overlay: shown while ensureModelReady is running (covers downloads too). -->
+  {#if isEnsuringModel}
+    <div class="ensure-model-overlay" role="status" aria-label="Preparing model">
+      <div class="ensure-model-box">
+        <span class="ensure-model-spinner" aria-hidden="true"></span>
+        <span class="ensure-model-label">Preparing model…</span>
+      </div>
+    </div>
+  {/if}
+
 </div>
 
 <style>
@@ -665,6 +680,48 @@
     color: hsl(var(--muted-foreground));
     background: hsl(var(--muted) / 0.5);
     border-top: 1px solid hsl(var(--border));
+  }
+
+  /* Model-load overlay */
+  .ensure-model-overlay {
+    position: absolute;
+    inset: 0;
+    background: hsl(var(--background) / 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+  }
+
+  .ensure-model-box {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.75rem;
+    padding: 1.25rem 1.75rem;
+    box-shadow: 0 8px 32px hsl(0 0% 0% / 0.12);
+  }
+
+  .ensure-model-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2.5px solid hsl(var(--muted-foreground) / 0.3);
+    border-top-color: hsl(var(--primary));
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+  }
+
+  .ensure-model-label {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
 </style>

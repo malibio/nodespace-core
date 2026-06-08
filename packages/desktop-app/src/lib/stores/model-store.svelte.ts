@@ -170,7 +170,7 @@ class ModelStore {
         // This store manages the *built-in* (GGUF) download/load lifecycle; its
         // consumers (model-manager, onboarding) download by URL and recommend a
         // model to fetch. Ollama models are pulled out-of-band (no URL here) and
-        // are surfaced separately by AiChatModelPicker, so exclude them — letting
+        // are surfaced separately by AiChatModelSelector, so exclude them — letting
         // them in would render dead download buttons and let `recommendedModel`
         // pick an un-downloadable row.
         this.models = entries

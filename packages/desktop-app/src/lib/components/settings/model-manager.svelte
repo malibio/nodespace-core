@@ -28,7 +28,7 @@
 
   // --- Ollama state ---
   let ollamaRunning = $state(false);
-  let ollamaModels = $state<string[]>([]);
+  let ollamaModels = $state<{ id: string; name: string }[]>([]);
   let ollamaChecking = $state(true);
 
   // --- OpenAI-compat configs ---
@@ -42,13 +42,26 @@
   let availableSelectionsForDefault = $state<{ label: string; value: string }[]>([]);
 
   function encodeSelection(s: ModelSelection): string {
-    return `${s.provider}:${s.modelId}${s.configId ? ':' + s.configId : ''}`;
+    // openai-compat: "openai-compat:<uuid>" (configId == modelId, no need to append twice)
+    // ollama: raw daemon ID, e.g. "ollama:llama3.2:latest" — stored as-is
+    // native: "native:<model-id>"
+    if (s.provider === 'openai-compat') return `openai-compat:${s.configId ?? s.modelId}`;
+    if (s.provider === 'ollama') return s.modelId; // already "ollama:<name>"
+    return `native:${s.modelId}`;
   }
   function decodeSelection(v: string): ModelSelection | null {
-    const parts = v.split(':');
-    if (parts.length < 2) return null;
-    const [provider, modelId, configId] = parts;
-    return { provider: provider as ModelSelection['provider'], modelId, configId };
+    if (v.startsWith('native:')) {
+      return { provider: 'native', modelId: v.slice('native:'.length) };
+    }
+    if (v.startsWith('openai-compat:')) {
+      const configId = v.slice('openai-compat:'.length);
+      return { provider: 'openai-compat', modelId: configId, configId };
+    }
+    if (v.startsWith('ollama:')) {
+      // Full daemon ID including any colons in the Ollama model name.
+      return { provider: 'ollama', modelId: v };
+    }
+    return null;
   }
 
   onMount(async () => {
@@ -61,7 +74,7 @@
       ollamaRunning = await ollamaAvailable();
       if (ollamaRunning) {
         const list = await chatModelList();
-        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => m.name);
+        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => ({ id: m.id, name: m.name }));
       }
     } catch (e) {
       log.warn('Ollama check failed', e);
@@ -81,9 +94,9 @@
         opts.push({ label: `Local — ${m.name}`, value: encodeSelection({ provider: 'native', modelId: m.id }) });
       }
     }
-    // Ollama models
-    for (const name of ollamaModels) {
-      opts.push({ label: `Ollama — ${name}`, value: encodeSelection({ provider: 'ollama', modelId: name }) });
+    // Ollama models — use daemon ID (already "ollama:<name>") as modelId
+    for (const m of ollamaModels) {
+      opts.push({ label: `Ollama — ${m.name}`, value: encodeSelection({ provider: 'ollama', modelId: m.id }) });
     }
     // OpenAI-compat configs
     for (const c of openAiConfigs) {
@@ -251,8 +264,8 @@
         <p class="mm-empty">No models found in Ollama.</p>
       {:else}
         <ul class="ollama-list">
-          {#each ollamaModels as name (name)}
-            <li class="ollama-item">{name}</li>
+          {#each ollamaModels as m (m.id)}
+            <li class="ollama-item">{m.name}</li>
           {/each}
         </ul>
       {/if}

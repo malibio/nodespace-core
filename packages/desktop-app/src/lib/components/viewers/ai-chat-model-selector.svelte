@@ -1,7 +1,7 @@
 <!--
   AiChatModelSelector — unified single-dropdown model picker for AiChatNodeViewer.
 
-  Replaces the two-step provider → AiChatModelPicker full-page flow with a compact
+  Replaces the two-step provider → model full-page flow with a compact
   dropdown in the chat header. Renders section headers (Local, Ollama, OpenAI-compat)
   and "Set up..." action as a native <select>-based custom UI.
 
@@ -89,8 +89,11 @@
     return `native:${m.id}`;
   }
 
+  // Ollama model IDs from the daemon already carry the "ollama:" prefix
+  // (e.g. "ollama:llama3.2:latest"). Use the raw ID as the option value so
+  // handleChange can pass it directly to the node without double-prefixing.
   function ollamaValue(m: ChatModelEntry): string {
-    return `ollama:${m.id}`;
+    return m.id;
   }
 
   function openAiValue(cfg: OpenAiCompatConfig): string {
@@ -198,10 +201,11 @@
       return;
     }
 
+    // Ollama option values are raw daemon model IDs ("ollama:<name>") — pass
+    // the full value directly so the daemon receives the correctly-prefixed ID.
     if (value.startsWith('ollama:')) {
-      const modelId = value.slice('ollama:'.length);
-      log.debug('Model selected', { provider: 'ollama', modelId, nodeId });
-      onSelect?.({ provider: 'ollama', modelId });
+      log.debug('Model selected', { provider: 'ollama', modelId: value, nodeId });
+      onSelect?.({ provider: 'ollama', modelId: value });
       return;
     }
 
@@ -210,7 +214,8 @@
       const cfg = openAiConfigs.find((c) => c.id === configId);
       if (!cfg) return;
       log.debug('OpenAI-compat config selected', { configId, nodeId });
-      onSelect?.({ provider: 'openai-compat', modelId: cfg.name, configId });
+      // Persist the config UUID as modelId so the selection survives reloads.
+      onSelect?.({ provider: 'openai-compat', modelId: configId, configId });
       return;
     }
   }
@@ -285,7 +290,7 @@
       {#if openAiConfigs.length > 0}
         <optgroup label="Custom endpoints">
           {#each openAiConfigs as cfg (cfg.id)}
-            <option value={openAiValue(cfg)}>{cfg.name}</option>
+            <option value={openAiValue(cfg)} disabled>{cfg.name} (coming soon)</option>
           {/each}
         </optgroup>
       {/if}
