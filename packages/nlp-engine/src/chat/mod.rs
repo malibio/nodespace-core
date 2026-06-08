@@ -804,14 +804,14 @@ fn strip_gemma_special_tokens(s: &str) -> String {
 ///   non-object (empty, malformed) is normalized to `"{}"`.
 fn chat_message_to_oai_value(msg: &ChatMessage) -> serde_json::Value {
     if msg.role == Role::Tool {
-        // Mistral's Jinja template requires "name" (the function name) on tool-result
+        // Ministral's Jinja template requires "name" (the function name) on tool-result
         // messages — absent → C++ exception → ffi error -3.
         let mut v = serde_json::json!({
             "role": "tool",
             "tool_call_id": msg.tool_call_id.as_deref().unwrap_or("unknown"),
             "content": msg.content,
         });
-        if let Some(name) = msg.name.as_deref() {
+        if let Some(name) = msg.name.as_deref().filter(|n| !n.is_empty()) {
             v["name"] = serde_json::Value::String(name.to_string());
         }
         v
@@ -1332,6 +1332,7 @@ mod tests {
         assert_eq!(v["role"], "tool");
         assert_eq!(v["tool_call_id"], "tc_1");
         assert_eq!(v["content"], "result text");
+        assert_eq!(v["name"], "my_tool");
     }
 
     #[test]
@@ -1342,7 +1343,7 @@ mod tests {
         let v = chat_message_to_oai_value(&m);
         assert_eq!(
             v["name"], "search_nodes",
-            "tool-result must carry \"name\" for Mistral Jinja template"
+            "tool-result must carry \"name\" for Ministral Jinja template"
         );
         assert_eq!(v["tool_call_id"], "tc_1");
         assert_eq!(v["content"], "[]");
@@ -1353,19 +1354,20 @@ mod tests {
         // Regression: ffi error -3 on Ministral 8B after 6+ tool-call round-trips.
         // Each tool-result message must carry "name" regardless of conversation depth.
         let results = [
-            ChatMessage::tool_result("r1", "tc_1", "search_nodes"),
-            ChatMessage::tool_result("r2", "tc_2", "search_nodes"),
-            ChatMessage::tool_result("r3", "tc_3", "search_nodes"),
-            ChatMessage::tool_result("r4", "tc_4", "search_nodes"),
-            ChatMessage::tool_result("r5", "tc_5", "search_nodes"),
-            ChatMessage::tool_result("r6", "tc_6", "search_nodes"),
-            ChatMessage::tool_result("r7", "tc_7", "search_nodes"),
+            ("tc_1", "search_nodes"),
+            ("tc_2", "search_nodes"),
+            ("tc_3", "search_nodes"),
+            ("tc_4", "search_nodes"),
+            ("tc_5", "search_nodes"),
+            ("tc_6", "get_node"),
+            ("tc_7", "search_nodes"),
         ];
-        for (i, msg) in results.iter().enumerate() {
-            let v = chat_message_to_oai_value(msg);
+        for (i, (call_id, tool_name)) in results.iter().enumerate() {
+            let msg = ChatMessage::tool_result(format!("r{}", i + 1), *call_id, *tool_name);
+            let v = chat_message_to_oai_value(&msg);
             assert_eq!(
                 v["name"],
-                "search_nodes",
+                *tool_name,
                 "tool-result #{} missing \"name\" field",
                 i + 1
             );
