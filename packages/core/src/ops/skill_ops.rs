@@ -3,14 +3,10 @@
 //! Shared logic for skill search used by the local agent's `search_skills`
 //! tool and the MCP `find_skills` handler exposed to external agents.
 //!
-//! Uses `semantic_search_nodes_of_type` so skill lookup runs a linear cosine
-//! scan against the small skill embedding set instead of going through HNSW
-//! + post-filter — faster *and* exact when the candidate set is small.
-//!
-//! Issues #1051, #1130, #1283, #1356.
+//! Issues #1051, #1130, #1283, #1356, #1392.
 
 use crate::models::Node;
-use crate::services::{NodeEmbeddingService, NodeService};
+use crate::services::{NodeEmbeddingService, NodeService, SearchNodeFilters};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -127,8 +123,17 @@ pub async fn find_skills(
 ) -> Result<FindSkillsOutput, OpsError> {
     let limit = input.limit.unwrap_or(3).min(MAX_SKILL_LIMIT);
 
+    let skill_filter = SearchNodeFilters {
+        node_types: Some(vec!["skill".to_string()]),
+        property_filters: None,
+    };
     let skill_results = embedding_service
-        .semantic_search_nodes_of_type(&input.query, "skill", limit, SKILL_SEARCH_THRESHOLD)
+        .semantic_search_nodes(
+            &input.query,
+            limit,
+            SKILL_SEARCH_THRESHOLD,
+            Some(&skill_filter),
+        )
         .await
         .map_err(|e| OpsError::Internal(format!("Skill search failed: {}", e)))?;
 
@@ -333,6 +338,23 @@ mod tests {
         let mut parts = Vec::new();
         render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
         assert_eq!(parts, vec!["Has content"]);
+    }
+
+    #[test]
+    fn skill_filter_matches_only_skill_nodes() {
+        // Validates that the SearchNodeFilters used in find_skills correctly
+        // selects skill-typed nodes and excludes others (BM25+KNN path relies
+        // on this post-filter for node_type restriction).
+        use crate::services::SearchNodeFilters;
+        let filter = SearchNodeFilters {
+            node_types: Some(vec!["skill".to_string()]),
+            property_filters: None,
+        };
+        let empty_props = serde_json::json!({});
+        assert!(filter.matches("skill", &empty_props));
+        assert!(!filter.matches("text", &empty_props));
+        assert!(!filter.matches("schema", &empty_props));
+        assert!(!filter.matches("ai-chat", &empty_props));
     }
 
     #[test]
