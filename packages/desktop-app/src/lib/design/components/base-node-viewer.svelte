@@ -1956,7 +1956,7 @@
 
   <!-- Backlinks Panel - outside scroll area, fixed at bottom of viewer -->
   {#if nodeId}
-    <BacklinksPanel {nodeId} />
+    <BacklinksPanel backlinks={currentViewedNode?.mentionedIn ?? []} />
   {/if}
 </div>
 

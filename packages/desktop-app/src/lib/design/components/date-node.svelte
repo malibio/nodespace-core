@@ -12,30 +12,17 @@
   import BaseNode from '$lib/design/components/base-node.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import type { NodeComponentProps } from '$lib/types/node-viewers.js';
-  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
   // Props following the NodeComponentProps interface (for individual node components)
   let {
     nodeId,
-    content: propsContent = '',
+    content = $bindable(''),
     autoFocus = false,
-    nodeType: propsNodeType = 'date',
-    children: propsChildren = []
+    nodeType = 'date',
+    children = []
   }: NodeComponentProps = $props();
 
   const dispatch = createEventDispatcher();
-
-  // Use sharedNodeStore as single source of truth for cross-pane reactivity
-  // This ensures content changes from other panes are immediately reflected
-  // Issue #679: Migrated from nodeData (which was never receiving updates)
-  let node = $derived(sharedNodeStore.getNode(nodeId));
-  let childIds = $derived(structureTree.getChildren(nodeId));
-
-  // Derive props from stores with fallback to passed props for backward compatibility
-  let content = $derived(node?.content ?? propsContent);
-  let nodeType = $derived(node?.nodeType ?? propsNodeType);
-  let children = $derived(childIds ?? propsChildren);
 
   // Parse date from content - expects YYYY-MM-DD format or similar
   function parseDate(content: string): Date | null {

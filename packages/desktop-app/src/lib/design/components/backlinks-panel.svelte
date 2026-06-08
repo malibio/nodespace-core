@@ -16,30 +16,9 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
-  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import type { NodeReference } from '$lib/types/node';
 
-  let { nodeId }: { nodeId: string } = $props();
-
-  // Use local state updated via store subscription for reliable reactivity
-  // Svelte 5's $derived doesn't reliably track Map.set() mutations
-  let backlinks = $state<NodeReference[]>([]);
-
-  // Helper to update backlinks from store
-  function updateBacklinks(id: string) {
-    const node = sharedNodeStore.nodes.get(id);
-    backlinks = node?.mentionedIn ?? [];
-  }
-
-  // Reactive subscription: re-subscribes when nodeId changes
-  // Uses $effect cleanup to unsubscribe from previous nodeId
-  $effect(() => {
-    updateBacklinks(nodeId);
-    const unsubscribe = sharedNodeStore.subscribe(nodeId, () => {
-      updateBacklinks(nodeId);
-    });
-    return unsubscribe;
-  });
+  let { backlinks = [] }: { backlinks?: NodeReference[] } = $props();
 
   let isOpen = $state(false);
 
