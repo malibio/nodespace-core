@@ -8,7 +8,7 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 
 **Built-in node types:**
 - `text` — freeform notes, documents, findings, summaries
-- `task` — structured to-do items; carry status (`todo`/`in_progress`/`done`) and priority
+- `task` — structured to-do items; carry `status` (`open`/`in_progress`/`done`/`cancelled`), `due_date` (YYYY-MM-DD), and `priority` (`low`/`medium`/`high`)
 - `date` — daily container nodes (e.g. "2026-05-30"); each day has one. Attach time-sensitive findings under the relevant date node so they're retrievable by day.
 
 **Hierarchy is first-class edges, not nesting.** A node has one parent edge. Children are ordered via fractional ordering — siblings have a stable position without gap-numbering. Moving or reordering a node is an edge operation (change the parent or sibling position), not a recreate-and-delete.
@@ -49,6 +49,29 @@ Run this preflight once per session or task, not before every individual command
 NodeSpace daemon must be running. The `nodespace` CLI communicates with `nodespaced` over a Unix socket. If the daemon is not running, CLI commands will fail with a connection error.
 
 Start the daemon: `nodespaced` (or it starts automatically on login if installed via DMG).
+
+## Tool Decision Guide
+
+Use this to pick the right tool when querying or searching:
+
+| Goal | Tool |
+|------|------|
+| Find nodes by keywords or meaning | `search_semantic` |
+| List all nodes of a type | `search_nodes(query="", node_type="...")` |
+| Filter by property values (status, due_date, priority, etc.) | `execute_query` |
+| Filter with comparison operators (gt, lt, gte, lte, in) | `execute_query` |
+| Get a specific node by ID | `get_node` |
+
+**`search_nodes` is for keyword/title search only.** Do not pass `filters={}` to filter by property values — use `execute_query` instead.
+
+**`execute_query` is the primary tool for structured property queries.** Examples:
+- "find all my open tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])`
+- "tasks due tomorrow" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])`
+- "tasks due this week" → `execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<YYYY-MM-DD start>"},{"type":"property","operator":"lte","property":"due_date","value":"<YYYY-MM-DD end>"}])`
+- "high priority tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"priority","value":"high"}])`
+- "cancelled tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"cancelled"}])`
+
+Date format for all date properties: **YYYY-MM-DD**. Available operators: `equals`, `contains`, `gt`, `lt`, `gte`, `lte`, `in`, `exists`.
 
 ## CLI Reference
 
@@ -117,6 +140,8 @@ nodespace node query --mentioned-by <node-id>
 - `--mentioned-by <id>` — nodes mentioned by the given node
 - `--limit <n>` — max results
 - `--offset <n>` — pagination offset
+
+**Note:** For property-level filtering (status, due_date, priority, etc.), use `execute_query` via the daemon API — the CLI `query` command does not support property filters.
 
 **Output:** JSON array of matching nodes
 
@@ -195,6 +220,21 @@ nodespace schema get person
 ```
 
 **Output:** Schema nodes as JSON (same shape as regular nodes; `node_type="schema"`)
+
+## Skills Reference
+
+NodeSpace agents route tasks through named skills. Each skill has a focused set of tools and guidance for a specific class of operation:
+
+| Skill | Description |
+|-------|-------------|
+| **Research & Search** | Search and explore the knowledge graph to find relevant information, discover connections, and answer questions about stored knowledge. |
+| **Node Creation** | Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type. |
+| **Schema Creation** | Define a new entity type or schema with custom fields, enums, and relationships, or modify an existing schema. Use when user says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice. |
+| **Graph Editing** | Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use `update_task_status` to change status. |
+| **Relationship Management** | Create connections between nodes, explore relationships, and traverse the knowledge graph. |
+| **Node Deletion** | Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record. |
+| **Bulk Import** | Import documents and create node hierarchies from markdown. Use when user wants to import, bulk create, or create nodes from a markdown document. |
+| **Organization** | Organize nodes into collections and categories. Use when user wants to add to a collection, categorize, or group nodes. |
 
 ## Common Agent Tasks
 
