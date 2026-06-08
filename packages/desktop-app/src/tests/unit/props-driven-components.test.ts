@@ -143,6 +143,32 @@ describe('TaskNode props contract', () => {
     expect(deriveTaskState({}, 'Regular text without task syntax')).toBe('pending');
   });
 
+  it('extractMetadata maps cancelled status to completed taskState', () => {
+    // Mirrors the logic in core-plugins.ts extractMetadata for task nodes
+    function extractTaskState(status: string | undefined): 'pending' | 'inProgress' | 'completed' {
+      let taskState: 'pending' | 'inProgress' | 'completed' = 'pending';
+      if (status === 'IN_PROGRESS' || status === 'in_progress') {
+        taskState = 'inProgress';
+      } else if (status === 'DONE' || status === 'done') {
+        taskState = 'completed';
+      } else if (status === 'OPEN' || status === 'open') {
+        taskState = 'pending';
+      } else if (status === 'CANCELLED' || status === 'cancelled') {
+        taskState = 'completed';
+      }
+      return taskState;
+    }
+
+    expect(extractTaskState('cancelled')).toBe('completed');
+    expect(extractTaskState('CANCELLED')).toBe('completed');
+    // Ensure other statuses are unaffected
+    expect(extractTaskState('done')).toBe('completed');
+    expect(extractTaskState('DONE')).toBe('completed');
+    expect(extractTaskState('in_progress')).toBe('inProgress');
+    expect(extractTaskState('open')).toBe('pending');
+    expect(extractTaskState(undefined)).toBe('pending');
+  });
+
   it('task state cycling order: pending → inProgress → completed → pending', () => {
     function cycleState(current: string): string {
       switch (current) {

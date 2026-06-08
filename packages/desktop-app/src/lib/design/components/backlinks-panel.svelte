@@ -6,11 +6,8 @@
   - List of node links with icons (like node tree, but without children)
   - Clean, minimal styling
 
-  Uses SharedNodeStore subscription pattern:
-  - mentionedIn is populated during root fetch (get_children_tree)
-  - Data includes {id, title, nodeType} for efficient display without N+1 queries
-  - Subscribes to node changes via store.subscribe() for reliable updates
-  - Updates when domain events trigger node refetch
+  Accepts backlinks as a prop — no store subscription needed.
+  Parent (base-node-viewer) derives mentionedIn from currentViewedNode and passes it in.
 -->
 
 <script lang="ts">

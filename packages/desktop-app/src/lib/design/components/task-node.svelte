@@ -26,7 +26,7 @@
   // Props using Svelte 5 runes mode - same interface as BaseNode
   let {
     nodeId,
-    nodeType = $bindable('task'),
+    nodeType = 'task',
     autoFocus = false,
     content = $bindable(''),
     children = [],
@@ -63,9 +63,6 @@
       isTyping = false;
     }
   }
-
-  // REFACTOR (Issue #316): Removed $effect for prop sync, will use bind:content instead
-  // Replaced $effect with $derived.by() for task state detection
 
   // Task-specific state management using $derived.by() for reactive computation
   // Priority: 1) metadata.taskState (pre-computed by extractNodeMetadata), 2) Content syntax, 3) Default
@@ -122,9 +119,6 @@
 
   /**
    * Update task state and sync with node manager
-   *
-   * REFACTOR (Issue #316): Removed direct taskState assignment since it's now $derived
-   * State updates flow through content/metadata changes, and taskState derives reactively
    *
    * WHY THIS FUNCTION STILL EXISTS:
    * Even though taskState is now a derived value (computed automatically from content/metadata),
@@ -184,11 +178,6 @@
   }
 
   /**
-   * REFACTOR (Issue #316): Removed $effect - taskState now derives automatically via $derived.by()
-   * No need for manual synchronization - state updates reactively from content/metadata changes
-   */
-
-  /**
    * Handle open button click to navigate to task viewer
    */
   async function handleOpenClick(event: MouseEvent) {
@@ -218,7 +207,6 @@
 </script>
 
 <!-- Wrap BaseNode with task-specific styling -->
-<!-- REFACTOR (Issue #316): Using bind:content and on:contentChanged instead of internalContent and handleContentChange -->
 <div
   class="task-node-wrapper"
   class:task-completed={taskState === 'completed'}
