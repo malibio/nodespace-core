@@ -54,32 +54,14 @@ pub async fn chat_model_list(
         .await
         .map_err(|e| grpc_err(e.message()))?;
 
-    // Fetch system RAM to decide whether to show the low-RAM fallback (3B).
-    let mut ram_client = grpc.local_agent_client().await;
-    let ram_gb = ram_client
-        .get_system_ram(GetSystemRamRequest {})
-        .await
-        .map(|r| r.into_inner().ram_bytes / (1024 * 1024 * 1024))
-        .unwrap_or(0);
-
     let models = resp
         .into_inner()
         .models
         .into_iter()
         .filter(|entry| {
-            if entry.backend != "gguf" {
-                return true; // Ollama models always pass through
-            }
-            if !entry.id.starts_with("ministral-") {
-                return false; // hide all non-Ministral GGUF models
-            }
-            // Hide the 3B fallback on machines with enough RAM for 8B.
-            // min_memory_gb == 8 identifies the 3B model; hide it when
-            // RAM >= 16 GB so users aren't confused by the smaller option.
-            if entry.min_memory_gb <= 8 && ram_gb >= 16 {
-                return false;
-            }
-            true
+            // Only Ministral 8B for the local GGUF path; all Ollama models pass through.
+            (entry.backend == "gguf" && entry.id == "ministral-8b-q4km")
+                || entry.backend != "gguf"
         })
         .map(|entry| {
             serde_json::json!({
