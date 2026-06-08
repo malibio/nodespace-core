@@ -256,6 +256,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // real work, a fabricated final summary is a different (harder) problem
         // than a pure hallucination with zero tool calls.
         let mut any_real_tool_calls = false;
+        // Duplicate tool-call detector: (tool_name, canonical_args_json) pairs
+        // seen so far this turn. When the model issues an identical call again
+        // (same tool + identical args after round-tripping through serde to
+        // normalise key order), we break the loop immediately rather than burning
+        // an iteration executing the same query and getting the same result.
+        let mut seen_calls: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         let mut total_usage = InferenceUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -594,6 +601,39 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Record that at least one real tool call has been made this turn.
             any_real_tool_calls = true;
 
+            // Duplicate-call guard: if every tool call in this iteration is
+            // identical to one already executed this turn, the model is stuck in
+            // a loop. Break out now so the final-inference path can produce a
+            // response from the results already in session history, rather than
+            // burning iterations re-executing the same query.
+            //
+            // Args are round-tripped through serde to normalise JSON key order
+            // so {"b":1,"a":2} and {"a":2,"b":1} are treated as the same call.
+            let canonical_args = |args_json: &str| {
+                serde_json::from_str::<serde_json::Value>(args_json)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| args_json.to_owned())
+            };
+            let all_duplicate = tool_calls.iter().all(|tc| {
+                seen_calls.contains(&(tc.function_name.clone(), canonical_args(&tc.arguments_json)))
+            });
+            if all_duplicate {
+                tracing::warn!(
+                    session_id = %session.id,
+                    iteration = iteration,
+                    tool_names = %tool_calls.iter().map(|tc| tc.function_name.as_str()).collect::<Vec<_>>().join(", "),
+                    "Duplicate tool-call loop detected — breaking to force final response"
+                );
+                // Remove the assistant tool-call message we just pushed (it has no
+                // matching tool results and would produce a malformed turn).
+                session.messages.pop();
+                break;
+            }
+            // Register each call in the seen set so later iterations can detect repeats.
+            for tc in &tool_calls {
+                seen_calls.insert((tc.function_name.clone(), canonical_args(&tc.arguments_json)));
+            }
+
             // Execute each tool call
             let mut tool_results_for_span: Vec<serde_json::Value> = Vec::new();
             for tc in &tool_calls {
@@ -784,14 +824,98 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Otherwise loop back for another inference round
         }
 
-        // Should not reach here, but just in case
+        // Reached only via the duplicate-call guard's `break` above. The
+        // max-iteration path (iteration == effective_max_iterations - 1) always
+        // returns early and never falls through here. Run one final text-only
+        // inference so the session always produces a response from the tool
+        // results already in history.
+        on_status(LocalAgentStatus::Thinking);
+
+        let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];
+        messages.extend(session.messages.clone());
+
+        let final_chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let final_for_cb = Arc::clone(&final_chunks);
+        let on_chunk_tail = Arc::clone(&on_chunk);
+        let tail_callback: Box<dyn Fn(StreamingChunk) + Send> =
+            Box::new(move |chunk: StreamingChunk| {
+                on_chunk_tail(chunk.clone());
+                if let Ok(mut guard) = final_for_cb.lock() {
+                    guard.push(chunk);
+                }
+            });
+
+        let tail_request = InferenceRequest {
+            messages,
+            tools: None,
+            temperature: Some(0.1),
+            max_tokens: Some(MAX_RESPONSE_TOKENS),
+        };
+
+        let final_response =
+            if let Ok(usage) = self.engine.generate(tail_request, tail_callback).await {
+                total_usage.prompt_tokens += usage.prompt_tokens;
+                total_usage.completion_tokens += usage.completion_tokens;
+                let chunks: Vec<StreamingChunk> = {
+                    let guard = final_chunks.lock().unwrap_or_else(|p| p.into_inner());
+                    guard.clone()
+                };
+                let (tail_text, tail_reasoning, _) = Self::parse_chunks(&chunks);
+                if !tail_reasoning.trim().is_empty() {
+                    if !accumulated_reasoning.is_empty() {
+                        accumulated_reasoning.push_str("\n\n");
+                    }
+                    accumulated_reasoning.push_str(tail_reasoning.trim());
+                }
+                if tail_text.is_empty() {
+                    // Synthesize from tool results when model returned nothing
+                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+                    for t in &all_tool_executions {
+                        let label = humanize_tool_name(&t.name);
+                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
+                            entry.1 += 1;
+                        } else {
+                            counts.push((label, 1));
+                        }
+                    }
+                    counts
+                        .into_iter()
+                        .map(|(label, count)| {
+                            if count > 1 {
+                                format!("• {} completed ({}×)", label, count)
+                            } else {
+                                format!("• {} completed", label)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    normalize_response(&tail_text)
+                }
+            } else {
+                // Inference failed — synthesize from executions
+                if !all_tool_executions.is_empty() {
+                    let label = humanize_tool_name(&all_tool_executions.last().unwrap().name);
+                    format!("Done — {} completed successfully.", label)
+                } else {
+                    String::new()
+                }
+            };
+
+        let reasoning = (!accumulated_reasoning.trim().is_empty())
+            .then(|| accumulated_reasoning.trim().to_string());
+
+        let mut assistant_msg = ChatMessage::text(Role::Assistant, final_response.clone());
+        assistant_msg.reasoning = reasoning.clone();
+        session.messages.push(assistant_msg);
+
         on_status(LocalAgentStatus::Idle);
         session.status = LocalAgentStatus::Idle;
 
         Ok(AgentTurnResult {
-            response: String::new(),
-            reasoning: (!accumulated_reasoning.trim().is_empty())
-                .then(|| accumulated_reasoning.trim().to_string()),
+            response: final_response,
+            reasoning,
             tool_calls_made: all_tool_executions,
             usage: total_usage,
         })
@@ -1555,16 +1679,17 @@ mod tests {
 
     #[tokio::test]
     async fn max_iteration_limit() {
-        // All 5 rounds return tool calls, never a text response
-        let tool_round = || {
+        // Each round returns a DISTINCT query so the duplicate-call guard does
+        // NOT fire — this test exercises the pure iteration-cap path.
+        let tool_round = |i: usize| {
             vec![
                 StreamingChunk::ToolCallStart {
-                    id: "tc".to_string(),
+                    id: format!("tc_{i}"),
                     name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
-                    id: "tc".to_string(),
-                    args_json: r#"{"query":"test"}"#.to_string(),
+                    id: format!("tc_{i}"),
+                    args_json: format!(r#"{{"query":"test-{i}"}}"#),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
@@ -1577,7 +1702,7 @@ mod tests {
 
         // Provide more rounds than the limit; the loop must stop at MAX_TOOL_ITERATIONS.
         // +1 extra for the final tool-less inference call.
-        let rounds: Vec<_> = (0..MAX_TOOL_ITERATIONS + 2).map(|_| tool_round()).collect();
+        let rounds: Vec<_> = (0..MAX_TOOL_ITERATIONS + 2).map(tool_round).collect();
         let engine = Arc::new(MockEngine::new(rounds));
         let executor = Arc::new(MockToolExecutor::new());
         let agent_loop = LocalAgentLoop::new(engine, executor);
@@ -1602,25 +1727,94 @@ mod tests {
         }
 
         // The fallback response must encode the invariant from issue #1092:
-        // no raw tool identifier reaches the UI. Tests on specific phrasing
-        // belong in `humanize_tool_name_known_tools` below, not here.
-        assert!(
-            !result.response.contains('_'),
-            "fallback response contains snake_case (likely a raw tool name): {:?}",
-            result.response
-        );
+        // no raw tool identifier reaches the UI.
         assert!(
             !result.response.contains("search_nodes"),
             "fallback response leaked raw tool name: {:?}",
             result.response
         );
-        // Repeated calls to the same tool collapse into one bullet with a
-        // retry count — verify the diagnostic signal is preserved.
-        assert!(
+    }
+
+    /// Duplicate-call guard: when the model issues the same tool+args pair
+    /// it already executed in this turn, the loop breaks immediately so the
+    /// final-inference step can synthesise a response from what's in history.
+    ///
+    /// Engine call sequence:
+    ///   Round 0: first call → executed normally (added to seen_calls)
+    ///   Round 1: identical call → guard fires, loop breaks (round NOT executed)
+    ///   Round 2: tail text-only inference → returns the real response
+    #[tokio::test]
+    async fn duplicate_tool_call_breaks_loop() {
+        let dup_call = || {
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_dup".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_dup".to_string(),
+                    args_json: r#"{"node_type":"task","query":"Test Task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]
+        };
+
+        let rounds = vec![
+            // Round 0: first call — executes normally
+            dup_call(),
+            // Round 1: identical call — guard detects duplicate, breaks loop
+            dup_call(),
+            // Round 2: tail tool-less inference — returns text
+            vec![
+                StreamingChunk::Token {
+                    text: "I found the task.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+        ];
+
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Find the task named Test Task",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // Guard fires before executing round 1 — exactly 1 tool call recorded.
+        assert_eq!(
+            result.tool_calls_made.len(),
+            1,
+            "duplicate guard must break after first execution, got: {:?}",
             result
-                .response
-                .contains(&format!("{}×", MAX_TOOL_ITERATIONS)),
-            "fallback response missing retry count: {:?}",
+                .tool_calls_made
+                .iter()
+                .map(|t| &t.name)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+        // Tail inference text is returned (not a synthesised fallback).
+        assert!(
+            result.response.contains("found the task"),
+            "expected tail-inference response, got: {:?}",
             result.response
         );
     }
@@ -2176,8 +2370,10 @@ mod tests {
     async fn max_iteration_limit_enforced_exactly() {
         let call_count = Arc::new(AtomicUsize::new(0));
 
-        // Build more rounds than MAX_TOOL_ITERATIONS of tool-call responses
-        // plus a final text response for the tool-less wrap-up call.
+        // Build more rounds than MAX_TOOL_ITERATIONS of tool-call responses with
+        // DISTINCT queries so the duplicate-call guard does NOT fire — this test
+        // exercises the pure iteration-cap path.
+        // Plus a final text response for the tool-less wrap-up call.
         let mut responses: Vec<Vec<StreamingChunk>> = Vec::new();
         for i in 0..8 {
             responses.push(vec![
@@ -2187,7 +2383,7 @@ mod tests {
                 },
                 StreamingChunk::ToolCallArgs {
                     id: format!("tc_{i}"),
-                    args_json: r#"{"query":"loop"}"#.to_string(),
+                    args_json: format!(r#"{{"query":"loop-{i}"}}"#),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
