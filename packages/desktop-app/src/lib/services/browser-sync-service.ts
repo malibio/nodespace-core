@@ -97,7 +97,7 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 class BrowserSyncService {
   private eventSource: EventSource | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private readonly maxReconnectDelay = 30_000; // 30 second ceiling
   private baseReconnectDelay = 1000; // 1 second
   private connectionState: ConnectionState = 'disconnected';
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -155,7 +155,11 @@ class BrowserSyncService {
       this.eventSource = new EventSource(sseUrl);
 
       this.eventSource.onopen = () => {
-        log.info('SSE connection established');
+        if (this.reconnectAttempts > 0) {
+          log.info(`SSE reconnected after ${this.reconnectAttempts} attempt(s)`);
+        } else {
+          log.info('SSE connection established');
+        }
         this.connectionState = 'connected';
         this.reconnectAttempts = 0;
       };
@@ -330,20 +334,16 @@ class BrowserSyncService {
   }
 
   /**
-   * Schedule reconnection with exponential backoff
+   * Schedule reconnection with capped exponential backoff.
+   * Retries indefinitely — temporary outages (e.g. Vite HMR restart) self-heal.
    */
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      log.error('Max reconnect attempts reached. Real-time sync disabled.');
-      log.error('Please check if dev-proxy is running (bun run dev:browser)');
-      return;
-    }
-
     this.reconnectAttempts++;
-    const delay = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-    log.info(
-      `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectDelay
     );
+    log.info(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;

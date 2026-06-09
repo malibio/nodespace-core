@@ -498,14 +498,14 @@ impl LocalAgentServiceImpl {
     // ---------------------------------------------------------------------------
 
     /// Write `properties['ai-chat']['status']` to the node.
-    /// Retries once on version conflict (optimistic concurrency).
+    /// Retries up to 5 times on version conflict (optimistic concurrency).
     async fn write_ai_chat_status(
         &self,
         node_id: &str,
         status: &str,
         model: Option<&str>,
     ) -> Result<(), String> {
-        for attempt in 0..2 {
+        for attempt in 0..5 {
             let node = self
                 .inner
                 .node_service
@@ -548,7 +548,7 @@ impl LocalAgentServiceImpl {
     }
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
-    /// Retries once on version conflict. `reasoning` is the model's captured
+    /// Retries up to 5 times on version conflict. `reasoning` is the model's captured
     /// chain-of-thought, persisted alongside the answer when present.
     async fn append_assistant_message(
         &self,
@@ -556,7 +556,7 @@ impl LocalAgentServiceImpl {
         content: &str,
         reasoning: Option<&str>,
     ) -> Result<(), String> {
-        for attempt in 0..2 {
+        for attempt in 0..5 {
             let node = self
                 .inner
                 .node_service
