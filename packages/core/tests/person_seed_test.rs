@@ -1,11 +1,10 @@
 //! Local PersonNode seeding tests (Issue #133, ADR-037)
 //!
 //! ADR-037 mandates that every install — free included — seeds exactly one
-//! local PersonNode (the local user, `auth_status: "local"`). On Pro upgrade
-//! this node is *bound* to a Supabase identity (nodespace-sync#125), not
-//! recreated. These tests verify:
+//! local PersonNode (the local user). On Pro upgrade this node is bound to a
+//! Supabase identity (nodespace-sync#125), not recreated. These tests verify:
 //! 1. Constructing a NodeService on a fresh database seeds exactly one person.
-//! 2. The seeded person carries `auth_status: "local"`.
+//! 2. The seeded person has no auth_status (that lives on DatabaseSettingsNode, #1398).
 //! 3. Re-opening the same database does NOT create a second person (idempotent).
 
 #[cfg(test)]
@@ -29,16 +28,14 @@ mod person_seed_tests {
             1,
             "a fresh install must seed exactly one local PersonNode"
         );
-        // Properties are stored namespaced under the node type:
-        // properties["person"]["auth_status"].
-        assert_eq!(
+        // auth_status lives on DatabaseSettingsNode (#1398), not on PersonNode
+        assert!(
             people[0]
                 .properties
                 .get("person")
                 .and_then(|p| p.get("auth_status"))
-                .and_then(|v| v.as_str()),
-            Some("local"),
-            "the seeded PersonNode must be the local user (auth_status: local)"
+                .is_none(),
+            "seeded PersonNode must not carry auth_status — that belongs on DatabaseSettingsNode"
         );
 
         Ok(())
