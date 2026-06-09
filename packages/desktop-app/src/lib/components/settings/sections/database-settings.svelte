@@ -2,30 +2,31 @@
     import { appSettings, loadSettings } from '$lib/stores/settings';
     import { invoke } from '@tauri-apps/api/core';
     import { createLogger } from '$lib/utils/logger';
+    import { Button } from '$lib/components/ui/button';
 
     const log = createLogger('DatabaseSettings');
 
     let restartPending = $state(false);
 </script>
 
-<div class="settings-section">
-    <h2>Database</h2>
+<div class="max-w-[600px]">
+    <h2 class="text-foreground mb-6 text-xl font-semibold">Database</h2>
 
-    <div class="setting-group">
-        <span class="setting-label">Active Database Path</span>
-        <div class="setting-value path-display">
+    <div class="mb-6">
+        <span class="text-muted-foreground mb-2 block text-sm font-medium">Active Database Path</span>
+        <div class="text-foreground bg-muted rounded-[var(--radius)] break-all px-3 py-2 font-mono text-sm">
             {$appSettings?.activeDatabasePath ?? 'Loading...'}
         </div>
     </div>
 
     {#if restartPending}
-        <div class="restart-notice">
+        <div class="border-amber-500/30 bg-amber-500/10 text-amber-700 rounded-[var(--radius)] mb-4 border px-3 py-2 text-sm">
             Restart required for the new database path to take effect.
         </div>
     {/if}
 
-    <div class="setting-actions">
-        <button class="btn btn-secondary" onclick={async () => {
+    <div class="mt-4 flex gap-3">
+        <Button variant="secondary" onclick={async () => {
             try {
                 const result = await invoke<{ newPath: string; success: boolean; restartRequired: boolean }>('select_new_database');
                 if (result.success) {
@@ -41,9 +42,9 @@
             }
         }}>
             Change Location...
-        </button>
+        </Button>
 
-        <button class="btn btn-outline" onclick={async () => {
+        <Button variant="outline" onclick={async () => {
             try {
                 await invoke<string>('reset_database_to_default');
                 await loadSettings();
@@ -53,22 +54,6 @@
             }
         }}>
             Reset to Default
-        </button>
+        </Button>
     </div>
 </div>
-
-<style>
-    .settings-section { max-width: 600px; }
-    h2 { font-size: 1.25rem; font-weight: 600; color: hsl(var(--foreground)); margin: 0 0 1.5rem 0; }
-    .setting-group { margin-bottom: 1.5rem; }
-    .setting-label { display: block; font-size: 0.875rem; font-weight: 500; color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem; }
-    .setting-value { font-size: 0.875rem; color: hsl(var(--foreground)); }
-    .path-display { font-family: monospace; background: hsl(var(--muted)); padding: 0.5rem 0.75rem; border-radius: var(--radius); word-break: break-all; }
-    .restart-notice { font-size: 0.875rem; color: hsl(var(--warning, 38 92% 50%)); background: hsl(var(--warning, 38 92% 50%) / 0.1); border: 1px solid hsl(var(--warning, 38 92% 50%) / 0.3); padding: 0.5rem 0.75rem; border-radius: var(--radius); margin-bottom: 1rem; }
-    .setting-actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
-    .btn { padding: 0.5rem 1rem; border-radius: var(--radius); font-size: 0.875rem; cursor: pointer; border: 1px solid transparent; }
-    .btn-secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
-    .btn-secondary:hover { opacity: 0.9; }
-    .btn-outline { background: transparent; border-color: hsl(var(--border)); color: hsl(var(--foreground)); }
-    .btn-outline:hover { background: hsl(var(--muted) / 0.5); }
-</style>
