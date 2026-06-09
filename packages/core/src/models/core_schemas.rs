@@ -291,7 +291,30 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            fields: vec![],        // Uses content for name
+            // ADR-037 #1372: opt-in restriction. A Core-protected boolean; the Pro
+            // RLS layer reads `properties->>'restrictedToMembers'` to gate access.
+            // Default/absent = false = open (organizational). member_of edge
+            // `permission` (admin/modify/readOnly) is a free-form edge property the
+            // RLS reads directly — no schema field needed.
+            fields: vec![SchemaField {
+                name: "restrictedToMembers".to_string(),
+                field_type: "boolean".to_string(),
+                protection: SchemaProtectionLevel::Core,
+                core_values: None,
+                user_values: None,
+                indexed: false,
+                required: Some(false),
+                extensible: None,
+                default: Some(serde_json::json!(false)),
+                description: Some(
+                    "When true, only person members may access this collection's \
+                     nodes (ADR-037 opt-in restriction). Default false = open."
+                        .to_string(),
+                ),
+                item_type: None,
+                fields: None,
+                item_fields: None,
+            }],
             relationships: vec![], // member_of is a native edge, not schema-defined
             title_template: None,
             properties_header_summary_template: None,
@@ -958,7 +981,6 @@ mod tests {
             "code-block",
             "quote-block",
             "ordered-list",
-            "collection",
             "checkbox",
         ] {
             let schema = schemas.iter().find(|s| s.id == *id).unwrap();
@@ -968,6 +990,19 @@ mod tests {
                 id
             );
         }
+    }
+
+    #[test]
+    fn test_collection_has_restricted_to_members_field() {
+        // ADR-037 #1372: opt-in restriction is a Core-protected boolean on collection.
+        let schemas = get_core_schemas();
+        let collection = schemas.iter().find(|s| s.id == "collection").unwrap();
+        let field = collection
+            .get_field("restrictedToMembers")
+            .expect("collection has restrictedToMembers");
+        assert_eq!(field.field_type, "boolean");
+        assert_eq!(field.protection, SchemaProtectionLevel::Core);
+        assert_eq!(field.default, Some(serde_json::json!(false)));
     }
 
     #[test]
