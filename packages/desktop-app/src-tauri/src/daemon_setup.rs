@@ -208,6 +208,15 @@ fn home_dir() -> Option<PathBuf> {
 
 // ── macOS: launchd ────────────────────────────────────────────────────────────
 
+/// Escape a string for safe embedding inside an XML `<string>` element.
+/// Handles the three characters that are special in XML character data.
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(target_os = "macos")]
 fn launch_agents_dir(home: &Path) -> PathBuf {
     home.join("Library/LaunchAgents")
@@ -223,10 +232,15 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
-    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
-    let db_path = format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR);
-    let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
-    let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
+    let socket_path = xml_escape(&format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE));
+    let db_path = xml_escape(&format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR));
+    let log_out = xml_escape(&format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR));
+    let log_err = xml_escape(&format!(
+        "{}/{}/nodespaced-error.log",
+        home_str, DAEMON_LOG_DIR
+    ));
+    let bin_escaped = xml_escape(&bin_str);
+    let label_escaped = xml_escape(LAUNCH_AGENT_LABEL);
 
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -257,8 +271,8 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 </dict>
 </plist>
 "#,
-        label = LAUNCH_AGENT_LABEL,
-        bin = bin_str,
+        label = label_escaped,
+        bin = bin_escaped,
         socket = socket_path,
         db = db_path,
         log_out = log_out,
@@ -381,11 +395,9 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
         .with_context(|| format!("Cannot write service file to {}", service_path.display()))
 }
 
-/// Enable and start (or restart) the systemd user service.
+/// Enable and start the systemd user service.
 #[cfg(target_os = "linux")]
 fn enable_systemd_service() -> Result<()> {
-    let service_name = SYSTEMD_SERVICE_NAME;
-
     // Reload unit files so systemd picks up the newly written service.
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
@@ -396,29 +408,23 @@ fn enable_systemd_service() -> Result<()> {
         tracing::warn!("systemctl daemon-reload failed: {}", err);
     }
 
-    // Enable so it starts on login.
+    // Enable and start atomically; --now avoids a separate start call and
+    // handles the "never started before" case correctly on all systemd versions.
     let enable = std::process::Command::new("systemctl")
-        .args(["--user", "enable", service_name])
+        .args(["--user", "enable", "--now", SYSTEMD_SERVICE_NAME])
         .output()
-        .context("Failed to run systemctl --user enable")?;
+        .context("Failed to run systemctl --user enable --now")?;
     if !enable.status.success() {
         let err = String::from_utf8_lossy(&enable.stderr);
-        tracing::warn!("systemctl enable failed: {}", err);
-    }
-
-    // Start or restart the service.
-    let start = std::process::Command::new("systemctl")
-        .args(["--user", "restart", service_name])
-        .output()
-        .context("Failed to run systemctl --user restart")?;
-    if !start.status.success() {
-        let err = String::from_utf8_lossy(&start.stderr);
         tracing::warn!(
-            "systemctl restart failed (daemon may start on next login): {}",
+            "systemctl enable --now failed (daemon may start on next login): {}",
             err
         );
     } else {
-        tracing::info!("systemd user service started: {}", service_name);
+        tracing::info!(
+            "systemd user service enabled and started: {}",
+            SYSTEMD_SERVICE_NAME
+        );
     }
 
     Ok(())

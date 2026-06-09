@@ -22,7 +22,7 @@ pub mod services;
 pub mod watcher;
 
 // Daemon lifecycle: launchd (macOS) and systemd (Linux)
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod daemon_setup;
 
 // First-launch skill installer (Issue #1199)
@@ -45,7 +45,7 @@ fn toggle_sidebar() -> String {
 /// to decide whether to show an error state (Issue #1179).
 #[tauri::command]
 async fn check_daemon_status() -> String {
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use daemon_setup::{check_daemon_socket, DaemonStatus};
 
@@ -60,7 +60,7 @@ async fn check_daemon_status() -> String {
             DaemonStatus::NotRunning => "not_running".to_string(),
         };
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     "healthy".to_string()
 }
 
@@ -213,7 +213,7 @@ pub fn run() {
             // setup() is synchronous so we can't block_on here — spawn a task instead.
             // manage(GrpcClient) happens inside the task; commands that need it will
             // fail gracefully until the connection is established.
-            #[cfg(unix)]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 use tauri::Emitter;
 
