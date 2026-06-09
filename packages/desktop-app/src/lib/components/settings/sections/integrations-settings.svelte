@@ -129,9 +129,9 @@
         {#if status === null}
           <Badge variant="secondary">Checking…</Badge>
         {:else if pathIsConfigured}
-          <Badge class="border-green-500/25 bg-green-500/12 text-green-700">Configured</Badge>
+          <Badge class="border-green-500/25 bg-green-500/10 text-green-700">Configured</Badge>
         {:else}
-          <Badge class="border-amber-500/25 bg-amber-500/12 text-amber-700">Not configured</Badge>
+          <Badge class="border-amber-500/25 bg-amber-500/10 text-amber-700">Not configured</Badge>
         {/if}
       </div>
       <p class="text-muted-foreground m-0 text-sm leading-relaxed">
@@ -172,9 +172,9 @@
         {:else if status === null}
           <Badge variant="secondary">Checking…</Badge>
         {:else if skillIsInstalled}
-          <Badge class="border-green-500/25 bg-green-500/12 text-green-700">Installed</Badge>
+          <Badge class="border-green-500/25 bg-green-500/10 text-green-700">Installed</Badge>
         {:else}
-          <Badge class="border-amber-500/25 bg-amber-500/12 text-amber-700">Not installed</Badge>
+          <Badge class="border-amber-500/25 bg-amber-500/10 text-amber-700">Not installed</Badge>
         {/if}
       </div>
       <p class="text-muted-foreground m-0 text-sm leading-relaxed">
@@ -188,7 +188,7 @@
     </CardHeader>
     <CardContent class="px-5 pb-5">
       {#if claudeDetected && skillResult?.cliWarning}
-        <div class="mb-4 flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/8 px-3.5 py-2.5 text-sm leading-relaxed text-amber-700">
+        <div class="mb-4 flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3.5 py-2.5 text-sm leading-relaxed text-amber-700">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" class="mt-0.5 shrink-0" aria-hidden="true">
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             <line x1="12" y1="9" x2="12" y2="13" />
