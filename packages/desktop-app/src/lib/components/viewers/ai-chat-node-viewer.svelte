@@ -37,6 +37,8 @@
     localAgentCancelTurn,
     ensureModelReady,
   } from '$lib/services/tauri-commands';
+  import { backendAdapter } from '$lib/services/backend-adapter';
+  import { browserSyncService } from '$lib/services/browser-sync-service';
   import { statusBar } from '$lib/stores/status-bar';
   import { createLogger } from '$lib/utils/logger';
 
@@ -351,6 +353,47 @@
     if (!nodeReady && node) {
       nodeReady = true;
     }
+  });
+
+  // In browser mode (no Tauri streaming events), poll the backend while processing
+  // so the UI updates even if the SSE connection is temporarily unavailable.
+  // Capped at 15 attempts (30 s) to avoid flooding the proxy when the daemon
+  // is stuck or SSE never recovers.
+  $effect(() => {
+    if (isTauri() || !isProcessing) return;
+
+    const MAX_ATTEMPTS = 15;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    async function poll(): Promise<void> {
+      if (cancelled || attempts >= MAX_ATTEMPTS) return;
+      attempts++;
+      try {
+        const fetched = await backendAdapter.getNode(nodeId);
+        if (fetched && !cancelled) {
+          sharedNodeStore.setNode(fetched, { type: 'database', reason: 'poll' }, true);
+          // If SSE is down, nudge it to reconnect.
+          if (!browserSyncService.isConnected()) {
+            browserSyncService.initialize().catch(() => {/* ignore */});
+          }
+        }
+      } catch {
+        // Polling failures are non-fatal — SSE will deliver when reconnected.
+      }
+      if (!cancelled && attempts < MAX_ATTEMPTS) {
+        timer = setTimeout(poll, 2000);
+      }
+    }
+
+    // Start first poll after 2 s to give SSE a chance to deliver first.
+    timer = setTimeout(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   });
 </script>
 
