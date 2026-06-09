@@ -183,6 +183,21 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
+        // Person schema - the ADR-037 identity primitive (content = name; no extra
+        // fields). PersonNodeBehavior owns validation + the computed display name.
+        SchemaNode {
+            id: "person".to_string(),
+            content: "Person".to_string(),
+            version: 1,
+            created_at: now,
+            modified_at: now,
+            is_core: true,
+            schema_version: 1,
+            fields: vec![],
+            relationships: vec![],
+            title_template: None,
+            properties_header_summary_template: None,
+        },
         // Date schema - daily note containers (no extra fields)
         SchemaNode {
             id: "date".to_string(),
@@ -879,7 +894,9 @@ mod tests {
     #[test]
     fn test_get_core_schemas_returns_all() {
         let schemas = get_core_schemas();
-        assert_eq!(schemas.len(), 15);
+        assert_eq!(schemas.len(), 16);
+        // ADR-037 #133: the person identity type is a core schema.
+        assert!(schemas.iter().any(|s| s.id == "person"));
     }
 
     #[test]

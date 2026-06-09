@@ -1870,6 +1870,81 @@ impl NodeBehavior for ToolNodeBehavior {
     }
 }
 
+/// Behavior for `person` nodes — the identity primitive for the ADR-037 access
+/// model ("members of a restricted collection = person nodes only").
+///
+/// Owns the PersonNode *type* only (validation + a computed display name). No
+/// PersonNode instance is created here; the first PersonNode is created, named,
+/// and bound to a Supabase identity at Pro sync-onboarding (nodespace-sync#125).
+pub struct PersonNodeBehavior;
+
+impl NodeBehavior for PersonNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "person"
+    }
+
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        // A person must have a name (stored in content) — membership and the
+        // computed display name both rely on it.
+        if node.content.trim().is_empty() {
+            return Err(NodeValidationError::MissingField(
+                "Person name (content) cannot be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn can_have_children(&self) -> bool {
+        false // A person is an identity, not a structural container.
+    }
+
+    fn supports_markdown(&self) -> bool {
+        false // Names are plain text.
+    }
+
+    fn default_metadata(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    /// A person's name is its embeddable content (so people are searchable).
+    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
+        let name = node.content.trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    }
+
+    /// People are grantees, not content — they don't contribute to parent embeddings.
+    fn get_parent_contribution(&self, _node: &Node) -> Option<String> {
+        None
+    }
+}
+
+impl PersonNodeBehavior {
+    /// Computed display name for a person: an explicit `custom:displayName`
+    /// property override if present and non-empty, else the node content (the
+    /// name), else a stable placeholder. The single place the rest of the app
+    /// should derive a person's shown name from.
+    pub fn display_name(&self, node: &Node) -> String {
+        node.properties
+            .get("custom:displayName")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                let c = node.content.trim();
+                if c.is_empty() {
+                    "Unknown Person".to_string()
+                } else {
+                    c.to_string()
+                }
+            })
+    }
+}
+
 /// Maximum allowed nesting depth for tool parameter schemas.
 ///
 /// Bounded nesting prevents external tools from registering schemas that could
@@ -2102,6 +2177,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(PromptNodeBehavior));
         registry.register(Arc::new(SkillNodeBehavior));
         registry.register(Arc::new(ToolNodeBehavior));
+        registry.register(Arc::new(PersonNodeBehavior));
 
         registry
     }
@@ -2800,7 +2876,8 @@ mod tests {
         assert!(types.contains(&"prompt".to_string()));
         assert!(types.contains(&"skill".to_string()));
         assert!(types.contains(&"tool".to_string()));
-        assert_eq!(types.len(), 16);
+        assert!(types.contains(&"person".to_string()));
+        assert_eq!(types.len(), 17);
     }
 
     #[test]
@@ -4407,6 +4484,47 @@ mod tests {
             behavior.get_embeddable_content(&empty).is_none(),
             "Custom type with empty content should NOT be embeddable"
         );
+    }
+
+    // PersonNodeBehavior tests (ADR-037, #133) --------------------------------
+
+    #[test]
+    fn person_node_validates_name_and_registers() {
+        let behavior = PersonNodeBehavior;
+        assert_eq!(behavior.type_name(), "person");
+        assert!(!behavior.can_have_children());
+
+        let alice = Node::new("person".to_string(), "Alice".to_string(), json!({}));
+        assert!(behavior.validate(&alice).is_ok());
+        // a person's name is embeddable (searchable)
+        assert_eq!(
+            behavior.get_embeddable_content(&alice).as_deref(),
+            Some("Alice")
+        );
+
+        // an unnamed person is rejected
+        let nameless = Node::new("person".to_string(), "   ".to_string(), json!({}));
+        assert!(behavior.validate(&nameless).is_err());
+
+        // registered as a built-in type
+        assert!(NodeBehaviorRegistry::new().get("person").is_some());
+    }
+
+    #[test]
+    fn person_display_name_prefers_override_then_content() {
+        let behavior = PersonNodeBehavior;
+        let n = Node::new("person".to_string(), "Alice Smith".to_string(), json!({}));
+        assert_eq!(behavior.display_name(&n), "Alice Smith");
+
+        let overridden = Node::new(
+            "person".to_string(),
+            "alice".to_string(),
+            json!({"custom:displayName": "Alice S."}),
+        );
+        assert_eq!(behavior.display_name(&overridden), "Alice S.");
+
+        let empty = Node::new("person".to_string(), "".to_string(), json!({}));
+        assert_eq!(behavior.display_name(&empty), "Unknown Person");
     }
 
     // ToolNodeBehavior tests (issue #1353) ------------------------------------
