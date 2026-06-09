@@ -1,16 +1,18 @@
-//! launchd-based daemon lifecycle management (Issue #1179).
+//! Daemon lifecycle management — macOS (launchd) and Linux (systemd).
 //!
 //! On first launch:
 //!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
 //!   2. Copy them to ~/.nodespace/bin/ (skipped if dest already matches bundled size).
-//!   3. Write a launchd user-agent plist to ~/Library/LaunchAgents/.
-//!   4. Bootstrap the agent via `launchctl bootstrap gui/<uid> <plist>`.
+//!   3. Register the daemon as a user service:
+//!      - macOS: write ~/Library/LaunchAgents/app.nodespace.daemon.plist and bootstrap it.
+//!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
+//!   4. Wait for the Unix Domain Socket to appear (cold-start model load can take ~9s).
 //!
 //! On subsequent launches:
-//!   - Check if the Unix Domain Socket exists and the daemon responds to a gRPC ping.
+//!   - Check if the socket exists and the daemon responds (cheap path).
 //!   - If already healthy: no-op.
-//!   - If plist is registered but daemon crashed: `launchctl kickstart` it.
-//!   - If plist is missing (e.g. clean install): re-run first-launch setup.
+//!   - If service is registered but daemon crashed: restart it.
+//!   - If service is missing (e.g. clean install): re-run first-launch setup.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,12 +23,19 @@ use tokio::time::timeout;
 
 use crate::constants::DAEMON_SOCKET_RELATIVE;
 
-const LAUNCH_AGENT_LABEL: &str = "app.nodespace.daemon";
 const DAEMON_BIN_DIR: &str = ".nodespace/bin";
+const DAEMON_DB_DIR: &str = ".nodespace/database";
 const DAEMON_LOG_DIR: &str = ".nodespace/logs";
-const PLIST_FILENAME: &str = "app.nodespace.daemon.plist";
 const DAEMON_BINARY_NAME: &str = "nodespaced";
 const CLI_BINARY_NAME: &str = "nodespace";
+
+#[cfg(target_os = "macos")]
+const LAUNCH_AGENT_LABEL: &str = "app.nodespace.daemon";
+#[cfg(target_os = "macos")]
+const PLIST_FILENAME: &str = "app.nodespace.daemon.plist";
+
+#[cfg(target_os = "linux")]
+const SYSTEMD_SERVICE_NAME: &str = "nodespace.service";
 
 /// Result of the daemon health check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +48,7 @@ pub enum DaemonStatus {
     NotRunning,
 }
 
-/// Ensure nodespaced is installed as a launchd user agent and running.
+/// Ensure nodespaced is installed as a user service (launchd/systemd) and running.
 ///
 /// Call this from the Tauri setup block. It is non-fatal: logs errors
 /// and returns them so the caller can emit an appropriate UI error state.
@@ -47,7 +56,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let home = home_dir().context("Cannot resolve home directory")?;
     let bin_dir = home.join(DAEMON_BIN_DIR);
     let log_dir = home.join(DAEMON_LOG_DIR);
-    let plist_path = launch_agents_dir(&home).join(PLIST_FILENAME);
+    let db_dir = home.join(DAEMON_DB_DIR);
     let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
     let daemon_bin = bin_dir.join(DAEMON_BINARY_NAME);
 
@@ -58,24 +67,36 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
         return Ok(DaemonStatus::Healthy);
     }
 
-    // Need to (re)start the daemon. Ensure directories exist.
+    // Need to (re)start the daemon. Ensure all directories exist.
     tokio::fs::create_dir_all(&bin_dir)
         .await
         .context("Failed to create ~/.nodespace/bin")?;
     tokio::fs::create_dir_all(&log_dir)
         .await
         .context("Failed to create ~/.nodespace/logs")?;
-    // ~/.nodespace itself is created implicitly by bin/log dirs above.
+    tokio::fs::create_dir_all(&db_dir)
+        .await
+        .context("Failed to create ~/.nodespace/database")?;
 
-    // Extract sidecar binaries from the .app bundle if missing or outdated.
+    // Extract sidecar binaries from the app bundle if missing or outdated.
     extract_sidecar_if_changed(app, DAEMON_BINARY_NAME, &bin_dir).await?;
     extract_sidecar_if_changed(app, CLI_BINARY_NAME, &bin_dir).await?;
 
-    // Write (or overwrite) the launchd plist with the current username baked in.
-    write_plist(&home, &plist_path, &daemon_bin).context("Failed to write launchd plist")?;
+    // Register and/or start the daemon user service.
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = launch_agents_dir(&home).join(PLIST_FILENAME);
+        write_plist(&home, &plist_path, &daemon_bin).context("Failed to write launchd plist")?;
+        bootstrap_launchd_agent(&plist_path)?;
+    }
 
-    // Bootstrap or restart the launchd agent.
-    bootstrap_launchd_agent(&plist_path)?;
+    #[cfg(target_os = "linux")]
+    {
+        let service_path = systemd_user_service_dir(&home).join(SYSTEMD_SERVICE_NAME);
+        write_systemd_service(&home, &service_path, &daemon_bin)
+            .context("Failed to write systemd service file")?;
+        enable_systemd_service()?;
+    }
 
     // The daemon loads the embedding model before binding the socket (~9s on M2 Pro).
     // 30s covers cold-start model load on slower machines.
@@ -85,14 +106,12 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
 
 /// Check daemon health by testing whether the Unix Domain Socket is reachable.
 ///
-/// A full gRPC ping would require importing the proto types; for the health
-/// check a successful UDS connect is sufficient — the OS rejects the connect
+/// A successful UDS connect is sufficient — the OS rejects the connect
 /// if no process is listening.
 pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
     if !socket_path.exists() {
         return DaemonStatus::NotRunning;
     }
-    // Attempt a UDS connection with a short timeout.
     match timeout(
         Duration::from_millis(500),
         tokio::net::UnixStream::connect(socket_path),
@@ -124,8 +143,7 @@ async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonStatus
 
 /// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`,
 /// but only if the destination is missing or has a different file size than
-/// the bundled source. Size comparison is a lightweight proxy for version change:
-/// a real binary size change on every Tauri build guarantees re-extraction.
+/// the bundled source.
 async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<()> {
     let src = resolve_sidecar_path(app, name)?;
     let dest = bin_dir.join(name);
@@ -135,7 +153,6 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
         .with_context(|| format!("Cannot stat bundled sidecar {}", src.display()))?
         .len();
 
-    // Skip extraction if dest exists and matches bundled binary size.
     if let Ok(dest_meta) = tokio::fs::metadata(&dest).await {
         if dest_meta.len() == src_size {
             tracing::debug!(
@@ -163,9 +180,6 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
 }
 
 /// Resolve the platform-tagged sidecar path inside the Tauri bundle.
-///
-/// Tauri appends the current target triple to sidecar binary names, e.g.:
-/// `binaries/nodespaced-aarch64-apple-darwin` on Apple Silicon.
 fn resolve_sidecar_path(app: &AppHandle, name: &str) -> Result<PathBuf> {
     use tauri::path::BaseDirectory;
 
@@ -192,11 +206,24 @@ fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+// ── macOS: launchd ────────────────────────────────────────────────────────────
+
+/// Escape a string for safe embedding inside an XML `<string>` element.
+/// Handles the three characters that are special in XML character data.
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(target_os = "macos")]
 fn launch_agents_dir(home: &Path) -> PathBuf {
     home.join("Library/LaunchAgents")
 }
 
 /// Write the launchd plist for the nodespaced user agent.
+#[cfg(target_os = "macos")]
 fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> {
     let launch_agents = plist_path
         .parent()
@@ -205,10 +232,15 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
-    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
-    let db_path = format!("{}/.nodespace/database/nodespace.db", home_str);
-    let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
-    let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
+    let socket_path = xml_escape(&format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE));
+    let db_path = xml_escape(&format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR));
+    let log_out = xml_escape(&format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR));
+    let log_err = xml_escape(&format!(
+        "{}/{}/nodespaced-error.log",
+        home_str, DAEMON_LOG_DIR
+    ));
+    let bin_escaped = xml_escape(&bin_str);
+    let label_escaped = xml_escape(LAUNCH_AGENT_LABEL);
 
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -239,8 +271,8 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 </dict>
 </plist>
 "#,
-        label = LAUNCH_AGENT_LABEL,
-        bin = bin_str,
+        label = label_escaped,
+        bin = bin_escaped,
         socket = socket_path,
         db = db_path,
         log_out = log_out,
@@ -253,10 +285,9 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
 /// Register or restart the launchd user agent.
 ///
-/// Uses the modern `launchctl bootstrap gui/<uid> <plist>` API (macOS 10.10+).
-/// If already bootstrapped, falls back to `launchctl kickstart -k` to restart
-/// a stopped or crashed instance. The legacy `launchctl load -w` is intentionally
-/// avoided — it was deprecated in macOS 10.11 and generates log noise on macOS 15+.
+/// Uses the modern `launchctl bootstrap gui/<uid>` API (macOS 10.10+).
+/// If already bootstrapped, falls back to `launchctl kickstart -k`.
+#[cfg(target_os = "macos")]
 fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     let uid = get_uid();
     let gui_target = format!("gui/{}", uid);
@@ -274,8 +305,7 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Error 37 = EALREADY: service is already registered in this bootstrap context.
-    // Error 36 = ENOTSUP: also seen for "already bootstrapped" on some versions.
+    // Error 37 = EALREADY / Error 36 = ENOTSUP: service already registered.
     let already_bootstrapped = output.status.code().is_some_and(|c| c == 37 || c == 36)
         || stderr.contains("already bootstrapped")
         || stderr.contains("service already exists");
@@ -301,7 +331,6 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Non-fatal: log and continue — daemon may still be running from a prior launch.
     tracing::warn!(
         "launchctl bootstrap exited with status {}: {}",
         output.status,
@@ -310,7 +339,93 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn get_uid() -> u32 {
     // SAFETY: getuid() is always safe to call.
     unsafe { libc::getuid() }
+}
+
+// ── Linux: systemd user service ───────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn systemd_user_service_dir(home: &Path) -> PathBuf {
+    home.join(".config/systemd/user")
+}
+
+/// Write the systemd user service unit for nodespaced.
+#[cfg(target_os = "linux")]
+fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) -> Result<()> {
+    let service_dir = service_path
+        .parent()
+        .context("service_path has no parent directory")?;
+    std::fs::create_dir_all(service_dir)
+        .context("Failed to create ~/.config/systemd/user directory")?;
+
+    let home_str = home.to_string_lossy();
+    let bin_str = daemon_bin.to_string_lossy();
+    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
+    let db_path = format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR);
+    let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
+    let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
+
+    let unit = format!(
+        "[Unit]\n\
+         Description=NodeSpace daemon\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={bin}\n\
+         Environment=NODESPACED_SOCKET={socket}\n\
+         Environment=NODESPACED_DB_PATH={db}\n\
+         StandardOutput=append:{log_out}\n\
+         StandardError=append:{log_err}\n\
+         Restart=on-failure\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        bin = bin_str,
+        socket = socket_path,
+        db = db_path,
+        log_out = log_out,
+        log_err = log_err,
+    );
+
+    std::fs::write(service_path, unit)
+        .with_context(|| format!("Cannot write service file to {}", service_path.display()))
+}
+
+/// Enable and start the systemd user service.
+#[cfg(target_os = "linux")]
+fn enable_systemd_service() -> Result<()> {
+    // Reload unit files so systemd picks up the newly written service.
+    let reload = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output()
+        .context("Failed to run systemctl --user daemon-reload")?;
+    if !reload.status.success() {
+        let err = String::from_utf8_lossy(&reload.stderr);
+        tracing::warn!("systemctl daemon-reload failed: {}", err);
+    }
+
+    // Enable and start atomically; --now avoids a separate start call and
+    // handles the "never started before" case correctly on all systemd versions.
+    let enable = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "--now", SYSTEMD_SERVICE_NAME])
+        .output()
+        .context("Failed to run systemctl --user enable --now")?;
+    if !enable.status.success() {
+        let err = String::from_utf8_lossy(&enable.stderr);
+        tracing::warn!(
+            "systemctl enable --now failed (daemon may start on next login): {}",
+            err
+        );
+    } else {
+        tracing::info!(
+            "systemd user service enabled and started: {}",
+            SYSTEMD_SERVICE_NAME
+        );
+    }
+
+    Ok(())
 }
