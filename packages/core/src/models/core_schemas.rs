@@ -17,6 +17,7 @@
 //! - **collection** - Collection containers
 //! - **horizontal-line** - Horizontal rule / thematic break
 //! - **table** - GFM markdown table
+//! - **person** - Identity primitive (name, email)
 //!
 //! ## Usage
 //!
@@ -793,6 +794,51 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
+        // Person schema — pure identity primitive (name, email)
+        SchemaNode {
+            id: "person".to_string(),
+            content: "Person".to_string(),
+            version: 1,
+            created_at: now,
+            modified_at: now,
+            is_core: true,
+            schema_version: 1,
+            fields: vec![
+                SchemaField {
+                    name: "name".to_string(),
+                    field_type: "string".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: true,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Display name; optional — a person may exist before a name is set".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "email".to_string(),
+                    field_type: "string".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: true,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Email address; optional at schema level, required in practice for invited teammates".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+            ],
+            relationships: vec![],
+            title_template: None,
+            properties_header_summary_template: None,
+        },
         // Prompt schema for AI agent prompts (ADR-030)
         SchemaNode {
             id: "prompt".to_string(),
@@ -879,7 +925,7 @@ mod tests {
     #[test]
     fn test_get_core_schemas_returns_all() {
         let schemas = get_core_schemas();
-        assert_eq!(schemas.len(), 15);
+        assert_eq!(schemas.len(), 16);
     }
 
     #[test]

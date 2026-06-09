@@ -2027,6 +2027,85 @@ impl NodeBehavior for CustomNodeBehavior {
 /// For most applications, behaviors are registered once during initialization and then
 /// accessed concurrently during runtime, making external synchronization unnecessary
 ///
+/// Built-in behavior for person nodes
+///
+/// Person nodes are pure identity — they carry only `name` (optional) and
+/// `email` (optional, format-validated when present). Role and auth state
+/// live on relationships, not on the node itself.
+pub struct PersonNodeBehavior;
+
+impl PersonNodeBehavior {
+    /// Returns a display name for the person, falling back gracefully when name is absent.
+    pub fn compute_display_name(&self, node: &Node) -> String {
+        if let Some(name) = node
+            .properties
+            .get("person")
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            return name.to_string();
+        }
+        if let Some(email) = node
+            .properties
+            .get("person")
+            .and_then(|p| p.get("email"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            return email.to_string();
+        }
+        "Unknown".to_string()
+    }
+}
+
+impl NodeBehavior for PersonNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "person"
+    }
+
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        if let Some(email) = node
+            .properties
+            .get("person")
+            .and_then(|p| p.get("email"))
+            .and_then(|v| v.as_str())
+        {
+            if !(email.is_empty() || email.contains('@') && email.contains('.')) {
+                return Err(NodeValidationError::InvalidProperties(
+                    "email must contain '@' and '.'".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn can_have_children(&self) -> bool {
+        false
+    }
+
+    fn supports_markdown(&self) -> bool {
+        false
+    }
+
+    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
+        let display = self.compute_display_name(node);
+        if display == "Unknown" {
+            None
+        } else {
+            Some(display)
+        }
+    }
+
+    fn get_parent_contribution(&self, _node: &Node) -> Option<String> {
+        None
+    }
+
+    fn default_metadata(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+}
+
 /// # Examples
 ///
 /// ```rust
@@ -2050,13 +2129,13 @@ impl NodeBehavior for CustomNodeBehavior {
 /// assert!(types.contains(&"task".to_string()));
 /// assert!(types.contains(&"date".to_string()));
 ///
-/// // Custom types also validate (fallback behavior)
-/// let custom_node = Node::new(
+/// // Person nodes also validate via registered behavior
+/// let person_node = Node::new(
 ///     "person".to_string(),
 ///     "Alice".to_string(),
-///     json!({"email": "alice@example.com"}),
+///     json!({"person": {"name": "Alice", "email": "alice@example.com"}}),
 /// );
-/// assert!(registry.validate_node(&custom_node).is_ok());
+/// assert!(registry.validate_node(&person_node).is_ok());
 /// ```
 pub struct NodeBehaviorRegistry {
     behaviors: HashMap<String, Arc<dyn NodeBehavior>>,
@@ -2102,6 +2181,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(PromptNodeBehavior));
         registry.register(Arc::new(SkillNodeBehavior));
         registry.register(Arc::new(ToolNodeBehavior));
+        registry.register(Arc::new(PersonNodeBehavior));
 
         registry
     }
@@ -2800,7 +2880,8 @@ mod tests {
         assert!(types.contains(&"prompt".to_string()));
         assert!(types.contains(&"skill".to_string()));
         assert!(types.contains(&"tool".to_string()));
-        assert_eq!(types.len(), 16);
+        assert!(types.contains(&"person".to_string()));
+        assert_eq!(types.len(), 17);
     }
 
     #[test]
@@ -4667,5 +4748,110 @@ mod tests {
         let behavior = ToolNodeBehavior;
         let node = tool_node_with_props(json!({ "tool": { "handler": "search_nodes" } }));
         assert!(behavior.get_parent_contribution(&node).is_none());
+    }
+
+    // --- PersonNodeBehavior tests ---
+
+    fn person_node(props: serde_json::Value) -> Node {
+        Node::new("person".to_string(), String::new(), props)
+    }
+
+    #[test]
+    fn person_schema_is_present_in_core_schemas() {
+        use crate::models::core_schemas::get_core_schemas;
+        let schemas = get_core_schemas();
+        assert!(schemas.iter().any(|s| s.id == "person"));
+    }
+
+    #[test]
+    fn person_behavior_is_registered() {
+        let registry = NodeBehaviorRegistry::new();
+        let types = registry.get_all_types();
+        assert!(types.contains(&"person".to_string()));
+    }
+
+    #[test]
+    fn person_empty_name_is_valid() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {}}));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn person_absent_name_is_valid() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({}));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn person_valid_email_passes() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"email": "alice@example.com"}}));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn person_invalid_email_fails() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"email": "notanemail"}}));
+        assert!(behavior.validate(&node).is_err());
+    }
+
+    #[test]
+    fn person_email_missing_dot_fails() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"email": "alice@example"}}));
+        assert!(behavior.validate(&node).is_err());
+    }
+
+    #[test]
+    fn person_empty_email_is_valid() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"email": ""}}));
+        assert!(behavior.validate(&node).is_ok());
+    }
+
+    #[test]
+    fn person_compute_display_name_with_name() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"name": "Alice"}}));
+        assert_eq!(behavior.compute_display_name(&node), "Alice");
+    }
+
+    #[test]
+    fn person_compute_display_name_falls_back_to_email() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"email": "alice@example.com"}}));
+        assert_eq!(behavior.compute_display_name(&node), "alice@example.com");
+    }
+
+    #[test]
+    fn person_compute_display_name_empty_is_unknown() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({}));
+        assert_eq!(behavior.compute_display_name(&node), "Unknown");
+    }
+
+    #[test]
+    fn person_cannot_have_children() {
+        assert!(!PersonNodeBehavior.can_have_children());
+    }
+
+    #[test]
+    fn person_embeddable_content_returns_display_name_when_known() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"name": "Bob"}}));
+        assert_eq!(
+            behavior.get_embeddable_content(&node),
+            Some("Bob".to_string())
+        );
+    }
+
+    #[test]
+    fn person_embeddable_content_is_none_when_unknown() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({}));
+        assert!(behavior.get_embeddable_content(&node).is_none());
     }
 }
