@@ -2004,9 +2004,11 @@ impl NodeBehavior for CustomNodeBehavior {
 
 /// Built-in behavior for person nodes
 ///
-/// Person nodes are pure identity — they carry only `name` (optional) and
-/// `email` (optional, format-validated when present). Role and auth state
-/// live on relationships, not on the node itself.
+/// Person nodes are identity nodes — they carry `name` (optional) and `email`
+/// (optional, format-validated when present), plus `auth_status` for the local
+/// user (ADR-037: seeded as `"local"`, bound to a Supabase identity on Pro
+/// upgrade via nodespace-sync#125). *Role/permission* lives on the `member_of`
+/// relationship, not on the node.
 pub struct PersonNodeBehavior;
 
 impl PersonNodeBehavior {
