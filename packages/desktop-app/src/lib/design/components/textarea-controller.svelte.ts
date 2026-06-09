@@ -379,11 +379,25 @@ export class TextareaController {
         // This prevents the cursor from being positioned at 0 before the action can apply
         // the correct position (e.g., 'absolute' position from Enter key node creation)
         if (!hasPendingCursorPosition) {
-          cursorService.setCursorAtBeginningOfLine(this.element, 0, {
-            focus: true,
-            delay: 0,
-            skipSyntax: true
-          });
+          // An empty/new node gets the cursor at the beginning. But when the
+          // textarea (re)initializes while it ALREADY has content and no explicit
+          // cursor position was requested — e.g. a remount the moment a freshly
+          // created node first persists, while the user is mid-typing its first
+          // word — snapping to position 0 makes the next keystrokes land BEFORE the
+          // existing text ("Hello" -> "lloHe"). Put the cursor at the end of the
+          // existing content (where the user was typing) instead.
+          if (content.length > 0) {
+            cursorService.setCursorAtPosition(this.element, content.length, {
+              focus: true,
+              delay: 0
+            });
+          } else {
+            cursorService.setCursorAtBeginningOfLine(this.element, 0, {
+              focus: true,
+              delay: 0,
+              skipSyntax: true
+            });
+          }
         }
       }
 
@@ -397,6 +411,18 @@ export class TextareaController {
       }
 
       if (this.recentEnter) {
+        return;
+      }
+
+      // While the textarea is focused, the user's keystrokes ARE the content —
+      // the DOM is the source of truth. A reactive content update that lags
+      // behind fast typing (the store hasn't caught up to the latest keystroke)
+      // would reset element.value to a stale string and reposition the cursor,
+      // scrambling characters ("Tests" → "stsTE"). Skip the soft update while
+      // focused: cross-window updates for the edited node are already dropped by
+      // the SharedNodeStore skip-while-editing guard, and forceUpdateContent()
+      // remains for explicit programmatic overrides (paste, blur-sync, etc.).
+      if (typeof document !== 'undefined' && document.activeElement === this.element) {
         return;
       }
 
