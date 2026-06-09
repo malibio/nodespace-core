@@ -2,6 +2,10 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { createLogger } from '$lib/utils/logger';
+  import { Button } from '$lib/components/ui/button';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Card, CardHeader, CardContent } from '$lib/components/ui/card';
+  import { cn } from '$lib/utils';
 
   const log = createLogger('IntegrationsSettings');
 
@@ -111,284 +115,114 @@
   const claudeDetected = $derived(status?.claudeCodeDetected ?? false);
 </script>
 
-<div class="integrations-settings">
-  <h2 class="section-title">Integrations</h2>
-  <p class="section-description">
+<div class="max-w-[640px]">
+  <h2 class="text-foreground mb-1.5 text-xl font-semibold">Integrations</h2>
+  <p class="text-muted-foreground mb-6 text-sm leading-relaxed">
     Manage how NodeSpace integrates with your shell and AI agents.
   </p>
 
   <!-- CLI PATH -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title-row">
-        <span class="card-title">CLI PATH</span>
+  <Card class="mb-4 gap-0 rounded-lg py-0">
+    <CardHeader class="p-5 pb-4">
+      <div class="mb-1.5 flex items-center gap-2.5">
+        <span class="text-foreground text-[0.9375rem] font-semibold">CLI PATH</span>
         {#if status === null}
-          <span class="badge badge-muted">Checking…</span>
+          <Badge variant="secondary">Checking…</Badge>
         {:else if pathIsConfigured}
-          <span class="badge badge-ok">Configured</span>
+          <Badge class="border-green-500/25 bg-green-500/10 text-green-700">Configured</Badge>
         {:else}
-          <span class="badge badge-warn">Not configured</span>
+          <Badge class="border-amber-500/25 bg-amber-500/10 text-amber-700">Not configured</Badge>
         {/if}
       </div>
-      <p class="card-description">
-        Adds <code>~/.nodespace/bin</code> to your PATH so you can run
-        <code>nodespace</code> from any terminal session.
+      <p class="text-muted-foreground m-0 text-sm leading-relaxed">
+        Adds <code class="bg-muted text-foreground rounded px-1 py-0.5 text-[0.8125rem]">~/.nodespace/bin</code> to your PATH so you can run
+        <code class="bg-muted text-foreground rounded px-1 py-0.5 text-[0.8125rem]">nodespace</code> from any terminal session.
       </p>
-    </div>
-
-    {#if pathFeedback !== null}
-      <div class={pathFeedback.ok ? 'success-banner' : 'error-banner'}>
-        {pathFeedback.message}
-      </div>
-    {/if}
-
-    <div class="card-actions">
-      {#if pathIsConfigured}
-        <button class="secondary-button" onclick={removeFromPath} disabled={pathWorking}>
-          {pathWorking ? 'Removing…' : 'Remove from PATH'}
-        </button>
-      {:else}
-        <button class="primary-button" onclick={addToPath} disabled={pathWorking}>
-          {pathWorking ? 'Adding…' : 'Add to PATH'}
-        </button>
+    </CardHeader>
+    <CardContent class="px-5 pb-5">
+      {#if pathFeedback !== null}
+        <div class={pathFeedback.ok
+          ? 'mb-4 rounded-md border border-green-500/25 bg-green-500/10 px-3.5 py-2.5 text-sm leading-relaxed text-green-700'
+          : 'border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-md border px-3.5 py-2.5 text-sm leading-relaxed'
+        }>
+          {pathFeedback.message}
+        </div>
       {/if}
-    </div>
-  </div>
+      <div class="flex gap-3">
+        {#if pathIsConfigured}
+          <Button variant="outline" size="sm" onclick={removeFromPath} disabled={pathWorking}>
+            {pathWorking ? 'Removing…' : 'Remove from PATH'}
+          </Button>
+        {:else}
+          <Button size="sm" onclick={addToPath} disabled={pathWorking}>
+            {pathWorking ? 'Adding…' : 'Add to PATH'}
+          </Button>
+        {/if}
+      </div>
+    </CardContent>
+  </Card>
 
   <!-- Claude Code Skill -->
-  <div class="card" class:card-disabled={!claudeDetected}>
-    <div class="card-header">
-      <div class="card-title-row">
-        <span class="card-title">Claude Code Skill</span>
+  <Card class={cn('mb-4 gap-0 rounded-lg py-0', !claudeDetected && 'opacity-60')}>
+    <CardHeader class="p-5 pb-4">
+      <div class="mb-1.5 flex items-center gap-2.5">
+        <span class="text-foreground text-[0.9375rem] font-semibold">Claude Code Skill</span>
         {#if !claudeDetected}
-          <span class="badge badge-muted">Claude Code not detected</span>
+          <Badge variant="secondary">Claude Code not detected</Badge>
         {:else if status === null}
-          <span class="badge badge-muted">Checking…</span>
+          <Badge variant="secondary">Checking…</Badge>
         {:else if skillIsInstalled}
-          <span class="badge badge-ok">Installed</span>
+          <Badge class="border-green-500/25 bg-green-500/10 text-green-700">Installed</Badge>
         {:else}
-          <span class="badge badge-warn">Not installed</span>
+          <Badge class="border-amber-500/25 bg-amber-500/10 text-amber-700">Not installed</Badge>
         {/if}
       </div>
-      <p class="card-description">
+      <p class="text-muted-foreground m-0 text-sm leading-relaxed">
         {#if !claudeDetected}
           Claude Code is not installed. Install it to enable NodeSpace tools in Claude Code CLI sessions.
         {:else}
           NodeSpace tools available in Claude Code CLI sessions via
-          <code>~/.claude/skills/nodespace/SKILL.md</code>.
+          <code class="bg-muted text-foreground rounded px-1 py-0.5 text-[0.8125rem]">~/.claude/skills/nodespace/SKILL.md</code>.
         {/if}
       </p>
-    </div>
-
-    {#if claudeDetected && skillResult?.cliWarning}
-      <div class="warning-banner">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
-          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-          <line x1="12" y1="9" x2="12" y2="13" />
-          <line x1="12" y1="17" x2="12.01" y2="17" />
-        </svg>
-        <span>{skillResult.cliWarning}</span>
-      </div>
-    {/if}
-
-    {#if skillFeedback !== null}
-      <div class={skillFeedback.ok ? 'success-banner' : 'error-banner'}>
-        {skillFeedback.message}
-      </div>
-    {/if}
-
-    <div class="card-actions">
-      {#if !claudeDetected}
-        <button class="primary-button" disabled>Add Skill</button>
-      {:else if skillIsInstalled}
-        <button class="primary-button" onclick={addSkill} disabled={skillWorking}>
-          {skillWorking ? 'Reinstalling…' : 'Reinstall Skill'}
-        </button>
-        <button class="secondary-button" onclick={removeSkill} disabled={skillWorking}>
-          {skillWorking ? 'Removing…' : 'Remove Skill'}
-        </button>
-      {:else}
-        <button class="primary-button" onclick={addSkill} disabled={skillWorking}>
-          {skillWorking ? 'Installing…' : 'Add Skill'}
-        </button>
+    </CardHeader>
+    <CardContent class="px-5 pb-5">
+      {#if claudeDetected && skillResult?.cliWarning}
+        <div class="mb-4 flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3.5 py-2.5 text-sm leading-relaxed text-amber-700">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" class="mt-0.5 shrink-0" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>{skillResult.cliWarning}</span>
+        </div>
       {/if}
-    </div>
-  </div>
+
+      {#if skillFeedback !== null}
+        <div class={skillFeedback.ok
+          ? 'mb-4 rounded-md border border-green-500/25 bg-green-500/10 px-3.5 py-2.5 text-sm leading-relaxed text-green-700'
+          : 'border-destructive/30 bg-destructive/10 text-destructive-foreground mb-4 rounded-md border px-3.5 py-2.5 text-sm leading-relaxed'
+        }>
+          {skillFeedback.message}
+        </div>
+      {/if}
+
+      <div class="flex gap-3">
+        {#if !claudeDetected}
+          <Button size="sm" disabled>Add Skill</Button>
+        {:else if skillIsInstalled}
+          <Button size="sm" onclick={addSkill} disabled={skillWorking}>
+            {skillWorking ? 'Reinstalling…' : 'Reinstall Skill'}
+          </Button>
+          <Button variant="outline" size="sm" onclick={removeSkill} disabled={skillWorking}>
+            {skillWorking ? 'Removing…' : 'Remove Skill'}
+          </Button>
+        {:else}
+          <Button size="sm" onclick={addSkill} disabled={skillWorking}>
+            {skillWorking ? 'Installing…' : 'Add Skill'}
+          </Button>
+        {/if}
+      </div>
+    </CardContent>
+  </Card>
 </div>
-
-<style>
-  .integrations-settings {
-    max-width: 640px;
-  }
-
-  .section-title {
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin: 0 0 0.375rem;
-    color: hsl(var(--foreground));
-  }
-
-  .section-description {
-    font-size: 0.875rem;
-    color: hsl(var(--muted-foreground));
-    margin: 0 0 1.5rem;
-    line-height: 1.5;
-  }
-
-  .card {
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.5rem;
-    padding: 1.25rem;
-    background: hsl(var(--card));
-    margin-bottom: 1rem;
-  }
-
-  .card-disabled {
-    opacity: 0.6;
-  }
-
-  .card-header {
-    margin-bottom: 1rem;
-  }
-
-  .card-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    margin-bottom: 0.375rem;
-  }
-
-  .card-title {
-    font-size: 0.9375rem;
-    font-weight: 600;
-    color: hsl(var(--foreground));
-  }
-
-  .card-description {
-    font-size: 0.875rem;
-    color: hsl(var(--muted-foreground));
-    margin: 0;
-    line-height: 1.5;
-  }
-
-  .card-description code {
-    font-size: 0.8125rem;
-    background: hsl(var(--muted));
-    padding: 0.1em 0.3em;
-    border-radius: 3px;
-    color: hsl(var(--foreground));
-  }
-
-  .badge {
-    font-size: 0.75rem;
-    font-weight: 500;
-    padding: 0.125rem 0.5rem;
-    border-radius: 9999px;
-  }
-
-  .badge-ok {
-    background: hsl(142 76% 36% / 0.12);
-    color: hsl(142 76% 30%);
-    border: 1px solid hsl(142 76% 36% / 0.25);
-  }
-
-  .badge-warn {
-    background: hsl(38 92% 50% / 0.12);
-    color: hsl(38 70% 35%);
-    border: 1px solid hsl(38 92% 50% / 0.25);
-  }
-
-  .badge-muted {
-    background: hsl(var(--muted));
-    color: hsl(var(--muted-foreground));
-    border: 1px solid hsl(var(--border));
-  }
-
-  .warning-banner {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: hsl(38 70% 35%);
-    background: hsl(38 92% 50% / 0.08);
-    border: 1px solid hsl(38 92% 50% / 0.2);
-    border-radius: 0.375rem;
-    padding: 0.625rem 0.875rem;
-    margin-bottom: 1rem;
-    line-height: 1.5;
-  }
-
-  .warning-banner svg {
-    flex-shrink: 0;
-    margin-top: 2px;
-  }
-
-  .success-banner {
-    font-size: 0.875rem;
-    color: hsl(142 76% 30%);
-    background: hsl(142 76% 36% / 0.1);
-    border: 1px solid hsl(142 76% 36% / 0.25);
-    border-radius: 0.375rem;
-    padding: 0.625rem 0.875rem;
-    margin-bottom: 1rem;
-    line-height: 1.5;
-  }
-
-  .error-banner {
-    font-size: 0.875rem;
-    color: hsl(var(--destructive-foreground));
-    background: hsl(var(--destructive) / 0.1);
-    border: 1px solid hsl(var(--destructive) / 0.3);
-    border-radius: 0.375rem;
-    padding: 0.625rem 0.875rem;
-    margin-bottom: 1rem;
-    line-height: 1.5;
-  }
-
-  .card-actions {
-    display: flex;
-    gap: 0.75rem;
-  }
-
-  .primary-button {
-    padding: 0.4375rem 1rem;
-    border-radius: 0.375rem;
-    border: none;
-    background: hsl(var(--primary));
-    color: hsl(var(--primary-foreground));
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-
-  .primary-button:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .primary-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .secondary-button {
-    padding: 0.4375rem 1rem;
-    border-radius: 0.375rem;
-    border: 1px solid hsl(var(--border));
-    background: transparent;
-    color: hsl(var(--foreground));
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .secondary-button:hover:not(:disabled) {
-    background: hsl(var(--muted) / 0.5);
-  }
-
-  .secondary-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-</style>

@@ -12,6 +12,7 @@
 <script lang="ts">
   import type { SchemaField } from '$lib/types/schema-node';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { TableRow as UiTableRow, TableCell } from '$lib/components/ui/table';
 
   let {
     id,
@@ -115,66 +116,21 @@
 </script>
 
 {#if nodeExists}
-  <tr class="result-row">
+  <UiTableRow>
     {#each columns as col (col.field)}
-      <td>
+      <TableCell>
         {#if col.field === 'content'}
           <button
-            class="title-link"
+            class="text-foreground hover:text-primary max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-left text-sm font-medium hover:underline"
             onclick={() => onRowClick(id)}
             title="Open {nodeContent || 'node'}"
           >
             {cellValues.get(col.field) || 'Untitled'}
           </button>
         {:else}
-          <span class="cell-value">{cellValues.get(col.field)}</span>
+          <span class="text-muted-foreground">{cellValues.get(col.field)}</span>
         {/if}
-      </td>
+      </TableCell>
     {/each}
-  </tr>
+  </UiTableRow>
 {/if}
-
-<style>
-  .result-row {
-    transition: background-color 0.1s ease;
-  }
-
-  .result-row:hover {
-    background: hsl(var(--muted));
-  }
-
-  td {
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid hsl(var(--border));
-    vertical-align: middle;
-    white-space: nowrap;
-    max-width: 20rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .title-link {
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    font-size: 0.875rem;
-    color: hsl(var(--foreground));
-    font-weight: 500;
-    text-align: left;
-    transition: color 0.15s ease;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-  }
-
-  .title-link:hover {
-    color: hsl(var(--primary));
-    text-decoration: underline;
-  }
-
-  .cell-value {
-    color: hsl(var(--muted-foreground));
-  }
-</style>
