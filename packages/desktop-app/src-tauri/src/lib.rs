@@ -21,8 +21,8 @@ pub mod services;
 // see watcher.rs module docs for activation gating.
 pub mod watcher;
 
-// launchd daemon lifecycle (Issue #1179) — macOS only
-#[cfg(target_os = "macos")]
+// Daemon lifecycle: launchd (macOS) and systemd (Linux)
+#[cfg(unix)]
 pub mod daemon_setup;
 
 // First-launch skill installer (Issue #1199)
@@ -45,7 +45,7 @@ fn toggle_sidebar() -> String {
 /// to decide whether to show an error state (Issue #1179).
 #[tauri::command]
 async fn check_daemon_status() -> String {
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         use daemon_setup::{check_daemon_socket, DaemonStatus};
 
@@ -60,7 +60,7 @@ async fn check_daemon_status() -> String {
             DaemonStatus::NotRunning => "not_running".to_string(),
         };
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     "healthy".to_string()
 }
 
@@ -221,8 +221,7 @@ pub fn run() {
                 let session_token = shutdown_token_for_setup.child_token();
 
                 tauri::async_runtime::spawn(async move {
-                    // macOS: ensure nodespaced launchd agent is installed and running.
-                    #[cfg(target_os = "macos")]
+                    // Ensure nodespaced service is installed and running (launchd on macOS, systemd on Linux).
                     {
                         use daemon_setup::{ensure_daemon_running, DaemonStatus};
                         match ensure_daemon_running(&app_handle).await {
