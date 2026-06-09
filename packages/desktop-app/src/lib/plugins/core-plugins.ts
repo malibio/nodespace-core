@@ -633,6 +633,37 @@ export const aiChatNodePlugin: PluginDefinition = {
 // Export all core plugins
 // These are the foundation plugins - external developers can create additional plugins
 // like WhiteBoardNode, ImageNode, etc. in separate packages
+export const personNodePlugin: PluginDefinition = {
+  id: 'person',
+  name: 'Person',
+  description: 'Create a person node — contact, collaborator, or stakeholder',
+  version: '1.0.0',
+  config: {
+    slashCommands: [
+      {
+        id: 'person',
+        name: 'Person',
+        description: 'Create a person node',
+        contentTemplate: '',
+        nodeType: 'person'
+      }
+    ],
+    canHaveChildren: false,
+    canBeChild: true
+  },
+  node: {
+    lazyLoad: () => import('../design/components/person-node.svelte'),
+    priority: 1
+  },
+  reference: {
+    component: BaseNodeReference as NodeReferenceComponent,
+    priority: 1
+  },
+  schemaForm: {
+    lazyLoad: () => import('../components/property-forms/person-schema-form.svelte')
+  }
+};
+
 export const corePlugins = [
   textNodePlugin,
   headerNodePlugin,
@@ -646,9 +677,8 @@ export const corePlugins = [
   tableNodePlugin,
   queryNodePlugin,
   collectionNodePlugin,
-  aiChatNodePlugin
-  // Note: userNodePlugin and documentNodePlugin are defined but not registered
-  // They will be added when user/document reference system is implemented
+  aiChatNodePlugin,
+  personNodePlugin
 ];
 
 /**
