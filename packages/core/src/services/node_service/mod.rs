@@ -916,7 +916,29 @@ impl NodeService {
         // properties.description but no child nodes (databases created before this change).
         service.backfill_schema_description_subtrees().await?;
 
+        // ADR-037 (#133): every install has exactly one local PersonNode (the user).
+        service.seed_local_person_if_needed().await?;
+
         Ok(service)
+    }
+
+    /// ADR-037 (#133): seed exactly one **local** PersonNode — the local user,
+    /// `auth_status: "local"`. Idempotent: skips when a person already exists, so an
+    /// existing database is backfilled on next open too. On Pro upgrade this node is
+    /// *bound* to a Supabase identity (nodespace-sync#125), not recreated — there is
+    /// no "now set up your user" migration step.
+    async fn seed_local_person_if_needed(&self) -> Result<(), NodeServiceError> {
+        if !self.query_nodes_by_type("person", None).await?.is_empty() {
+            return Ok(());
+        }
+        let person = Node::new(
+            "person".to_string(),
+            "Me".to_string(),
+            serde_json::json!({ "auth_status": "local" }),
+        );
+        let id = self.create_node(person).await?;
+        tracing::info!(node_id = %id, "🌱 Seeded local PersonNode (ADR-037)");
+        Ok(())
     }
 
     /// Seed core schema definitions if database is fresh
