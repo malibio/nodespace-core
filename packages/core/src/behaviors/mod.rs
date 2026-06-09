@@ -2002,31 +2002,6 @@ impl NodeBehavior for CustomNodeBehavior {
     }
 }
 
-/// Registry for managing node behaviors
-///
-/// The registry provides thread-safe storage and retrieval of node behaviors.
-/// Built-in behaviors (text, task, date) are registered automatically.
-///
-/// # Fallback Behavior
-///
-/// For node types without explicit behavior registration, the registry provides
-/// a `CustomNodeBehavior` fallback. This enables schema-defined custom types
-/// (like "person", "invoice", "customer") to work without Rust code.
-///
-/// # Thread Safety
-///
-/// All behaviors are stored in `Arc` for efficient cloning and thread-safe access
-/// during read operations. The registry follows a "register at startup, read at runtime"
-/// pattern:
-///
-/// - **Concurrent reads**: Safe without external synchronization. Wrap in `Arc<NodeBehaviorRegistry>`
-///   to share across threads (see test_registry_thread_safety for example).
-/// - **Concurrent registration**: Requires external synchronization. Wrap in `Arc<Mutex<NodeBehaviorRegistry>>`
-///   if registering behaviors from multiple threads.
-///
-/// For most applications, behaviors are registered once during initialization and then
-/// accessed concurrently during runtime, making external synchronization unnecessary
-///
 /// Built-in behavior for person nodes
 ///
 /// Person nodes are pure identity — they carry only `name` (optional) and
@@ -2106,6 +2081,31 @@ impl NodeBehavior for PersonNodeBehavior {
     }
 }
 
+/// Registry for managing node behaviors
+///
+/// The registry provides thread-safe storage and retrieval of node behaviors.
+/// Built-in behaviors (text, task, date) are registered automatically.
+///
+/// # Fallback Behavior
+///
+/// For node types without explicit behavior registration, the registry provides
+/// a `CustomNodeBehavior` fallback. This enables schema-defined custom types
+/// (like "invoice", "customer") to work without Rust code.
+///
+/// # Thread Safety
+///
+/// All behaviors are stored in `Arc` for efficient cloning and thread-safe access
+/// during read operations. The registry follows a "register at startup, read at runtime"
+/// pattern:
+///
+/// - **Concurrent reads**: Safe without external synchronization. Wrap in `Arc<NodeBehaviorRegistry>`
+///   to share across threads (see test_registry_thread_safety for example).
+/// - **Concurrent registration**: Requires external synchronization. Wrap in `Arc<Mutex<NodeBehaviorRegistry>>`
+///   if registering behaviors from multiple threads.
+///
+/// For most applications, behaviors are registered once during initialization and then
+/// accessed concurrently during runtime, making external synchronization unnecessary.
+///
 /// # Examples
 ///
 /// ```rust
