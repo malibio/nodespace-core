@@ -922,12 +922,14 @@ impl NodeService {
         Ok(service)
     }
 
-    /// ADR-037 (#133): seed exactly one **local** PersonNode — the local user,
-    /// marked `auth_status: "local"`. Idempotent: skips when a person already exists,
-    /// so an existing database is backfilled on next open too. On Pro upgrade this node
-    /// is *bound* to a Supabase identity (nodespace-sync#125) — a single `auth_identities`
-    /// row keyed on the node id — not recreated; there is no "now set up your user" step.
-    /// Name/email stay absent until the user fills them in (PersonNodeBehavior allows it).
+    /// ADR-037 (#133): seed exactly one local PersonNode — the local user.
+    /// Idempotent: skips when a person already exists, so an existing database
+    /// is backfilled on next open too. Name/email stay absent until the user
+    /// fills them in (PersonNodeBehavior allows it). On Pro upgrade this node
+    /// is bound to a Supabase identity (nodespace-sync#125) via a single
+    /// `auth_identities` row — not recreated.
+    ///
+    /// Note: `auth_status` lives on DatabaseSettingsNode (#1398), not here.
     async fn seed_local_person_if_needed(&self) -> Result<(), NodeServiceError> {
         if !self.query_nodes_by_type("person", None).await?.is_empty() {
             return Ok(());
@@ -935,7 +937,7 @@ impl NodeService {
         let person = Node::new(
             "person".to_string(),
             String::new(),
-            serde_json::json!({ "person": { "auth_status": "local" } }),
+            serde_json::json!({}),
         );
         let id = self.create_node(person).await?;
         tracing::info!(node_id = %id, "🌱 Seeded local PersonNode (ADR-037)");
