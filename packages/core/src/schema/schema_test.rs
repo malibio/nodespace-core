@@ -134,7 +134,8 @@ async fn create_base_schema(svc: &Arc<NodeService>, name: &str, field_names: &[&
 #[tokio::test]
 async fn test_update_schema_add_valid_title_template() {
     let (svc, _tmp) = create_test_service().await;
-    let schema_id = create_base_schema(&svc, "Person", &["first_name", "last_name"]).await;
+    // NB: not "Person" — that now collides with the core `person` schema (ADR-037).
+    let schema_id = create_base_schema(&svc, "Employee", &["first_name", "last_name"]).await;
 
     let result = handle_update_schema(
         &svc,
