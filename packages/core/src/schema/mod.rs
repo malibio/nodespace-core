@@ -1468,7 +1468,10 @@ mod tests {
         use crate::services::node_service::normalize_schema_id;
         let entity_name = "Customer Invoice";
         let schema_id = normalize_schema_id(entity_name);
-        assert_eq!(schema_id, "customer-invoice");
+        // normalize_schema_id joins on '_' (see its dedicated unit tests); the core
+        // hardcoded schema ids that use hyphens (code-block, …) are not generated
+        // through this path.
+        assert_eq!(schema_id, "customer_invoice");
     }
 
     #[test]
