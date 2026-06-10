@@ -13,10 +13,14 @@ use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{InitiateOAuthRequest, WatchSyncStatusRequest};
 use crate::services::{ProClient, ProTier};
 
-/// Default cloud-worker URL when the frontend doesn't supply one.
-/// Matches `nodespace-sync/cloud-worker`'s default bind
-/// (`127.0.0.1:8787`); override via the optional `worker_url` arg.
+/// Default auth-Worker URL when the frontend doesn't supply one. Release builds
+/// hit the deployed canonical domain (`pro.nodespace.ai`, nodespace-cloud#21);
+/// debug builds hit the local `wrangler dev` worker (`127.0.0.1:8787`, what
+/// `device-sync.sh` runs). Either is overridable via the optional `worker_url` arg.
+#[cfg(debug_assertions)]
 const DEFAULT_WORKER_URL: &str = "http://127.0.0.1:8787";
+#[cfg(not(debug_assertions))]
+const DEFAULT_WORKER_URL: &str = "https://pro.nodespace.ai";
 
 /// Flag tracking whether the status-stream task is already running.
 /// Module-level so repeated calls to `pro_subscribe_sync_status` from
