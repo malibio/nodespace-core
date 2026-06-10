@@ -581,7 +581,7 @@ pub fn is_valid_node_id(node_id: &str) -> bool {
 /// Derive a stable schema node ID from the schema's display name.
 ///
 /// Schema nodes use their normalized name as ID (e.g. "Invoice" → "invoice",
-/// "Customer Profile" → "customer-profile") so they can be referenced
+/// "Customer Profile" → "customer_profile") so they can be referenced
 /// predictably by type name rather than an opaque UUID.
 pub(crate) fn normalize_schema_id(name: &str) -> String {
     name.to_lowercase()
@@ -934,11 +934,7 @@ impl NodeService {
         if !self.query_nodes_by_type("person", None).await?.is_empty() {
             return Ok(());
         }
-        let person = Node::new(
-            "person".to_string(),
-            String::new(),
-            serde_json::json!({}),
-        );
+        let person = Node::new("person".to_string(), String::new(), serde_json::json!({}));
         let id = self.create_node(person).await?;
         tracing::info!(node_id = %id, "🌱 Seeded local PersonNode (ADR-037)");
         Ok(())
