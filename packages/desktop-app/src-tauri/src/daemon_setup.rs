@@ -27,6 +27,7 @@ const DAEMON_BIN_DIR: &str = ".nodespace/bin";
 const DAEMON_DB_DIR: &str = ".nodespace/database";
 const DAEMON_LOG_DIR: &str = ".nodespace/logs";
 const DAEMON_BINARY_NAME: &str = "nodespaced";
+const PRO_DAEMON_BINARY_NAME: &str = "nodespaced-pro";
 const CLI_BINARY_NAME: &str = "nodespace";
 
 #[cfg(target_os = "macos")]
@@ -36,6 +37,31 @@ const PLIST_FILENAME: &str = "app.nodespace.daemon.plist";
 
 #[cfg(target_os = "linux")]
 const SYSTEMD_SERVICE_NAME: &str = "nodespace.service";
+
+// ── Pro edition, baked at compile time (#156) ───────────────────────────────
+// A Pro build sets these env vars when running `tauri build` (see
+// nodespace-sync/scripts/build-pro-dmg.sh); a community build leaves them unset.
+// When set, the app installs + launches the `nodespaced-pro` sync daemon with the
+// Supabase cloud env instead of the community `nodespaced`. The anon key is the
+// project's PUBLISHABLE key (safe to bake into the binary).
+const PRO_SUPABASE_URL: Option<&str> = option_env!("NODESPACE_PRO_SUPABASE_URL");
+const PRO_ANON_KEY: Option<&str> = option_env!("NODESPACE_PRO_ANON_KEY");
+const PRO_SCHEMA: Option<&str> = option_env!("NODESPACE_PRO_SCHEMA");
+const PRO_COLLECTION: Option<&str> = option_env!("NODESPACE_PRO_COLLECTION");
+
+/// True when this binary was built as the Pro edition (cloud env baked in).
+fn is_pro_build() -> bool {
+    PRO_SUPABASE_URL.is_some()
+}
+
+/// The daemon sidecar this edition installs + launches.
+fn daemon_binary_name() -> &'static str {
+    if is_pro_build() {
+        PRO_DAEMON_BINARY_NAME
+    } else {
+        DAEMON_BINARY_NAME
+    }
+}
 
 /// Result of the daemon health check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +84,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let log_dir = home.join(DAEMON_LOG_DIR);
     let db_dir = home.join(DAEMON_DB_DIR);
     let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
-    let daemon_bin = bin_dir.join(DAEMON_BINARY_NAME);
+    let daemon_bin = bin_dir.join(daemon_binary_name());
 
     // Check current daemon health first (cheap path for subsequent launches).
     let status = check_daemon_socket(&socket_path).await;
@@ -78,8 +104,8 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
         .await
         .context("Failed to create ~/.nodespace/database")?;
 
-    // Extract sidecar binaries from the app bundle if missing or outdated.
-    extract_sidecar_if_changed(app, DAEMON_BINARY_NAME, &bin_dir).await?;
+    // Extract sidecar binaries from the .app bundle if missing or outdated.
+    extract_sidecar_if_changed(app, daemon_binary_name(), &bin_dir).await?;
     extract_sidecar_if_changed(app, CLI_BINARY_NAME, &bin_dir).await?;
 
     // Register and/or start the daemon user service.
@@ -242,6 +268,24 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let bin_escaped = xml_escape(&bin_str);
     let label_escaped = xml_escape(LAUNCH_AGENT_LABEL);
 
+    // Pro edition: inject the Supabase cloud env the sync daemon needs (#156). The
+    // values are baked at build time; all are XML-safe (JWT chars / URLs / schema
+    // names contain no `<>&`). Empty for a community build.
+    let pro_env = if is_pro_build() {
+        format!(
+            "        <key>NODESPACED_PRO_SUPABASE_URL</key>\n        <string>{url}</string>\n\
+             \x20       <key>NODESPACED_PRO_ANON_KEY</key>\n        <string>{key}</string>\n\
+             \x20       <key>NODESPACED_PRO_SCHEMA</key>\n        <string>{schema}</string>\n\
+             \x20       <key>NODESPACED_PRO_COLLECTION</key>\n        <string>{coll}</string>\n",
+            url = xml_escape(PRO_SUPABASE_URL.unwrap_or_default()),
+            key = xml_escape(PRO_ANON_KEY.unwrap_or_default()),
+            schema = xml_escape(PRO_SCHEMA.unwrap_or_default()),
+            coll = xml_escape(PRO_COLLECTION.unwrap_or_default()),
+        )
+    } else {
+        String::new()
+    };
+
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -259,7 +303,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         <string>{socket}</string>
         <key>NODESPACED_DB_PATH</key>
         <string>{db}</string>
-    </dict>
+{pro_env}    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -275,6 +319,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         bin = bin_escaped,
         socket = socket_path,
         db = db_path,
+        pro_env = pro_env,
         log_out = log_out,
         log_err = log_err,
     );
