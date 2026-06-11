@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "_comment": "Pro-edition build override (#156). Pass via `tauri build --config src-tauri/tauri.pro.conf.json` (see nodespace-sync/scripts/build-pro-dmg.sh). It only adds the `nodespaced-pro` sync daemon to the bundled sidecars; the Pro cloud config is baked into the Rust binary at build time via NODESPACE_PRO_* env vars, and `daemon_setup` then installs + launches nodespaced-pro instead of the community nodespaced.",
+  "bundle": {
+    "externalBin": [
+      "binaries/nodespaced",
+      "binaries/nodespace",
+      "binaries/nodespaced-pro"
+    ]
+  }
+}
