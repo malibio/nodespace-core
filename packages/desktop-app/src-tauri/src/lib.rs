@@ -39,6 +39,30 @@ fn toggle_sidebar() -> String {
     "Sidebar toggled!".to_string()
 }
 
+/// True when frontend-console capture is enabled (env `NS_FRONTEND_LOG` set to a
+/// file path). The frontend gates its forwarding on this so normal builds pay no
+/// IPC cost; diagnostics set the env per window to capture the Svelte event flow.
+#[tauri::command]
+fn frontend_log_enabled() -> bool {
+    std::env::var_os("NS_FRONTEND_LOG").is_some()
+}
+
+/// Append a frontend log line to the file named by `NS_FRONTEND_LOG`. No-op if the
+/// env var is unset. Best-effort (diagnostic only) — never fails the caller.
+#[tauri::command]
+fn frontend_log(line: String) {
+    if let Some(path) = std::env::var_os("NS_FRONTEND_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 /// Report the current daemon health to the frontend.
 ///
 /// Returns "healthy", "starting", or "not_running". The frontend uses this
@@ -209,10 +233,19 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
-            // Spawn async task to start daemon (if needed) then connect gRPC client.
+            // Manage the gRPC client EAGERLY via a lazy channel (connects on first
+            // RPC). Previously `manage(GrpcClient)` ran only after the async connect
+            // below, so a frontend command issued at startup (e.g. the date page's
+            // `get_children_tree`) raced it and got a fatal "state not managed for
+            // field `client`", closing the view (nodespace-sync#162). With the client
+            // managed up front, an early call instead yields a retryable transport
+            // error until the daemon is reachable.
+            #[cfg(unix)]
+            app.manage(crate::services::GrpcClient::connect_lazy());
+
+            // Spawn async task to start the daemon (if needed) and wire up the
+            // watcher, token stream, and Pro probe on the (already-managed) client.
             // setup() is synchronous so we can't block_on here — spawn a task instead.
-            // manage(GrpcClient) happens inside the task; commands that need it will
-            // fail gracefully until the connection is established.
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 use tauri::Emitter;
@@ -263,67 +296,40 @@ pub fn run() {
                         }
                     }
 
-                    // Connect gRPC client over UDS. Retry briefly in case the
-                    // daemon socket came up just after wait_for_daemon returned.
-                    let grpc_result = {
-                        let mut result = crate::services::GrpcClient::connect().await;
-                        if result.is_err() {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            result = crate::services::GrpcClient::connect().await;
-                        }
-                        result
-                    };
-                    match grpc_result {
-                        Ok(grpc_client) => {
-                            // Snapshot the underlying channel before
-                            // we hand `grpc_client` to managed state —
-                            // ProClient rides the same h2 connection.
-                            let channel = grpc_client.channel().await;
-                            app_handle.manage(grpc_client.clone());
-                            tracing::info!("gRPC client connected to nodespaced");
-                            watcher::spawn(app_handle.clone(), session_token);
-                            // Subscribe to token stream for ai-chat node inference events.
-                            commands::local_agent::start_token_stream_subscription(
-                                app_handle.clone(),
-                                grpc_client,
-                            );
+                    // The gRPC client is already managed (lazy) above. Fetch it and
+                    // wire the watcher, token stream, and Pro probe; the underlying
+                    // channel connects on first use.
+                    use tauri::Manager;
+                    let grpc_client = (*app_handle.state::<crate::services::GrpcClient>()).clone();
+                    let channel = grpc_client.channel().await;
+                    watcher::spawn(app_handle.clone(), session_token);
+                    // Subscribe to token stream for ai-chat node inference events.
+                    commands::local_agent::start_token_stream_subscription(
+                        app_handle.clone(),
+                        grpc_client,
+                    );
 
-                            // Pro capability probe: a single
-                            // WatchSyncStatus call on the same channel.
-                            // Community `nodespaced` returns
-                            // `Status::Unimplemented` → tier=Community
-                            // → sync pill stays hidden. Pro
-                            // `nodespaced-pro` answers the probe →
-                            // tier=Pro → pill renders and listens for
-                            // the `sync:status` stream.
-                            let pro = crate::services::ProClient::probe_on_channel(channel).await;
-                            let tier = pro.tier().await;
-                            let last_status = pro.last_status().await;
-                            let payload = serde_json::json!({
-                                "tier": tier,
-                                "initial_status": last_status.as_ref().map(|s| {
-                                    serde_json::json!({
-                                        "state": s.state,
-                                        "detail": s.detail,
-                                    })
-                                }),
-                            });
-                            app_handle.manage(pro);
-                            if let Err(e) = app_handle.emit("pro:tier-detected", payload) {
-                                tracing::warn!(
-                                    error = %e,
-                                    "failed to emit pro:tier-detected"
-                                );
-                            }
-                            tracing::info!(?tier, "Pro capability probe done");
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to connect to nodespaced: {e:#}");
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.emit("daemon-status", "not_running");
-                            }
-                        }
+                    // Pro capability probe: a single WatchSyncStatus call on the same
+                    // channel. Community `nodespaced` returns `Status::Unimplemented`
+                    // → tier=Community → sync pill stays hidden. Pro `nodespaced-pro`
+                    // answers → tier=Pro → pill renders and listens for `sync:status`.
+                    let pro = crate::services::ProClient::probe_on_channel(channel).await;
+                    let tier = pro.tier().await;
+                    let last_status = pro.last_status().await;
+                    let payload = serde_json::json!({
+                        "tier": tier,
+                        "initial_status": last_status.as_ref().map(|s| {
+                            serde_json::json!({
+                                "state": s.state,
+                                "detail": s.detail,
+                            })
+                        }),
+                    });
+                    app_handle.manage(pro);
+                    if let Err(e) = app_handle.emit("pro:tier-detected", payload) {
+                        tracing::warn!(error = %e, "failed to emit pro:tier-detected");
                     }
+                    tracing::info!(?tier, "Pro capability probe done");
                 });
             }
 
@@ -383,6 +389,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             toggle_sidebar,
+            frontend_log_enabled,
+            frontend_log,
             check_daemon_status,
             commands::pro_sync::pro_tier,
             commands::pro_sync::pro_subscribe_sync_status,

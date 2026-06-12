@@ -83,6 +83,52 @@ const DEFAULT_LEVEL: LogLevel = isProd
  * // Advanced: Direct instantiation for testing
  * const log = new Logger({ enabled: true, level: 'debug', prefix: 'Test' });
  */
+// ── Frontend-console capture (diagnostic) ──────────────────────────────────────
+// When `NS_FRONTEND_LOG` is set (a file path), the app's `frontend_log` Tauri
+// command appends each frontend log line to that file. Gated by a one-time
+// `frontend_log_enabled` query, so normal builds, the browser, and tests pay no
+// cost. A long-term aid for diagnosing cross-window / cloud-sync behaviour in the
+// real GUI (where the Svelte console isn't otherwise capturable headlessly).
+let forwardState: 'unknown' | 'on' | 'off' = 'unknown';
+let forwardInit: Promise<void> | null = null;
+
+function forwardToFile(level: LogLevel, message: string, data?: unknown): void {
+  void (async () => {
+    try {
+      if (forwardState === 'unknown') {
+        if (!forwardInit) {
+          forwardInit = (async () => {
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              forwardState = (await invoke<boolean>('frontend_log_enabled')) ? 'on' : 'off';
+            } catch {
+              forwardState = 'off';
+            }
+          })();
+        }
+        await forwardInit;
+      }
+      if (forwardState !== 'on') return;
+      const { invoke } = await import('@tauri-apps/api/core');
+      let line = `${new Date().toISOString()} [${level.toUpperCase()}] ${message}`;
+      if (data !== undefined) {
+        try {
+          line += ` ${JSON.stringify(data)}`;
+        } catch {
+          line += ` ${String(data)}`;
+        }
+      }
+      await invoke('frontend_log', { line });
+    } catch {
+      /* best-effort diagnostic only */
+    }
+  })();
+}
+
+// Probe capture-enabled at module load so debug logging activates promptly when
+// NS_FRONTEND_LOG is set (before the first cross-window sync events arrive).
+forwardToFile('info', '[logger] frontend-console capture initialised');
+
 export class Logger {
   private config: LoggerConfig;
 
@@ -97,6 +143,10 @@ export class Logger {
 
   private shouldLog(level: LogLevel): boolean {
     if (!this.config.enabled) return false;
+
+    // When frontend-console capture is on (NS_FRONTEND_LOG set), log every level
+    // so the captured file is complete even though release builds default to warn.
+    if (forwardState === 'on') return true;
 
     const currentLevelIndex = LOG_LEVELS.indexOf(this.config.level);
     const requestedLevelIndex = LOG_LEVELS.indexOf(level);
@@ -120,6 +170,7 @@ export class Logger {
       } else {
         console.debug(this.formatMessage(message));
       }
+      forwardToFile('debug', this.formatMessage(message), data);
     }
   }
 
@@ -134,6 +185,7 @@ export class Logger {
       } else {
         console.log(this.formatMessage(message));
       }
+      forwardToFile('info', this.formatMessage(message), data);
     }
   }
 
@@ -148,6 +200,7 @@ export class Logger {
       } else {
         console.warn(this.formatMessage(message));
       }
+      forwardToFile('warn', this.formatMessage(message), data);
     }
   }
 
@@ -162,6 +215,7 @@ export class Logger {
       } else {
         console.error(this.formatMessage(message));
       }
+      forwardToFile('error', this.formatMessage(message), data);
     }
   }
 
