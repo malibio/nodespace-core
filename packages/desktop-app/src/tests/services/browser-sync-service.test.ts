@@ -214,11 +214,13 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       expect(structureTree.getChildren('parent1')).toContain('child1');
     });
 
-    it('should handle duplicate relationship to same parent (second edge rejected due to tree invariant)', async () => {
-      // Scenario: Two relationships to the same parent (duplicate) before node:created
-      // Note: ReactiveStructureTree enforces a tree structure (not DAG),
-      // so a node can only have one parent. Attempting to add a second parent
-      // is logged as a tree invariant violation and rejected.
+    it('should reparent on a second relationship to a different parent (single-parent tree)', async () => {
+      // Scenario: Two has_child edges naming DIFFERENT parents for the same child
+      // arrive before node:created. ReactiveStructureTree enforces a single-parent
+      // tree, so the second edge is treated as a MOVE: the child is pruned from the
+      // first parent and re-attached under the second (nodespace-sync#162). A move
+      // applied on another window/cloud delivers the new-parent edge with no old-parent
+      // delete, so reparenting (not rejecting) is what keeps windows consistent.
 
       const nodeData = createTestNode('child');
       registerMockNode(nodeData);
@@ -244,14 +246,12 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       // First relationship arrives
       testableService.handleEvent(relationship1);
 
-      // Second relationship to different parent arrives (violates tree structure)
-      // This is logged as an error but doesn't crash
+      // Second relationship to a different parent arrives → reparent (move)
       testableService.handleEvent(relationship2);
 
-      // First parent relationship exists
-      expect(structureTree.getChildren('parent1')).toContain('child');
-      // Second parent relationship is rejected (tree invariant violation)
-      expect(structureTree.getChildren('parent2')).not.toContain('child');
+      // Child has moved to the new parent: pruned from parent1, present under parent2
+      expect(structureTree.getChildren('parent1')).not.toContain('child');
+      expect(structureTree.getChildren('parent2')).toContain('child');
 
       // Now create the node (Issue #724: ID-only)
       testableService.handleEvent({
@@ -265,9 +265,9 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
         expect(sharedNodeStore.getNode('child')).toBeDefined();
       });
 
-      // Verify state is consistent with tree structure
-      expect(structureTree.getChildren('parent1')).toContain('child');
-      expect(structureTree.getChildren('parent2')).not.toContain('child');
+      // State stays consistent after the node is materialised: child under parent2 only
+      expect(structureTree.getChildren('parent1')).not.toContain('child');
+      expect(structureTree.getChildren('parent2')).toContain('child');
     });
   });
 

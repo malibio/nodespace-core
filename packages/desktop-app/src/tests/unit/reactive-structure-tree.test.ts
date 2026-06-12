@@ -503,29 +503,21 @@ describe('ReactiveStructureTree', () => {
       expect(childInfo.find(c => c.nodeId === 'child1')?.order).toBe(5.0);
     });
 
-    it('should prevent adding child with different parent (tree invariant)', () => {
+    it('reparents (moves) a child when added under a different parent', () => {
+      // The one-parent invariant is preserved by MOVING, not by rejecting: a
+      // has_child edge under a new parent (an indent synced from another window)
+      // means the node moved. Rejecting it left the node stranded under its old
+      // parent across windows (nodespace-sync#162).
       structureTree.children.clear();
 
-      // Add child to parent1
-      structureTree.__testOnly_addChild({
-        parentId: 'parent1',
-        childId: 'child1',
-        order: 1.0
-      });
+      structureTree.__testOnly_addChild({ parentId: 'parent1', childId: 'child1', order: 1.0 });
 
-      // Try to add same child to parent2 (should be rejected due to tree invariant)
-      structureTree.__testOnly_addChild({
-        parentId: 'parent2',
-        childId: 'child1',
-        order: 1.0
-      });
+      // Same child added under parent2 → it moves there.
+      structureTree.__testOnly_addChild({ parentId: 'parent2', childId: 'child1', order: 1.0 });
 
-      // Verify child1 only belongs to parent1 (tree invariant preserved)
-      expect(structureTree.getChildren('parent1')).toEqual(['child1']);
-      expect(structureTree.getChildren('parent2')).toEqual([]);
-
-      // Verify child1's parent is still parent1
-      expect(structureTree.getParent('child1')).toBe('parent1');
+      expect(structureTree.getChildren('parent1')).toEqual([]); // pruned from old parent
+      expect(structureTree.getChildren('parent2')).toEqual(['child1']); // now under new parent
+      expect(structureTree.getParent('child1')).toBe('parent2');
     });
   });
 
@@ -826,6 +818,34 @@ describe('ReactiveStructureTree', () => {
 
       // Verify child3 inserted in correct position
       expect(structureTree.getChildren('parent2')).toEqual(['child2', 'child3', 'child4']);
+    });
+  });
+
+  describe('addChild reparents across parents (cloud-sync indent/outdent)', () => {
+    it('moves a child to the new parent when addChild names a different parent', () => {
+      // A node already under `old` parent (e.g. a line under today's date page).
+      structureTree.addChild({ parentId: 'old', childId: 'n', order: 1 });
+      expect(structureTree.getChildren('old')).toEqual(['n']);
+
+      // A has_child edge under a DIFFERENT parent arrives (indent on another
+      // window): the daemon reparents in one step, so only a relationship:created
+      // for the new parent is delivered — possibly before any old-edge delete.
+      // It must MOVE the node, not be rejected as an "invariant violation"
+      // (nodespace-sync#162: indent not reflected across windows).
+      structureTree.addChild({ parentId: 'p1', childId: 'n', order: 1 });
+
+      expect(structureTree.getChildren('p1')).toEqual(['n']);
+      expect(structureTree.getChildren('old')).toEqual([]); // pruned from old parent
+      expect(structureTree.getParent('n')).toBe('p1');
+    });
+
+    it('a later relationship:deleted for the old edge is a harmless no-op', () => {
+      structureTree.addChild({ parentId: 'old', childId: 'n', order: 1 });
+      structureTree.addChild({ parentId: 'p1', childId: 'n', order: 1 }); // reparent
+      // Old-edge delete arrives afterwards (out-of-order) — must not remove n from p1.
+      structureTree.removeChild({ parentId: 'old', childId: 'n', order: 0 });
+      expect(structureTree.getChildren('p1')).toEqual(['n']);
+      expect(structureTree.getParent('n')).toBe('p1');
     });
   });
 });

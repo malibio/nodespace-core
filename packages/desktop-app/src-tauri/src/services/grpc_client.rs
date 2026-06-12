@@ -57,6 +57,14 @@ impl GrpcClient {
 
         tracing::info!(socket = %sock.display(), "Connected to nodespaced");
 
+        Ok(Self::from_channel(channel))
+    }
+
+    /// Wrap an established (or lazy) channel in the full service-client bundle.
+    /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
+    /// stays in sync as new services are added.
+    #[cfg(unix)]
+    fn from_channel(channel: Channel) -> Self {
         let inner = GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
             import: ImportServiceClient::new(channel.clone()),
@@ -66,10 +74,24 @@ impl GrpcClient {
             local_agent: LocalAgentServiceClient::new(channel.clone()),
             channel,
         };
-
-        Ok(Self {
+        Self {
             inner: Arc::new(RwLock::new(inner)),
-        })
+        }
+    }
+
+    /// Build a client over a LAZY UDS channel — it connects on the first RPC
+    /// rather than now, so this returns synchronously and can be `.manage()`'d at
+    /// app setup BEFORE the daemon socket is reachable. This removes the startup
+    /// race where the frontend invoked a command (e.g. `get_children_tree`) before
+    /// the async `connect()` had run, getting a fatal "state not managed for field
+    /// `client`" that closed the view. With a lazy client managed up front, an
+    /// early call instead waits / yields a retryable transport error.
+    #[cfg(unix)]
+    pub fn connect_lazy() -> Self {
+        let sock = resolve_socket_path();
+        tracing::info!(socket = %sock.display(), "gRPC client (lazy) — connects on first use");
+        let channel = uds_channel_lazy(&sock);
+        Self::from_channel(channel)
     }
 
     /// Borrow a clone of the `NodeServiceClient`.
@@ -144,6 +166,24 @@ async fn uds_channel(sock: &std::path::Path) -> Result<Channel, tonic::transport
             async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
         }))
         .await
+}
+
+/// Lazy variant of [`uds_channel`] — builds the channel without connecting; the
+/// first RPC establishes (and later re-establishes) the UDS connection.
+#[cfg(unix)]
+fn uds_channel_lazy(sock: &std::path::Path) -> Channel {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let sock = sock.to_path_buf();
+    Endpoint::from_static("http://localhost").connect_with_connector_lazy(service_fn(
+        move |_: Uri| {
+            let sock = sock.clone();
+            async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
+        },
+    ))
 }
 
 #[derive(Debug, thiserror::Error)]

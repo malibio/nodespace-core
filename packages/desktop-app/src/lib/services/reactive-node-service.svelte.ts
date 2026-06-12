@@ -95,6 +95,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     _updateTrigger++;
   });
 
+  // Also recompute the rendered outline when the hierarchy TREE changes — not only
+  // on node changes. A has_child edge synced from another window or the cloud
+  // mutates structureTree but fires no SharedNodeStore node event, so without this
+  // the new nesting (e.g. an indent done elsewhere) never re-rendered here
+  // (nodespace-sync#162).
+  let _structureUnsubscribe: (() => void) | null = structureTree.onChange(() => {
+    _updateTrigger++;
+  });
+
   // NOTE: Backend now returns children pre-sorted via fractional ordering (ORDER BY order ASC)
   // No frontend sorting needed - we trust the backend's ordering
 
@@ -1472,6 +1481,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       if (_subscriptionUnsubscribe) {
         _subscriptionUnsubscribe();
         _subscriptionUnsubscribe = null;
+      }
+      if (_structureUnsubscribe) {
+        _structureUnsubscribe();
+        _structureUnsubscribe = null;
       }
     },
 
