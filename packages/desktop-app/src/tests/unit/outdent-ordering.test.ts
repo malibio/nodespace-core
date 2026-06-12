@@ -69,6 +69,7 @@ vi.mock('$lib/stores/reactive-structure-tree.svelte', () => ({
     getParent: vi.fn(() => null),
     removeChild: vi.fn(),
     addChild: vi.fn(),
+    onChange: vi.fn(() => () => {}),
     children: new Map()
   }
 }));

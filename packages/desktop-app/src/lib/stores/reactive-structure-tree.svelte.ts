@@ -26,12 +26,34 @@ export class ReactiveStructureTree {
   // so we must reassign after every mutation (see notifyChange())
   children = $state.raw(new Map<string, ChildInfo[]>());
 
+  // Explicit change subscribers. The Svelte-reactive `children` reassignment only
+  // re-renders consumers that read `children` inside a tracked scope; some consumers
+  // recompute off their own trigger (e.g. ReactiveNodeService._updateTrigger, bumped
+  // on SharedNodeStore node events — NOT on hierarchy edges). A synced has_child edge
+  // (indent/outdent from another window or the cloud) mutates the tree with no node
+  // event, so those consumers must subscribe here to recompute (nodespace-sync#162).
+  private changeSubscribers = new Set<() => void>();
+
+  /** Subscribe to any hierarchy change. Returns an unsubscribe fn. */
+  onChange(cb: () => void): () => void {
+    this.changeSubscribers.add(cb);
+    return () => this.changeSubscribers.delete(cb);
+  }
+
   /**
-   * Reassign the children map to trigger Svelte reactivity.
+   * Reassign the children map to trigger Svelte reactivity, then notify explicit
+   * subscribers.
    * $state.raw() only tracks reassignment, not in-place Map mutations.
    */
   private notifyChange() {
     this.children = new Map(this.children);
+    for (const cb of this.changeSubscribers) {
+      try {
+        cb();
+      } catch {
+        /* a misbehaving subscriber must not break the tree */
+      }
+    }
   }
 
   /**
@@ -113,17 +135,26 @@ export class ReactiveStructureTree {
       return;
     }
 
-    // Check if child already has a DIFFERENT parent (tree invariant violation)
+    // Child already under a DIFFERENT parent → REPARENT (move it), don't reject.
+    // A node has exactly one parent, so a new has_child edge under a different
+    // parent means the node moved (indent/outdent/drag). Cloud sync delivers the
+    // new-parent edge and the old-parent edge-delete as independent events that can
+    // arrive in either order — and a move applied on the receiver's daemon emits a
+    // RelationshipCreated for the new parent but no delete for the old (the daemon
+    // reparents in one step). Rejecting here left the node stranded under its old
+    // parent on every OTHER window (nodespace-sync#162: indent/outdent not
+    // reflected across windows / cloud sync). Prune the old parent, then add below.
     const currentParent = this.getParent(childId);
     if (currentParent && currentParent !== parentId) {
-      log.error(
-        `Tree invariant violation: ${childId} already has parent ${currentParent}, cannot add to ${parentId}`,
-        rel
-      );
-      // In a tree structure, a node can only have one parent
-      // This indicates either a database inconsistency or a bug in event emission
-      // For now, we'll ignore the duplicate edge to preserve tree structure
-      return;
+      const oldChildren = this.children.get(currentParent);
+      if (oldChildren) {
+        const pruned = oldChildren.filter((c) => c.nodeId !== childId);
+        if (pruned.length === 0) {
+          this.children.delete(currentParent);
+        } else {
+          this.children.set(currentParent, pruned);
+        }
+      }
     }
 
     // Binary search to find insertion position
