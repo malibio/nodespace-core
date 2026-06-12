@@ -330,6 +330,30 @@ pub fn run() {
                         tracing::warn!(error = %e, "failed to emit pro:tier-detected");
                     }
                     tracing::info!(?tier, "Pro capability probe done");
+
+                    // Re-establish the "daemon unreachable" signal lost when the
+                    // eager lazy client replaced the connect()-or-emit path. The lazy
+                    // channel never fails at startup, so a genuinely-down daemon would
+                    // otherwise leave the UI silently empty. After the probe has
+                    // exercised the channel, confirm reachability with the same socket
+                    // check `check_daemon_status` uses and emit `not_running` so
+                    // app-shell shows its error banner + retry (Issue #1179). `Starting`
+                    // is transient — only `NotRunning` trips the banner.
+                    {
+                        use daemon_setup::{check_daemon_socket, DaemonStatus};
+                        if let Some(home) = dirs::home_dir() {
+                            let socket_path = home.join(crate::constants::DAEMON_SOCKET_RELATIVE);
+                            if matches!(
+                                check_daemon_socket(socket_path.as_path()).await,
+                                DaemonStatus::NotRunning
+                            ) {
+                                tracing::error!("nodespaced unreachable after startup");
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.emit("daemon-status", "not_running");
+                                }
+                            }
+                        }
+                    }
                 });
             }
 

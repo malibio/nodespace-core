@@ -93,6 +93,9 @@ let forwardState: 'unknown' | 'on' | 'off' = 'unknown';
 let forwardInit: Promise<void> | null = null;
 
 function forwardToFile(level: LogLevel, message: string, data?: unknown): void {
+  // Tests pay no cost: never touch the Tauri `invoke` bridge under VITEST, or the
+  // one-time `frontend_log_enabled` probe pollutes invoke-call assertions elsewhere.
+  if (isTest) return;
   void (async () => {
     try {
       if (forwardState === 'unknown') {

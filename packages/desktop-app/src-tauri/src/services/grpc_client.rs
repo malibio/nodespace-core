@@ -57,6 +57,14 @@ impl GrpcClient {
 
         tracing::info!(socket = %sock.display(), "Connected to nodespaced");
 
+        Ok(Self::from_channel(channel))
+    }
+
+    /// Wrap an established (or lazy) channel in the full service-client bundle.
+    /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
+    /// stays in sync as new services are added.
+    #[cfg(unix)]
+    fn from_channel(channel: Channel) -> Self {
         let inner = GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
             import: ImportServiceClient::new(channel.clone()),
@@ -66,10 +74,9 @@ impl GrpcClient {
             local_agent: LocalAgentServiceClient::new(channel.clone()),
             channel,
         };
-
-        Ok(Self {
+        Self {
             inner: Arc::new(RwLock::new(inner)),
-        })
+        }
     }
 
     /// Build a client over a LAZY UDS channel — it connects on the first RPC
@@ -84,18 +91,7 @@ impl GrpcClient {
         let sock = resolve_socket_path();
         tracing::info!(socket = %sock.display(), "gRPC client (lazy) — connects on first use");
         let channel = uds_channel_lazy(&sock);
-        let inner = GrpcClientInner {
-            node: NodeServiceClient::new(channel.clone()),
-            import: ImportServiceClient::new(channel.clone()),
-            settings: SettingsServiceClient::new(channel.clone()),
-            embeddings: EmbeddingsServiceClient::new(channel.clone()),
-            agent_session: AgentSessionServiceClient::new(channel.clone()),
-            local_agent: LocalAgentServiceClient::new(channel.clone()),
-            channel,
-        };
-        Self {
-            inner: Arc::new(RwLock::new(inner)),
-        }
+        Self::from_channel(channel)
     }
 
     /// Borrow a clone of the `NodeServiceClient`.
