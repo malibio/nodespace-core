@@ -5,6 +5,11 @@
       "binaries/nodespaced",
       "binaries/nodespace",
       "binaries/nodespaced-pro"
+    ],
+    "resources": [
+      "resources/models/**/*",
+      "binaries/nodespaced-pro-*",
+      "binaries/nodespace-*"
     ]
   }
 }
