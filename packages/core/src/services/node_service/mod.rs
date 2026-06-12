@@ -1877,6 +1877,15 @@ impl NodeService {
             }
         }
 
+        // Capture the OLD parent before the move so we can surface its edge removal
+        // (sync-epic nodespace-sync#162 / S3): the store deletes the old has_child
+        // edge but, historically, only a RelationshipUpdated for the NEW parent was
+        // emitted (gated on Some). A move-to-root (new_parent = None) therefore
+        // emitted no relationship event at all, so the detach never propagated to
+        // other devices; a reparent left a stale cloud edge. We now also emit a
+        // RelationshipDeleted for the old parent whenever the parent actually changes.
+        let old_parent_id = self.get_parent(node_id).await?.map(|p| p.id);
+
         let insert_after = self.resolve_insert_position(position, new_parent).await?;
 
         // Perform the move
@@ -1886,7 +1895,9 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipUpdated event (Issue #811: unified relationship events)
+        // Emit RelationshipUpdated event (Issue #811: unified relationship events).
+        // Emit the NEW-parent edge first so a consumer that inserts-then-deletes
+        // never sees the node parentless mid-move.
         if let Some(parent_id) = new_parent {
             self.emit_event(DomainEvent::RelationshipUpdated {
                 relationship: crate::db::events::RelationshipEvent::new(
@@ -1897,6 +1908,19 @@ impl NodeService {
                     serde_json::json!({"order": actual_order}),
                 ),
             });
+        }
+
+        // Surface the removal of the OLD parent edge when the parent actually
+        // changed (move-to-root OR reparent) — not on a same-parent position move.
+        if let Some(old_id) = old_parent_id {
+            if new_parent != Some(old_id.as_str()) {
+                self.emit_event(DomainEvent::RelationshipDeleted {
+                    id: format!("relationship:{}:{}", old_id, node_id),
+                    from_id: crate::db::events::node_thing(&old_id),
+                    to_id: crate::db::events::node_thing(node_id),
+                    relationship_type: "has_child".to_string(),
+                });
+            }
         }
 
         // Bump the node's version to support OCC
