@@ -18,7 +18,7 @@ Make breaking changes without hesitation. Fix breakage immediately in the same s
 
 ## Project Overview
 
-NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 frontend, Tauri 2.0 desktop. Stack: SurrealDB/RocksDB, async/await trait-based Rust, $state/$derived/$effect runes. UI-first approach — build interfaces with mock data before storage integration.
+NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 frontend, Tauri 2.0 desktop. Stack: libsql/SQLite (local store — `packages/core/src/db/`), async/await trait-based Rust, $state/$derived/$effect runes. UI-first approach — build interfaces with mock data before storage integration.
 
 **Before starting any task, read:**
 - [`overview.md`](../nodespace-docs/development/overview.md) - Complete development process
