@@ -32,6 +32,19 @@ service CloudSyncService {
   // Force an immediate reconcile cycle (push pending + pull recent).
   // No-op if the orchestrator is already in SYNCING.
   rpc TriggerSync (TriggerSyncRequest) returns (TriggerSyncResponse);
+
+  // --- Team membership (M5, #147). Thin adapters over the cloud
+  // membership RPCs; the daemon forwards the signed-in user's JWT, so
+  // the same admin / last-admin / open-vs-restricted gates apply
+  // server-side. No UI wired yet — these exist for tests + a future UI.
+  rpc SetMember (SetMemberRequest) returns (MembershipAck);
+  rpc RemoveMember (RemoveMemberRequest) returns (MembershipAck);
+  rpc LeaveCollection (LeaveCollectionRequest) returns (MembershipAck);
+  rpc ListMembers (ListMembersRequest) returns (ListMembersResponse);
+  rpc CreateInvite (CreateInviteRequest) returns (CreateInviteResponse);
+  rpc AcceptInvite (AcceptInviteRequest) returns (MembershipAck);
+  rpc RequestJoin (RequestJoinRequest) returns (RequestJoinResponse);
+  rpc ApproveRequest (ApproveRequestRequest) returns (MembershipAck);
 }
 
 // --- Messages -----------------------------------------------------
@@ -91,3 +104,62 @@ message SyncStatusEvent {
 
 message TriggerSyncRequest {}
 message TriggerSyncResponse {}
+
+// --- Team membership (M5, #147) ----------------------------------
+// permission is "admin" | "modify" | "readOnly". collection_id / person_id are
+// node ids (TEXT). The daemon forwards the caller's JWT to the cloud RPCs.
+
+message SetMemberRequest {
+  string collection_id = 1;
+  string person_id = 2;
+  string permission = 3;
+}
+message RemoveMemberRequest {
+  string collection_id = 1;
+  string person_id = 2;
+}
+message LeaveCollectionRequest {
+  string collection_id = 1;
+}
+message ListMembersRequest {
+  string collection_id = 1;
+}
+message Member {
+  string person_id = 1;
+  string permission = 2;
+}
+message ListMembersResponse {
+  repeated Member members = 1;
+}
+message CreateInviteRequest {
+  string collection_id = 1;
+  string permission = 2;
+  // Optional invitee email; when set, the invite is bound to it (only that
+  // signed-in user may redeem). Empty => a bearer share-code.
+  string email = 3;
+  // Optional lifetime; 0 => server default (7 days).
+  uint64 ttl_secs = 4;
+}
+message CreateInviteResponse {
+  string code = 1;
+}
+message AcceptInviteRequest {
+  string code = 1;
+}
+message RequestJoinRequest {
+  string collection_id = 1;
+}
+message RequestJoinResponse {
+  string request_id = 1;
+}
+message ApproveRequestRequest {
+  string request_id = 1;
+  // Optional tier override; empty => the requested tier.
+  string permission = 2;
+}
+// Generic ack for membership mutations. `detail` is "ok" for SetMember /
+// RemoveMember / LeaveCollection / ApproveRequest; for AcceptInvite it is the
+// joined collection id (so the caller can pull it).
+message MembershipAck {
+  string detail = 1;
+}
