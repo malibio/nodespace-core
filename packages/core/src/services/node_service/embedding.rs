@@ -37,13 +37,10 @@ impl NodeService {
             })
     }
 
-    /// Replace a node's embeddings with `embeddings` (wholesale, like the local
-    /// generation path). Used by the Pro daemon's cloud **pull** to apply vectors
-    /// synced from another device into the local store (#97). Like the read API,
-    /// it is **independent of the `nlp` feature**: applying a received vector
-    /// doesn't require the generation engine, so a daemon built without llama-cpp
-    /// can still receive embeddings. Empty `embeddings` is a no-op (use
-    /// [`Self::delete_embeddings`] to clear).
+    /// Replace a node's embeddings with locally-generated vectors (`origin =
+    /// 'local'`, wholesale). **Independent of the `nlp` feature** (it's a plain
+    /// store write). Empty `embeddings` is a no-op (use [`Self::delete_embeddings`]
+    /// to clear).
     pub async fn upsert_embeddings(
         &self,
         node_id: &str,
@@ -54,6 +51,23 @@ impl NodeService {
             .await
             .map_err(|e| {
                 NodeServiceError::query_failed(format!("Failed to upsert embeddings: {}", e))
+            })
+    }
+
+    /// Apply embeddings PULLED from another device (`origin = 'remote'`,
+    /// #182/#183). The Pro daemon's cloud pull uses this instead of
+    /// [`Self::upsert_embeddings`] so the push sweep won't re-push a vector this
+    /// device merely received. Also independent of the `nlp` feature.
+    pub async fn apply_remote_embeddings(
+        &self,
+        node_id: &str,
+        embeddings: Vec<crate::models::NewEmbedding>,
+    ) -> Result<(), NodeServiceError> {
+        self.store
+            .apply_remote_embeddings(node_id, embeddings)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!("Failed to apply remote embeddings: {}", e))
             })
     }
 

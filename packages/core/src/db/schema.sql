@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS embedding (
     stale        INTEGER NOT NULL DEFAULT 1,
     error_count  INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
+    -- Provenance (#182/#183): 'local' = generated on this device, 'remote' =
+    -- pulled from another device via cloud sync. The cloud-push sweep reads only
+    -- 'local' rows, so a pulled vector never gets re-pushed (no cross-device
+    -- re-push loop / write amplification).
+    origin       TEXT    NOT NULL DEFAULT 'local',
     created_at   TEXT    NOT NULL,
     modified_at  TEXT    NOT NULL
 ) STRICT;
@@ -57,9 +62,9 @@ CREATE TABLE IF NOT EXISTS embedding (
 CREATE INDEX IF NOT EXISTS idx_emb_node      ON embedding (node_id);
 CREATE INDEX IF NOT EXISTS idx_emb_stale_mod ON embedding (stale, modified_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_emb_unique ON embedding (node_id, model_name, chunk_index);
--- Cloud-push sweep (#97): SqliteStore::embeddings_modified_since does a
--- stale-agnostic `modified_at >= ?` range scan ORDER BY modified_at, node_id,
--- chunk_index. idx_emb_stale_mod can't serve it (leading column is `stale`), so
--- this composite makes the recurring sweep an index range scan that also covers
--- the ORDER BY (no filesort).
-CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (modified_at, node_id, chunk_index);
+-- Cloud-push sweep (#97/#182): SqliteStore::embeddings_modified_since does an
+-- `origin = 'local' AND modified_at >= ?` range scan ORDER BY modified_at,
+-- node_id, chunk_index. Leading on `origin` (equality) then `modified_at`
+-- (range) makes the recurring sweep an index range scan that also covers the
+-- ORDER BY (no filesort).
+CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (origin, modified_at, node_id, chunk_index);
