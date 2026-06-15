@@ -9,9 +9,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::services::pro_client::pb::cloud_sync_service_client::CloudSyncServiceClient;
 use crate::services::pro_client::pb::sync_status_event::State as PbState;
-use crate::services::pro_client::pb::{InitiateOAuthRequest, WatchSyncStatusRequest};
+use crate::services::pro_client::pb::{
+    AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, InitiateOAuthRequest,
+    LeaveCollectionRequest, ListMembersRequest, RemoveMemberRequest, RequestJoinRequest,
+    SetMemberRequest, WatchSyncStatusRequest,
+};
 use crate::services::{ProClient, ProTier};
+use tonic::transport::Channel;
 
 /// Default auth-Worker URL when the frontend doesn't supply one. Release builds
 /// hit the deployed canonical domain (`pro.nodespace.ai`, nodespace-cloud#21);
@@ -152,4 +158,171 @@ pub async fn pro_initiate_oauth(
         .map_err(|e| format!("InitiateOAuth failed: {e}"))?
         .into_inner();
     Ok(resp.attempt_id)
+}
+
+// --- Team membership commands (M5, #147) ----------------------------------
+//
+// Thin pass-throughs over the daemon's `CloudSyncService` membership RPCs. The
+// daemon forwards the signed-in user's JWT to the matching cloud RPC, so the
+// admin / last-admin / open-vs-restricted gates are enforced server-side — these
+// commands carry no authority of their own. No collaboration UI is wired yet;
+// they exist for tests and a future UI, mirroring the `pro_initiate_oauth`
+// shape (resolve the Pro client or fail in community mode, then one RPC).
+
+/// One roster entry returned by [`pro_list_members`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemberDto {
+    pub person_id: String,
+    /// "admin" | "modify" | "readOnly".
+    pub permission: String,
+}
+
+/// Resolve the Pro gRPC client, or fail when running in community mode (no
+/// `ProClient` in managed state). Mirrors the guard in `pro_initiate_oauth`.
+async fn membership_client(app: &AppHandle) -> Result<CloudSyncServiceClient<Channel>, String> {
+    match app.try_state::<ProClient>() {
+        Some(pro) => Ok(pro.client().await),
+        None => Err("community tier — Pro membership operations unavailable".into()),
+    }
+}
+
+/// Add a member or change their role on a collection (admin only, server-gated).
+/// `permission` is "admin" | "modify" | "readOnly".
+#[tauri::command]
+pub async fn pro_set_member(
+    app: AppHandle,
+    collection_id: String,
+    person_id: String,
+    permission: String,
+) -> Result<(), String> {
+    let mut client = membership_client(&app).await?;
+    client
+        .set_member(SetMemberRequest {
+            collection_id,
+            person_id,
+            permission,
+        })
+        .await
+        .map_err(|e| format!("SetMember failed: {e}"))?;
+    Ok(())
+}
+
+/// Remove a member from a collection (admin only; last-admin protected server-side).
+#[tauri::command]
+pub async fn pro_remove_member(
+    app: AppHandle,
+    collection_id: String,
+    person_id: String,
+) -> Result<(), String> {
+    let mut client = membership_client(&app).await?;
+    client
+        .remove_member(RemoveMemberRequest {
+            collection_id,
+            person_id,
+        })
+        .await
+        .map_err(|e| format!("RemoveMember failed: {e}"))?;
+    Ok(())
+}
+
+/// Leave a collection the signed-in user belongs to (resolved from their JWT).
+#[tauri::command]
+pub async fn pro_leave_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    let mut client = membership_client(&app).await?;
+    client
+        .leave_collection(LeaveCollectionRequest { collection_id })
+        .await
+        .map_err(|e| format!("LeaveCollection failed: {e}"))?;
+    Ok(())
+}
+
+/// List the roster of a collection (member/admin).
+#[tauri::command]
+pub async fn pro_list_members(
+    app: AppHandle,
+    collection_id: String,
+) -> Result<Vec<MemberDto>, String> {
+    let mut client = membership_client(&app).await?;
+    let resp = client
+        .list_members(ListMembersRequest { collection_id })
+        .await
+        .map_err(|e| format!("ListMembers failed: {e}"))?
+        .into_inner();
+    Ok(resp
+        .members
+        .into_iter()
+        .map(|m| MemberDto {
+            person_id: m.person_id,
+            permission: m.permission,
+        })
+        .collect())
+}
+
+/// Create an invite (admin only). Returns the invite code. When `email` is set
+/// the invite is bound to it; otherwise it's a bearer share-code. `ttl_secs` of
+/// `None`/`0` uses the server default (7 days).
+#[tauri::command]
+pub async fn pro_create_invite(
+    app: AppHandle,
+    collection_id: String,
+    permission: String,
+    email: Option<String>,
+    ttl_secs: Option<u64>,
+) -> Result<String, String> {
+    let mut client = membership_client(&app).await?;
+    let resp = client
+        .create_invite(CreateInviteRequest {
+            collection_id,
+            permission,
+            email: email.unwrap_or_default(),
+            ttl_secs: ttl_secs.unwrap_or(0),
+        })
+        .await
+        .map_err(|e| format!("CreateInvite failed: {e}"))?
+        .into_inner();
+    Ok(resp.code)
+}
+
+/// Redeem an invite code (invitee's own JWT). Returns the joined collection id
+/// so the caller can pull it.
+#[tauri::command]
+pub async fn pro_accept_invite(app: AppHandle, code: String) -> Result<String, String> {
+    let mut client = membership_client(&app).await?;
+    let resp = client
+        .accept_invite(AcceptInviteRequest { code })
+        .await
+        .map_err(|e| format!("AcceptInvite failed: {e}"))?
+        .into_inner();
+    Ok(resp.detail)
+}
+
+/// Request to join a restricted collection. Returns the request id.
+#[tauri::command]
+pub async fn pro_request_join(app: AppHandle, collection_id: String) -> Result<String, String> {
+    let mut client = membership_client(&app).await?;
+    let resp = client
+        .request_join(RequestJoinRequest { collection_id })
+        .await
+        .map_err(|e| format!("RequestJoin failed: {e}"))?
+        .into_inner();
+    Ok(resp.request_id)
+}
+
+/// Approve a pending join request (admin only). `permission` of `None`/empty
+/// grants the originally-requested tier.
+#[tauri::command]
+pub async fn pro_approve_request(
+    app: AppHandle,
+    request_id: String,
+    permission: Option<String>,
+) -> Result<(), String> {
+    let mut client = membership_client(&app).await?;
+    client
+        .approve_request(ApproveRequestRequest {
+            request_id,
+            permission: permission.unwrap_or_default(),
+        })
+        .await
+        .map_err(|e| format!("ApproveRequest failed: {e}"))?;
+    Ok(())
 }
