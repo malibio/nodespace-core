@@ -28,6 +28,7 @@
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
   import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
   import ProSyncPill from '$lib/components/pro-sync-pill.svelte';
+  import ProReloginModal from '$lib/components/pro-relogin-modal.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
   import ConflictToast from '$lib/components/conflict-toast.svelte';
 
@@ -40,6 +41,42 @@
 
   // First-launch onboarding wizard (Issue #1180).
   let showOnboarding = $state(false);
+
+  // Pro re-login prompt (T18, #1304). The daemon emits AUTH_REQUIRED when the
+  // persisted refresh token can't be renewed; we surface a modal offering a
+  // fresh sign-in or working offline. `reloginDismissed` is per-episode so
+  // "Work Offline" doesn't keep nagging, and is re-armed once the daemon
+  // leaves the auth-required state so a later failure prompts again.
+  let reloginDismissed = $state(false);
+  let reloginPending = $state(false);
+
+  let showReloginModal = $derived(
+    proSync.isPro && proSync.state === 'auth-required' && !reloginDismissed
+  );
+
+  $effect(() => {
+    if (proSync.state !== 'auth-required' && reloginDismissed) {
+      reloginDismissed = false;
+    }
+  });
+
+  async function handleReloginSignIn() {
+    if (reloginPending) return;
+    reloginPending = true;
+    try {
+      // Same PKCE flow the sync pill uses; the daemon opens the browser and
+      // the modal closes as `sync:status` transitions away from auth-required.
+      await invoke('pro_initiate_oauth');
+    } catch (e) {
+      log.warn('pro_initiate_oauth (relogin) failed', { error: e });
+    } finally {
+      reloginPending = false;
+    }
+  }
+
+  function handleReloginWorkOffline() {
+    reloginDismissed = true;
+  }
 
   /**
    * Sets up MCP event listeners for real-time UI updates
@@ -630,6 +667,15 @@
 
     <!-- Conflict resolution notifications (Issue #642) -->
     <ConflictToast />
+
+    <!-- Pro re-login prompt when the daemon's session can't be refreshed (T18, #1304) -->
+    <ProReloginModal
+      open={showReloginModal}
+      detail={proSync.detail}
+      pending={reloginPending}
+      onSignIn={handleReloginSignIn}
+      onWorkOffline={handleReloginWorkOffline}
+    />
   </NodeServiceContext>
 </ThemeProvider>
 
