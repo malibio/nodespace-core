@@ -219,6 +219,57 @@ impl SqliteStore {
         .await
         .context("Failed to create vec0 embeddings table")?;
 
+        Self::migrate_embedding_origin(conn).await?;
+
+        Ok(())
+    }
+
+    /// Idempotent DDL migration for the embedding `origin` column (#182/#183).
+    ///
+    /// `schema.sql` is applied with `CREATE TABLE/INDEX IF NOT EXISTS`, which
+    /// CANNOT alter a pre-existing `embedding` table — and `packages/core` ships
+    /// in the community desktop app, whose user DBs are never reset (lazy
+    /// node-migration design). On such a DB the new column + reshaped index would
+    /// be silently absent, so every embedding write and the push sweep's
+    /// `WHERE origin = 'local'` would fail with `no such column: origin`. Add the
+    /// column and rebuild the index here when missing. No-op on fresh DBs (the
+    /// column already exists) and on re-runs.
+    async fn migrate_embedding_origin(conn: &libsql::Connection) -> Result<()> {
+        let mut cols = conn
+            .query("PRAGMA table_info(embedding)", ())
+            .await
+            .context("read embedding table_info")?;
+        let mut has_origin = false;
+        while let Some(row) = cols.next().await? {
+            // table_info columns: (cid, name, type, notnull, dflt_value, pk)
+            let name: String = row.get(1)?;
+            if name == "origin" {
+                has_origin = true;
+                break;
+            }
+        }
+        if has_origin {
+            return Ok(());
+        }
+
+        conn.execute(
+            "ALTER TABLE embedding ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
+            (),
+        )
+        .await
+        .context("add embedding.origin column")?;
+        // `idx_emb_modified` already exists under its old (originless) definition,
+        // so CREATE INDEX IF NOT EXISTS in schema.sql was skipped — drop it and
+        // rebuild with `origin` leading so the filtered push sweep stays covered.
+        conn.execute("DROP INDEX IF EXISTS idx_emb_modified", ())
+            .await
+            .context("drop legacy idx_emb_modified")?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (origin, modified_at, node_id, chunk_index)",
+            (),
+        )
+        .await
+        .context("rebuild idx_emb_modified with origin")?;
         Ok(())
     }
 
@@ -2373,10 +2424,36 @@ impl SqliteStore {
         Ok(schemas)
     }
 
+    /// Replace a node's embeddings with locally-generated vectors (`origin =
+    /// 'local'`). This is what the embedding generation path uses; the cloud-push
+    /// sweep reads only `'local'` rows.
     pub async fn upsert_embeddings(
         &self,
         node_id: &str,
         embeddings: Vec<crate::models::NewEmbedding>,
+    ) -> Result<()> {
+        self.upsert_embeddings_with_origin(node_id, embeddings, "local")
+            .await
+    }
+
+    /// Replace a node's embeddings with vectors PULLED from another device
+    /// (`origin = 'remote'`, #182/#183). Identical to `upsert_embeddings` except
+    /// for the provenance tag, which keeps the push sweep from re-pushing a vector
+    /// this device merely received (no cross-device re-push loop).
+    pub async fn apply_remote_embeddings(
+        &self,
+        node_id: &str,
+        embeddings: Vec<crate::models::NewEmbedding>,
+    ) -> Result<()> {
+        self.upsert_embeddings_with_origin(node_id, embeddings, "remote")
+            .await
+    }
+
+    async fn upsert_embeddings_with_origin(
+        &self,
+        node_id: &str,
+        embeddings: Vec<crate::models::NewEmbedding>,
+        origin: &str,
     ) -> Result<()> {
         if embeddings.is_empty() {
             return Ok(());
@@ -2416,7 +2493,7 @@ impl SqliteStore {
                 .unwrap_or_else(|| "nomic-embed-text-v1.5".to_string());
 
             tx.execute(
-                "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, NULL, ?12, ?13)",
+                "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, origin, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, NULL, ?12, ?13, ?14)",
                 libsql::params![
                     id.clone(),
                     emb.node_id.clone(),
@@ -2429,6 +2506,7 @@ impl SqliteStore {
                     emb.total_chunks as i64,
                     emb.content_hash,
                     emb.token_count as i64,
+                    origin.to_string(),
                     now.clone(),
                     now.clone(),
                 ],
@@ -2525,10 +2603,16 @@ impl SqliteStore {
         Ok(out)
     }
 
-    /// Read embedding records modified at or after `since`, across all nodes,
-    /// ordered by `modified_at`. Drives the Pro daemon's cloud-push sweep (#97):
-    /// the daemon keeps a cursor over `modified_at` and pushes newly (re)computed
-    /// vectors. Stale rows are included — the caller decides whether to skip them.
+    /// Read **locally-generated** (`origin = 'local'`) embedding records modified
+    /// at or after `since`, across all nodes, ordered by `modified_at`. Drives the
+    /// Pro daemon's cloud-push sweep (#97): the daemon keeps a cursor over
+    /// `modified_at` and pushes newly (re)computed vectors. Stale rows are
+    /// included — the caller decides whether to skip them.
+    ///
+    /// The `origin = 'local'` filter (#182/#183) excludes vectors PULLED from
+    /// other devices, so a received vector is never re-pushed — without it, a
+    /// pull's `modified_at = now` would re-arm this sweep and bounce the vector
+    /// back to cloud, amplifying writes and (on heterogeneous devices) looping.
     ///
     /// INVARIANT: assumes every writer stores `modified_at` as a UTC rfc3339
     /// string (`Utc::now().to_rfc3339()`, as `upsert_embeddings` does). The cursor
@@ -2545,7 +2629,8 @@ impl SqliteStore {
                 "SELECT id, node_id, vector, dimension, model_name, chunk_index, chunk_start, \
                  chunk_end, total_chunks, content_hash, token_count, stale, error_count, \
                  last_error, created_at, modified_at \
-                 FROM embedding WHERE modified_at >= ?1 ORDER BY modified_at, node_id, chunk_index",
+                 FROM embedding WHERE origin = 'local' AND modified_at >= ?1 \
+                 ORDER BY modified_at, node_id, chunk_index",
                 libsql::params![since.to_rfc3339()],
             )
             .await
@@ -3741,6 +3826,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_migrate_embedding_origin_upgrades_legacy_db() -> Result<()> {
+        // A pre-#182 DB: `embedding` table WITHOUT `origin`, old index shape, with
+        // a row already present (community desktop DBs aren't reset). The migration
+        // must add the column (default 'local' for existing rows) and rebuild the
+        // index, idempotently — otherwise embedding writes / the push sweep would
+        // hit `no such column: origin`.
+        let tmp = TempDir::new().unwrap();
+        let db = libsql::Builder::new_local(tmp.path().join("legacy.db"))
+            .build()
+            .await?;
+        let conn = db.connect()?;
+        conn.execute(
+            "CREATE TABLE embedding (id TEXT PRIMARY KEY, node_id TEXT NOT NULL, vector BLOB NOT NULL, \
+             dimension INTEGER NOT NULL DEFAULT 768, model_name TEXT NOT NULL DEFAULT 'm', \
+             chunk_index INTEGER NOT NULL DEFAULT 0, chunk_start INTEGER NOT NULL DEFAULT 0, \
+             chunk_end INTEGER, total_chunks INTEGER NOT NULL DEFAULT 1, content_hash TEXT, \
+             token_count INTEGER, stale INTEGER NOT NULL DEFAULT 1, error_count INTEGER NOT NULL DEFAULT 0, \
+             last_error TEXT, created_at TEXT NOT NULL, modified_at TEXT NOT NULL)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE INDEX idx_emb_modified ON embedding (modified_at, node_id, chunk_index)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "INSERT INTO embedding (id, node_id, vector, created_at, modified_at) \
+             VALUES ('e1', 'n1', x'00', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            (),
+        )
+        .await?;
+
+        SqliteStore::migrate_embedding_origin(&conn).await?;
+
+        // Column added; the existing row defaulted to 'local'.
+        let mut rows = conn
+            .query("SELECT origin FROM embedding WHERE id = 'e1'", ())
+            .await?;
+        let origin: String = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(origin, "local");
+
+        // Index rebuilt to lead with `origin`.
+        let mut idx = conn
+            .query(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_emb_modified'",
+                (),
+            )
+            .await?;
+        let sql: String = idx.next().await?.unwrap().get(0)?;
+        assert!(
+            sql.contains("origin"),
+            "index must include origin; was: {sql}"
+        );
+
+        // Idempotent: a second run is a no-op.
+        SqliteStore::migrate_embedding_origin(&conn).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_get_embeddings_roundtrip_and_modified_since() -> Result<()> {
         // #97 read-API: vectors must round-trip out of the le-f32 blob, both
         // chunks come back in order, and the modified-since cursor filters.
@@ -3770,11 +3916,32 @@ mod tests {
         assert_eq!(got[1].chunk_index, 1);
         assert_eq!(got[1].vector[5], 1.0, "axis-5 unit vector round-trips");
 
-        // Cursor: epoch returns everything, a far-future cursor returns nothing.
+        // Cursor: epoch returns everything (local-origin), a far-future cursor none.
         let epoch = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
         assert_eq!(store.embeddings_modified_since(epoch).await?.len(), 2);
         let future = Utc::now() + chrono::Duration::days(1);
         assert!(store.embeddings_modified_since(future).await?.is_empty());
+
+        // Provenance (#182/#183): a node's REMOTE (pulled) embedding must NOT show
+        // up in the push sweep, so a received vector is never re-pushed.
+        let other = store
+            .create_node(
+                Node::new("text".to_string(), "remote node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .apply_remote_embeddings(&other.id, vec![unit_embedding(&other.id, 7)])
+            .await?;
+        // get_embeddings still returns it locally (it IS stored)...
+        assert_eq!(store.get_embeddings(&other.id).await?.len(), 1);
+        // ...but the push sweep only sees the 2 local-origin chunks, not the remote one.
+        assert_eq!(
+            store.embeddings_modified_since(epoch).await?.len(),
+            2,
+            "remote-origin embeddings are excluded from the push sweep"
+        );
 
         // The recurring sweep must ride idx_emb_modified, not full-scan + filesort
         // (the #1416 review concern): assert the query plan uses the index and the
@@ -3782,7 +3949,7 @@ mod tests {
         let mut plan = store
             .db
             .query(
-                "EXPLAIN QUERY PLAN SELECT id FROM embedding WHERE modified_at >= ?1 \
+                "EXPLAIN QUERY PLAN SELECT id FROM embedding WHERE origin = 'local' AND modified_at >= ?1 \
                  ORDER BY modified_at, node_id, chunk_index",
                 libsql::params!["1970-01-01T00:00:00+00:00".to_string()],
             )
