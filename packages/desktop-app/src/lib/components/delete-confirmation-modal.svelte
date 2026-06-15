@@ -1,12 +1,13 @@
 <script lang="ts">
   import { getDeleteConfirmationState } from '$lib/services/delete-confirmation.svelte';
+  import { focusTrap } from '$lib/actions/focus-trap';
 
   const confirmation = getDeleteConfirmationState();
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') confirmation.cancel();
-    if (e.key === 'Enter') confirmation.confirm();
-  }
+  // Keyboard handling lives elsewhere: focusTrap owns Escape + Tab and lands
+  // initial focus on Cancel, and each button activates on its own Enter
+  // natively. Deliberately NO global Enter→confirm handler — with focus
+  // defaulting to Cancel, that would make Enter delete the node while the
+  // highlighted control says Cancel, on a dialog that warns "cannot be undone".
 </script>
 
 {#if confirmation.pending}
@@ -22,8 +23,9 @@
       aria-modal="true"
       aria-labelledby="delete-modal-title"
       aria-describedby="delete-modal-desc"
+      use:focusTrap={{ onEscape: confirmation.cancel }}
       onclick={(e) => e.stopPropagation()}
-      onkeydown={handleKeydown}
+      onkeydown={(e) => e.stopPropagation()}
       tabindex="0"
     >
       <h2 id="delete-modal-title">Delete node and {confirmation.pending.descendantCount}

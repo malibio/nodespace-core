@@ -48,12 +48,13 @@ describe('ProReloginModal', () => {
     expect(onSignIn).not.toHaveBeenCalled();
   });
 
-  it('treats Escape (overlay keydown) as work-offline', async () => {
+  it('moves focus into the dialog on open and dismisses on Escape from inside (focus-trap, #1414)', async () => {
     render(ProReloginModal, { props: { open: true, onSignIn, onWorkOffline } });
-    // The overlay carries the Escape handler; it wraps the dialog.
     const dialog = screen.getByRole('dialog');
-    const overlay = dialog.parentElement as HTMLElement;
-    await fireEvent.keyDown(overlay, { key: 'Escape' });
+    // focusTrap moves focus inside the dialog on open — real keyboard focus,
+    // not a synthetic dispatch on the overlay.
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     expect(onWorkOffline).toHaveBeenCalledTimes(1);
   });
 
