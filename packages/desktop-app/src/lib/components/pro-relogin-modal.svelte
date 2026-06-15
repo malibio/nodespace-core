@@ -15,6 +15,8 @@
 -->
 
 <script lang="ts">
+  import { focusTrap } from '$lib/actions/focus-trap';
+
   interface Props {
     /** Whether the modal is visible. */
     open?: boolean;
@@ -32,15 +34,10 @@
 </script>
 
 {#if open}
-  <div
-    class="relogin-overlay"
-    onclick={onWorkOffline}
-    onkeydown={(e) => e.key === 'Escape' && onWorkOffline()}
-    role="presentation"
-    tabindex="-1"
-  >
+  <div class="relogin-overlay" onclick={onWorkOffline} role="presentation" tabindex="-1">
     <div
       class="relogin-content"
+      use:focusTrap={{ onEscape: onWorkOffline }}
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       role="dialog"
