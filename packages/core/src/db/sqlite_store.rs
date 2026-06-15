@@ -2450,6 +2450,114 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Decode a stored embedding row into the `Embedding` model. Vectors are
+    /// persisted by `upsert_embeddings` as a little-endian f32 blob; decode it
+    /// back to `Vec<f32>`. Column order must match the SELECTs below.
+    fn row_to_embedding(row: &libsql::Row) -> Result<crate::models::Embedding> {
+        let id: String = row.get(0)?;
+        let node: String = row.get(1)?;
+        let vector_blob: Vec<u8> = row.get(2)?;
+        let dimension: i64 = row.get(3)?;
+        let model_name: String = row.get(4)?;
+        let chunk_index: i64 = row.get(5)?;
+        let chunk_start: i64 = row.get(6)?;
+        let chunk_end: Option<i64> = row.get(7)?;
+        let total_chunks: i64 = row.get(8)?;
+        let content_hash: Option<String> = row.get(9)?;
+        let token_count: Option<i64> = row.get(10)?;
+        let stale: i64 = row.get(11)?;
+        let error_count: i64 = row.get(12)?;
+        let last_error: Option<String> = row.get(13)?;
+        let created_at_str: String = row.get(14)?;
+        let modified_at_str: String = row.get(15)?;
+
+        let vector: Vec<f32> = vector_blob
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .with_context(|| format!("Invalid embedding created_at: {}", created_at_str))?
+            .with_timezone(&Utc);
+        let modified_at = DateTime::parse_from_rfc3339(&modified_at_str)
+            .with_context(|| format!("Invalid embedding modified_at: {}", modified_at_str))?
+            .with_timezone(&Utc);
+
+        Ok(crate::models::Embedding {
+            id,
+            node,
+            vector,
+            dimension: dimension as i32,
+            model_name,
+            chunk_index: chunk_index as i32,
+            chunk_start: chunk_start as i32,
+            chunk_end: chunk_end.map(|v| v as i32),
+            total_chunks: total_chunks as i32,
+            content_hash,
+            token_count: token_count.map(|v| v as i32),
+            stale: stale != 0,
+            error_count: error_count as i32,
+            last_error,
+            created_at,
+            modified_at,
+        })
+    }
+
+    /// Read all locally-stored embedding records for a node (one per chunk),
+    /// ordered by chunk index. Used by the Pro daemon's cloud push (#97) to
+    /// mirror a node's vectors into Supabase pgvector.
+    pub async fn get_embeddings(&self, node_id: &str) -> Result<Vec<crate::models::Embedding>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id, node_id, vector, dimension, model_name, chunk_index, chunk_start, \
+                 chunk_end, total_chunks, content_hash, token_count, stale, error_count, \
+                 last_error, created_at, modified_at \
+                 FROM embedding WHERE node_id = ?1 ORDER BY chunk_index",
+                libsql::params![node_id.to_string()],
+            )
+            .await
+            .context("Failed to query embeddings for node")?;
+
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(Self::row_to_embedding(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// Read embedding records modified at or after `since`, across all nodes,
+    /// ordered by `modified_at`. Drives the Pro daemon's cloud-push sweep (#97):
+    /// the daemon keeps a cursor over `modified_at` and pushes newly (re)computed
+    /// vectors. Stale rows are included — the caller decides whether to skip them.
+    ///
+    /// INVARIANT: assumes every writer stores `modified_at` as a UTC rfc3339
+    /// string (`Utc::now().to_rfc3339()`, as `upsert_embeddings` does). The cursor
+    /// compares lexicographically, which equals chronological order ONLY for that
+    /// fixed `+00:00`-offset form; a `Z`-suffixed or non-UTC timestamp would break
+    /// ordering and make the sweep skip rows. Served by `idx_emb_modified`.
+    pub async fn embeddings_modified_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<crate::models::Embedding>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT id, node_id, vector, dimension, model_name, chunk_index, chunk_start, \
+                 chunk_end, total_chunks, content_hash, token_count, stale, error_count, \
+                 last_error, created_at, modified_at \
+                 FROM embedding WHERE modified_at >= ?1 ORDER BY modified_at, node_id, chunk_index",
+                libsql::params![since.to_rfc3339()],
+            )
+            .await
+            .context("Failed to query embeddings modified since")?;
+
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(Self::row_to_embedding(&row)?);
+        }
+        Ok(out)
+    }
+
     pub async fn mark_root_embedding_stale(&self, node_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let tx = self
@@ -3630,6 +3738,80 @@ mod tests {
             .query("SELECT COUNT(*) FROM vec_embeddings", ())
             .await?;
         Ok(rows.next().await?.unwrap().get(0)?)
+    }
+
+    #[tokio::test]
+    async fn test_get_embeddings_roundtrip_and_modified_since() -> Result<()> {
+        // #97 read-API: vectors must round-trip out of the le-f32 blob, both
+        // chunks come back in order, and the modified-since cursor filters.
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        let mut e0 = unit_embedding(&node.id, 0);
+        e0.total_chunks = 2;
+        let mut e1 = unit_embedding(&node.id, 5);
+        e1.chunk_index = 1;
+        e1.total_chunks = 2;
+        store.upsert_embeddings(&node.id, vec![e0, e1]).await?;
+
+        let got = store.get_embeddings(&node.id).await?;
+        assert_eq!(got.len(), 2, "both chunks returned");
+        assert_eq!(got[0].node, node.id);
+        assert_eq!(got[0].chunk_index, 0);
+        assert_eq!(got[0].vector.len(), 768);
+        assert_eq!(got[0].vector[0], 1.0, "axis-0 unit vector round-trips");
+        assert!(!got[0].stale, "freshly upserted vectors are not stale");
+        assert_eq!(got[1].chunk_index, 1);
+        assert_eq!(got[1].vector[5], 1.0, "axis-5 unit vector round-trips");
+
+        // Cursor: epoch returns everything, a far-future cursor returns nothing.
+        let epoch = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
+        assert_eq!(store.embeddings_modified_since(epoch).await?.len(), 2);
+        let future = Utc::now() + chrono::Duration::days(1);
+        assert!(store.embeddings_modified_since(future).await?.is_empty());
+
+        // The recurring sweep must ride idx_emb_modified, not full-scan + filesort
+        // (the #1416 review concern): assert the query plan uses the index and the
+        // ORDER BY is index-covered.
+        let mut plan = store
+            .db
+            .query(
+                "EXPLAIN QUERY PLAN SELECT id FROM embedding WHERE modified_at >= ?1 \
+                 ORDER BY modified_at, node_id, chunk_index",
+                libsql::params!["1970-01-01T00:00:00+00:00".to_string()],
+            )
+            .await?;
+        let mut detail = String::new();
+        while let Some(row) = plan.next().await? {
+            let d: String = row.get(3)?; // EXPLAIN QUERY PLAN: (id, parent, notused, detail)
+            detail.push_str(&d);
+            detail.push(' ');
+        }
+        assert!(
+            detail.contains("idx_emb_modified"),
+            "sweep must use idx_emb_modified; plan was: {detail}"
+        );
+        assert!(
+            !detail.to_uppercase().contains("TEMP B-TREE"),
+            "ORDER BY must be index-covered (no filesort); plan was: {detail}"
+        );
+
+        // A node with no embeddings reads back empty (not an error).
+        let other = store
+            .create_node(
+                Node::new("text".to_string(), "no emb".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        assert!(store.get_embeddings(&other.id).await?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
