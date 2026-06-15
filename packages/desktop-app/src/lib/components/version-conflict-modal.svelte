@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusTrap } from '$lib/actions/focus-trap';
   import type { Node } from '$lib/types';
 
   // ConflictResolution type moved inline (version-conflict-resolver deleted in #558)
@@ -79,16 +80,11 @@
 
 {#if open}
   <!-- Modal overlay -->
-  <div
-    class="conflict-modal-overlay"
-    onclick={onCancel}
-    onkeydown={(e) => e.key === 'Escape' && onCancel()}
-    role="presentation"
-    tabindex="-1"
-  >
+  <div class="conflict-modal-overlay" onclick={onCancel} role="presentation" tabindex="-1">
     <!-- Modal content (stop propagation to prevent closing when clicking inside) -->
     <div
       class="conflict-modal-content"
+      use:focusTrap={{ onEscape: onCancel }}
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       role="dialog"
