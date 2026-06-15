@@ -3,6 +3,40 @@
 use super::*;
 
 impl NodeService {
+    /// Read all locally-stored embedding records for a node (one per chunk).
+    ///
+    /// Read-only and **independent of the `nlp` feature**: it queries the
+    /// persisted `embedding` table, which exists whether or not embedding
+    /// *generation* (llama-cpp) is compiled in. The Pro daemon uses this to
+    /// mirror a node's vectors into Supabase pgvector (#97).
+    pub async fn get_embeddings(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<crate::models::Embedding>, NodeServiceError> {
+        self.store.get_embeddings(node_id).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to read embeddings: {}", e))
+        })
+    }
+
+    /// Read embedding records modified at or after `since`, across all nodes,
+    /// ordered by `modified_at`. Drives the Pro daemon's cloud-push sweep (#97):
+    /// it advances a cursor over `modified_at` and pushes newly (re)computed
+    /// vectors. Also independent of the `nlp` feature.
+    pub async fn embeddings_modified_since(
+        &self,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::models::Embedding>, NodeServiceError> {
+        self.store
+            .embeddings_modified_since(since)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to read embeddings since cursor: {}",
+                    e
+                ))
+            })
+    }
+
     /// Set the embedding waker for event-driven processing.
     ///
     /// Silently ignored if called more than once. Works on `Arc<NodeService>`
