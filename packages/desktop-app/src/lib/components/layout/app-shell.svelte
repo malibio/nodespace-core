@@ -31,6 +31,8 @@
   import ProReloginModal from '$lib/components/pro-relogin-modal.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
   import ConflictToast from '$lib/components/conflict-toast.svelte';
+  import { recoveredItems } from '$lib/stores/recovered-items.svelte';
+  import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -58,6 +60,28 @@
     if (proSync.state !== 'auth-required' && reloginDismissed) {
       reloginDismissed = false;
     }
+  });
+
+  // Recovered Items (core#1303): once the daemon's probe confirms Pro tier, load
+  // the local-only recovery log. If the daemon preserved any conflict "losers",
+  // show a one-time snackbar on first open; the inline badge handles per-node
+  // review/restore. Guarded one-shot so it loads exactly once per session; fully
+  // inert in community (proSync.isPro is false → load() returns empty → no toast).
+  let recoveredLoadStarted = false;
+  let recoveredNotified = false;
+  $effect(() => {
+    if (!proSync.isPro || recoveredLoadStarted) return;
+    recoveredLoadStarted = true;
+    recoveredItems.load().then(() => {
+      if (recoveredNotified || recoveredItems.items.length === 0) return;
+      recoveredNotified = true;
+      const n = recoveredItems.items.length;
+      conflictNotifications.add({
+        nodeId: recoveredItems.items[0].node_id,
+        message: `${n} recovered item${n === 1 ? '' : 's'} from a sync conflict — open the affected node to review or restore.`,
+        conflictType: 'recovered-items'
+      });
+    });
   });
 
   async function handleReloginSignIn() {
