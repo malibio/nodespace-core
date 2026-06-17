@@ -325,6 +325,40 @@ describe('CreateNodeCommand', () => {
     });
   });
 
+  // Regression for #1421: rapid Enter in an empty node piled blank nodes UPWARD.
+  // An empty node always has cursor position 0, so the "create above" branch
+  // (meant for cursor-at-start of a NON-empty node, to push its content down)
+  // fired on every Enter — inserting before the node and keeping focus on it
+  // (`focusOriginalNode`), so nodes stacked above instead of advancing down.
+  describe('execute - empty node (#1421)', () => {
+    it('creates a sibling BELOW (not above) when the node is empty', async () => {
+      const context = createContext({ key: 'Enter', content: '', cursorPosition: 0 });
+
+      await command.execute(context);
+
+      expect(createNewNodeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterNodeId: 'test-node',
+          insertAtBeginning: false // create below + advance focus, not above
+        })
+      );
+      // and must NOT keep focus on the original (which caused the upward pile-up)
+      expect(createNewNodeSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ focusOriginalNode: true })
+      );
+    });
+
+    it('still creates ABOVE for a non-empty node with cursor at start', async () => {
+      const context = createContext({ key: 'Enter', content: 'keep me', cursorPosition: 0 });
+
+      await command.execute(context);
+
+      expect(createNewNodeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ insertAtBeginning: true, focusOriginalNode: true })
+      );
+    });
+  });
+
   // Helper function to create mock context
   function createContext(options: {
     key: string;
