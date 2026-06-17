@@ -11,5 +11,6 @@ pub mod local_agent;
 pub mod nodes;
 pub mod onboarding;
 pub mod pro_sync;
+pub mod recovered_items;
 pub mod schemas;
 pub mod settings;

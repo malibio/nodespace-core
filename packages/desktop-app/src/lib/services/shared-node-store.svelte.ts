@@ -45,7 +45,10 @@ const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
   'deleted-node': 'The node you edited was deleted by another pane',
   'child-transfer-failure': "Changes couldn't be saved. Please try again.",
-  'write-failure': "Your change couldn't be saved. Please check your connection."
+  'write-failure': "Your change couldn't be saved. Please check your connection.",
+  // Surfaced by the Recovered Items UI (app-shell) with its own count-aware
+  // message; this entry only keeps the map exhaustive over the union.
+  'recovered-items': 'A superseded edit was recovered after a sync conflict'
 };
 
 const log = createLogger('SharedNodeStore');
