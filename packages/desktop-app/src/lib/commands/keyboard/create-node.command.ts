@@ -179,9 +179,16 @@ export class CreateNodeCommand implements KeyboardCommand {
    * - Within inline format opening syntax at beginning (e.g., |**, *|*)
    */
   private shouldCreateNodeAbove(content: string, position: number): boolean {
-    // Always create above when cursor is at the very beginning
+    // Create above when cursor is at the very beginning of a NON-EMPTY node —
+    // the intent is to push the existing content down and leave an empty line
+    // above. An empty node has nothing to preserve below, and its cursor is
+    // always at position 0, so the old unconditional `position <= 0` made every
+    // Enter on an empty node insert *above* and keep focus on it
+    // (`focusOriginalNode`) — blank nodes piled upward and focus never advanced,
+    // diverging across sync (#1421). For an empty node, fall through to normal
+    // "create below + advance focus" splitting.
     if (position <= 0) {
-      return true;
+      return content.trim().length > 0;
     }
 
     // For headers, create above when cursor is within or at the end of the syntax area
