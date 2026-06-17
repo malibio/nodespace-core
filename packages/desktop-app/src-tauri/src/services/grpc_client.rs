@@ -138,9 +138,12 @@ impl GrpcClient {
 /// Resolve the daemon socket path.
 ///
 /// Checks `NODESPACED_SOCKET` env var first, then falls back to
-/// `~/.nodespace/daemon.sock`.
+/// `~/.nodespace/daemon.sock`. `pub(crate)` so the daemon-reachability checks in
+/// `lib.rs` probe the SAME socket the client actually dials — otherwise a
+/// `NODESPACED_SOCKET` override (two-window demo, custom setups) makes them check
+/// the wrong path and falsely report "not running".
 #[cfg(unix)]
-fn resolve_socket_path() -> std::path::PathBuf {
+pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
         return std::path::PathBuf::from(p);
     }
