@@ -31,8 +31,76 @@ import { scheduleCollectionRefresh, scheduleSchemaRefresh } from '$lib/utils/col
 import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schema-plugin-loader';
 import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
 import { normalizeNodeData } from './node-normalize';
+import { proSync } from '$lib/stores/pro-sync.svelte';
 
 const log = createLogger('TauriSync');
+
+// ---------------------------------------------------------------------------
+// Pro-only reconnect-replay render coalescing (#188)
+//
+// On reconnect the Pro daemon now flushes a caught-up batch of node events as a
+// single burst (sync PR #194). Applied one-by-one, each `node:created/updated`
+// triggers its own async fetch + `setNode` → one re-render per node. To render
+// the burst in one pass, when sync is active we collect the node ids over a tiny
+// window, fetch them together, then apply them in a SYNCHRONOUS `setNode` loop —
+// Svelte batches synchronous store mutations into a single render.
+//
+// Gated on `proSync.isPro`: reconnect replay is a Pro-only flow, so the community
+// build never enters this path and its per-event behavior is byte-for-byte
+// unchanged.
+// ---------------------------------------------------------------------------
+
+/** How long to gather a burst before flushing. One frame (~16ms) is enough to
+ *  collect a daemon-flushed batch without adding perceptible latency. */
+const REPLAY_COALESCE_WINDOW_MS = 16;
+
+const pendingNodeIds = new Set<string>();
+let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Queue a node id for the next coalesced flush (Pro path). */
+function enqueueNodeFetch(nodeId: string): void {
+  pendingNodeIds.add(nodeId);
+  if (coalesceTimer !== null) return;
+  coalesceTimer = setTimeout(flushPendingNodeFetches, REPLAY_COALESCE_WINDOW_MS);
+}
+
+/** Fetch all queued nodes, then apply them in one synchronous pass so the burst
+ *  renders once. A failed fetch for a single node is skipped, never fatal. */
+async function flushPendingNodeFetches(): Promise<void> {
+  coalesceTimer = null;
+  const ids = [...pendingNodeIds];
+  pendingNodeIds.clear();
+  if (ids.length === 0) return;
+
+  const fetched = await Promise.all(
+    ids.map((id) =>
+      backendAdapter.getNode(id).catch((error) => {
+        log.error('replay-coalesce: failed to fetch node', { nodeId: id, error });
+        return null;
+      })
+    )
+  );
+
+  // Synchronous apply loop — no `await` between setNode calls, so Svelte
+  // coalesces the resulting reactive updates into a single render.
+  let applied = 0;
+  for (const node of fetched) {
+    if (!node) continue;
+    sharedNodeStore.setNode(normalizeNodeData(node), { type: 'database', reason: 'domain-event' }, true);
+    applied++;
+  }
+  log.info('replay-coalesce: applied node burst in one pass', { requested: ids.length, applied });
+}
+
+/** Route a node fetch through the Pro coalescer, or apply immediately in the
+ *  community build (unchanged behavior). */
+function queueOrFetchNode(nodeId: string, eventType: string): void {
+  if (proSync.isPro) {
+    enqueueNodeFetch(nodeId);
+  } else {
+    fetchAndUpdateNode(nodeId, eventType);
+  }
+}
 
 /**
  * Strip the `node:` table prefix from a stored record id so it
@@ -104,14 +172,16 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         );
       }
 
-      // Fetch full node data since the node might be in the current view
-      fetchAndUpdateNode(event.payload.id, 'node:created');
+      // Fetch full node data since the node might be in the current view.
+      // Pro: coalesce a reconnect-replay burst into one render (#188); community:
+      // apply immediately (unchanged).
+      queueOrFetchNode(event.payload.id, 'node:created');
     });
 
     await listen<NodeEventData>('node:updated', (event) => {
       const nodeId = event.payload.id;
       log.debug(`node:updated received`, { nodeId });
-      fetchAndUpdateNode(nodeId, 'node:updated');
+      queueOrFetchNode(nodeId, 'node:updated');
     });
 
     await listen<{ id: string }>('node:deleted', (event) => {
