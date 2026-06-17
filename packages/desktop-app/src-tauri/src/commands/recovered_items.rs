@@ -90,6 +90,13 @@ pub async fn pro_list_recovered_items(app: AppHandle) -> Result<Vec<RecoveredIte
 
 /// Drop every recovered entry for `node_id` (after a restore, or a single dismiss).
 /// No-op in community mode or when the log is absent.
+///
+/// NOTE (known race): this read→filter→rewrite is not atomic against the daemon,
+/// which also appends to this file. If the daemon records a fresh recovered item
+/// between our read and rewrite, that entry is clobbered. Low-probability and the
+/// only loss is a recovery breadcrumb (the node content itself lives in the store
+/// and cloud); a proper fix is daemon-mediated mutation (or file locking), tracked
+/// as a follow-up. Acceptable for the viewer/restore slice (core#1303).
 #[tauri::command]
 pub async fn pro_dismiss_recovered_item(app: AppHandle, node_id: String) -> Result<(), String> {
     if app.try_state::<ProClient>().is_none() {
