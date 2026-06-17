@@ -56,6 +56,31 @@ const REPLAY_COALESCE_WINDOW_MS = 16;
 
 const pendingNodeIds = new Set<string>();
 let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+// Ids deleted while a flush is mid-fetch (between the snapshot and the apply
+// loop). The flush skips these so a delete that lands during the fetch wins over
+// the now-stale upsert it raced — without this, the re-fetch could resurrect a
+// just-deleted node (the sync#193 failure class, opened anew by coalescing).
+let flushInProgress = false;
+const tombstonedDuringFlush = new Set<string>();
+
+/** Drop any queued/in-flight re-fetch for a node that was just deleted, so the
+ *  delete wins over a racing upsert in the same coalescing window. */
+function cancelPendingNodeFetch(nodeId: string): void {
+  pendingNodeIds.delete(nodeId);
+  if (flushInProgress) tombstonedDuringFlush.add(nodeId);
+}
+
+/** Reset all coalescer state. Called on (re)init so a stale in-flight timer from
+ *  a prior listener registration can't fire into fresh state. */
+function resetNodeFetchCoalescer(): void {
+  if (coalesceTimer !== null) {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = null;
+  }
+  pendingNodeIds.clear();
+  tombstonedDuringFlush.clear();
+  flushInProgress = false;
+}
 
 /** Queue a node id for the next coalesced flush (Pro path). */
 function enqueueNodeFetch(nodeId: string): void {
@@ -65,31 +90,48 @@ function enqueueNodeFetch(nodeId: string): void {
 }
 
 /** Fetch all queued nodes, then apply them in one synchronous pass so the burst
- *  renders once. A failed fetch for a single node is skipped, never fatal. */
+ *  renders once. A failed fetch for a single node is skipped, never fatal; a node
+ *  tombstoned (deleted) during the fetch is skipped so the delete wins. */
 async function flushPendingNodeFetches(): Promise<void> {
   coalesceTimer = null;
   const ids = [...pendingNodeIds];
   pendingNodeIds.clear();
   if (ids.length === 0) return;
 
-  const fetched = await Promise.all(
-    ids.map((id) =>
-      backendAdapter.getNode(id).catch((error) => {
-        log.error('replay-coalesce: failed to fetch node', { nodeId: id, error });
-        return null;
-      })
-    )
-  );
+  flushInProgress = true;
+  tombstonedDuringFlush.clear();
+  try {
+    const fetched = await Promise.all(
+      ids.map((id) =>
+        backendAdapter.getNode(id).catch((error) => {
+          log.error('replay-coalesce: failed to fetch node', { nodeId: id, error });
+          return null;
+        })
+      )
+    );
 
-  // Synchronous apply loop — no `await` between setNode calls, so Svelte
-  // coalesces the resulting reactive updates into a single render.
-  let applied = 0;
-  for (const node of fetched) {
-    if (!node) continue;
-    sharedNodeStore.setNode(normalizeNodeData(node), { type: 'database', reason: 'domain-event' }, true);
-    applied++;
+    // Synchronous apply loop — no `await` between setNode calls, so Svelte
+    // coalesces the resulting reactive updates into a single render. A node
+    // deleted while we were fetching is skipped so the delete is not clobbered.
+    let applied = 0;
+    for (let i = 0; i < fetched.length; i++) {
+      const node = fetched[i];
+      if (!node || tombstonedDuringFlush.has(ids[i])) continue;
+      sharedNodeStore.setNode(
+        normalizeNodeData(node),
+        { type: 'database', reason: 'domain-event' },
+        true
+      );
+      applied++;
+    }
+    log.info('replay-coalesce: applied node burst in one pass', {
+      requested: ids.length,
+      applied
+    });
+  } finally {
+    flushInProgress = false;
+    tombstonedDuringFlush.clear();
   }
-  log.info('replay-coalesce: applied node burst in one pass', { requested: ids.length, applied });
 }
 
 /** Route a node fetch through the Pro coalescer, or apply immediately in the
@@ -152,6 +194,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
   log.info('Initializing Tauri real-time sync listeners');
 
+  // Clear any coalescer state (and a stale in-flight timer) from a prior init.
+  resetNodeFetchCoalescer();
+
   try {
     // Listen for node events and update SharedNodeStore
     // Issue #724: Events now send only node_id, fetch full data if needed
@@ -186,6 +231,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
     await listen<{ id: string }>('node:deleted', (event) => {
       log.debug(`Node deleted: ${event.payload.id}`);
+      // Evict any coalesced re-fetch first so a delete racing an upsert in the
+      // same window can't be clobbered by the queued fetch re-adding the node.
+      cancelPendingNodeFetch(event.payload.id);
       sharedNodeStore.deleteNode(event.payload.id, { type: 'database', reason: 'domain-event' }, true);
 
       // Issue #832: We don't know if deleted node was a collection without fetching,

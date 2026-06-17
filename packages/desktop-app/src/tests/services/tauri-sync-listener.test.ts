@@ -306,6 +306,21 @@ describe('TauriSyncListener', () => {
 				expect(sharedNodeStore.hasNode('c1')).toBe(true);
 			});
 		});
+
+		it('a delete during the window wins — the queued upsert does not resurrect the node', async () => {
+			// Node is updated (queued for coalesced re-fetch) then deleted before the
+			// window flushes. Even though getNode would still return it, the delete
+			// must win — the coalescer evicts the pending re-fetch.
+			registerMockNode(createTestNode('zombie', 'should not come back'));
+
+			emitTauriEvent('node:updated', { id: 'zombie' }); // queued
+			emitTauriEvent('node:deleted', { id: 'zombie' }); // evicts the queued re-fetch
+
+			// Give the coalescing window time to fire.
+			await new Promise((resolve) => setTimeout(resolve, 40));
+
+			expect(sharedNodeStore.hasNode('zombie')).toBe(false);
+		});
 	});
 
 	describe('Unified Relationship Events - has_child (Issue #811)', () => {
