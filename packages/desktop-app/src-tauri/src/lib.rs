@@ -73,11 +73,8 @@ async fn check_daemon_status() -> String {
     {
         use daemon_setup::{check_daemon_socket, DaemonStatus};
 
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => return "not_running".to_string(),
-        };
-        let socket_path = home.join(crate::constants::DAEMON_SOCKET_RELATIVE);
+        // Probe the SAME socket the gRPC client dials (honors NODESPACED_SOCKET).
+        let socket_path = crate::services::grpc_client::resolve_socket_path();
         return match check_daemon_socket(socket_path.as_path()).await {
             DaemonStatus::Healthy => "healthy".to_string(),
             DaemonStatus::Starting => "starting".to_string(),
@@ -341,16 +338,17 @@ pub fn run() {
                     // is transient — only `NotRunning` trips the banner.
                     {
                         use daemon_setup::{check_daemon_socket, DaemonStatus};
-                        if let Some(home) = dirs::home_dir() {
-                            let socket_path = home.join(crate::constants::DAEMON_SOCKET_RELATIVE);
-                            if matches!(
-                                check_daemon_socket(socket_path.as_path()).await,
-                                DaemonStatus::NotRunning
-                            ) {
-                                tracing::error!("nodespaced unreachable after startup");
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    let _ = window.emit("daemon-status", "not_running");
-                                }
+                        // Probe the SAME socket the gRPC client dials (honors
+                        // NODESPACED_SOCKET), not the hardcoded default — else a
+                        // socket override falsely reports the daemon down.
+                        let socket_path = crate::services::grpc_client::resolve_socket_path();
+                        if matches!(
+                            check_daemon_socket(socket_path.as_path()).await,
+                            DaemonStatus::NotRunning
+                        ) {
+                            tracing::error!("nodespaced unreachable after startup");
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.emit("daemon-status", "not_running");
                             }
                         }
                     }

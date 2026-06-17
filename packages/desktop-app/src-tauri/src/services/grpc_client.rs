@@ -138,9 +138,12 @@ impl GrpcClient {
 /// Resolve the daemon socket path.
 ///
 /// Checks `NODESPACED_SOCKET` env var first, then falls back to
-/// `~/.nodespace/daemon.sock`.
+/// `~/.nodespace/daemon.sock`. `pub(crate)` so the daemon-reachability checks in
+/// `lib.rs` probe the SAME socket the client actually dials — otherwise a
+/// `NODESPACED_SOCKET` override (two-window demo, custom setups) makes them check
+/// the wrong path and falsely report "not running".
 #[cfg(unix)]
-fn resolve_socket_path() -> std::path::PathBuf {
+pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
         return std::path::PathBuf::from(p);
     }
@@ -190,4 +193,37 @@ fn uds_channel_lazy(sock: &std::path::Path) -> Channel {
 pub enum GrpcClientError {
     #[error("Failed to connect to nodespaced: {0}")]
     Connect(tonic::transport::Error),
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::resolve_socket_path;
+
+    /// Regression for the false "background service not running" banner: the
+    /// daemon-reachability checks must resolve the SAME socket the gRPC client
+    /// dials, i.e. honor `NODESPACED_SOCKET` over the default. Single-threaded so
+    /// the process-global env mutation doesn't race other tests.
+    #[test]
+    fn resolve_socket_path_honors_env_override_then_falls_back() {
+        let prev = std::env::var_os("NODESPACED_SOCKET");
+
+        std::env::set_var("NODESPACED_SOCKET", "/tmp/ns-demo-a.sock");
+        assert_eq!(
+            resolve_socket_path(),
+            std::path::PathBuf::from("/tmp/ns-demo-a.sock"),
+            "NODESPACED_SOCKET override must win"
+        );
+
+        std::env::remove_var("NODESPACED_SOCKET");
+        assert!(
+            resolve_socket_path().ends_with(".nodespace/daemon.sock"),
+            "with no override, fall back to the default socket"
+        );
+
+        // Restore prior state so we don't leak into other tests.
+        match prev {
+            Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
+            None => std::env::remove_var("NODESPACED_SOCKET"),
+        }
+    }
 }
