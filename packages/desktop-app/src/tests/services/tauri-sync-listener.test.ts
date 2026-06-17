@@ -4,6 +4,7 @@ import { SharedNodeStore, sharedNodeStore } from '$lib/services/shared-node-stor
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
 import * as backendAdapterModule from '$lib/services/backend-adapter';
+import { proSync } from '$lib/stores/pro-sync.svelte';
 
 /**
  * Tests for Tauri Domain Event Listener
@@ -257,6 +258,68 @@ describe('TauriSyncListener', () => {
 			emitTauriEvent('node:deleted', { id: 'node1' });
 
 			expect(sharedNodeStore.hasNode('node1')).toBe(false);
+		});
+	});
+
+	// #188: when sync is active, a reconnect-replay burst of node events is
+	// coalesced — collected over a short window, then applied in one synchronous
+	// pass so the caught-up set renders once instead of once per node.
+	describe('Pro reconnect-replay render coalescing (#188)', () => {
+		beforeEach(async () => {
+			await initializeTauriSyncListeners();
+			proSync.tier = 'pro'; // activate the Pro coalescing path
+		});
+
+		afterEach(() => {
+			proSync.tier = 'unknown'; // singleton — restore so other tests see community
+		});
+
+		it('defers a burst then applies every node in one pass', async () => {
+			for (const id of ['n1', 'n2', 'n3']) {
+				registerMockNode(createTestNode(id, `content ${id}`));
+				emitTauriEvent('node:created', { id });
+			}
+
+			// Synchronously after the burst the applies are still deferred (the
+			// coalescing window hasn't fired) — proves we don't render per node.
+			expect(sharedNodeStore.hasNode('n1')).toBe(false);
+			expect(sharedNodeStore.hasNode('n2')).toBe(false);
+			expect(sharedNodeStore.hasNode('n3')).toBe(false);
+
+			// After the window flushes, the whole burst has landed.
+			await vi.waitFor(() => {
+				expect(sharedNodeStore.hasNode('n1')).toBe(true);
+				expect(sharedNodeStore.hasNode('n2')).toBe(true);
+				expect(sharedNodeStore.hasNode('n3')).toBe(true);
+			});
+			expect(sharedNodeStore.getNode('n2')?.content).toBe('content n2');
+		});
+
+		it('community build (not Pro) still applies each event immediately', async () => {
+			proSync.tier = 'community';
+			registerMockNode(createTestNode('c1', 'community node'));
+
+			emitTauriEvent('node:updated', { id: 'c1' });
+
+			// No coalescing window — the existing per-event path applies right away.
+			await vi.waitFor(() => {
+				expect(sharedNodeStore.hasNode('c1')).toBe(true);
+			});
+		});
+
+		it('a delete during the window wins — the queued upsert does not resurrect the node', async () => {
+			// Node is updated (queued for coalesced re-fetch) then deleted before the
+			// window flushes. Even though getNode would still return it, the delete
+			// must win — the coalescer evicts the pending re-fetch.
+			registerMockNode(createTestNode('zombie', 'should not come back'));
+
+			emitTauriEvent('node:updated', { id: 'zombie' }); // queued
+			emitTauriEvent('node:deleted', { id: 'zombie' }); // evicts the queued re-fetch
+
+			// Give the coalescing window time to fire.
+			await new Promise((resolve) => setTimeout(resolve, 40));
+
+			expect(sharedNodeStore.hasNode('zombie')).toBe(false);
 		});
 	});
 
