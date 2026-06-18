@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { createLogger } from '$lib/utils/logger';
+  import { focusTrap } from '$lib/actions/focus-trap';
 
   const log = createLogger('OnboardingWizard');
 
@@ -31,6 +32,10 @@
   let isLoading = $state(false);
   let stepSuccess = $state(false);
   let stepError = $state<string | null>(null);
+
+  // The dialog content element — the focus-trap target and the focus anchor for
+  // step transitions (see the $effect below).
+  let dialogEl = $state<HTMLElement>();
 
   // Which steps are active (some may be skipped if prerequisites missing)
   let showSkill = $state(false);
@@ -132,32 +137,37 @@
     onClose();
   }
 
-  // ── dialog keyboard / backdrop ─────────────────────────────────────────────
+  // ── multi-step focus management ────────────────────────────────────────────
 
-  function handleBackdropClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
-      onClose();
-    }
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      onClose();
-    }
-  }
+  // `focusTrap` moves focus into the dialog on open, traps Tab, and handles
+  // Escape — but it does so once, on mount. This wizard swaps its primary action
+  // button on every transition (advancing a step, or a configure step
+  // succeeding), which unmounts the button that had focus and drops focus to
+  // <body>, where the trap's key handler can no longer see Escape/Tab. Re-anchor
+  // focus on the new step's primary action after each such transition. Keyed on
+  // exactly the state that changes which primary button is shown, so it never
+  // steals focus mid-interaction (there are no text inputs to interrupt).
+  $effect(() => {
+    const refocusKey = `${currentStep}:${stepSuccess}:${pathWasAlreadyConfigured}`;
+    if (!dialogEl) return;
+    log.debug('Re-anchoring wizard focus', { refocusKey });
+    (dialogEl.querySelector<HTMLElement>('.primary-button') ?? dialogEl).focus();
+  });
 </script>
 
 {#if open}
-  <div
-    class="onboarding-backdrop"
-    onclick={handleBackdropClick}
-    onkeydown={handleKeydown}
-    role="dialog"
-    aria-modal="true"
-    aria-label="First-launch setup"
-    tabindex="-1"
-  >
-    <div class="onboarding-dialog">
+  <div class="onboarding-backdrop" onclick={onClose} role="presentation" tabindex="-1">
+    <div
+      class="onboarding-dialog"
+      bind:this={dialogEl}
+      use:focusTrap={{ onEscape: onClose }}
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-label="First-launch setup"
+      tabindex="0"
+    >
       <!-- Close button -->
       <button class="close-button" onclick={onClose} aria-label="Close dialog">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
