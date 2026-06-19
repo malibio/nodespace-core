@@ -6,56 +6,61 @@
 
 @layer base {
   :root {
-    /* NodeSpace Warm Gray Design System - from patterns.html */
+    /* NodeSpace Design System - Figma canonical tokens (NS-theme/shadcn-based) */
 
-    /* Color system - Scheme 3: Subtle Tint System (light mode) */
-    --primary: 200 40% 45%; /* Blue-gray primary for Scheme 3 */
-    --primary-foreground: 0 0% 98%; /* Off-white for primary text */
+    /* Color system - light mode */
+    --primary: 174 67% 35%; /* Teal primary */
+    --primary-foreground: 0 0% 98%;
 
-    --secondary: 200 12% 92%; /* Light blue-gray secondary for Scheme 3 */
-    --secondary-foreground: 200 12% 45%; /* Medium blue-gray for secondary text */
+    --secondary: 240 4% 96%; /* Near-white with cool tint */
+    --secondary-foreground: 240 8% 40%;
 
-    --accent: 200 40% 45%; /* Blue-gray accent for Scheme 3 consistency */
-    --accent-foreground: 0 0% 98%; /* Off-white for accent text */
+    --accent: 174 67% 35%;
+    --accent-foreground: 0 0% 98%;
 
-    --background: 0 0% 98%; /* Clean off-white background */
-    --foreground: 0 0% 15%; /* Dark neutral gray text - Scheme 3 active items */
+    --background: 0 0% 100%;
+    --foreground: 240 11% 4%; /* Near-black with blue-violet tint */
 
-    --card: 0 0% 100%; /* Pure white cards */
-    --card-foreground: 0 0% 15%; /* Dark neutral gray text */
+    --card: 0 0% 100%;
+    --card-foreground: 240 11% 4%;
 
-    --popover: 0 0% 100%; /* Same as cards */
-    --popover-foreground: 0 0% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 11% 4%;
 
-    --muted: 200 12% 94%; /* Light blue-gray muted areas - Scheme 3 */
-    --muted-foreground: 0 0% 25%; /* Medium neutral gray for muted text - Scheme 3 inactive items */
+    --muted: 240 4% 96%;
+    --muted-foreground: 240 8% 40%;
 
     /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
     --hover-foreground: var(--muted-foreground);
 
-    --border: 200 12% 88%; /* Light blue-gray borders - Scheme 3 */
-    --input: 200 12% 88%;
-    --ring: 200 40% 55%; /* Focus ring matches blue-gray primary - Scheme 3 */
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 174 67% 35%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 347 77% 51%;
     --destructive-foreground: 0 0% 100%;
+    --destructive-light: 357 76% 77%;
 
-    --success: 142 76% 36%; /* #22c55e - Green for completed items */
+    --success: 97 46% 47%;
     --success-foreground: 0 0% 100%;
+    --success-light: 87 64% 70%;
 
-    --warning: 45 93% 47%; /* #eab308 - Yellow/orange for in-progress */
+    --warning: 40 99% 49%;
     --warning-foreground: 0 0% 100%;
+    --warning-light: 38 100% 78%;
+
+    --info-light: 214 83% 80%;
 
     --radius: 0.5rem;
 
-    /* Hierarchy background colors for visual separation - Subtle Tint System */
-    --sidebar-background: 200 12% 92%; /* Subtle blue-gray sidebar */
-    --active-nav-background: 200 12% 85%; /* Active navigation item highlight - darker than hover (88%) */
-    --tab-bar-background: 200 12% 85%; /* Tab bar background */
-    --inactive-tab-background: 200 12% 80%; /* Inactive tab background */
-    --active-tab-background: 0 0% 99%; /* Active tab matches content */
-    --content-background: 0 0% 99%; /* Background color for main content */
+    /* Hierarchy background colors — not yet in Figma variables; approximated from palette */
+    --sidebar-background: 240 4% 94%;
+    --active-nav-background: 240 4% 88%;
+    --tab-bar-background: 240 4% 88%;
+    --inactive-tab-background: 240 4% 84%;
+    --active-tab-background: 0 0% 100%;
+    --content-background: 0 0% 100%;
 
     /* Icon Positioning System - Single source of truth */
     /* Used by node indicators and chevrons for consistent vertical alignment */
@@ -81,52 +86,57 @@
   }
 
   .dark {
-    /* Color system - Scheme 3: Subtle Tint System (dark mode) */
-    --primary: 200 40% 55%; /* Blue-gray primary for Scheme 3 dark */
-    --primary-foreground: 0 0% 95%; /* Very light gray for primary text */
+    /* Color system - dark mode (Figma canonical tokens) */
+    --primary: 173 73% 41%; /* Teal primary dark */
+    --primary-foreground: 0 0% 98%;
 
-    --secondary: 200 12% 14%; /* Dark blue-gray secondary for Scheme 3 */
-    --secondary-foreground: 200 12% 60%; /* Light blue-gray for secondary text */
+    --secondary: 240 4% 16%;
+    --secondary-foreground: 240 2% 80%;
 
-    --accent: 200 40% 55%; /* Blue-gray accent for Scheme 3 consistency */
-    --accent-foreground: 0 0% 95%; /* Very light gray for accent text */
+    --accent: 173 73% 41%;
+    --accent-foreground: 0 0% 98%;
 
-    --background: 0 0% 12%; /* More comfortable dark background (VS Code standard) */
-    --foreground: 0 0% 90%; /* Light neutral gray text - Scheme 3 active items dark */
+    --background: 0 0% 9%;
+    --foreground: 0 0% 98%;
 
-    --card: 200 12% 14%; /* Slightly elevated dark cards - Scheme 3 blue-gray */
-    --card-foreground: 0 0% 90%; /* Light neutral gray text */
+    --card: 240 6% 10%;
+    --card-foreground: 0 0% 98%;
 
-    --popover: 200 12% 14%; /* Same as cards - Scheme 3 blue-gray */
-    --popover-foreground: 0 0% 90%;
+    --popover: 240 6% 10%;
+    --popover-foreground: 0 0% 98%;
 
-    --muted: 200 12% 16%; /* Dark blue-gray muted areas - Scheme 3 */
-    --muted-foreground: 0 0% 75%; /* Light neutral gray for muted text - Scheme 3 inactive items dark */
+    --muted: 240 3% 35%;
+    --muted-foreground: 240 2% 80%;
 
     /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
     --hover-foreground: var(--muted-foreground);
 
-    --border: 200 12% 24%; /* Dark blue-gray borders - Scheme 3 */
-    --input: 200 12% 26%; /* Slightly lighter for inputs - Scheme 3 */
-    --ring: 200 40% 65%; /* Focus ring matches blue-gray primary - Scheme 3 */
+    --border: 0 0% 100% / 0.1; /* rgba white at 10% */
+    --input: 0 0% 100% / 0.1;
+    --ring: 173 73% 41%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 359 100% 70%;
     --destructive-foreground: 0 0% 100%;
+    --destructive-light: 357 100% 59%;
 
-    --success: 142 76% 36%; /* #22c55e - Same green */
+    --success: 87 93% 38%;
     --success-foreground: 0 0% 100%;
+    --success-light: 87 76% 35%;
 
-    --warning: 45 93% 47%; /* #eab308 - Same yellow/orange */
+    --warning: 38 100% 51%;
     --warning-foreground: 0 0% 100%;
+    --warning-light: 38 99% 47%;
 
-    /* Dark mode hierarchy colors for visual separation - Subtle Tint System */
-    --sidebar-background: 200 12% 14%; /* Subtle blue-gray sidebar dark */
-    --active-nav-background: 200 12% 17%; /* Active navigation item highlight dark */
-    --tab-bar-background: 200 12% 18%; /* Tab bar background dark */
-    --inactive-tab-background: 200 12% 22%; /* Inactive tab background dark */
-    --active-tab-background: 0 0% 12%; /* Active tab matches content dark */
-    --content-background: 0 0% 12%; /* Background color for main content dark */
+    --info-light: 214 67% 57%;
+
+    /* Dark mode hierarchy colors — approximated from Figma dark card/secondary */
+    --sidebar-background: 240 4% 13%;
+    --active-nav-background: 240 4% 17%;
+    --tab-bar-background: 240 4% 17%;
+    --inactive-tab-background: 240 4% 20%;
+    --active-tab-background: 0 0% 9%;
+    --content-background: 0 0% 9%;
 
     /* Dark mode node colors are now defined at the end of the file for proper specificity */
   }
@@ -513,31 +523,28 @@
   font-weight: 600;
 }
 
-/* NodeSpace Extensions - Design system aligned colors */
+/* NodeSpace Extensions - node type colors (all map to primary) */
 :root {
-  /* NodeSpace node-specific extensions - Subtle Tint System (Light mode) */
-  --node-text: 200 40% 45%; /* Text nodes use Scheme 3 blue-gray light */
-  --node-task: 200 40% 45%; /* Task nodes use Scheme 3 blue-gray light */
-  --node-ai-chat: 200 40% 45%; /* AI chat nodes use Scheme 3 blue-gray light */
-  --node-entity: 200 40% 45%; /* Entity nodes use Scheme 3 blue-gray light */
-  --node-query: 200 40% 45%; /* Query nodes use Scheme 3 blue-gray light */
-  --node-user: 200 40% 45%; /* User nodes use Scheme 3 blue-gray light */
-  --node-date: 200 40% 45%; /* Date nodes use Scheme 3 blue-gray light */
-  --node-document: 200 40% 45%; /* Document nodes use Scheme 3 blue-gray light */
+  --node-text: 174 67% 35%;
+  --node-task: 174 67% 35%;
+  --node-ai-chat: 174 67% 35%;
+  --node-entity: 174 67% 35%;
+  --node-query: 174 67% 35%;
+  --node-user: 174 67% 35%;
+  --node-date: 174 67% 35%;
+  --node-document: 174 67% 35%;
   --processing-opacity: 0.7;
 }
 
-/* Dark mode overrides for NodeSpace node colors */
 .dark {
-  /* Override node colors for dark theme - these must be after the light mode definitions */
-  --node-text: 200 40% 55%; /* Text nodes use Scheme 3 blue-gray dark */
-  --node-task: 200 40% 55%; /* Task nodes use Scheme 3 blue-gray dark */
-  --node-ai-chat: 200 40% 55%; /* AI chat nodes use Scheme 3 blue-gray dark */
-  --node-entity: 200 40% 55%; /* Entity nodes use Scheme 3 blue-gray dark */
-  --node-query: 200 40% 55%; /* Query nodes use Scheme 3 blue-gray dark */
-  --node-user: 200 40% 55%; /* User nodes use Scheme 3 blue-gray dark */
-  --node-date: 200 40% 55%; /* Date nodes use Scheme 3 blue-gray dark */
-  --node-document: 200 40% 55%; /* Document nodes use Scheme 3 blue-gray dark */
+  --node-text: 173 73% 41%;
+  --node-task: 173 73% 41%;
+  --node-ai-chat: 173 73% 41%;
+  --node-entity: 173 73% 41%;
+  --node-query: 173 73% 41%;
+  --node-user: 173 73% 41%;
+  --node-date: 173 73% 41%;
+  --node-document: 173 73% 41%;
 }
 
 /* =============================================================================

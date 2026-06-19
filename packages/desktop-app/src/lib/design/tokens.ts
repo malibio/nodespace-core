@@ -13,15 +13,15 @@ const log = createLogger('Tokens');
 // Re-export NodeType from registry for consistency
 export type NodeType = RegistryNodeType;
 
-// Node-specific colors - Subtle Tint System (Scheme 3)
+// Node-specific colors — all map to primary (teal, Figma canonical)
 export const nodeTypeColors = {
-  text: 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  document: 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  task: 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  'ai-chat': 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  user: 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  entity: 'hsl(200 40% 45%)', // Blue-gray (Scheme 3)
-  query: 'hsl(200 40% 45%)' // Blue-gray (Scheme 3)
+  text: 'hsl(174 67% 35%)',
+  document: 'hsl(174 67% 35%)',
+  task: 'hsl(174 67% 35%)',
+  'ai-chat': 'hsl(174 67% 35%)',
+  user: 'hsl(174 67% 35%)',
+  entity: 'hsl(174 67% 35%)',
+  query: 'hsl(174 67% 35%)'
 } as const;
 
 // Theme types for runtime theme switching
