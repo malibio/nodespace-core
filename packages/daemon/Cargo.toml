@@ -40,7 +40,7 @@ tao = "0.31"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tower = { version = "0.5", features = ["util"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-
+dirs = "5.0"
 
 [dev-dependencies]
 tempfile = "3.0"

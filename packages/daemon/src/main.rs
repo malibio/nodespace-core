@@ -46,7 +46,12 @@ fn socket_path() -> std::path::PathBuf {
 }
 
 #[cfg(windows)]
-compile_error!("Windows Named Pipe transport is not yet implemented. See issue #1176.");
+fn pipe_name() -> String {
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return p;
+    }
+    r"\\.\pipe\nodespace-daemon".to_string()
+}
 
 /// `tao`'s event loop must own the main thread on macOS (NSApplication is
 /// main-thread-only). So `main` builds the tokio runtime explicitly, hands
@@ -217,6 +222,155 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     Ok(())
 }
 
+/// Headless server loop for Windows — uses a Named Pipe instead of UDS.
+#[cfg(windows)]
+async fn serve_headless() -> Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    use tokio_util::sync::CancellationToken;
+
+    let name = pipe_name();
+    let db_path = resolve_db_path()?;
+
+    tracing::info!(db_path = %db_path.display(), pipe = %name, "Starting nodespaced (headless, Windows)");
+
+    let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    let (bundle, _bg_task) = build_services(&db_path).await?;
+
+    tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
+
+    // CancellationToken is cloned into the acceptor stream so that
+    // `server.connect().await` races against shutdown rather than blocking
+    // indefinitely after tonic stops polling the stream.
+    let cancel = CancellationToken::new();
+    let cancel_stream = cancel.clone();
+    let incoming = {
+        let name = name.clone();
+        async_stream::stream! {
+            loop {
+                // .first_pipe_instance(false): multiple clients connect serially
+                // to the same pipe name — each iteration creates a fresh instance.
+                let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to create Named Pipe server instance");
+                        yield Err(e);
+                        return;
+                    }
+                };
+                tokio::select! {
+                    res = server.connect() => {
+                        if let Err(e) = res { yield Err(e); return; }
+                        yield Ok::<_, std::io::Error>(server);
+                    }
+                    _ = cancel_stream.cancelled() => return,
+                }
+            }
+        }
+    };
+
+    let builder = Server::builder()
+        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
+        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_incoming_shutdown(incoming, async move {
+                shutdown.await;
+                cancel.cancel();
+            })
+    } else {
+        builder.serve_with_incoming_shutdown(incoming, async move {
+            shutdown.await;
+            cancel.cancel();
+        })
+    };
+
+    serve.await.context("gRPC server terminated with error")?;
+    drain_gpu(bundle.embedding_state).await;
+    Ok(())
+}
+
+/// Tray-driven server loop for Windows — uses a Named Pipe instead of UDS.
+#[cfg(windows)]
+async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    use tokio_util::sync::CancellationToken;
+
+    let name = pipe_name();
+    let db_path = resolve_db_path()?;
+
+    tracing::info!(db_path = %db_path.display(), pipe = %name, "Starting nodespaced (tray, Windows)");
+
+    let signal_shutdown =
+        install_shutdown_handler().context("Failed to install signal handlers")?;
+    // _bg_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    let (bundle, _bg_task) = build_services(&db_path).await?;
+
+    let shutdown_controller = controller.clone();
+    let combined_shutdown = async move {
+        tokio::select! {
+            _ = signal_shutdown => tracing::info!("OS signal triggered shutdown"),
+            _ = shutdown_controller.shutdown() => tracing::info!("Tray Quit triggered shutdown"),
+        }
+    };
+
+    tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
+
+    let cancel = CancellationToken::new();
+    let cancel_stream = cancel.clone();
+    let incoming = {
+        let name = name.clone();
+        async_stream::stream! {
+            loop {
+                let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to create Named Pipe server instance");
+                        yield Err(e);
+                        return;
+                    }
+                };
+                tokio::select! {
+                    res = server.connect() => {
+                        if let Err(e) = res { yield Err(e); return; }
+                        yield Ok::<_, std::io::Error>(server);
+                    }
+                    _ = cancel_stream.cancelled() => return,
+                }
+            }
+        }
+    };
+
+    let builder = Server::builder()
+        .layer(TrayMetricsLayer::new(controller))
+        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
+        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
+        .add_service(ImportServiceServer::new(bundle.import))
+        .add_service(SettingsServiceServer::new(bundle.settings))
+        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
+    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
+        builder
+            .add_service(EmbeddingsServiceServer::new(emb))
+            .serve_with_incoming_shutdown(incoming, async move {
+                combined_shutdown.await;
+                cancel.cancel();
+            })
+    } else {
+        builder.serve_with_incoming_shutdown(incoming, async move {
+            combined_shutdown.await;
+            cancel.cancel();
+        })
+    };
+
+    serve.await.context("gRPC server terminated with error")?;
+    drain_gpu(bundle.embedding_state).await;
+    Ok(())
+}
+
 /// All initialized service handles for a daemon startup.
 struct ServiceBundle {
     node_service_grpc: NodeServiceImpl,
@@ -287,10 +441,8 @@ async fn build_services(
     let settings = SettingsServiceImpl::with_default_path()
         .map_err(|e| anyhow::anyhow!("Failed to initialize SettingsService: {}", e))?;
     let capture_config_path = {
-        let home = std::env::var("HOME").unwrap_or_default();
-        std::path::PathBuf::from(home)
-            .join(".nodespace")
-            .join("daemon.toml")
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        home.join(".nodespace").join("daemon.toml")
     };
     let agent_session = AgentSessionHandler::new(
         manager,
@@ -361,9 +513,8 @@ fn resolve_model_path() -> Option<std::path::PathBuf> {
     let p = if let Ok(custom) = std::env::var("NODESPACED_MODEL_PATH") {
         std::path::PathBuf::from(custom)
     } else {
-        let home = std::env::var("HOME").ok()?;
-        std::path::PathBuf::from(home)
-            .join(".nodespace")
+        let home = dirs::home_dir()?;
+        home.join(".nodespace")
             .join("models")
             .join("nomic-embed-text-v1.5.Q8_0.gguf")
     };

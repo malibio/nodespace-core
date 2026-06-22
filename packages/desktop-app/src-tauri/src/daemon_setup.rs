@@ -1,4 +1,4 @@
-//! Daemon lifecycle management — macOS (launchd) and Linux (systemd).
+//! Daemon lifecycle management — macOS (launchd), Linux (systemd), Windows (direct spawn).
 //!
 //! On first launch:
 //!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
@@ -6,7 +6,8 @@
 //!   3. Register the daemon as a user service:
 //!      - macOS: write ~/Library/LaunchAgents/app.nodespace.daemon.plist and bootstrap it.
 //!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
-//!   4. Wait for the Unix Domain Socket to appear (cold-start model load can take ~9s).
+//!      - Windows: spawn the daemon process directly and write an HKCU autorun key.
+//!   4. Wait for the IPC endpoint to appear (UDS on Unix, Named Pipe on Windows).
 //!
 //! On subsequent launches:
 //!   - Check if the socket exists and the daemon responds (cheap path).
@@ -83,7 +84,13 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let bin_dir = home.join(DAEMON_BIN_DIR);
     let log_dir = home.join(DAEMON_LOG_DIR);
     let db_dir = home.join(DAEMON_DB_DIR);
+    // On Windows the "socket path" is a Named Pipe path, not a filesystem path.
+    // check_daemon_socket and wait_for_daemon both dispatch on cfg(windows) so they
+    // probe the pipe correctly as long as we pass the right path here.
+    #[cfg(unix)]
     let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
+    #[cfg(windows)]
+    let socket_path = PathBuf::from(crate::services::grpc_client::resolve_pipe_name());
     let daemon_bin = bin_dir.join(daemon_binary_name());
 
     // Ensure all directories exist before any binary checks.
@@ -131,6 +138,15 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
         enable_systemd_service()?;
     }
 
+    // Windows: spawn the daemon process directly and register it in HKCU autorun
+    // so it restarts automatically on next login. Full SCM registration requires
+    // elevation which a normal user app cannot assume — direct spawn is used instead.
+    #[cfg(windows)]
+    {
+        spawn_daemon_windows(&daemon_bin).context("Failed to spawn daemon on Windows")?;
+        register_autorun_windows(&daemon_bin);
+    }
+
     // The daemon loads the embedding model before binding the socket (~9s on M2 Pro).
     // 30s covers cold-start model load on slower machines.
     let status = wait_for_daemon(&socket_path, Duration::from_secs(30)).await;
@@ -138,6 +154,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
 }
 
 /// Send SIGTERM to the process listening on the socket and wait for it to exit.
+#[cfg(unix)]
 async fn kill_running_daemon(socket_path: &Path) {
     if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
         return;
@@ -145,14 +162,10 @@ async fn kill_running_daemon(socket_path: &Path) {
 
     // Resolve the PID via lsof rather than storing it, so this works whether the
     // daemon was started by launchd, a previous app launch, or manually.
-    #[cfg(unix)]
     {
         use std::process::Command;
         let sock = socket_path.to_string_lossy();
-        if let Ok(out) = Command::new("lsof")
-            .args(["-t", "-U", &sock])
-            .output()
-        {
+        if let Ok(out) = Command::new("lsof").args(["-t", "-U", &sock]).output() {
             let pids: Vec<i32> = String::from_utf8_lossy(&out.stdout)
                 .split_whitespace()
                 .filter_map(|s| s.parse().ok())
@@ -178,10 +191,32 @@ async fn kill_running_daemon(socket_path: &Path) {
     let _ = std::fs::remove_file(socket_path);
 }
 
+/// Kill the running daemon on Windows via taskkill and wait for it to exit.
+#[cfg(windows)]
+async fn kill_running_daemon(socket_path: &Path) {
+    if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
+        return;
+    }
+
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/IM", "nodespaced.exe"])
+        .output();
+    tracing::info!("Sent taskkill to nodespaced.exe");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if check_daemon_socket(socket_path).await == DaemonStatus::NotRunning {
+            break;
+        }
+    }
+}
+
 /// Check daemon health by testing whether the Unix Domain Socket is reachable.
 ///
 /// A successful UDS connect is sufficient — the OS rejects the connect
 /// if no process is listening.
+#[cfg(unix)]
 pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
     if !socket_path.exists() {
         return DaemonStatus::NotRunning;
@@ -193,6 +228,31 @@ pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
     .await
     {
         Ok(Ok(_)) => DaemonStatus::Healthy,
+        Ok(Err(_)) => DaemonStatus::NotRunning,
+        Err(_) => DaemonStatus::Starting,
+    }
+}
+
+/// Check daemon health on Windows by probing the Named Pipe.
+///
+/// Uses a blocking `std::fs::OpenOptions` probe (pipes are accessible via the
+/// filesystem namespace on Windows) wrapped in `spawn_blocking`.
+#[cfg(windows)]
+pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
+    let pipe_path = socket_path.to_string_lossy().to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&pipe_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(_)) => DaemonStatus::Healthy,
+        // ERROR_PIPE_BUSY (231): daemon is running but all instances are busy with
+        // existing clients. The daemon is healthy — treat as Starting so the caller
+        // retries rather than spawning a second instance.
+        Ok(Err(e)) if e.raw_os_error() == Some(231) => DaemonStatus::Starting,
         Ok(Err(_)) => DaemonStatus::NotRunning,
         Err(_) => DaemonStatus::Starting,
     }
@@ -266,6 +326,7 @@ fn resolve_sidecar_path(app: &AppHandle, name: &str) -> Result<PathBuf> {
         .with_context(|| format!("Cannot resolve sidecar path for '{}'", name))
 }
 
+#[cfg(unix)]
 fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)
@@ -274,6 +335,11 @@ fn set_executable(path: &Path) -> Result<()> {
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms)
         .with_context(|| format!("Cannot set executable bit on {}", path.display()))
+}
+
+#[cfg(windows)]
+fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -521,4 +587,59 @@ fn enable_systemd_service() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── Windows: direct spawn + HKCU autorun ─────────────────────────────────────
+
+#[cfg(windows)]
+const WINDOWS_AUTORUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
+const WINDOWS_AUTORUN_VALUE: &str = "NodeSpaceDaemon";
+
+/// Spawn the nodespaced binary as a detached background process on Windows.
+#[cfg(windows)]
+fn spawn_daemon_windows(daemon_bin: &Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+    Command::new(daemon_bin)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("Failed to spawn {}", daemon_bin.display()))?;
+    tracing::info!("nodespaced spawned (Windows)");
+    Ok(())
+}
+
+/// Register the daemon binary in HKCU autorun via reg.exe so it starts on next login.
+/// Best-effort: logs on failure but does not propagate the error.
+#[cfg(windows)]
+fn register_autorun_windows(daemon_bin: &Path) {
+    let bin_str = daemon_bin.to_string_lossy().to_string();
+    let result = std::process::Command::new("reg")
+        .args([
+            "add",
+            &format!("HKCU\\{}", WINDOWS_AUTORUN_KEY),
+            "/v",
+            WINDOWS_AUTORUN_VALUE,
+            "/t",
+            "REG_SZ",
+            "/d",
+            &bin_str,
+            "/f",
+        ])
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            tracing::info!("nodespaced registered in HKCU autorun");
+        }
+        Ok(out) => {
+            tracing::warn!(
+                "Failed to register autorun: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to run reg.exe for autorun: {}", e);
+        }
+    }
 }

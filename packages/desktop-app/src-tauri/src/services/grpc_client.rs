@@ -60,10 +60,22 @@ impl GrpcClient {
         Ok(Self::from_channel(channel))
     }
 
+    /// Connect to the `nodespaced` daemon over a Named Pipe and return
+    /// a fully-initialised client bundle.
+    #[cfg(windows)]
+    pub async fn connect() -> Result<Self, GrpcClientError> {
+        let pipe = resolve_pipe_name();
+        tracing::info!(pipe = %pipe, "Connecting to nodespaced (Named Pipe)");
+        let channel = pipe_channel(&pipe)
+            .await
+            .map_err(GrpcClientError::Connect)?;
+        tracing::info!(pipe = %pipe, "Connected to nodespaced");
+        Ok(Self::from_channel(channel))
+    }
+
     /// Wrap an established (or lazy) channel in the full service-client bundle.
     /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
-    /// stays in sync as new services are added.
-    #[cfg(unix)]
+    /// stays in sync as new services are added. `Channel` is platform-agnostic.
     fn from_channel(channel: Channel) -> Self {
         let inner = GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),
@@ -91,6 +103,15 @@ impl GrpcClient {
         let sock = resolve_socket_path();
         tracing::info!(socket = %sock.display(), "gRPC client (lazy) — connects on first use");
         let channel = uds_channel_lazy(&sock);
+        Self::from_channel(channel)
+    }
+
+    /// Lazy Named Pipe variant for Windows — connects on the first RPC.
+    #[cfg(windows)]
+    pub fn connect_lazy() -> Self {
+        let pipe = resolve_pipe_name();
+        tracing::info!(pipe = %pipe, "gRPC client (lazy) — connects on first use");
+        let channel = pipe_channel_lazy(&pipe);
         Self::from_channel(channel)
     }
 
@@ -153,6 +174,25 @@ pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
         .join("daemon.sock")
 }
 
+/// Resolve the Named Pipe name used on Windows.
+///
+/// Checks `NODESPACED_SOCKET` env var first (mirrors Unix override convention),
+/// then falls back to `\\.\pipe\nodespace-daemon`.
+#[cfg(windows)]
+pub(crate) fn resolve_pipe_name() -> String {
+    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+        return p;
+    }
+    r"\\.\pipe\nodespace-daemon".to_string()
+}
+
+/// On Windows, return the pipe name as a `PathBuf` so callers that take a `Path`
+/// (e.g. `check_daemon_socket`) work without platform-specific call sites.
+#[cfg(windows)]
+pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(resolve_pipe_name())
+}
+
 /// Build a tonic `Channel` connected over a Unix Domain Socket.
 #[cfg(unix)]
 async fn uds_channel(sock: &std::path::Path) -> Result<Channel, tonic::transport::Error> {
@@ -189,6 +229,40 @@ fn uds_channel_lazy(sock: &std::path::Path) -> Channel {
     ))
 }
 
+/// Build a tonic `Channel` connected over a Named Pipe (Windows).
+#[cfg(windows)]
+async fn pipe_channel(pipe: &str) -> Result<Channel, tonic::transport::Error> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::windows::named_pipe::ClientOptions;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let pipe = pipe.to_string();
+    Endpoint::from_static("http://localhost")
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let pipe = pipe.clone();
+            async move { ClientOptions::new().open(&pipe).map(TokioIo::new) }
+        }))
+        .await
+}
+
+/// Lazy variant of [`pipe_channel`] — builds the channel without connecting.
+#[cfg(windows)]
+fn pipe_channel_lazy(pipe: &str) -> Channel {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::windows::named_pipe::ClientOptions;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    let pipe = pipe.to_string();
+    Endpoint::from_static("http://localhost").connect_with_connector_lazy(service_fn(
+        move |_: Uri| {
+            let pipe = pipe.clone();
+            async move { ClientOptions::new().open(&pipe).map(TokioIo::new) }
+        },
+    ))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GrpcClientError {
     #[error("Failed to connect to nodespaced: {0}")]
@@ -221,6 +295,52 @@ mod tests {
         );
 
         // Restore prior state so we don't leak into other tests.
+        match prev {
+            Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
+            None => std::env::remove_var("NODESPACED_SOCKET"),
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::{resolve_pipe_name, resolve_socket_path};
+
+    #[test]
+    fn resolve_pipe_name_honors_env_override_then_falls_back() {
+        let prev = std::env::var_os("NODESPACED_SOCKET");
+
+        std::env::set_var("NODESPACED_SOCKET", r"\\.\pipe\ns-test");
+        assert_eq!(
+            resolve_pipe_name(),
+            r"\\.\pipe\ns-test",
+            "NODESPACED_SOCKET override must win"
+        );
+
+        std::env::remove_var("NODESPACED_SOCKET");
+        assert_eq!(
+            resolve_pipe_name(),
+            r"\\.\pipe\nodespace-daemon",
+            "default pipe name must be correct"
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
+            None => std::env::remove_var("NODESPACED_SOCKET"),
+        }
+    }
+
+    #[test]
+    fn resolve_socket_path_delegates_to_pipe_name() {
+        let prev = std::env::var_os("NODESPACED_SOCKET");
+        std::env::remove_var("NODESPACED_SOCKET");
+
+        let path = resolve_socket_path();
+        assert_eq!(
+            path.to_string_lossy().as_ref(),
+            r"\\.\pipe\nodespace-daemon"
+        );
+
         match prev {
             Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
             None => std::env::remove_var("NODESPACED_SOCKET"),
