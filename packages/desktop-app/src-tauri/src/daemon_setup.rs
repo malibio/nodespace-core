@@ -86,14 +86,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
     let daemon_bin = bin_dir.join(daemon_binary_name());
 
-    // Check current daemon health first (cheap path for subsequent launches).
-    let status = check_daemon_socket(&socket_path).await;
-    if status == DaemonStatus::Healthy {
-        tracing::info!("nodespaced is already running and healthy");
-        return Ok(DaemonStatus::Healthy);
-    }
-
-    // Need to (re)start the daemon. Ensure all directories exist.
+    // Ensure all directories exist before any binary checks.
     tokio::fs::create_dir_all(&bin_dir)
         .await
         .context("Failed to create ~/.nodespace/bin")?;
@@ -104,9 +97,23 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
         .await
         .context("Failed to create ~/.nodespace/database")?;
 
-    // Extract sidecar binaries from the .app bundle if missing or outdated.
-    extract_sidecar_if_changed(app, daemon_binary_name(), &bin_dir).await?;
+    // Always check whether the bundled sidecar differs from the installed binary.
+    // If the daemon is already running but the binary changed (e.g. dev rebuild),
+    // kill it so the updated binary gets launched below.
+    let binary_updated = extract_sidecar_if_changed(app, daemon_binary_name(), &bin_dir).await?;
     extract_sidecar_if_changed(app, CLI_BINARY_NAME, &bin_dir).await?;
+
+    if binary_updated {
+        tracing::info!("nodespaced binary updated — restarting daemon");
+        kill_running_daemon(&socket_path).await;
+    } else {
+        // Binary unchanged: if already healthy, nothing to do.
+        let status = check_daemon_socket(&socket_path).await;
+        if status == DaemonStatus::Healthy {
+            tracing::info!("nodespaced is already running and healthy");
+            return Ok(DaemonStatus::Healthy);
+        }
+    }
 
     // Register and/or start the daemon user service.
     #[cfg(target_os = "macos")]
@@ -128,6 +135,47 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // 30s covers cold-start model load on slower machines.
     let status = wait_for_daemon(&socket_path, Duration::from_secs(30)).await;
     Ok(status)
+}
+
+/// Send SIGTERM to the process listening on the socket and wait for it to exit.
+async fn kill_running_daemon(socket_path: &Path) {
+    if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
+        return;
+    }
+
+    // Resolve the PID via lsof rather than storing it, so this works whether the
+    // daemon was started by launchd, a previous app launch, or manually.
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let sock = socket_path.to_string_lossy();
+        if let Ok(out) = Command::new("lsof")
+            .args(["-t", "-U", &sock])
+            .output()
+        {
+            let pids: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            for pid in pids {
+                // SAFETY: kill() is always safe to call with a valid pid and signal.
+                unsafe { libc::kill(pid, libc::SIGTERM) };
+                tracing::info!("Sent SIGTERM to old nodespaced (pid {})", pid);
+            }
+        }
+    }
+
+    // Give the daemon up to 5 s to exit cleanly before proceeding.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if check_daemon_socket(socket_path).await == DaemonStatus::NotRunning {
+            break;
+        }
+    }
+
+    // Remove a stale socket file so launchd can bind the new one.
+    let _ = std::fs::remove_file(socket_path);
 }
 
 /// Check daemon health by testing whether the Unix Domain Socket is reachable.
@@ -169,8 +217,8 @@ async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonStatus
 
 /// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`,
 /// but only if the destination is missing or has a different file size than
-/// the bundled source.
-async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<()> {
+/// the bundled source. Returns true if the binary was updated.
+async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<bool> {
     let src = resolve_sidecar_path(app, name)?;
     let dest = bin_dir.join(name);
 
@@ -186,7 +234,7 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
                 name,
                 src_size
             );
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -202,7 +250,7 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
         .with_context(|| format!("Failed to copy {} to {}", src.display(), dest.display()))?;
 
     set_executable(&dest)?;
-    Ok(())
+    Ok(true)
 }
 
 /// Resolve the platform-tagged sidecar path inside the Tauri bundle.

@@ -13,8 +13,9 @@
     "dev:browser:prod": "bun run dev:check && bunx concurrently --success first --names 'Proxy,UI' --prefix-colors 'yellow,green' 'bun run dev:browser:proxy' 'sleep 2 && bun run dev:browser:frontend'",
     "demo:browser": "bun run dev:check && bunx concurrently --success first --names 'Proxy,UI' --prefix-colors 'yellow,green' 'bun run dev:browser:proxy' 'sleep 2 && bun run dev:browser:frontend'",
     "dev:tauri:frontend": "bunx vite dev --port 1422",
-    "dev:tauri": "bunx tauri dev -- --bin nodespace-app",
-    "demo:tauri": "NODESPACED_DB_PATH=~/.nodespace/database/demo.db bunx tauri dev -- --bin nodespace-app",
+    "dev:tauri:sidecars": "bun run scripts/build-sidecar-binaries.ts",
+    "dev:tauri": "bun run dev:tauri:sidecars && bunx tauri dev -- --bin nodespace-app",
+    "demo:tauri": "NODESPACED_DB_PATH=$HOME/.nodespace/database/demo.db bunx tauri dev -- --bin nodespace-app",
     "dev": "bun run dev:browser",
     "sync": "bunx svelte-kit sync",
     "build": "bun run sync && bunx vite build",
@@ -36,7 +37,7 @@
     "quality:fix": "bunx eslint --fix 'src/**/*.{ts,svelte}' && BROWSERSLIST_IGNORE_OLD_DATA=1 bunx svelte-check",
     "tauri": "bunx tauri",
     "tauri:dev": "bun run dev:tauri",
-    "tauri:build": "bunx tauri build"
+    "tauri:build": "bun run dev:tauri:sidecars --release && bunx tauri build"
   },
   "license": "MIT",
   "dependencies": {
