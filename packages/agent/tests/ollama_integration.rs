@@ -440,8 +440,9 @@ async fn test_ollama_inference_with_production_prompt() {
         .any(|c| matches!(c, StreamingChunk::Error { .. }));
 
     assert!(!has_error, "Should not receive Error chunks");
+    // completion_tokens=1 with an empty body is Ollama's signature for silent context truncation.
     assert!(
-        completion_tokens_indicate_real_response(usage.completion_tokens),
+        usage.completion_tokens > 1,
         "completion_tokens={} — looks like context-window truncation (expected > 1). \
          prompt_tokens={}. Check that num_ctx is being sent correctly.",
         usage.completion_tokens,
@@ -455,13 +456,6 @@ async fn test_ollama_inference_with_production_prompt() {
         usage.prompt_tokens,
         usage.completion_tokens
     );
-}
-
-/// Returns true if completion_tokens suggests a real model response (not a truncation artifact).
-/// A single completion token (value 1) with an empty response body is the signature of
-/// Ollama silently truncating at the context window limit.
-fn completion_tokens_indicate_real_response(completion_tokens: u32) -> bool {
-    completion_tokens > 1
 }
 
 #[tokio::test]

@@ -5,11 +5,14 @@ use crate::agent_types::{
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
 
 pub struct OllamaInferenceEngine {
     http_client: reqwest::Client,
     base_url: String,
     model_name: String,
+    /// Cached context window size from /api/show — fetched once per engine instance.
+    cached_context_window: OnceCell<u32>,
 }
 
 impl OllamaInferenceEngine {
@@ -18,6 +21,7 @@ impl OllamaInferenceEngine {
             http_client: reqwest::Client::new(),
             base_url: "http://127.0.0.1:11434".to_string(),
             model_name,
+            cached_context_window: OnceCell::new(),
         }
     }
 
@@ -26,6 +30,7 @@ impl OllamaInferenceEngine {
             http_client: reqwest::Client::new(),
             base_url,
             model_name,
+            cached_context_window: OnceCell::new(),
         }
     }
 }
@@ -107,7 +112,6 @@ struct OllamaToolCallFunction {
 
 #[derive(Deserialize)]
 struct OllamaShowResponse {
-    #[serde(rename = "model_info")]
     model_info: Option<serde_json::Value>,
 }
 
@@ -144,15 +148,20 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                 .collect()
         });
 
-        // When tools are present, fetch the model's context window and set num_ctx
-        // so Ollama uses the full context instead of its 4096-token default.
-        // Fall back to 32768 if /api/show is unreachable or the key is missing.
+        // When tools are present, set num_ctx so Ollama uses the model's full context
+        // instead of its 4096-token default. The value is fetched from /api/show once
+        // per engine instance (cached) and falls back to 32768 if unreachable.
         let num_ctx = if tools.is_some() {
-            let ctx = match self.model_info().await {
-                Ok(Some(spec)) => spec.context_window,
-                _ => 32_768,
-            };
-            Some(ctx)
+            let ctx = self
+                .cached_context_window
+                .get_or_init(|| async {
+                    match self.model_info().await {
+                        Ok(Some(spec)) => spec.context_window,
+                        _ => 32_768,
+                    }
+                })
+                .await;
+            Some(*ctx)
         } else {
             None
         };
