@@ -66,6 +66,11 @@ fn socket_path() -> std::path::PathBuf {
 
 /// Spawn the watcher as a Tokio task. Returns immediately; the task runs
 /// until `cancel_token` is cancelled or the process exits.
+#[cfg(not(unix))]
+pub fn spawn(_app: AppHandle, _cancel_token: tokio_util::sync::CancellationToken) {
+    // No-op on Windows — watcher uses Unix Domain Socket transport.
+}
+
 #[cfg(unix)]
 pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) {
     tauri::async_runtime::spawn(async move {
