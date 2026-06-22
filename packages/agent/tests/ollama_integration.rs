@@ -235,17 +235,233 @@ async fn test_ollama_inference_with_tools() {
     let collected = chunks.lock().unwrap();
     eprintln!("Tool test chunks received: {}", collected.len());
 
-    // Model may or may not call the tool — both are valid responses.
-    // Not all models support tool calling; some return no chunks in that case.
-    // Verify only that no Error chunks were emitted.
+    // A non-empty response is required — either a tool call or at least one text token.
+    // An empty response (no chunks except Done) means inference failed, typically due to
+    // context-window truncation or a model that received an oversized prompt.
+    let has_tool_call = collected
+        .iter()
+        .any(|c| matches!(c, StreamingChunk::ToolCallStart { .. }));
+    let has_token = collected
+        .iter()
+        .any(|c| matches!(c, StreamingChunk::Token { text } if !text.is_empty()));
     let has_error = collected
         .iter()
         .any(|c| matches!(c, StreamingChunk::Error { .. }));
+
     assert!(!has_error, "Should not receive Error chunks");
+    assert!(
+        has_tool_call || has_token,
+        "Expected at least one ToolCallStart or non-empty Token chunk — empty response indicates inference failure (e.g. context-window truncation). Chunks: {:?}",
+        collected.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>()
+    );
     eprintln!(
-        "Tool call chunks: {} (model may not support tool calling)",
+        "Tool test: has_tool_call={has_tool_call}, has_token={has_token}, total_chunks={}",
         collected.len()
     );
+}
+
+#[tokio::test]
+async fn test_ollama_model_info_context_window_detection() {
+    if !ollama_running().await {
+        eprintln!("SKIP test_ollama_model_info_context_window_detection: Ollama not running at localhost:11434");
+        return;
+    }
+    let Some(model_name) = first_ollama_model().await else {
+        eprintln!(
+            "SKIP test_ollama_model_info_context_window_detection: No Ollama models available"
+        );
+        return;
+    };
+
+    let engine = OllamaInferenceEngine::new(model_name.clone());
+    let info = engine
+        .model_info()
+        .await
+        .expect("model_info() should not error");
+
+    let spec = info.expect("model_info() should return Some for an available model");
+    eprintln!(
+        "model_info() for {model_name}: context_window={}",
+        spec.context_window
+    );
+
+    assert!(
+        spec.context_window > 4096,
+        "context_window should be greater than the 4096 Ollama default — \
+         got {} for model '{}'. This indicates the serde field name or key lookup is broken.",
+        spec.context_window,
+        model_name
+    );
+}
+
+#[tokio::test]
+async fn test_ollama_inference_with_production_prompt() {
+    if !ollama_running().await {
+        eprintln!("SKIP test_ollama_inference_with_production_prompt: Ollama not running at localhost:11434");
+        return;
+    }
+    let Some(model_name) = first_ollama_model().await else {
+        eprintln!("SKIP test_ollama_inference_with_production_prompt: No Ollama models available");
+        return;
+    };
+    eprintln!("Using model for production prompt test: {model_name}");
+
+    use nodespace_agent::prompt_assembler::PromptAssembler;
+
+    // Build a realistic production system prompt (~1,900 tokens) using the real seed content.
+    let entity_types = "ENTITY TYPES:\n\
+        - task: Task (core) -- fields: status(enum: open/in_progress/done)\n\
+        - text: Text (core) -- fields: content(text)\n\
+        - date: Date (core) -- fields: date(date)\n\
+        - project: Project -- fields: name(text), status(text), deadline(date)\n\
+        - customer: Customer -- fields: name(text), email(text), phone(text)\n";
+    let system_prompt = PromptAssembler::assemble_static(entity_types, Some("2026-06-22"));
+
+    eprintln!(
+        "Production system prompt length: {} bytes",
+        system_prompt.len()
+    );
+
+    // Use all 14 production tools (the full set the live app sends to Ollama).
+    let tools: Vec<ToolDefinition> = vec![
+        ToolDefinition {
+            name: "search_semantic".into(),
+            description: "Find nodes semantically related to a query".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+        },
+        ToolDefinition {
+            name: "search_nodes".into(),
+            description: "Search for nodes by keyword, type, or property filters".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"},"node_type":{"type":"string"},"filters":{"type":"object"}},"required":["query"]}),
+        },
+        ToolDefinition {
+            name: "get_node".into(),
+            description: "Get a node by ID".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}),
+        },
+        ToolDefinition {
+            name: "create_node".into(),
+            description: "Create a new node".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"title":{"type":"string"},"node_type":{"type":"string"}},"required":["title","node_type"]}),
+        },
+        ToolDefinition {
+            name: "update_node".into(),
+            description: "Update an existing node's fields".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"fields":{"type":"object"}},"required":["id"]}),
+        },
+        ToolDefinition {
+            name: "update_task_status".into(),
+            description: "Update a task's completion status".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"status":{"type":"string","enum":["open","in_progress","done","cancelled"]}},"required":["id","status"]}),
+        },
+        ToolDefinition {
+            name: "delete_node".into(),
+            description: "Delete a node from the knowledge graph".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}),
+        },
+        ToolDefinition {
+            name: "create_schema".into(),
+            description: "Create a new node type schema with fields and relationships".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"},"fields":{"type":"array"},"relationships":{"type":"array"}},"required":["name"]}),
+        },
+        ToolDefinition {
+            name: "create_relationship".into(),
+            description: "Create a relationship between two nodes".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"from_id":{"type":"string"},"to_id":{"type":"string"},"relationship_type":{"type":"string"}},"required":["from_id","to_id","relationship_type"]}),
+        },
+        ToolDefinition {
+            name: "get_related_nodes".into(),
+            description: "Get nodes related to a given node".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"relationship_type":{"type":"string"}},"required":["id"]}),
+        },
+        ToolDefinition {
+            name: "delete_relationship".into(),
+            description: "Delete a relationship between two nodes".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"from_id":{"type":"string"},"to_id":{"type":"string"},"relationship_type":{"type":"string"}},"required":["from_id","to_id","relationship_type"]}),
+        },
+        ToolDefinition {
+            name: "create_nodes_from_markdown".into(),
+            description: "Import a markdown document and create a hierarchy of nodes".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{"markdown":{"type":"string"}},"required":["markdown"]}),
+        },
+        ToolDefinition {
+            name: "list_node_types".into(),
+            description: "List all available node types in the workspace".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{}}),
+        },
+        ToolDefinition {
+            name: "get_workspace_stats".into(),
+            description: "Get statistics about the workspace (node counts by type, etc.)".into(),
+            parameters_schema: serde_json::json!({"type":"object","properties":{}}),
+        },
+    ];
+
+    let engine = OllamaInferenceEngine::new(model_name.clone());
+    let request = InferenceRequest {
+        messages: vec![
+            ChatMessage::text(Role::System, system_prompt),
+            ChatMessage::text(Role::User, "What tasks do I have open?"),
+        ],
+        tools: Some(tools),
+        temperature: Some(0.0),
+        max_tokens: Some(200),
+    };
+
+    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chunks_clone = chunks.clone();
+
+    let usage = engine
+        .generate(
+            request,
+            Box::new(move |chunk| {
+                chunks_clone.lock().unwrap().push(chunk);
+            }),
+        )
+        .await
+        .expect("generate() should succeed");
+
+    let collected = chunks.lock().unwrap();
+    eprintln!(
+        "Production prompt test: {} chunks, prompt_tokens={}, completion_tokens={}",
+        collected.len(),
+        usage.prompt_tokens,
+        usage.completion_tokens
+    );
+
+    let has_tool_call = collected
+        .iter()
+        .any(|c| matches!(c, StreamingChunk::ToolCallStart { .. }));
+    let has_token = collected
+        .iter()
+        .any(|c| matches!(c, StreamingChunk::Token { text } if !text.is_empty()));
+    let has_error = collected
+        .iter()
+        .any(|c| matches!(c, StreamingChunk::Error { .. }));
+
+    assert!(!has_error, "Should not receive Error chunks");
+    assert!(
+        completion_tokens_indicate_real_response(usage.completion_tokens),
+        "completion_tokens={} — looks like context-window truncation (expected > 1). \
+         prompt_tokens={}. Check that num_ctx is being sent correctly.",
+        usage.completion_tokens,
+        usage.prompt_tokens
+    );
+    assert!(
+        has_tool_call || has_token,
+        "Expected at least one ToolCallStart or non-empty Token chunk with a production-sized \
+         prompt and 14 tools. Empty response indicates context-window truncation. \
+         prompt_tokens={}, completion_tokens={}",
+        usage.prompt_tokens,
+        usage.completion_tokens
+    );
+}
+
+/// Returns true if completion_tokens suggests a real model response (not a truncation artifact).
+/// A single completion token (value 1) with an empty response body is the signature of
+/// Ollama silently truncating at the context window limit.
+fn completion_tokens_indicate_real_response(completion_tokens: u32) -> bool {
+    completion_tokens > 1
 }
 
 #[tokio::test]
