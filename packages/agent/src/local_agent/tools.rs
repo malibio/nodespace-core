@@ -755,7 +755,7 @@ fn def_update_task_status() -> ToolDefinition {
 /// then forces every derivation to account for it. There are no drift-detector
 /// tests because the lists can no longer drift — they are computed from here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Tool {
+pub enum Tool {
     SearchNodes,
     ExecuteQuery,
     SearchSemantic,
@@ -775,7 +775,7 @@ pub(crate) enum Tool {
 impl Tool {
     /// Every tool in registry order. The order here is the order tools are
     /// presented to the model, so keep retrieval/discovery tools first.
-    pub(crate) const ALL: &'static [Tool] = &[
+    pub const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
         Tool::ExecuteQuery,
         Tool::SearchSemantic,
@@ -865,7 +865,7 @@ impl Tool {
 }
 
 /// All tool definitions for the graph executor, derived from the registry.
-pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
+pub fn all_tool_definitions() -> Vec<ToolDefinition> {
     Tool::ALL.iter().map(|t| t.definition()).collect()
 }
 
