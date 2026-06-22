@@ -292,12 +292,6 @@ jobs:
         with:
           bun-version: "1.3.11"
 
-      - name: Setup Node.js (for npm publish)
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
       - name: Install dependencies (skill)
         run: bun install --frozen-lockfile
         working-directory: packages/skill
@@ -305,7 +299,10 @@ jobs:
       - name: Set version from release tag (skill)
         run: |
           TAG="${{ github.event.release.tag_name }}"
-          npm version "${TAG#v}" --no-git-tag-version
+          VERSION="${TAG#v}"
+          # Update version directly — avoids npm's workspace: protocol error
+          contents=$(cat package.json)
+          echo "$contents" | sed "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" > package.json
         working-directory: packages/skill
 
       - name: Build @nodespaceai/skill
@@ -313,10 +310,11 @@ jobs:
         working-directory: packages/skill
 
       - name: Publish @nodespaceai/skill
-        run: npm publish --access public
+        run: bun publish --access public
         working-directory: packages/skill
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   update-homebrew-cask:
     name: Update Homebrew cask
