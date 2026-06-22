@@ -9,17 +9,17 @@
     /* NodeSpace Design System - Figma canonical tokens (NS-theme/shadcn-based) */
 
     /* Color system - light mode */
-    --primary: 174 67% 35%; /* Teal primary */
-    --primary-foreground: 0 0% 98%;
+    --primary: 174 67% 35%;
+    --primary-foreground: 166 89% 96%;
 
-    --secondary: 240 4% 96%; /* Near-white with cool tint */
-    --secondary-foreground: 240 8% 40%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 4% 10%;
 
-    --accent: 174 67% 35%;
-    --accent-foreground: 0 0% 98%;
+    --accent: 176 100% 24%;
+    --accent-foreground: 240 4% 10%;
 
     --background: 0 0% 100%;
-    --foreground: 240 11% 4%; /* Near-black with blue-violet tint */
+    --foreground: 240 11% 4%;
 
     --card: 0 0% 100%;
     --card-foreground: 240 11% 4%;
@@ -27,8 +27,8 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 11% 4%;
 
-    --muted: 240 4% 96%;
-    --muted-foreground: 240 8% 40%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 243 9% 40%;
 
     /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
@@ -36,31 +36,45 @@
 
     --border: 240 6% 90%;
     --input: 240 6% 90%;
-    --ring: 174 67% 35%;
+    --ring: 0 0% 63%;
 
-    --destructive: 347 77% 51%;
+    --destructive: 345 77% 51%;
     --destructive-foreground: 0 0% 100%;
-    --destructive-light: 357 76% 77%;
+    --destructive-light: 357 74% 76%;
 
-    --success: 97 46% 47%;
+    --success: 97 45% 46%;
     --success-foreground: 0 0% 100%;
-    --success-light: 87 64% 70%;
+    --success-light: 96 64% 69%;
 
-    --warning: 40 99% 49%;
+    --warning: 38 97% 49%;
     --warning-foreground: 0 0% 100%;
-    --warning-light: 38 100% 78%;
+    --warning-light: 43 100% 78%;
 
-    --info-light: 214 83% 80%;
+    --info-light: 213 82% 80%;
 
     --radius: 0.5rem;
 
-    /* Hierarchy background colors — not yet in Figma variables; approximated from palette */
-    --sidebar-background: 240 4% 94%;
-    --active-nav-background: 240 4% 88%;
-    --tab-bar-background: 240 4% 88%;
-    --inactive-tab-background: 240 4% 84%;
+    /* Sidebar tokens - Figma canonical */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 11% 4%;
+    --sidebar-primary: 174 67% 35%;
+    --sidebar-primary-foreground: 166 89% 96%;
+    --sidebar-accent: 240 5% 96%;
+    --sidebar-accent-foreground: 240 4% 10%;
+    --sidebar-border: 240 6% 90%;
+    --sidebar-ring: 0 0% 63%;
+
+    /* NodeSpace layout hierarchy — approximated from sidebar palette */
+    --active-nav-background: 240 5% 92%;
+    --tab-bar-background: 240 5% 92%;
+    --inactive-tab-background: 240 5% 88%;
     --active-tab-background: 0 0% 100%;
     --content-background: 0 0% 100%;
+
+    /* Semantic colors (used in badges/alerts with background) */
+    --semantic-background: 15 2% 41%;
+    --semantic-border: 15 1% 54%;
+    --semantic-foreground: 0 0% 100%;
 
     /* Icon Positioning System - Single source of truth */
     /* Used by node indicators and chevrons for consistent vertical alignment */
@@ -87,56 +101,70 @@
 
   .dark {
     /* Color system - dark mode (Figma canonical tokens) */
-    --primary: 173 73% 41%; /* Teal primary dark */
-    --primary-foreground: 0 0% 98%;
+    --primary: 173 50% 41%;
+    --primary-foreground: 177 100% 9%;
 
     --secondary: 240 4% 16%;
-    --secondary-foreground: 240 2% 80%;
+    --secondary-foreground: 0 0% 98%;
 
-    --accent: 173 73% 41%;
+    --accent: 173 87% 27%;
     --accent-foreground: 0 0% 98%;
 
     --background: 0 0% 9%;
     --foreground: 0 0% 98%;
 
-    --card: 240 6% 10%;
+    --card: 240 4% 10%;
     --card-foreground: 0 0% 98%;
 
-    --popover: 240 6% 10%;
+    --popover: 240 4% 10%;
     --popover-foreground: 0 0% 98%;
 
-    --muted: 240 3% 35%;
+    --muted: 240 2% 35%;
     --muted-foreground: 240 2% 80%;
 
     /* Systematic hover states - WCAG-compliant contrast */
     --hover-background: var(--muted);
     --hover-foreground: var(--muted-foreground);
 
-    --border: 0 0% 100% / 0.1; /* rgba white at 10% */
-    --input: 0 0% 100% / 0.1;
-    --ring: 173 73% 41%;
+    --border: 0 0% 100% / 0.1;
+    --input: 0 0% 100% / 0.15;
+    --ring: 0 0% 45%;
 
-    --destructive: 359 100% 70%;
+    --destructive: 0 100% 70%;
     --destructive-foreground: 0 0% 100%;
-    --destructive-light: 357 100% 59%;
+    --destructive-light: 354 100% 59%;
 
-    --success: 87 93% 38%;
+    --success: 96 96% 37%;
     --success-foreground: 0 0% 100%;
-    --success-light: 87 76% 35%;
+    --success-light: 101 73% 35%;
 
     --warning: 38 100% 51%;
     --warning-foreground: 0 0% 100%;
-    --warning-light: 38 99% 47%;
+    --warning-light: 38 98% 47%;
 
-    --info-light: 214 67% 57%;
+    --info-light: 213 68% 57%;
 
-    /* Dark mode hierarchy colors — approximated from Figma dark card/secondary */
-    --sidebar-background: 240 4% 13%;
-    --active-nav-background: 240 4% 17%;
-    --tab-bar-background: 240 4% 17%;
-    --inactive-tab-background: 240 4% 20%;
+    /* Sidebar tokens - Figma canonical */
+    --sidebar-background: 240 4% 10%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 173 50% 41%;
+    --sidebar-primary-foreground: 177 100% 9%;
+    --sidebar-accent: 240 4% 16%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 0 0% 100% / 0.1;
+    --sidebar-ring: 0 0% 45%;
+
+    /* NodeSpace layout hierarchy — approximated from dark sidebar palette */
+    --active-nav-background: 240 4% 14%;
+    --tab-bar-background: 240 4% 14%;
+    --inactive-tab-background: 240 4% 17%;
     --active-tab-background: 0 0% 9%;
     --content-background: 0 0% 9%;
+
+    /* Semantic colors */
+    --semantic-background: 10 2% 15%;
+    --semantic-border: 0 2% 32%;
+    --semantic-foreground: 0 0% 100%;
 
     /* Dark mode node colors are now defined at the end of the file for proper specificity */
   }
@@ -537,14 +565,14 @@
 }
 
 .dark {
-  --node-text: 173 73% 41%;
-  --node-task: 173 73% 41%;
-  --node-ai-chat: 173 73% 41%;
-  --node-entity: 173 73% 41%;
-  --node-query: 173 73% 41%;
-  --node-user: 173 73% 41%;
-  --node-date: 173 73% 41%;
-  --node-document: 173 73% 41%;
+  --node-text: 173 50% 41%;
+  --node-task: 173 50% 41%;
+  --node-ai-chat: 173 50% 41%;
+  --node-entity: 173 50% 41%;
+  --node-query: 173 50% 41%;
+  --node-user: 173 50% 41%;
+  --node-date: 173 50% 41%;
+  --node-document: 173 50% 41%;
 }
 
 /* =============================================================================

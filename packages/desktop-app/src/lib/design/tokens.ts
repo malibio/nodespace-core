@@ -14,6 +14,7 @@ const log = createLogger('Tokens');
 export type NodeType = RegistryNodeType;
 
 // Node-specific colors — all map to primary (teal, Figma canonical)
+// Light: #1D9387 = hsl(174 67% 35%), Dark: #1DB6A5 = hsl(173 50% 41%)
 export const nodeTypeColors = {
   text: 'hsl(174 67% 35%)',
   document: 'hsl(174 67% 35%)',
