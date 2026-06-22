@@ -48,6 +48,7 @@ jobs:
 
       - name: Install Protobuf
         run: |
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew untap aws/tap azure/bicep 2>/dev/null || true
           brew install protobuf
 
@@ -169,6 +170,7 @@ jobs:
       - name: Install Protobuf (macOS)
         if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
         run: |
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew untap aws/tap azure/bicep 2>/dev/null || true
           brew install protobuf
 
@@ -463,6 +465,7 @@ jobs:
       - name: Install Protobuf (macOS)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'macos-latest'
         run: |
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew untap aws/tap azure/bicep 2>/dev/null || true
           brew install protobuf
 
