@@ -31,6 +31,26 @@
   let ollamaModels = $state<{ id: string; name: string }[]>([]);
   let ollamaChecking = $state(true);
 
+  async function checkOllama() {
+    ollamaChecking = true;
+    try {
+      ollamaRunning = await ollamaAvailable();
+      if (ollamaRunning) {
+        const list = await chatModelList();
+        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => ({ id: m.id, name: m.name }));
+      } else {
+        ollamaModels = [];
+      }
+    } catch (e) {
+      log.warn('Ollama check failed', e);
+      ollamaRunning = false;
+      ollamaModels = [];
+    } finally {
+      buildDefaultOptions();
+      ollamaChecking = false;
+    }
+  }
+
   // --- OpenAI-compat configs ---
   let openAiConfigs = $state<OpenAiCompatConfig[]>([]);
   let editingConfig = $state<OpenAiCompatConfig | null>(null);
@@ -69,21 +89,7 @@
     openAiConfigs = getOpenAiConfigs();
     defaultModel = getDefaultModelSelection();
 
-    ollamaChecking = true;
-    try {
-      ollamaRunning = await ollamaAvailable();
-      if (ollamaRunning) {
-        const list = await chatModelList();
-        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => ({ id: m.id, name: m.name }));
-      }
-    } catch (e) {
-      log.warn('Ollama check failed', e);
-      ollamaRunning = false;
-    } finally {
-      ollamaChecking = false;
-    }
-
-    buildDefaultOptions();
+    await checkOllama();
   });
 
   function buildDefaultOptions() {
@@ -191,7 +197,7 @@
         class="refresh-btn"
         onclick={() => modelStore.refreshModels()}
         disabled={isLoading}
-        aria-label="Refresh"
+        aria-label="Refresh local models"
       >
         <svg class:spinning={isLoading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
           <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
@@ -254,7 +260,19 @@
 
   <!-- ── Ollama ─────────────────────────────────────────────────── -->
   <section class="mm-section">
-    <h3>Ollama</h3>
+    <div class="mm-section-header">
+      <h3>Ollama</h3>
+      <button
+        class="refresh-btn"
+        onclick={checkOllama}
+        disabled={ollamaChecking}
+        aria-label="Refresh Ollama status"
+      >
+        <svg class:spinning={ollamaChecking} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+        </svg>
+      </button>
+    </div>
 
     {#if ollamaChecking}
       <p class="mm-empty">Checking…</p>
