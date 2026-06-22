@@ -18,19 +18,26 @@
   /** Wait for daemon-status: healthy or not_running (max 30s). */
   async function waitForDaemon(): Promise<void> {
     if (!isTauri()) return;
-    await new Promise<void>(async (resolve) => {
-      const unlisten = await listen<string>('daemon-status', (event) => {
-        if (event.payload === 'healthy' || event.payload === 'not_running') {
-          clearTimeout(timer);
-          unlisten();
-          resolve();
-        }
-      });
-      const timer = setTimeout(() => {
-        unlisten();
-        resolve();
-      }, 30_000);
+    // Wire resolve through a shared mutable slot so the listen callback and the
+    // timeout both reference the same resolver without an async promise executor.
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((r) => {
+      resolveWait = r;
     });
+    // Await listen registration before starting the timer — guarantees the
+    // unlisten handle is captured and no events are missed.
+    const unlisten = await listen<string>('daemon-status', (event) => {
+      if (event.payload === 'healthy' || event.payload === 'not_running') {
+        unlisten();
+        resolveWait();
+      }
+    });
+    const timer = setTimeout(() => {
+      unlisten();
+      resolveWait();
+    }, 30_000);
+    await wait;
+    clearTimeout(timer);
   }
 
   // Initialize database first, then schema plugins, then sync listeners
