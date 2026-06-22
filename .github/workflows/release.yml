@@ -483,7 +483,7 @@ jobs:
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libgtk-3-dev:arm64 libxdo-dev:arm64 libssl-dev:arm64
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libgtk-3-dev:arm64 libxdo-dev:arm64 libssl-dev:arm64
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -492,6 +492,8 @@ jobs:
         run: cargo build --release --bin nodespaced --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          CXX_aarch64_unknown_linux_gnu: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-g++' || '' }}
           PKG_CONFIG_ALLOW_CROSS: ${{ matrix.id == 'linux-arm' && '1' || '' }}
           PKG_CONFIG_PATH: ${{ matrix.id == 'linux-arm' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '' }}
           PKG_CONFIG_SYSROOT_DIR: ${{ matrix.id == 'linux-arm' && '/' || '' }}
@@ -501,6 +503,8 @@ jobs:
         run: cargo build --release --bin nodespace --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          CXX_aarch64_unknown_linux_gnu: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-g++' || '' }}
           PKG_CONFIG_ALLOW_CROSS: ${{ matrix.id == 'linux-arm' && '1' || '' }}
           PKG_CONFIG_PATH: ${{ matrix.id == 'linux-arm' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '' }}
           PKG_CONFIG_SYSROOT_DIR: ${{ matrix.id == 'linux-arm' && '/' || '' }}
