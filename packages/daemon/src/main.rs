@@ -315,27 +315,22 @@ async fn serve_headless() -> Result<()> {
         }
     };
 
-    let builder = Server::builder()
+    let mut builder = Server::builder()
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
         .add_service(SettingsServiceServer::new(bundle.settings))
         .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
-        builder
-            .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(incoming, async move {
-                shutdown.await;
-                cancel.cancel();
-            })
-    } else {
-        builder.serve_with_incoming_shutdown(incoming, async move {
+    if let Some(emb) = bundle.embeddings_service_grpc {
+        builder = builder.add_service(EmbeddingsServiceServer::new(emb));
+    }
+    builder
+        .serve_with_incoming_shutdown(incoming, async move {
             shutdown.await;
             cancel.cancel();
         })
-    };
-
-    serve.await.context("gRPC server terminated with error")?;
+        .await
+        .context("gRPC server terminated with error")?;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
 }
@@ -391,28 +386,23 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         }
     };
 
-    let builder = Server::builder()
+    let mut builder = Server::builder()
         .layer(TrayMetricsLayer::new(controller))
         .add_service(NodeServiceServer::new(bundle.node_service_grpc))
         .add_service(AgentSessionServiceServer::new(bundle.agent_session))
         .add_service(ImportServiceServer::new(bundle.import))
         .add_service(SettingsServiceServer::new(bundle.settings))
         .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
-        builder
-            .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(incoming, async move {
-                combined_shutdown.await;
-                cancel.cancel();
-            })
-    } else {
-        builder.serve_with_incoming_shutdown(incoming, async move {
+    if let Some(emb) = bundle.embeddings_service_grpc {
+        builder = builder.add_service(EmbeddingsServiceServer::new(emb));
+    }
+    builder
+        .serve_with_incoming_shutdown(incoming, async move {
             combined_shutdown.await;
             cancel.cancel();
         })
-    };
-
-    serve.await.context("gRPC server terminated with error")?;
+        .await
+        .context("gRPC server terminated with error")?;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
 }
