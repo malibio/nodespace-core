@@ -18,14 +18,18 @@
   /** Wait for daemon-status: healthy or not_running (max 30s). */
   async function waitForDaemon(): Promise<void> {
     if (!isTauri()) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 30_000);
-      listen<string>('daemon-status', (event) => {
+    await new Promise<void>(async (resolve) => {
+      const unlisten = await listen<string>('daemon-status', (event) => {
         if (event.payload === 'healthy' || event.payload === 'not_running') {
           clearTimeout(timer);
+          unlisten();
           resolve();
         }
       });
+      const timer = setTimeout(() => {
+        unlisten();
+        resolve();
+      }, 30_000);
     });
   }
 
