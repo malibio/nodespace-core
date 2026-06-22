@@ -490,7 +490,7 @@ jobs:
 
       - name: Install Protobuf (Linux)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgtk-3-dev
 
       - name: Install cross-compilation toolchain (Linux ARM)
         if: steps.filter.outputs.skip != 'true' && matrix.id == 'linux-arm'
