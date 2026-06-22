@@ -73,6 +73,8 @@ struct OllamaOptions {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_predict: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -105,7 +107,8 @@ struct OllamaToolCallFunction {
 
 #[derive(Deserialize)]
 struct OllamaShowResponse {
-    modelinfo: Option<serde_json::Value>,
+    #[serde(rename = "model_info")]
+    model_info: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -141,6 +144,19 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
                 .collect()
         });
 
+        // When tools are present, fetch the model's context window and set num_ctx
+        // so Ollama uses the full context instead of its 4096-token default.
+        // Fall back to 32768 if /api/show is unreachable or the key is missing.
+        let num_ctx = if tools.is_some() {
+            let ctx = match self.model_info().await {
+                Ok(Some(spec)) => spec.context_window,
+                _ => 32_768,
+            };
+            Some(ctx)
+        } else {
+            None
+        };
+
         // Ollama does not deliver tool_calls through its streaming API for Gemma 4
         // (and likely other models) — tool calls only appear in the final
         // non-streaming response. Use stream:false so tool calls are reliably
@@ -156,6 +172,7 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
             options: OllamaOptions {
                 temperature: request.temperature,
                 num_predict: request.max_tokens,
+                num_ctx,
             },
         };
 
@@ -308,15 +325,33 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
         match self.http_client.post(&url).json(&show_request).send().await {
             Ok(response) => match response.json::<OllamaShowResponse>().await {
                 Ok(show_response) => {
-                    let mut context_window = 4096u32;
-
-                    if let Some(modelinfo) = show_response.modelinfo {
-                        if let Some(ctx_len) =
-                            modelinfo.get("llm.context_length").and_then(|v| v.as_u64())
-                        {
-                            context_window = ctx_len as u32;
-                        }
-                    }
+                    let context_window = show_response
+                        .model_info
+                        .as_ref()
+                        .and_then(|info| {
+                            // Try well-known family-specific keys first, then fall back to
+                            // any key ending in ".context_length" (covers future model families).
+                            let known_keys = [
+                                "llm.context_length",
+                                "gemma4.context_length",
+                                "llama.context_length",
+                                "qwen2.context_length",
+                                "mistral.context_length",
+                                "phi3.context_length",
+                            ];
+                            known_keys
+                                .iter()
+                                .find_map(|k| info.get(*k).and_then(|v| v.as_u64()))
+                                .or_else(|| {
+                                    info.as_object().and_then(|obj| {
+                                        obj.iter()
+                                            .find(|(k, _)| k.ends_with(".context_length"))
+                                            .and_then(|(_, v)| v.as_u64())
+                                    })
+                                })
+                        })
+                        .map(|n| n as u32)
+                        .unwrap_or(32_768);
 
                     Ok(Some(ChatModelSpec {
                         model_id: self.model_name.clone(),
