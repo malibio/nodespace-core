@@ -21,8 +21,8 @@ pub mod services;
 // see watcher.rs module docs for activation gating.
 pub mod watcher;
 
-// Daemon lifecycle: launchd (macOS) and systemd (Linux)
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+// Daemon lifecycle: launchd (macOS), systemd (Linux), direct spawn (Windows)
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub mod daemon_setup;
 
 // First-launch skill installer (Issue #1199)
@@ -69,7 +69,7 @@ fn frontend_log(line: String) {
 /// to decide whether to show an error state (Issue #1179).
 #[tauri::command]
 async fn check_daemon_status() -> String {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
         use daemon_setup::{check_daemon_socket, DaemonStatus};
 
@@ -81,7 +81,7 @@ async fn check_daemon_status() -> String {
             DaemonStatus::NotRunning => "not_running".to_string(),
         };
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     "healthy".to_string()
 }
 
@@ -237,13 +237,13 @@ pub fn run() {
             // field `client`", closing the view (nodespace-sync#162). With the client
             // managed up front, an early call instead yields a retryable transport
             // error until the daemon is reachable.
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             app.manage(crate::services::GrpcClient::connect_lazy());
 
             // Spawn async task to start the daemon (if needed) and wire up the
             // watcher, token stream, and Pro probe on the (already-managed) client.
             // setup() is synchronous so we can't block_on here — spawn a task instead.
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             {
                 use tauri::Emitter;
 

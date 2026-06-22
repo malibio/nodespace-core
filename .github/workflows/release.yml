@@ -16,6 +16,7 @@ on:
           - macos-intel
           - linux-arm
           - linux-x86
+          - windows-x86
 
 # Required permissions for uploading release assets
 permissions:
@@ -123,6 +124,12 @@ jobs:
             rust_targets: 'x86_64-apple-darwin'
             id: 'macos-intel'
 
+          # Windows x86_64
+          - platform: 'windows-latest'
+            args: '--target x86_64-pc-windows-msvc'
+            rust_targets: 'x86_64-pc-windows-msvc'
+            id: 'windows-x86'
+
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -202,6 +209,29 @@ jobs:
           cargo build --release --bin nodespace --target "${TRIPLE}"
           cp "target/${TRIPLE}/release/nodespace" "${BIN_DIR}/nodespace-${TRIPLE}"
           chmod +x "${BIN_DIR}/nodespace-${TRIPLE}"
+
+          echo "Sidecars built:"
+          ls -la "${BIN_DIR}/"
+
+      - name: Install Protobuf (Windows)
+        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'windows-latest'
+        run: choco install protoc --yes
+        shell: bash
+
+      - name: Build nodespaced and nodespace sidecars (Windows)
+        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          TRIPLE="${{ matrix.rust_targets }}"
+          BIN_DIR="packages/desktop-app/src-tauri/binaries"
+
+          echo "Building nodespaced for ${TRIPLE}..."
+          cargo build --release --bin nodespaced --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespaced.exe" "${BIN_DIR}/nodespaced-${TRIPLE}.exe"
+
+          echo "Building nodespace CLI for ${TRIPLE}..."
+          cargo build --release --bin nodespace --target "${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespace.exe" "${BIN_DIR}/nodespace-${TRIPLE}.exe"
 
           echo "Sidecars built:"
           ls -la "${BIN_DIR}/"
@@ -389,6 +419,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             id: linux-x86
 
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            id: windows-x86
+
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -427,6 +461,11 @@ jobs:
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'ubuntu-22.04'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgtk-3-dev
 
+      - name: Install Protobuf (Windows)
+        if: steps.filter.outputs.skip != 'true' && matrix.os == 'windows-latest'
+        run: choco install protoc --yes
+        shell: bash
+
       - name: Install cross-compilation toolchain (Linux ARM)
         if: steps.filter.outputs.skip != 'true' && matrix.id == 'linux-arm'
         run: sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -447,16 +486,22 @@ jobs:
 
       - name: Rename binaries with target triple suffix
         if: steps.filter.outputs.skip != 'true'
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/nodespaced nodespaced-${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/nodespace nodespace-${{ matrix.target }}
+          EXT=""
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
+          cp "target/${{ matrix.target }}/release/nodespaced${EXT}" "nodespaced-${{ matrix.target }}${EXT}"
+          cp "target/${{ matrix.target }}/release/nodespace${EXT}" "nodespace-${{ matrix.target }}${EXT}"
 
       - name: Upload binaries to release
         if: steps.filter.outputs.skip != 'true' && github.event_name == 'release'
+        shell: bash
         run: |
+          EXT=""
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
           gh release upload ${{ github.event.release.tag_name }} \
-            nodespaced-${{ matrix.target }} \
-            nodespace-${{ matrix.target }} \
+            "nodespaced-${{ matrix.target }}${EXT}" \
+            "nodespace-${{ matrix.target }}${EXT}" \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

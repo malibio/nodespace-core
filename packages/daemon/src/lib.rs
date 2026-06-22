@@ -23,10 +23,10 @@ pub fn resolve_db_path() -> Result<PathBuf> {
         return Ok(PathBuf::from(custom));
     }
 
-    let home = std::env::var("HOME").context(
-        "Cannot determine database path: $HOME is unset and NODESPACED_DB_PATH not provided",
+    let home = dirs::home_dir().context(
+        "Cannot determine database path: home directory is unknown and NODESPACED_DB_PATH not provided",
     )?;
-    Ok(PathBuf::from(home)
+    Ok(home
         .join(".nodespace")
         .join("database")
         .join("nodespace.db"))
