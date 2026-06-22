@@ -31,10 +31,10 @@ NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 fr
 1. **Check git status on the primary checkout**: `git status` — commit any pending changes first
 2. **Pull latest `main`**: `git fetch origin && git pull origin main`
 3. **Enter an isolated worktree**: `EnterWorktree({name: "issue-<number>-brief-desc"})`
-   - Creates `.claude/worktrees/issue-<number>-brief-desc/` on a new branch branched from `origin/main`
+   - Creates `~/.worktrees/issue-<number>-brief-desc/` on a new branch branched from `origin/main`
    - All subsequent commands run **inside the worktree**; primary `main` stays untouched
    - Naming: terse, no `feature/` prefix — branch name doubles as directory name, e.g. `issue-1122-agent-tools`
-   - Continuing parent-issue work on a shared branch: `EnterWorktree({path: ".claude/worktrees/<existing>"})`. If no worktree exists yet: `git worktree add .claude/worktrees/<name> <branch>` first
+   - Continuing parent-issue work on a shared branch: `EnterWorktree({path: "~/.worktrees/<existing>"})`. If no worktree exists yet: `git worktree add ~/.worktrees/<name> <branch>` first
 4. **Install dependencies**: `bun install`
 5. **Run test baseline**: `bun run test` — frontend only (Rust tests require warm cache)
    - If you hit `Cannot find base config file "./.svelte-kit/tsconfig.json"`, run `bunx svelte-kit sync` from `packages/desktop-app/` once, then re-run
@@ -49,8 +49,8 @@ NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 fr
 
 ## Mandatory Startup Sequence — CONTINUING FROM WIP
 
-1. **Enter the existing worktree**: `EnterWorktree({path: ".claude/worktrees/issue-<N>-brief-desc"})`
-   - If removed: `git worktree add .claude/worktrees/issue-<N>-brief-desc <branch>` first
+1. **Enter the existing worktree**: `EnterWorktree({path: "~/.worktrees/issue-<N>-brief-desc"})`
+   - If removed: `git worktree add ~/.worktrees/issue-<N>-brief-desc <branch>` first
 2. **Check git status**: confirm you're on the right branch
 3. **Pull latest**: `git fetch origin && git pull origin <branch-name>`
 4. **Sync dependencies if needed**: `bun install` — only if WIP commit mentions new packages
@@ -225,7 +225,7 @@ The context window clears between planning and implementation. The implementatio
 Every plan MUST include:
 
 1. **Step 0 — Startup sequence:**
-   > `git status` and `git pull origin main` on primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})`, then inside the worktree: `bun install`, `bun run test` (baseline), `bun run gh:comment <N> "..."`, `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
+   > `git status` and `git pull origin main` on primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})` (creates `~/.worktrees/issue-<N>-brief-desc/`), then inside the worktree: `bun install`, `bun run test` (baseline), `bun run gh:comment <N> "..."`, `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
 
 2. **Final steps:**
    > `bun run test:all` (no new failures), `bun run quality:fix` + commit, `bun run gh:pr <N>`. After approval: `gh pr view <PR#>`, `ExitWorktree({action: "remove", discard_changes: true})`, `gh pr merge <PR#> --squash --delete-branch`.
