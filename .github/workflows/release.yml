@@ -47,7 +47,9 @@ jobs:
             . -> target
 
       - name: Install Protobuf
-        run: brew install protobuf
+        run: |
+          brew untap aws/tap azure/bicep 2>/dev/null || true
+          brew install protobuf
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -165,7 +167,9 @@ jobs:
 
       - name: Install Protobuf (macOS)
         if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
-        run: brew install protobuf
+        run: |
+          brew untap aws/tap azure/bicep 2>/dev/null || true
+          brew install protobuf
 
       - name: Setup Bun
         if: steps.filter.outputs.skip != 'true'
@@ -455,7 +459,9 @@ jobs:
 
       - name: Install Protobuf (macOS)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'macos-latest'
-        run: brew install protobuf
+        run: |
+          brew untap aws/tap azure/bicep 2>/dev/null || true
+          brew install protobuf
 
       - name: Install Protobuf (Linux)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'ubuntu-22.04'
