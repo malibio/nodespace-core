@@ -16,6 +16,10 @@ import { join } from 'node:path';
 
 const WORKSPACE_ROOT = join(import.meta.dir, '../../..');
 const BINARIES_DIR = join(import.meta.dir, '../src-tauri/binaries');
+// In dev mode Tauri resolves BaseDirectory::Resource from target/debug/binaries/
+// (its build cache), not src-tauri/binaries/. Keep both in sync so daemon_setup's
+// size check always sees the fresh binary.
+const TAURI_DEV_BINARIES_DIR = join(WORKSPACE_ROOT, 'target/debug/binaries');
 
 const PACKAGES = [
   { crate: 'nodespace-daemon', bin: 'nodespaced' },
@@ -41,18 +45,27 @@ function copyBinaries(triple: string, profile: 'debug' | 'release'): void {
   const targetDir = join(WORKSPACE_ROOT, 'target', profile);
 
   if (!existsSync(BINARIES_DIR)) mkdirSync(BINARIES_DIR, { recursive: true });
+  if (profile === 'debug' && !existsSync(TAURI_DEV_BINARIES_DIR)) {
+    mkdirSync(TAURI_DEV_BINARIES_DIR, { recursive: true });
+  }
 
   for (const { bin } of PACKAGES) {
     const src = join(targetDir, bin);
-    const dest = join(BINARIES_DIR, `${bin}-${triple}`);
+    const tripled = `${bin}-${triple}`;
 
     if (!existsSync(src)) {
       throw new Error(`Built binary not found: ${src}`);
     }
 
-    copyFileSync(src, dest);
-    chmodSync(dest, 0o755);
-    console.log(`  ${bin}-${triple} → src-tauri/binaries/`);
+    copyFileSync(src, join(BINARIES_DIR, tripled));
+    chmodSync(join(BINARIES_DIR, tripled), 0o755);
+    console.log(`  ${tripled} → src-tauri/binaries/`);
+
+    if (profile === 'debug') {
+      copyFileSync(src, join(TAURI_DEV_BINARIES_DIR, tripled));
+      chmodSync(join(TAURI_DEV_BINARIES_DIR, tripled), 0o755);
+      console.log(`  ${tripled} → target/debug/binaries/`);
+    }
   }
 }
 

@@ -230,6 +230,13 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
+            // Kill the running daemon if its binary is stale (size mismatch vs bundled
+            // sidecar). Must run before connect_lazy so the frontend never connects to
+            // an outdated daemon. ensure_daemon_running (spawned below) then extracts
+            // the fresh binary and restarts via launchd/systemd.
+            #[cfg(unix)]
+            crate::daemon_setup::kill_stale_daemon_sync(app);
+
             // Manage the gRPC client EAGERLY via a lazy channel (connects on first
             // RPC). Previously `manage(GrpcClient)` ran only after the async connect
             // below, so a frontend command issued at startup (e.g. the date page's

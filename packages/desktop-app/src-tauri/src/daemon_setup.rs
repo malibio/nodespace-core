@@ -64,6 +64,72 @@ fn daemon_binary_name() -> &'static str {
     }
 }
 
+/// Synchronously kill the running daemon if the installed binary differs in size
+/// from the bundled sidecar. Called before the gRPC client is managed so the
+/// frontend never connects to a stale daemon.
+///
+/// This is intentionally synchronous and cheap (two stat calls + maybe lsof).
+/// The async `ensure_daemon_running` handles extraction and restart afterward.
+#[cfg(unix)]
+pub fn kill_stale_daemon_sync(app: &tauri::App) {
+    let handle = app.handle();
+    let home = match home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let bin_dir = home.join(DAEMON_BIN_DIR);
+    let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
+    let installed = bin_dir.join(daemon_binary_name());
+
+    let bundled_size = match resolve_sidecar_path_sync(handle) {
+        Some(p) => match std::fs::metadata(&p) {
+            Ok(m) => m.len(),
+            Err(_) => return,
+        },
+        None => return,
+    };
+
+    let installed_size = match std::fs::metadata(&installed) {
+        Ok(m) => m.len(),
+        Err(_) => return, // not installed yet — ensure_daemon_running handles this
+    };
+
+    if bundled_size == installed_size {
+        return; // up to date
+    }
+
+    tracing::info!(
+        bundled = bundled_size,
+        installed = installed_size,
+        "Installed daemon binary is stale — killing before gRPC client connects"
+    );
+
+    // Kill via lsof → SIGKILL (fast; launchd will restart with fresh binary after extraction)
+    let sock = socket_path.to_string_lossy();
+    if let Ok(out) = std::process::Command::new("lsof")
+        .args(["-t", "-U", sock.as_ref()])
+        .output()
+    {
+        for pid in String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|s: &str| s.parse::<i32>().ok())
+        {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
+        }
+    }
+
+    // Remove stale socket so the health check in ensure_daemon_running sees NotRunning
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+fn resolve_sidecar_path_sync(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::path::BaseDirectory;
+    let triple = tauri::utils::platform::target_triple().ok()?;
+    let name = format!("binaries/{}-{}", daemon_binary_name(), triple);
+    app.path().resolve(&name, BaseDirectory::Resource).ok()
+}
+
 /// Result of the daemon health check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonStatus {

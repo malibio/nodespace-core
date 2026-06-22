@@ -1,5 +1,7 @@
 # Rust build artifacts (ensure target never gets committed)
 target/
+# Tauri dev-mode sidecar cache (kept in sync by dev:tauri:sidecars)
+target/debug/binaries/
 **/*.rs.bk
 *.pdb
 # Cargo.lock is committed for reproducible builds (application crate best practice)

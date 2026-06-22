@@ -75,6 +75,7 @@ jobs:
         run: |
           TRIPLE="aarch64-apple-darwin"
           BIN_DIR="packages/desktop-app/src-tauri/binaries"
+          mkdir -p "${BIN_DIR}"
 
           echo "Building nodespaced for ${TRIPLE}..."
           cargo build --release --bin nodespaced --target "${TRIPLE}"
@@ -203,6 +204,7 @@ jobs:
         run: |
           TRIPLE="${{ matrix.rust_targets }}"
           BIN_DIR="packages/desktop-app/src-tauri/binaries"
+          mkdir -p "${BIN_DIR}"
 
           echo "Building nodespaced for ${TRIPLE}..."
           cargo build --release --bin nodespaced --target "${TRIPLE}"
@@ -228,6 +230,7 @@ jobs:
         run: |
           TRIPLE="${{ matrix.rust_targets }}"
           BIN_DIR="packages/desktop-app/src-tauri/binaries"
+          mkdir -p "${BIN_DIR}"
 
           echo "Building nodespaced for ${TRIPLE}..."
           cargo build --release --bin nodespaced --target "${TRIPLE}"
@@ -465,7 +468,7 @@ jobs:
 
       - name: Install Protobuf (Linux)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgtk-3-dev
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgtk-3-dev libxdo-dev
 
       - name: Install Protobuf (Windows)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'windows-latest'
@@ -474,7 +477,13 @@ jobs:
 
       - name: Install cross-compilation toolchain (Linux ARM)
         if: steps.filter.outputs.skip != 'true' && matrix.id == 'linux-arm'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libgtk-3-dev:arm64 libxdo-dev:arm64
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -483,12 +492,18 @@ jobs:
         run: cargo build --release --bin nodespaced --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          PKG_CONFIG_ALLOW_CROSS: ${{ matrix.id == 'linux-arm' && '1' || '' }}
+          PKG_CONFIG_PATH: ${{ matrix.id == 'linux-arm' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '' }}
+          PKG_CONFIG_SYSROOT_DIR: ${{ matrix.id == 'linux-arm' && '/' || '' }}
 
       - name: Build nodespace CLI
         if: steps.filter.outputs.skip != 'true'
         run: cargo build --release --bin nodespace --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
+          PKG_CONFIG_ALLOW_CROSS: ${{ matrix.id == 'linux-arm' && '1' || '' }}
+          PKG_CONFIG_PATH: ${{ matrix.id == 'linux-arm' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '' }}
+          PKG_CONFIG_SYSROOT_DIR: ${{ matrix.id == 'linux-arm' && '/' || '' }}
 
       - name: Rename binaries with target triple suffix
         if: steps.filter.outputs.skip != 'true'

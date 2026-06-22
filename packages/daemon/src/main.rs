@@ -222,6 +222,52 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     Ok(())
 }
 
+/// Newtype so we can implement tonic's `Connected` for `NamedPipeServer`.
+/// `NamedPipeServer` is a transport; tonic's blanket bound requires `Connected`
+/// on stream items so it can extract peer metadata for request extensions.
+#[cfg(windows)]
+struct NamedPipeConn(tokio::net::windows::named_pipe::NamedPipeServer);
+
+#[cfg(windows)]
+impl tonic::transport::server::Connected for NamedPipeConn {
+    type ConnectInfo = ();
+    fn connect_info(&self) -> Self::ConnectInfo {}
+}
+
+#[cfg(windows)]
+impl tokio::io::AsyncRead for NamedPipeConn {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+#[cfg(windows)]
+impl tokio::io::AsyncWrite for NamedPipeConn {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
 /// Headless server loop for Windows — uses a Named Pipe instead of UDS.
 #[cfg(windows)]
 async fn serve_headless() -> Result<()> {
@@ -261,7 +307,7 @@ async fn serve_headless() -> Result<()> {
                 tokio::select! {
                     res = server.connect() => {
                         if let Err(e) = res { yield Err(e); return; }
-                        yield Ok::<_, std::io::Error>(server);
+                        yield Ok::<_, std::io::Error>(NamedPipeConn(server));
                     }
                     _ = cancel_stream.cancelled() => return,
                 }
@@ -337,7 +383,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
                 tokio::select! {
                     res = server.connect() => {
                         if let Err(e) = res { yield Err(e); return; }
-                        yield Ok::<_, std::io::Error>(server);
+                        yield Ok::<_, std::io::Error>(NamedPipeConn(server));
                     }
                     _ = cancel_stream.cancelled() => return,
                 }
