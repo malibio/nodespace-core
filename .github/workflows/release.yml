@@ -238,7 +238,7 @@ jobs:
           cargo build --release --bin nodespaced --target "${TRIPLE}"
           cp "target/${TRIPLE}/release/nodespaced.exe" "${BIN_DIR}/nodespaced-${TRIPLE}.exe"
 
-          echo "Building nodespace CLI for ${TRIPLE}..."
+          echo "Building nodespace CLI stub for ${TRIPLE}..."
           cargo build --release --bin nodespace --target "${TRIPLE}"
           cp "target/${TRIPLE}/release/nodespace.exe" "${BIN_DIR}/nodespace-${TRIPLE}.exe"
 
@@ -502,7 +502,7 @@ jobs:
           PKG_CONFIG_SYSROOT_DIR: ${{ matrix.id == 'linux-arm' && '/' || '' }}
 
       - name: Build nodespace CLI
-        if: steps.filter.outputs.skip != 'true'
+        if: steps.filter.outputs.skip != 'true' && matrix.os != 'windows-latest'
         run: cargo build --release --bin nodespace --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.id == 'linux-arm' && 'aarch64-linux-gnu-gcc' || '' }}
@@ -519,18 +519,24 @@ jobs:
           EXT=""
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
           cp "target/${{ matrix.target }}/release/nodespaced${EXT}" "nodespaced-${{ matrix.target }}${EXT}"
-          cp "target/${{ matrix.target }}/release/nodespace${EXT}" "nodespace-${{ matrix.target }}${EXT}"
+          if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
+            cp "target/${{ matrix.target }}/release/nodespace" "nodespace-${{ matrix.target }}"
+          fi
 
       - name: Upload binaries to release
         if: steps.filter.outputs.skip != 'true' && github.event_name == 'release'
         shell: bash
         run: |
-          EXT=""
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
-          gh release upload ${{ github.event.release.tag_name }} \
-            "nodespaced-${{ matrix.target }}${EXT}" \
-            "nodespace-${{ matrix.target }}${EXT}" \
-            --clobber
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            gh release upload ${{ github.event.release.tag_name }} \
+              "nodespaced-${{ matrix.target }}.exe" \
+              --clobber
+          else
+            gh release upload ${{ github.event.release.tag_name }} \
+              "nodespaced-${{ matrix.target }}" \
+              "nodespace-${{ matrix.target }}" \
+              --clobber
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

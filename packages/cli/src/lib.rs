@@ -173,6 +173,11 @@ pub async fn connect_local_agent(
         })
 }
 
+#[cfg(windows)]
+pub async fn run(_cli: Cli) -> Result<()> {
+    anyhow::bail!("The nodespace CLI is not supported on Windows (Unix socket transport only).")
+}
+
 /// Top-level dispatch — wired by `main.rs` and reused by integration tests.
 #[cfg(unix)]
 pub async fn run(cli: Cli) -> Result<()> {
