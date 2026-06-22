@@ -277,45 +277,6 @@ jobs:
             target/release/bundle/
           if-no-files-found: warn
 
-  publish-npm:
-    name: Publish npm packages
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-    needs: build-tauri-macos-arm
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies (skill)
-        run: bun install --frozen-lockfile
-        working-directory: packages/skill
-
-      - name: Set version from release tag (skill)
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          VERSION="${TAG#v}"
-          # Update version directly — avoids npm's workspace: protocol error
-          contents=$(cat package.json)
-          echo "$contents" | sed "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" > package.json
-        working-directory: packages/skill
-
-      - name: Build @nodespaceai/skill
-        run: bun run build
-        working-directory: packages/skill
-
-      - name: Publish @nodespaceai/skill
-        run: bun publish --access public
-        working-directory: packages/skill
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
   update-homebrew-cask:
     name: Update Homebrew cask
     runs-on: macos-latest
