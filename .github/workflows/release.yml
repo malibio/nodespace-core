@@ -522,13 +522,7 @@ jobs:
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "Release build failed: ${TAG}" \
-            --body "## Release build failed
-
-**Tag**: ${TAG}
-**Run**: ${RUN_URL}
-**Triggered by**: ${{ github.event_name }}
-
-Check the run above for the failing job and logs." \
+            --body "Release build failed. Tag: ${TAG}. Run: ${RUN_URL}. Triggered by: ${{ github.event_name }}. Check the run above for the failing job and logs." \
             --label "foundation"
 
   upload-checksums:
