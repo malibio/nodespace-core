@@ -43,13 +43,16 @@
   // Initialize database first, then schema plugins, then sync listeners
   onMount(async () => {
     try {
+      // Register the daemon listener BEFORE initializeApp() to avoid a race
+      // where Rust emits 'daemon-status: healthy' before the JS listen() call
+      // completes, which would cause waitForDaemon to block for the full 30s.
+      const daemonReady = waitForDaemon();
+
       // Step 1: Initialize database and Tauri services
       await initializeApp();
 
       // Step 2: Wait for the daemon to be ready before issuing any gRPC calls.
-      // daemon_setup emits 'daemon-status: starting' immediately, then 'healthy'
-      // or 'not_running' once ensure_daemon_running completes.
-      await waitForDaemon();
+      await daemonReady;
 
       // Step 3: Initialize schema plugin auto-registration system
       // This must happen after database is ready

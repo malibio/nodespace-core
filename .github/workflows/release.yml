@@ -18,9 +18,10 @@ on:
           - linux-x86
           - windows-x86
 
-# Required permissions for uploading release assets
+# Required permissions for uploading release assets and creating failure issues
 permissions:
   contents: write
+  issues: write
 
 jobs:
   # macOS ARM is a standalone job so publish-npm can depend on it alone,
@@ -438,6 +439,9 @@ jobs:
 
       - name: Download binaries from release
         run: |
+          # Note: 'nodespace-*' matches only Unix CLI binaries — the Windows CLI
+          # (nodespace-x86_64-pc-windows-msvc.exe) is intentionally not uploaded
+          # because the Windows CLI is a stub (Unix socket transport only).
           gh release download ${{ github.event.release.tag_name }} \
             --pattern 'nodespaced-*' --pattern 'nodespace-*' \
             --dir artifacts/

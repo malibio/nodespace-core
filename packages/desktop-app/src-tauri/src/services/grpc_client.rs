@@ -168,8 +168,8 @@ pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
         return std::path::PathBuf::from(p);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
         .join(".nodespace")
         .join("daemon.sock")
 }

@@ -721,10 +721,18 @@ const WINDOWS_AUTORUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Ru
 const WINDOWS_AUTORUN_VALUE: &str = "NodeSpaceDaemon";
 
 /// Spawn the nodespaced binary as a detached background process on Windows.
+///
+/// Uses `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` so the child is not a
+/// member of the parent's job object. Without these flags, Windows terminates
+/// all job members (including nodespaced) when the Tauri app exits.
 #[cfg(windows)]
 fn spawn_daemon_windows(daemon_bin: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     Command::new(daemon_bin)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -739,6 +747,9 @@ fn spawn_daemon_windows(daemon_bin: &Path) -> Result<()> {
 #[cfg(windows)]
 fn register_autorun_windows(daemon_bin: &Path) {
     let bin_str = daemon_bin.to_string_lossy().to_string();
+    // Wrap the path in quotes so the Windows Run registry evaluator handles
+    // paths with spaces (e.g. C:\Users\John Smith\AppData\...) correctly.
+    let quoted = format!("\"{}\"", bin_str);
     let result = std::process::Command::new("reg")
         .args([
             "add",
@@ -748,7 +759,7 @@ fn register_autorun_windows(daemon_bin: &Path) {
             "/t",
             "REG_SZ",
             "/d",
-            &bin_str,
+            &quoted,
             "/f",
         ])
         .output();
