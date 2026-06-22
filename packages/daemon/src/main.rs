@@ -53,83 +53,6 @@ fn pipe_name() -> String {
     r"\\.\pipe\nodespace-daemon".to_string()
 }
 
-#[cfg(windows)]
-use windows_service::{
-    define_windows_service,
-    service::{
-        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-        ServiceType,
-    },
-    service_control_handler::{self, ServiceControlHandlerResult},
-    service_dispatcher,
-};
-
-#[cfg(windows)]
-define_windows_service!(ffi_service_main, windows_service_main);
-
-#[cfg(windows)]
-fn windows_service_main(_arguments: Vec<std::ffi::OsString>) {
-    if let Err(e) = run_as_service() {
-        tracing::error!(error = %e, "Windows SCM service failed");
-    }
-}
-
-#[cfg(windows)]
-fn run_as_service() -> Result<()> {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let shutdown_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
-
-    let status_handle = service_control_handler::register(
-        "nodespaced",
-        move |control| -> ServiceControlHandlerResult {
-            match control {
-                ServiceControl::Stop | ServiceControl::Shutdown => {
-                    if let Some(tx) = shutdown_tx.lock().unwrap().take() {
-                        let _ = tx.send(());
-                    }
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        },
-    )?;
-
-    status_handle.set_service_status(ServiceStatus {
-        service_type: ServiceType::OWN_PROCESS,
-        current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
-        exit_code: ServiceExitCode::Win32(0),
-        checkpoint: 0,
-        wait_hint: std::time::Duration::default(),
-        process_id: None,
-    })?;
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("build tokio runtime for SCM service")?;
-
-    runtime.block_on(async {
-        tokio::select! {
-            result = serve_headless() => result,
-            _ = async move { shutdown_rx.await.ok(); } => Ok(()),
-        }
-    })?;
-
-    status_handle.set_service_status(ServiceStatus {
-        service_type: ServiceType::OWN_PROCESS,
-        current_state: ServiceState::Stopped,
-        controls_accepted: ServiceControlAccept::empty(),
-        exit_code: ServiceExitCode::Win32(0),
-        checkpoint: 0,
-        wait_hint: std::time::Duration::default(),
-        process_id: None,
-    })?;
-
-    Ok(())
-}
-
 /// `tao`'s event loop must own the main thread on macOS (NSApplication is
 /// main-thread-only). So `main` builds the tokio runtime explicitly, hands
 /// it to a worker thread that hosts the gRPC server, and lets `tray::run`
@@ -155,17 +78,6 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .context("build tokio runtime")?;
-
-    // On Windows, attempt SCM dispatch first. If invoked by the Service Control
-    // Manager, `service_dispatcher::start` blocks until the service exits; if
-    // invoked from a terminal (or with NODESPACE_CONSOLE set), it returns
-    // immediately so we fall through to the normal tray/headless startup.
-    #[cfg(windows)]
-    if std::env::var("NODESPACE_CONSOLE").is_err() {
-        if service_dispatcher::start("nodespaced", ffi_service_main).is_ok() {
-            return Ok(());
-        }
-    }
 
     if headless() {
         return runtime.block_on(async { serve_headless().await });
@@ -314,6 +226,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 #[cfg(windows)]
 async fn serve_headless() -> Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
+    use tokio_util::sync::CancellationToken;
 
     let name = pipe_name();
     let db_path = resolve_db_path()?;
@@ -326,19 +239,32 @@ async fn serve_headless() -> Result<()> {
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
+    // CancellationToken is cloned into the acceptor stream so that
+    // `server.connect().await` races against shutdown rather than blocking
+    // indefinitely after tonic stops polling the stream.
+    let cancel = CancellationToken::new();
+    let cancel_stream = cancel.clone();
     let incoming = {
         let name = name.clone();
         async_stream::stream! {
             loop {
-                let server = ServerOptions::new()
-                    .first_pipe_instance(false)
-                    .create(&name)
-                    .map_err(|e| {
+                // .first_pipe_instance(false): multiple clients connect serially
+                // to the same pipe name — each iteration creates a fresh instance.
+                let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
+                    Ok(s) => s,
+                    Err(e) => {
                         tracing::error!(error = %e, "Failed to create Named Pipe server instance");
-                        e
-                    })?;
-                server.connect().await?;
-                yield Ok::<_, std::io::Error>(server);
+                        yield Err(e);
+                        return;
+                    }
+                };
+                tokio::select! {
+                    res = server.connect() => {
+                        if let Err(e) = res { yield Err(e); return; }
+                        yield Ok::<_, std::io::Error>(server);
+                    }
+                    _ = cancel_stream.cancelled() => return,
+                }
             }
         }
     };
@@ -352,9 +278,15 @@ async fn serve_headless() -> Result<()> {
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(incoming, shutdown)
+            .serve_with_incoming_shutdown(incoming, async move {
+                shutdown.await;
+                cancel.cancel();
+            })
     } else {
-        builder.serve_with_incoming_shutdown(incoming, shutdown)
+        builder.serve_with_incoming_shutdown(incoming, async move {
+            shutdown.await;
+            cancel.cancel();
+        })
     };
 
     serve.await.context("gRPC server terminated with error")?;
@@ -366,6 +298,7 @@ async fn serve_headless() -> Result<()> {
 #[cfg(windows)]
 async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
+    use tokio_util::sync::CancellationToken;
 
     let name = pipe_name();
     let db_path = resolve_db_path()?;
@@ -387,19 +320,27 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
+    let cancel = CancellationToken::new();
+    let cancel_stream = cancel.clone();
     let incoming = {
         let name = name.clone();
         async_stream::stream! {
             loop {
-                let server = ServerOptions::new()
-                    .first_pipe_instance(false)
-                    .create(&name)
-                    .map_err(|e| {
+                let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
+                    Ok(s) => s,
+                    Err(e) => {
                         tracing::error!(error = %e, "Failed to create Named Pipe server instance");
-                        e
-                    })?;
-                server.connect().await?;
-                yield Ok::<_, std::io::Error>(server);
+                        yield Err(e);
+                        return;
+                    }
+                };
+                tokio::select! {
+                    res = server.connect() => {
+                        if let Err(e) = res { yield Err(e); return; }
+                        yield Ok::<_, std::io::Error>(server);
+                    }
+                    _ = cancel_stream.cancelled() => return,
+                }
             }
         }
     };
@@ -414,9 +355,15 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let serve = if let Some(emb) = bundle.embeddings_service_grpc {
         builder
             .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(incoming, combined_shutdown)
+            .serve_with_incoming_shutdown(incoming, async move {
+                combined_shutdown.await;
+                cancel.cancel();
+            })
     } else {
-        builder.serve_with_incoming_shutdown(incoming, combined_shutdown)
+        builder.serve_with_incoming_shutdown(incoming, async move {
+            combined_shutdown.await;
+            cancel.cancel();
+        })
     };
 
     serve.await.context("gRPC server terminated with error")?;

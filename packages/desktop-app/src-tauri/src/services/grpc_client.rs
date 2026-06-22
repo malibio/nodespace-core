@@ -75,24 +75,7 @@ impl GrpcClient {
 
     /// Wrap an established (or lazy) channel in the full service-client bundle.
     /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
-    /// stays in sync as new services are added.
-    #[cfg(unix)]
-    fn from_channel(channel: Channel) -> Self {
-        let inner = GrpcClientInner {
-            node: NodeServiceClient::new(channel.clone()),
-            import: ImportServiceClient::new(channel.clone()),
-            settings: SettingsServiceClient::new(channel.clone()),
-            embeddings: EmbeddingsServiceClient::new(channel.clone()),
-            agent_session: AgentSessionServiceClient::new(channel.clone()),
-            local_agent: LocalAgentServiceClient::new(channel.clone()),
-            channel,
-        };
-        Self {
-            inner: Arc::new(RwLock::new(inner)),
-        }
-    }
-
-    #[cfg(windows)]
+    /// stays in sync as new services are added. `Channel` is platform-agnostic.
     fn from_channel(channel: Channel) -> Self {
         let inner = GrpcClientInner {
             node: NodeServiceClient::new(channel.clone()),

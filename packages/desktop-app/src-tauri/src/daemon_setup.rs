@@ -1,4 +1,4 @@
-//! Daemon lifecycle management — macOS (launchd) and Linux (systemd).
+//! Daemon lifecycle management — macOS (launchd), Linux (systemd), Windows (direct spawn).
 //!
 //! On first launch:
 //!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
@@ -6,7 +6,8 @@
 //!   3. Register the daemon as a user service:
 //!      - macOS: write ~/Library/LaunchAgents/app.nodespace.daemon.plist and bootstrap it.
 //!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
-//!   4. Wait for the Unix Domain Socket to appear (cold-start model load can take ~9s).
+//!      - Windows: spawn the daemon process directly and write an HKCU autorun key.
+//!   4. Wait for the IPC endpoint to appear (UDS on Unix, Named Pipe on Windows).
 //!
 //! On subsequent launches:
 //!   - Check if the socket exists and the daemon responds (cheap path).
@@ -83,7 +84,13 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     let bin_dir = home.join(DAEMON_BIN_DIR);
     let log_dir = home.join(DAEMON_LOG_DIR);
     let db_dir = home.join(DAEMON_DB_DIR);
+    // On Windows the "socket path" is a Named Pipe path, not a filesystem path.
+    // check_daemon_socket and wait_for_daemon both dispatch on cfg(windows) so they
+    // probe the pipe correctly as long as we pass the right path here.
+    #[cfg(unix)]
     let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
+    #[cfg(windows)]
+    let socket_path = PathBuf::from(crate::services::grpc_client::resolve_pipe_name());
     let daemon_bin = bin_dir.join(daemon_binary_name());
 
     // Ensure all directories exist before any binary checks.
@@ -242,6 +249,10 @@ pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
     .await;
     match result {
         Ok(Ok(_)) => DaemonStatus::Healthy,
+        // ERROR_PIPE_BUSY (231): daemon is running but all instances are busy with
+        // existing clients. The daemon is healthy — treat as Starting so the caller
+        // retries rather than spawning a second instance.
+        Ok(Err(e)) if e.raw_os_error() == Some(231) => DaemonStatus::Starting,
         Ok(Err(_)) => DaemonStatus::NotRunning,
         Err(_) => DaemonStatus::Starting,
     }
