@@ -110,6 +110,8 @@ pub struct TaskNode {
     #[serde(rename = "nodeType")]
     pub node_type: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub version: i64,
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,

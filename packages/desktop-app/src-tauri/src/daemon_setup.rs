@@ -104,18 +104,45 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
         "Installed daemon binary is stale — killing before gRPC client connects"
     );
 
-    // Kill via lsof → SIGKILL (fast; launchd will restart with fresh binary after extraction)
+    // Kill only nodespaced processes using the socket (not gRPC clients like nodespace-app).
+    // Parse lsof -F pn output to collect unique PIDs, then verify each is nodespaced
+    // before SIGKILLing. Deduplicating into a HashSet avoids spawning ps more than once
+    // per PID when the daemon has multiple FDs open on the socket.
     let sock = socket_path.to_string_lossy();
     if let Ok(out) = std::process::Command::new("lsof")
-        .args(["-t", "-U", sock.as_ref()])
+        .args(["-F", "pn", "-U", sock.as_ref()])
         .output()
     {
-        for pid in String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
-            .filter_map(|s: &str| s.parse::<i32>().ok())
-        {
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-            tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
+        use std::collections::HashSet;
+        let output = String::from_utf8_lossy(&out.stdout);
+        let mut current_pid: Option<i32> = None;
+        let mut pids_to_check: HashSet<i32> = HashSet::new();
+        for line in output.lines() {
+            if let Some(pid_str) = line.strip_prefix('p') {
+                current_pid = pid_str.parse::<i32>().ok();
+            } else if line.strip_prefix('n').is_some() {
+                if let Some(pid) = current_pid {
+                    pids_to_check.insert(pid);
+                }
+            }
+        }
+        for pid in pids_to_check {
+            let exe_check = std::process::Command::new("ps")
+                .args(["-p", &pid.to_string(), "-o", "comm="])
+                .output()
+                .ok();
+            let is_daemon = exe_check
+                .as_ref()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .trim()
+                        .ends_with("nodespaced")
+                })
+                .unwrap_or(false);
+            if is_daemon {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
+            }
         }
     }
 
@@ -220,6 +247,9 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
 }
 
 /// Send SIGTERM to the process listening on the socket and wait for it to exit.
+///
+/// Uses `-F pn` output and verifies each PID's comm against "nodespaced" before
+/// signalling — avoids accidentally terminating gRPC clients sharing the socket.
 #[cfg(unix)]
 async fn kill_running_daemon(socket_path: &Path) {
     if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
@@ -228,18 +258,46 @@ async fn kill_running_daemon(socket_path: &Path) {
 
     // Resolve the PID via lsof rather than storing it, so this works whether the
     // daemon was started by launchd, a previous app launch, or manually.
+    // Parse -F pn output to extract PIDs, then verify each is nodespaced before
+    // sending SIGTERM (same pattern as kill_stale_daemon_sync).
     {
+        use std::collections::HashSet;
         use std::process::Command;
         let sock = socket_path.to_string_lossy();
-        if let Ok(out) = Command::new("lsof").args(["-t", "-U", &sock]).output() {
-            let pids: Vec<i32> = String::from_utf8_lossy(&out.stdout)
-                .split_whitespace()
-                .filter_map(|s| s.parse().ok())
-                .collect();
-            for pid in pids {
-                // SAFETY: kill() is always safe to call with a valid pid and signal.
-                unsafe { libc::kill(pid, libc::SIGTERM) };
-                tracing::info!("Sent SIGTERM to old nodespaced (pid {})", pid);
+        if let Ok(out) = Command::new("lsof")
+            .args(["-F", "pn", "-U", sock.as_ref()])
+            .output()
+        {
+            let output = String::from_utf8_lossy(&out.stdout);
+            let mut current_pid: Option<i32> = None;
+            let mut pids_to_kill: HashSet<i32> = HashSet::new();
+            for line in output.lines() {
+                if let Some(pid_str) = line.strip_prefix('p') {
+                    current_pid = pid_str.parse::<i32>().ok();
+                } else if line.strip_prefix('n').is_some() {
+                    if let Some(pid) = current_pid {
+                        pids_to_kill.insert(pid);
+                    }
+                }
+            }
+            for pid in pids_to_kill {
+                let exe_check = Command::new("ps")
+                    .args(["-p", &pid.to_string(), "-o", "comm="])
+                    .output()
+                    .ok();
+                let is_daemon = exe_check
+                    .as_ref()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .trim()
+                            .ends_with("nodespaced")
+                    })
+                    .unwrap_or(false);
+                if is_daemon {
+                    // SAFETY: kill() is always safe to call with a valid pid and signal.
+                    unsafe { libc::kill(pid, libc::SIGTERM) };
+                    tracing::info!("Sent SIGTERM to old nodespaced (pid {})", pid);
+                }
             }
         }
     }

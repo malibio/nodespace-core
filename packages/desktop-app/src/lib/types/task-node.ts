@@ -81,6 +81,7 @@ export interface TaskNode {
   id: string;
   nodeType: 'task';
   content: string;
+  title?: string;
   version: number;
   createdAt: string;
   modifiedAt: string;

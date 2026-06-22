@@ -132,10 +132,12 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .map(normalize_date_field);
 
     let lifecycle_status = node.lifecycle_status.clone();
+    let title = node.title.clone();
     let task = TaskNode {
         id: node.id,
         node_type: node.node_type,
         content: node.content,
+        title,
         version: node.version,
         created_at: node.created_at,
         modified_at: node.modified_at,
