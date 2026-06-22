@@ -82,6 +82,7 @@ packages/*/data/
 *.bin
 *.safetensors
 *.lock
+!bun.lock
 sentence-transformers/
 all-MiniLM-L6-v2/
 huggingface/
