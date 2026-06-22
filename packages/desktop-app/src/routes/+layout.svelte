@@ -9,9 +9,25 @@
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { initializeApp } from '$lib/services/app-initialization';
+  import { isTauri } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
 
   let isInitialized = false;
   let initError: string | null = null;
+
+  /** Wait for daemon-status: healthy or not_running (max 30s). */
+  async function waitForDaemon(): Promise<void> {
+    if (!isTauri()) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 30_000);
+      listen<string>('daemon-status', (event) => {
+        if (event.payload === 'healthy' || event.payload === 'not_running') {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+  }
 
   // Initialize database first, then schema plugins, then sync listeners
   onMount(async () => {
@@ -19,7 +35,12 @@
       // Step 1: Initialize database and Tauri services
       await initializeApp();
 
-      // Step 2: Initialize schema plugin auto-registration system
+      // Step 2: Wait for the daemon to be ready before issuing any gRPC calls.
+      // daemon_setup emits 'daemon-status: starting' immediately, then 'healthy'
+      // or 'not_running' once ensure_daemon_running completes.
+      await waitForDaemon();
+
+      // Step 3: Initialize schema plugin auto-registration system
       // This must happen after database is ready
       try {
         const result = await initializeSchemaPluginSystem();
@@ -40,7 +61,7 @@
         console.error('[App Layout] Schema plugin initialization failed:', error);
       }
 
-      // Step 3: Initialize Tauri domain event listeners for real-time synchronization
+      // Step 4: Initialize Tauri domain event listeners for real-time synchronization
       try {
         await initializeTauriSyncListeners();
       } catch (error) {

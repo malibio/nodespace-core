@@ -261,15 +261,30 @@ pub fn run() {
                     // Ensure nodespaced service is installed and running (launchd on macOS, systemd on Linux).
                     {
                         use daemon_setup::{ensure_daemon_running, DaemonStatus};
+
+                        // Signal the frontend to hold off on gRPC calls until the daemon is ready.
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.emit("daemon-status", "starting");
+                        }
+
                         match ensure_daemon_running(&app_handle).await {
                             Ok(DaemonStatus::Healthy) => {
                                 tracing::info!("nodespaced is running");
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.emit("daemon-status", "healthy");
+                                }
                             }
                             Ok(status) => {
                                 tracing::warn!("nodespaced not yet healthy: {:?}", status);
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.emit("daemon-status", "not_running");
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("Daemon setup failed: {:#}", e);
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.emit("daemon-status", "not_running");
+                                }
                             }
                         }
                     }

@@ -104,18 +104,40 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
         "Installed daemon binary is stale — killing before gRPC client connects"
     );
 
-    // Kill via lsof → SIGKILL (fast; launchd will restart with fresh binary after extraction)
+    // Kill only nodespaced processes using the socket (not gRPC clients like nodespace-app).
+    // lsof -t returns all PIDs with the socket open — we filter to those whose executable
+    // is named "nodespaced" to avoid SIGKILLing the Tauri app itself.
     let sock = socket_path.to_string_lossy();
     if let Ok(out) = std::process::Command::new("lsof")
-        .args(["-t", "-U", sock.as_ref()])
+        .args(["-F", "pn", "-U", sock.as_ref()])
         .output()
     {
-        for pid in String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
-            .filter_map(|s: &str| s.parse::<i32>().ok())
-        {
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-            tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
+        let output = String::from_utf8_lossy(&out.stdout);
+        let mut current_pid: Option<i32> = None;
+        for line in output.lines() {
+            if let Some(pid_str) = line.strip_prefix('p') {
+                current_pid = pid_str.parse::<i32>().ok();
+            } else if line.strip_prefix('n').is_some() {
+                // Check if this PID is a nodespaced process
+                if let Some(pid) = current_pid {
+                    let exe_check = std::process::Command::new("ps")
+                        .args(["-p", &pid.to_string(), "-o", "comm="])
+                        .output()
+                        .ok();
+                    let is_daemon = exe_check
+                        .as_ref()
+                        .map(|o| {
+                            String::from_utf8_lossy(&o.stdout)
+                                .trim()
+                                .ends_with("nodespaced")
+                        })
+                        .unwrap_or(false);
+                    if is_daemon {
+                        unsafe { libc::kill(pid, libc::SIGKILL) };
+                        tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
+                    }
+                }
+            }
         }
     }
 
