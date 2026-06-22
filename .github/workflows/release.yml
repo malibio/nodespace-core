@@ -461,6 +461,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  notify-failure:
+    name: Notify on build failure
+    runs-on: ubuntu-22.04
+    needs: [build-tauri-macos-arm, build-tauri, build-headless]
+    if: failure()
+
+    steps:
+      - name: Post GitHub issue on failure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Release build failed: ${TAG}" \
+            --body "## Release build failed
+
+**Tag**: ${TAG}
+**Run**: ${RUN_URL}
+**Triggered by**: ${{ github.event_name }}
+
+Check the run above for the failing job and logs." \
+            --label "foundation"
+
   upload-checksums:
     needs: build-headless
     runs-on: ubuntu-22.04
