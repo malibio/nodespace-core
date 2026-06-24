@@ -1557,18 +1557,30 @@ impl SqliteStore {
                     libsql::params![props, now, parent_id.clone(), node_id.clone()],
                 ).await.context("Failed to update relationship order")?;
             } else {
-                // Delete old parent relationship, create new one
-                self.db.execute(
+                // Cross-parent move: delete the old has_child edge, create the new
+                // one. These MUST be one transaction — if the INSERT fails
+                // (constraint / IO / crash / cancel) after the DELETE committed, the
+                // node is left with NO has_child edge: a silently-orphaned root.
+                // Wrapping in a tx makes it all-or-nothing, matching the atomicity
+                // of `move_children_to_parent` / `delete_subtree_atomic`.
+                let rel_id = uuid::Uuid::new_v4().to_string();
+                let props = serde_json::json!({"order": new_order}).to_string();
+                let tx = self
+                    .db
+                    .transaction()
+                    .await
+                    .context("Failed to begin move_node reparent transaction")?;
+                tx.execute(
                     "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
                     libsql::params![node_id.clone()],
                 ).await.context("Failed to delete old parent relationship")?;
-
-                let rel_id = uuid::Uuid::new_v4().to_string();
-                let props = serde_json::json!({"order": new_order}).to_string();
-                self.db.execute(
+                tx.execute(
                     "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
                     libsql::params![rel_id, parent_id.clone(), node_id.clone(), props, now.clone(), now],
                 ).await.context("Failed to create new parent relationship")?;
+                tx.commit()
+                    .await
+                    .context("Failed to commit move_node reparent transaction")?;
             }
         } else {
             // Make root: delete parent relationship
@@ -4199,6 +4211,55 @@ mod tests {
             parent_of_child1.as_deref(),
             Some(parent_id.as_str()),
             "child1 should still be under original parent after rollback"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_node_cross_parent_leaves_exactly_one_edge() -> Result<()> {
+        // #1429: the cross-parent move deletes the old has_child edge and inserts
+        // the new one in ONE transaction. After a successful move the node must
+        // have EXACTLY ONE has_child edge, pointing at the new parent — never zero
+        // (orphaned root, the bug when a non-transactional INSERT failed after the
+        // DELETE committed) and never two (old edge left behind).
+        let (store, _temp) = create_test_store().await?;
+
+        let parent_a = Node::new("text".to_string(), "Parent A".to_string(), json!({}));
+        let parent_a_id = parent_a.id.clone();
+        store.create_node(parent_a, None, None).await?;
+
+        let parent_b = Node::new("text".to_string(), "Parent B".to_string(), json!({}));
+        let parent_b_id = parent_b.id.clone();
+        store.create_node(parent_b, None, None).await?;
+
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let child_id = child.id.clone();
+        store.create_node(child, None, None).await?;
+
+        // Wire under A, then move to B — this exercises the cross-parent branch.
+        store.move_node(&child_id, Some(&parent_a_id), None).await?;
+        store.move_node(&child_id, Some(&parent_b_id), None).await?;
+
+        let mut rows = store
+            .db
+            .query(
+                "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![child_id.clone()],
+            )
+            .await?;
+        let mut parents: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            parents.push(row.get(0)?);
+        }
+        assert_eq!(
+            parents,
+            vec![parent_b_id.clone()],
+            "after a cross-parent move the child must have exactly one has_child edge, under the new parent"
+        );
+        assert_eq!(
+            store.get_parent_id(&child_id).await?.as_deref(),
+            Some(parent_b_id.as_str()),
         );
 
         Ok(())
