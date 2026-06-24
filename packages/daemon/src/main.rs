@@ -142,8 +142,8 @@ async fn serve_headless() -> Result<()> {
     let base_services = BaseServices {
         node_service: bundle.node_service_grpc,
         agent_session: bundle.agent_session,
-        import_svc: bundle.import,
-        settings_svc: bundle.settings,
+        import: bundle.import,
+        settings: bundle.settings,
         local_agent: bundle.local_agent,
         embeddings: bundle.embeddings_service_grpc,
     };
@@ -200,8 +200,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let base_services = BaseServices {
         node_service: bundle.node_service_grpc,
         agent_session: bundle.agent_session,
-        import_svc: bundle.import,
-        settings_svc: bundle.settings,
+        import: bundle.import,
+        settings: bundle.settings,
         local_agent: bundle.local_agent,
         embeddings: bundle.embeddings_service_grpc,
     };
@@ -313,8 +313,8 @@ async fn serve_headless() -> Result<()> {
     let base_services = BaseServices {
         node_service: bundle.node_service_grpc,
         agent_session: bundle.agent_session,
-        import_svc: bundle.import,
-        settings_svc: bundle.settings,
+        import: bundle.import,
+        settings: bundle.settings,
         local_agent: bundle.local_agent,
         embeddings: bundle.embeddings_service_grpc,
     };
@@ -383,8 +383,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let base_services = BaseServices {
         node_service: bundle.node_service_grpc,
         agent_session: bundle.agent_session,
-        import_svc: bundle.import,
-        settings_svc: bundle.settings,
+        import: bundle.import,
+        settings: bundle.settings,
         local_agent: bundle.local_agent,
         embeddings: bundle.embeddings_service_grpc,
     };

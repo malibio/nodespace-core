@@ -24,8 +24,8 @@ use crate::{
 pub struct BaseServices {
     pub node_service: NodeServiceImpl,
     pub agent_session: AgentSessionHandler,
-    pub import_svc: ImportServiceImpl,
-    pub settings_svc: SettingsServiceImpl,
+    pub import: ImportServiceImpl,
+    pub settings: SettingsServiceImpl,
     pub local_agent: LocalAgentServiceImpl,
     /// `None` only when no NLP model file exists at daemon startup.
     pub embeddings: Option<EmbeddingsServiceImpl>,
@@ -58,15 +58,15 @@ pub fn build_base_router<L>(
 where
     L: Layer<Routes> + Clone,
 {
-    let mut router = server
+    let router = server
         .add_service(NodeServiceServer::new(services.node_service))
         .add_service(AgentSessionServiceServer::new(services.agent_session))
-        .add_service(ImportServiceServer::new(services.import_svc))
-        .add_service(SettingsServiceServer::new(services.settings_svc))
+        .add_service(ImportServiceServer::new(services.import))
+        .add_service(SettingsServiceServer::new(services.settings))
         .add_service(LocalAgentServiceServer::new(services.local_agent));
 
-    if let Some(emb) = services.embeddings {
-        router = router.add_service(EmbeddingsServiceServer::new(emb));
+    match services.embeddings {
+        Some(emb) => router.add_service(EmbeddingsServiceServer::new(emb)),
+        None => router,
     }
-    router
 }
