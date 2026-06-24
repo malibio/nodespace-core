@@ -527,6 +527,37 @@ describe('SharedNodeStore - Coverage Completion', () => {
       // Should timeout gracefully
       await expect(store.flushAllPending()).resolves.not.toThrow();
     });
+
+    it('does not double-execute an already in-flight operation on flush (#1435)', async () => {
+      // A controllable in-flight persist: the backend call hangs until we
+      // resolve it manually, so we can flush WHILE the op is still executing.
+      let resolveUpdate!: (v: Node) => void;
+      const updateSpy = vi
+        .spyOn(backendAdapter, 'updateNode')
+        .mockImplementation(
+          () => new Promise<Node>((res) => { resolveUpdate = res; })
+        );
+
+      store.setNode(mockNode, databaseSource);
+      store.updateNode(mockNode.id, { content: 'in-flight' }, viewerSource);
+
+      // Let the 500ms debounce fire: the op moves pending → executing and calls
+      // the backend exactly once (now parked on our unresolved promise).
+      await new Promise((r) => setTimeout(r, 600));
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+
+      // Flush on window-close while the op is still in flight. The executing-op
+      // guard must NOT start a second backend call (the bug: an OCC conflict or
+      // duplicate create at the worst possible moment).
+      const flushPromise = store.flushAllPending();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+
+      // Complete the in-flight op; flush settles by awaiting that same promise.
+      resolveUpdate({ ...mockNode, content: 'in-flight', version: 2 });
+      await flushPromise;
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ========================================================================

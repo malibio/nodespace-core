@@ -285,13 +285,20 @@ class SimplePersistenceCoordinator {
     const promises: Promise<void>[] = [];
     for (const [nodeId, pending] of this.pendingOperations) {
       clearTimeout(pending.timeoutId);
-      // Execute the operation directly - start the execution, then wait on the pending promise
-      pending.operation().then(
-        () => pending.resolve(),
-        (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
-      ).finally(() => {
-        this.pendingOperations.delete(nodeId);
-      });
+      // Only START the operation if it is not already in flight. Without this
+      // guard, a debounced save whose timeout fired just before window-close
+      // (so it is mid-RPC, tracked in executingOperations) would be executed a
+      // SECOND time here — an OCC conflict or duplicate create at the most
+      // data-loss-sensitive moment. Mirror flushAndWaitForNodes: skip the
+      // re-execute, but still await the in-flight promise either way.
+      if (!this.executingOperations.has(nodeId)) {
+        pending.operation().then(
+          () => pending.resolve(),
+          (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
+        ).finally(() => {
+          this.pendingOperations.delete(nodeId);
+        });
+      }
       promises.push(pending.promise.catch(() => {})); // Ignore errors, just wait for completion
     }
 
@@ -1718,6 +1725,39 @@ export class SharedNodeStore {
           log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id, incomingCount, existingCount });
           continue;
         }
+      }
+
+      // Same skip-while-editing guard as setNode (nodespace-sync#76): a concurrent
+      // tree (re)load with a `database` source must NOT clobber a node the user is
+      // actively editing — `doLoadChildrenTree` passes a database source, so a
+      // reload for a parent whose child is mid-keystroke would overwrite the
+      // child's optimistic content. ai-chat is exempt (messages are written
+      // programmatically; skipping causes version drift). Extract the predicate
+      // into a variable — the Svelte strict_equals transform drops parentheses
+      // from inline `a && b && (c || d)` reactive reads, turning it into
+      // `a && b && c || d`.
+      const isFocused = focusManager.editingNodeId === node.id;
+      const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
+      const isActivelyEdited = isFocused || hasPending;
+      if (
+        source.type === 'database' &&
+        existingNode &&
+        isActivelyEdited &&
+        node.nodeType !== 'ai-chat'
+      ) {
+        log.debug(
+          `batchSetNodes: skipping clobber of actively-edited node ${node.id} ` +
+            `(focused=${isFocused}, pending=${hasPending})`
+        );
+        // Stash the server-confirmed version only when the broadcast is plausibly
+        // an echo of THIS client's own write; otherwise leave it empty so the next
+        // RPC uses our local version, conflicts, and surfaces the foreign change
+        // (preserves OCC). Mirrors setNode exactly.
+        if (typeof node.version === 'number' && this.isPlausibleOwnEcho(existingNode, node)) {
+          this.serverConfirmedVersions.set(node.id, node.version);
+        }
+        this.persistedNodeIds.add(node.id);
+        continue;
       }
 
       const isHierarchyChange = !existingNode;

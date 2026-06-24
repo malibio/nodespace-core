@@ -294,4 +294,60 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     expect(after?.content).toBe('cloud-current');
     expect(after?.version).toBe(15);
   });
+
+  // #1436: batchSetNodes (used by doLoadChildrenTree with a database source)
+  // must apply the SAME skip-while-editing guard as setNode — a concurrent tree
+  // reload would otherwise overwrite a child being edited mid-keystroke.
+  describe('batchSetNodes guard (#1436)', () => {
+    it('skips clobbering a focused node in a database-source batch', () => {
+      const optimistic = makeNode('b1', 'hello world', 1);
+      store.setNode(optimistic, viewerSource);
+      focusManager.focusNode('b1', 'default');
+
+      // A tree (re)load batch lands with the older confirmed snapshot.
+      store.batchSetNodes([makeNode('b1', 'hell', 2)], databaseSource);
+
+      const after = store.getNode('b1');
+      expect(after?.content).toBe('hello world');
+      expect(after?.version).toBe(1);
+    });
+
+    it('skips clobbering a node with pending persistence in a batch even if unfocused', () => {
+      store.setNode(makeNode('b2', 'initial', 1), viewerSource);
+      store.updateNode('b2', { content: 'user-typing-this' }, viewerSource);
+
+      store.batchSetNodes([makeNode('b2', 'initial', 2)], databaseSource);
+
+      const after = store.getNode('b2');
+      expect(after?.content).toBe('user-typing-this');
+      expect(after?.version).toBe(1);
+    });
+
+    it('applies database-source batch updates for non-focused, non-dirty nodes (regression)', () => {
+      store.setNode(makeNode('b3', 'before', 1), databaseSource);
+
+      store.batchSetNodes([makeNode('b3', 'after', 5)], databaseSource);
+
+      expect(store.getNode('b3')?.content).toBe('after');
+      expect(store.getNode('b3')?.version).toBe(5);
+    });
+
+    it('guards only the edited node, applying the rest of the batch', () => {
+      // b4 is being edited; b5 is untouched. One batch reload touches both.
+      store.setNode(makeNode('b4', 'editing-this', 1), viewerSource);
+      focusManager.focusNode('b4', 'default');
+      store.setNode(makeNode('b5', 'old', 1), databaseSource);
+
+      store.batchSetNodes(
+        [makeNode('b4', 'stale', 2), makeNode('b5', 'new', 7)],
+        databaseSource
+      );
+
+      // b4 preserved (guard fired), b5 applied (no guard).
+      expect(store.getNode('b4')?.content).toBe('editing-this');
+      expect(store.getNode('b4')?.version).toBe(1);
+      expect(store.getNode('b5')?.content).toBe('new');
+      expect(store.getNode('b5')?.version).toBe(7);
+    });
+  });
 });
