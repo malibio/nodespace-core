@@ -25,10 +25,21 @@ NODESPACED="${INSTALL_PREFIX}/nodespaced"
 # at /usr/local/bin/nodespaced, warn the user before overwriting it.
 # ---------------------------------------------------------------------------
 if [[ -x "${NODESPACED}" ]]; then
-    EXISTING_EDITION="$("${NODESPACED}" --edition 2>/dev/null || echo "unknown")"
+    # Verify the binary's code signature before executing it as root.
+    # An unsigned or tampered binary should not be run with elevated privileges.
+    if ! codesign --verify --quiet "${NODESPACED}" 2>/dev/null; then
+        echo "Warning: existing nodespaced binary failed signature verification — skipping Pro guard" >&2
+        EXISTING_EDITION="unknown"
+    else
+        EXISTING_EDITION="$("${NODESPACED}" --edition 2>/dev/null || echo "unknown")"
+    fi
     if [[ "${EXISTING_EDITION}" == "pro" && "${NODESPACE_FORCE_COMMUNITY:-0}" != "1" ]]; then
         # Display a dialog on macOS so the user sees a clear warning.
-        /usr/bin/osascript - <<'APPLESCRIPT' || true
+        # Do NOT use || true here — osascript returns non-zero when the user
+        # clicks Abort (AppleScript error -128), which is exactly how we detect
+        # the abort. Suppressing the exit code would make the $? check below
+        # always see 0 and never abort.
+        /usr/bin/osascript - <<'APPLESCRIPT'
 display dialog "You are installing NodeSpace Community, which would replace your Pro installation.
 
 Continue anyway to install Community, or click Abort to keep your Pro installation." \
@@ -44,6 +55,19 @@ APPLESCRIPT
             echo "Installation aborted — Pro installation preserved." >&2
             exit 1
         fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Log directory: create the per-user log directory for the LaunchAgent.
+# This must be done before launchctl bootstrap so the daemon can write logs
+# immediately on first start.
+# ---------------------------------------------------------------------------
+INSTALLING_USER_EARLY="${USER:-$(logname 2>/dev/null || echo "")}"
+if [[ -n "${INSTALLING_USER_EARLY}" && "${INSTALLING_USER_EARLY}" != "root" ]]; then
+    INSTALLING_USER_HOME=$(eval echo "~${INSTALLING_USER_EARLY}" 2>/dev/null || echo "")
+    if [[ -n "${INSTALLING_USER_HOME}" && -d "${INSTALLING_USER_HOME}" ]]; then
+        mkdir -p "${INSTALLING_USER_HOME}/Library/Logs/com.nodespace"
     fi
 fi
 

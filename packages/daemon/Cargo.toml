@@ -43,7 +43,9 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 dirs = "5.0"
 
 [features]
-# Compile with `--features pro` for the Pro edition binary.
+# Build the Pro edition binary. Compile with `--features pro` to set edition() to "pro".
+# Without this flag the binary reports edition "community" and the Pro guard in
+# the postinstall script will not treat it as a protected installation.
 pro = []
 
 [dev-dependencies]

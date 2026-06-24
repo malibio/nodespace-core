@@ -19,11 +19,13 @@
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- Log to the standard macOS user log directory (world-readable /tmp is avoided). -->
+    <!-- launchd expands ~ for LaunchAgent plists. -->
     <key>StandardOutPath</key>
-    <string>/tmp/nodespaced.log</string>
+    <string>~/Library/Logs/com.nodespace/nodespaced.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/tmp/nodespaced.log</string>
+    <string>~/Library/Logs/com.nodespace/nodespaced.log</string>
 
     <!-- Throttle rapid restart loops (e.g. crash on startup) to 10s. -->
     <key>ThrottleInterval</key>
