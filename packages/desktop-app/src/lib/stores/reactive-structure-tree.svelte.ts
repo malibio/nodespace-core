@@ -14,8 +14,6 @@
 import type { HierarchyRelationship } from '$lib/types/event-types';
 import { createLogger } from '$lib/utils/logger';
 
-const log = createLogger('ReactiveStructureTree');
-
 interface ChildInfo {
   nodeId: string;
   order: number;

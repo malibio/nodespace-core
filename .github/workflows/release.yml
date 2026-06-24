@@ -14,6 +14,7 @@ on:
           - all
           - macos-arm
           - macos-intel
+          - macos-pkg
           - linux-arm
           - linux-x86
           - windows-x86
@@ -116,6 +117,13 @@ jobs:
           name: binaries-macos-aarch64-apple-darwin
           path: target/aarch64-apple-darwin/release/bundle/
           if-no-files-found: warn
+
+      - name: Upload .app bundle for pkg job
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-bundle-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/bundle/macos/
+          if-no-files-found: error
 
   build-tauri:
     name: Build Tauri (other platforms)
@@ -278,6 +286,94 @@ jobs:
             target/release/bundle/
           if-no-files-found: warn
 
+  build-pkg-macos:
+    name: Build macOS .pkg installer (ARM)
+    runs-on: macos-latest
+    needs: build-tauri-macos-arm
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.platform == 'all' || inputs.platform == 'macos-pkg'))
+
+    env:
+      TRIPLE: aarch64-apple-darwin
+      APPLE_SIGNING_IDENTITY: "Developer ID Application: Michael Libio (F4M5J7YNLS)"
+      APPLE_INSTALLER_IDENTITY: "Developer ID Installer: Michael Libio (F4M5J7YNLS)"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Import Apple Developer certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          echo "${APPLE_CERTIFICATE}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" "$(security list-keychains -d user | xargs)"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+      - name: Download .app bundle artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: app-bundle-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/bundle/macos/
+
+      - name: Build nodespaced and nodespace binaries
+        run: |
+          # Build the headless binaries that go into /usr/local/bin/ in the .pkg.
+          # The .app bundle is reused from the upstream Tauri job (downloaded above).
+          cargo build --release \
+            --bin nodespaced --bin nodespace \
+            --target aarch64-apple-darwin
+
+      - name: Build .pkg installer
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/build-pkg.sh
+
+      - name: Upload .pkg to release
+        if: github.event_name == 'release'
+        run: |
+          PKG=$(ls target/pkg-output/*.pkg | head -1)
+          gh release upload ${{ github.event.release.tag_name }} "${PKG}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .pkg as workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-macos-pkg
+          path: target/pkg-output/*.pkg
+          if-no-files-found: warn
+
   build-headless:
     strategy:
       fail-fast: false
@@ -412,7 +508,7 @@ jobs:
   notify-failure:
     name: Notify on build failure
     runs-on: ubuntu-22.04
-    needs: [build-tauri-macos-arm, build-tauri, build-headless]
+    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless]
     if: failure()
 
     steps:

@@ -37,6 +37,7 @@ export default [
         FileList: 'readonly',
         getComputedStyle: 'readonly',
         HTMLElement: 'readonly',
+        HTMLInputElement: 'readonly',
         performance: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
@@ -181,6 +182,7 @@ export default [
         FileList: 'readonly',
         getComputedStyle: 'readonly',
         HTMLElement: 'readonly',
+        HTMLInputElement: 'readonly',
         performance: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
@@ -278,6 +280,7 @@ export default [
         test: 'readonly', // Vitest
         // DOM types for tests
         HTMLElement: 'readonly',
+        HTMLInputElement: 'readonly',
         Element: 'readonly',
         Node: 'readonly',
         Text: 'readonly',
