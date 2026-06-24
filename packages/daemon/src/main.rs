@@ -62,6 +62,18 @@ fn pipe_name() -> String {
 /// CI, headless servers): if `NODESPACED_HEADLESS=1` is set, the tray loop
 /// is skipped and we fall back to a pure async `main` that exits on signals.
 fn main() -> Result<()> {
+    // Early-exit flags — handled before tracing/runtime init so the installer
+    // postinstall script can query these without spinning up the full daemon.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--edition") {
+        println!("{}", edition());
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--version") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -106,6 +118,15 @@ fn main() -> Result<()> {
 
 fn headless() -> bool {
     matches!(std::env::var("NODESPACED_HEADLESS").as_deref(), Ok("1"))
+}
+
+/// Returns the build edition: "pro" when compiled with `--features pro`, otherwise "community".
+fn edition() -> &'static str {
+    if cfg!(feature = "pro") {
+        "pro"
+    } else {
+        "community"
+    }
 }
 
 /// Headless server loop. Used by Linux CI and any environment without a

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nodespace.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/nodespaced</string>
+    </array>
+
+    <!-- Restart the daemon automatically if it exits for any reason. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Start at login; do not require the user to manually launch. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/nodespaced.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/nodespaced.log</string>
+
+    <!-- Throttle rapid restart loops (e.g. crash on startup) to 10s. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

@@ -14,6 +14,8 @@ on:
           - all
           - macos-arm
           - macos-intel
+          - macos-pkg-arm
+          - macos-pkg-intel
           - linux-arm
           - linux-x86
           - windows-x86
@@ -278,6 +280,147 @@ jobs:
             target/release/bundle/
           if-no-files-found: warn
 
+  build-pkg-macos:
+    name: Build macOS .pkg installer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: aarch64-apple-darwin
+            tauri_job: build-tauri-macos-arm
+            id: macos-pkg-arm
+          - triple: x86_64-apple-darwin
+            tauri_job: build-tauri
+            id: macos-pkg-intel
+
+    runs-on: macos-latest
+    # ARM pkg depends on the standalone ARM Tauri job; Intel pkg depends on
+    # the matrix Tauri job. Both only run on release or when explicitly selected.
+    needs:
+      - build-tauri-macos-arm
+      - build-tauri
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.platform == 'all' ||
+        inputs.platform == matrix.id))
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install Protobuf
+        run: |
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+          brew untap aws/tap azure/bicep 2>/dev/null || true
+          brew install protobuf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate SvelteKit types
+        run: bun run --cwd packages/desktop-app sync
+
+      - name: Download embedding model for bundling
+        run: |
+          mkdir -p packages/desktop-app/src-tauri/resources/models
+          gh release download models-v2 --pattern "nomic-embed-text-v1.5.Q8_0.gguf" --dir packages/desktop-app/src-tauri/resources/models/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build nodespaced and nodespace binaries
+        run: |
+          TRIPLE="${{ matrix.triple }}"
+          cargo build --release \
+            --bin nodespaced --bin nodespace \
+            --target "${TRIPLE}"
+
+          BIN_DIR="packages/desktop-app/src-tauri/binaries"
+          mkdir -p "${BIN_DIR}"
+          cp "target/${TRIPLE}/release/nodespaced" "${BIN_DIR}/nodespaced-${TRIPLE}"
+          cp "target/${TRIPLE}/release/nodespace"  "${BIN_DIR}/nodespace-${TRIPLE}"
+          chmod +x "${BIN_DIR}/nodespaced-${TRIPLE}" "${BIN_DIR}/nodespace-${TRIPLE}"
+
+      - name: Import Apple Developer certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          echo "${APPLE_CERTIFICATE}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" "$(security list-keychains -d user | xargs)"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+      - name: Build Tauri app (for .app bundle)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Michael Libio (F4M5J7YNLS)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: packages/desktop-app
+          tauriScript: bunx tauri
+          args: '--target ${{ matrix.triple }}'
+
+      - name: Build .pkg installer
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Michael Libio (F4M5J7YNLS)"
+          APPLE_INSTALLER_IDENTITY: "Developer ID Installer: Michael Libio (F4M5J7YNLS)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/build-pkg.sh
+
+      - name: Upload .pkg to release
+        if: github.event_name == 'release'
+        run: |
+          PKG=$(ls target/pkg-output/*.pkg | head -1)
+          gh release upload ${{ github.event.release.tag_name }} "${PKG}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .pkg as workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.id }}
+          path: target/pkg-output/*.pkg
+          if-no-files-found: warn
+
   build-headless:
     strategy:
       fail-fast: false
@@ -412,7 +555,7 @@ jobs:
   notify-failure:
     name: Notify on build failure
     runs-on: ubuntu-22.04
-    needs: [build-tauri-macos-arm, build-tauri, build-headless]
+    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless]
     if: failure()
 
     steps:
