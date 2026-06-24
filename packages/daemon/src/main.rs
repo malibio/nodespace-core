@@ -25,10 +25,9 @@ use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    resolve_db_path, tray, AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl,
-    EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer, LocalAgentServiceImpl,
-    LocalAgentServiceServer, NodeServiceImpl, NodeServiceServer, SettingsServiceImpl,
-    SettingsServiceServer,
+    build_base_router, resolve_db_path, tray, AgentSessionHandler, BaseServices,
+    EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl, NodeServiceImpl,
+    SettingsServiceImpl,
 };
 use nodespace_nlp_engine::EmbeddingService;
 use tokio::sync::RwLock;
@@ -140,21 +139,18 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(sock = %sock.display(), "gRPC server listening");
 
     let sock_cleanup = sock.clone();
-    let builder = Server::builder()
-        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
-        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings))
-        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
-        builder
-            .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
-    } else {
-        builder.serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
+    let base_services = BaseServices {
+        node_service: bundle.node_service_grpc,
+        agent_session: bundle.agent_session,
+        import: bundle.import,
+        settings: bundle.settings,
+        local_agent: bundle.local_agent,
+        embeddings: bundle.embeddings_service_grpc,
     };
-
-    serve.await.context("gRPC server terminated with error")?;
+    build_base_router(Server::builder(), base_services)
+        .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
+        .await
+        .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
@@ -201,22 +197,21 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     tracing::info!(sock = %sock.display(), "gRPC server listening");
 
     let sock_cleanup = sock.clone();
-    let builder = Server::builder()
-        .layer(TrayMetricsLayer::new(controller))
-        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
-        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings))
-        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    let serve = if let Some(emb) = bundle.embeddings_service_grpc {
-        builder
-            .add_service(EmbeddingsServiceServer::new(emb))
-            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
-    } else {
-        builder.serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
+    let base_services = BaseServices {
+        node_service: bundle.node_service_grpc,
+        agent_session: bundle.agent_session,
+        import: bundle.import,
+        settings: bundle.settings,
+        local_agent: bundle.local_agent,
+        embeddings: bundle.embeddings_service_grpc,
     };
-
-    serve.await.context("gRPC server terminated with error")?;
+    build_base_router(
+        Server::builder().layer(TrayMetricsLayer::new(controller)),
+        base_services,
+    )
+    .serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
+    .await
+    .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
@@ -315,16 +310,15 @@ async fn serve_headless() -> Result<()> {
         }
     };
 
-    let mut builder = Server::builder()
-        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
-        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings))
-        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    if let Some(emb) = bundle.embeddings_service_grpc {
-        builder = builder.add_service(EmbeddingsServiceServer::new(emb));
-    }
-    builder
+    let base_services = BaseServices {
+        node_service: bundle.node_service_grpc,
+        agent_session: bundle.agent_session,
+        import: bundle.import,
+        settings: bundle.settings,
+        local_agent: bundle.local_agent,
+        embeddings: bundle.embeddings_service_grpc,
+    };
+    build_base_router(Server::builder(), base_services)
         .serve_with_incoming_shutdown(incoming, async move {
             shutdown.await;
             cancel.cancel();
@@ -386,23 +380,24 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         }
     };
 
-    let mut builder = Server::builder()
-        .layer(TrayMetricsLayer::new(controller))
-        .add_service(NodeServiceServer::new(bundle.node_service_grpc))
-        .add_service(AgentSessionServiceServer::new(bundle.agent_session))
-        .add_service(ImportServiceServer::new(bundle.import))
-        .add_service(SettingsServiceServer::new(bundle.settings))
-        .add_service(LocalAgentServiceServer::new(bundle.local_agent));
-    if let Some(emb) = bundle.embeddings_service_grpc {
-        builder = builder.add_service(EmbeddingsServiceServer::new(emb));
-    }
-    builder
-        .serve_with_incoming_shutdown(incoming, async move {
-            combined_shutdown.await;
-            cancel.cancel();
-        })
-        .await
-        .context("gRPC server terminated with error")?;
+    let base_services = BaseServices {
+        node_service: bundle.node_service_grpc,
+        agent_session: bundle.agent_session,
+        import: bundle.import,
+        settings: bundle.settings,
+        local_agent: bundle.local_agent,
+        embeddings: bundle.embeddings_service_grpc,
+    };
+    build_base_router(
+        Server::builder().layer(TrayMetricsLayer::new(controller)),
+        base_services,
+    )
+    .serve_with_incoming_shutdown(incoming, async move {
+        combined_shutdown.await;
+        cancel.cancel();
+    })
+    .await
+    .context("gRPC server terminated with error")?;
     drain_gpu(bundle.embedding_state).await;
     Ok(())
 }

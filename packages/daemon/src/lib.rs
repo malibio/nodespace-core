@@ -5,6 +5,7 @@
 //! out. Proto types are provided by the `nodespace-proto` crate; this lib
 //! re-exports them alongside the service implementations.
 
+pub mod router;
 pub mod services;
 pub mod tray;
 
@@ -46,6 +47,7 @@ pub use nodespace_proto::{
     TerminateSessionResponse, UpdateCaptureSettingsRequest, WriteInputRequest, WriteInputResponse,
 };
 
+pub use router::{build_base_router, BaseServices};
 pub use services::{
     AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl,
     NodeServiceImpl, SettingsServiceImpl,
