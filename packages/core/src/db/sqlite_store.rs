@@ -902,6 +902,57 @@ impl SqliteStore {
         })
     }
 
+    /// Atomically delete multiple nodes in a SINGLE transaction (#1433). Either
+    /// every existing target row is removed or none are — a mid-batch failure rolls
+    /// the whole thing back, so a caller that gets `Err` can rely on nothing having
+    /// been deleted. FK CASCADE removes each node's relationships + embeddings (same
+    /// as `delete_node`); children not in `ids` are left in place (edges cascade).
+    /// Emits one `Deleted` notification per node that existed, AFTER commit. Returns
+    /// the nodes that were deleted.
+    pub async fn bulk_delete(&self, ids: &[String], source: Option<String>) -> Result<Vec<Node>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        // Snapshot the rows that actually exist (for the post-commit notifications).
+        let existing = self.get_nodes_by_ids(ids).await?;
+        let to_delete: Vec<Node> = ids
+            .iter()
+            .filter_map(|id| existing.get(id).cloned())
+            .collect();
+        if to_delete.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk delete transaction")?;
+        let placeholders: Vec<String> = (1..=to_delete.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
+        let params: Vec<libsql::Value> = to_delete
+            .iter()
+            .map(|n| libsql::Value::Text(n.id.clone()))
+            .collect();
+        tx.execute(&sql, params)
+            .await
+            .context("Failed to delete nodes in bulk")?;
+        tx.commit()
+            .await
+            .context("Failed to commit bulk delete transaction")?;
+
+        for node in &to_delete {
+            self.notify(StoreChange {
+                operation: StoreOperation::Deleted,
+                node: node.clone(),
+                source: source.clone(),
+                previous_node: None,
+                playbook_context: None,
+            });
+        }
+        Ok(to_delete)
+    }
+
     /// Atomically delete a node and its entire `has_child` subtree in a single transaction.
     ///
     /// **OCC contract:** Version-checks only the target node at `expected_version`. Descendants
@@ -4061,6 +4112,36 @@ mod tests {
         assert_eq!(store.persisted_version("does-not-exist").await?, None);
         // A date-format id with no real row must report None (no virtual v1).
         assert_eq!(store.persisted_version("2026-01-01").await?, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_delete_removes_all_in_one_transaction() -> Result<()> {
+        // #1433: bulk_delete deletes every existing target (all-or-nothing) and
+        // returns the deleted nodes; a missing id is simply skipped.
+        let (store, _t) = create_test_store().await?;
+
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let n = Node::new("text".to_string(), format!("n{i}"), json!({}));
+            ids.push(n.id.clone());
+            store.create_node(n, None, None).await?;
+        }
+        ids.push("never-existed".to_string());
+
+        let deleted = store.bulk_delete(&ids, None).await?;
+        assert_eq!(
+            deleted.len(),
+            3,
+            "only the 3 existing nodes are reported deleted"
+        );
+
+        for id in ids.iter().take(3) {
+            assert!(
+                store.get_node(id).await?.is_none(),
+                "node {id} should be gone"
+            );
+        }
         Ok(())
     }
 

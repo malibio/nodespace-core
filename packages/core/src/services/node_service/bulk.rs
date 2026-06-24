@@ -487,44 +487,70 @@ impl NodeService {
             ))
         })?;
 
-        // Step 2: Validate all nodes BEFORE performing atomic update.
-        // This ensures we fail fast before any database changes.
-        // Note: this validation snapshot is taken before the store transaction; any
-        // concurrent write landing between here and store.bulk_update is silently
-        // overwritten — intentional under the last-write-wins contract (see store doc).
+        // Step 2: Build the MERGED update candidate for each node, validate it, and
+        // record the property-change set for the event.
+        //
+        // #1434: previously bulk_update wholesale-REPLACED properties with the raw
+        // client value (`updated.properties = properties.clone()`) and emitted an
+        // empty `changed_properties`. That diverged from the single-update path
+        // (which normalizes flat client props → deep-merges into the existing
+        // namespaced props) AND silently no-opped every property-change-driven
+        // subscriber/playbook rule. Mirror single-update here: normalize + deep-merge,
+        // validate the merged candidate, persist the merged value, and emit the real
+        // `changed_properties` computed from old→new.
+        //
+        // Validation snapshot is taken before the store transaction; any concurrent
+        // write landing between here and store.bulk_update is overwritten — intentional
+        // under the last-write-wins contract (see store doc).
+        let mut merged_updates: Vec<(String, crate::models::NodeUpdate)> =
+            Vec::with_capacity(updates.len());
+        let mut pending_events: Vec<(String, Node, Vec<crate::db::events::PropertyChange>)> =
+            Vec::with_capacity(updates.len());
+
         for (id, update) in &updates {
-            // Look up existing node from batch result
             let existing = existing_nodes
                 .get(id)
                 .ok_or_else(|| NodeServiceError::node_not_found(id))?;
 
             let mut updated = existing.clone();
-
-            // Apply partial updates to build validation candidate
             if let Some(node_type) = &update.node_type {
                 updated.node_type = node_type.clone();
             }
-
             if let Some(content) = &update.content {
                 updated.content = content.clone();
             }
 
-            // NOTE: Sibling ordering is now handled via has_child relationship order field.
-            // Bulk updates don't support sibling reordering - use move_node instead.
+            // NOTE: Sibling ordering is handled via the has_child order field; bulk
+            // updates don't reorder — use move_node.
 
+            let mut changed_properties = Vec::new();
             if let Some(properties) = &update.properties {
-                updated.properties = properties.clone();
+                let old_props = updated.properties.clone();
+                if updated.node_type == "schema" {
+                    // Schema nodes use a flat (non-namespaced) format — deep-merge as-is.
+                    Self::deep_merge_namespaced_properties(
+                        &mut updated.properties,
+                        properties.clone(),
+                    );
+                } else {
+                    let normalized = Self::normalize_flat_properties_to_namespace(
+                        &updated.node_type,
+                        properties,
+                        None,
+                    );
+                    Self::deep_merge_namespaced_properties(&mut updated.properties, normalized);
+                }
+                changed_properties =
+                    super::compute_property_changes(&old_props, &updated.properties);
             }
 
-            // Validate behavior (PROTECTED rules)
+            // Validate the MERGED candidate (PROTECTED + USER-EXTENSIBLE rules).
             self.behaviors.validate_node(&updated).map_err(|e| {
                 NodeServiceError::bulk_operation_failed(format!(
                     "Failed to validate node {}: {}",
                     id, e
                 ))
             })?;
-
-            // Validate schema (USER-EXTENSIBLE rules)
             if updated.node_type != "schema" {
                 self.validate_node_against_schema(&updated)
                     .await
@@ -535,38 +561,43 @@ impl NodeService {
                         ))
                     })?;
             }
+
+            // Persist the caller's intent for type/content/title/lifecycle, but the
+            // MERGED value for properties (so the stored row matches single-update).
+            merged_updates.push((
+                id.clone(),
+                crate::models::NodeUpdate {
+                    node_type: update.node_type.clone(),
+                    content: update.content.clone(),
+                    properties: update
+                        .properties
+                        .as_ref()
+                        .map(|_| updated.properties.clone()),
+                    title: update.title.clone(),
+                    lifecycle_status: update.lifecycle_status.clone(),
+                },
+            ));
+            pending_events.push((id.clone(), updated, changed_properties));
         }
 
-        // Step 3: All validations passed - perform atomic bulk update.
-        self.store.bulk_update(updates.clone()).await.map_err(|e| {
+        // Step 3: All validations passed — perform the atomic bulk update.
+        self.store.bulk_update(merged_updates).await.map_err(|e| {
             NodeServiceError::bulk_operation_failed(format!(
                 "Failed to execute bulk update transaction: {}",
                 e
             ))
         })?;
 
-        // Issue #1306: Emit one NodeUpdated event per updated node.
-        // `store.bulk_update` runs a single SQL transaction without per-row notify calls,
-        // so we emit explicitly here rather than relying on the store notifier.
-        for (id, update) in &updates {
-            if let Some(existing) = existing_nodes.get(id) {
-                let mut updated_node = existing.clone();
-                if let Some(nt) = &update.node_type {
-                    updated_node.node_type = nt.clone();
-                }
-                if let Some(c) = &update.content {
-                    updated_node.content = c.clone();
-                }
-                if let Some(p) = &update.properties {
-                    updated_node.properties = p.clone();
-                }
-                self.emit_event(DomainEvent::NodeUpdated {
-                    node_id: id.clone(),
-                    node_type: updated_node.node_type.clone(),
-                    node: updated_node,
-                    changed_properties: vec![],
-                });
-            }
+        // Issue #1306: emit one NodeUpdated event per node (store.bulk_update runs a
+        // single SQL transaction with no per-row notify), now carrying the real
+        // changed_properties so property-change automation fires (#1434).
+        for (id, node, changed_properties) in pending_events {
+            self.emit_event(DomainEvent::NodeUpdated {
+                node_id: id,
+                node_type: node.node_type.clone(),
+                node,
+                changed_properties,
+            });
         }
 
         Ok(())
@@ -606,20 +637,21 @@ impl NodeService {
             return Ok(());
         }
 
-        // Coalesce delete events: one event per node regardless of cascade writes
-        // (Issue #1306).
+        // #1433: delete in ONE transaction so the documented all-or-nothing contract
+        // actually holds. The old loop called store.delete_node per id (each its own
+        // autocommit), so a failure on the Nth left the first N-1 committed while the
+        // caller got Err and reasonably assumed nothing was deleted → orphaned state /
+        // double-delete on retry. Coalesce the Deleted events: one per node (#1306).
         let _batch = self.begin_batch_emit();
-        for id in &ids {
-            self.store
-                .delete_node(id, self.client_id.clone())
-                .await
-                .map_err(|e| {
-                    NodeServiceError::bulk_operation_failed(format!(
-                        "Failed to delete node {}: {}",
-                        id, e
-                    ))
-                })?;
-        }
+        self.store
+            .bulk_delete(&ids, self.client_id.clone())
+            .await
+            .map_err(|e| {
+                NodeServiceError::bulk_operation_failed(format!(
+                    "Failed to bulk delete nodes: {}",
+                    e
+                ))
+            })?;
         // _batch drops here → one flush per deleted node
 
         Ok(())
