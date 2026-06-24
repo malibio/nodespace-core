@@ -499,6 +499,22 @@ impl NodeService {
                         target.node_type
                     )));
                 }
+                // #1427: collection hierarchy (collection member_of collection) is a
+                // DAG, but nothing enforced it — `a member_of b` + `b member_of a`
+                // created a cycle that makes the recursive members walk loop. Reject
+                // a hierarchy edge that would close a cycle. Only relevant when the
+                // source is itself a collection; a content node has no member_of
+                // descendants, so the check is a cheap no-op for ordinary membership.
+                let source = self
+                    .get_node(source_id)
+                    .await?
+                    .ok_or_else(|| NodeServiceError::node_not_found(source_id))?;
+                if source.node_type == "collection" {
+                    self.store
+                        .validate_no_member_of_cycle(source_id, target_id)
+                        .await
+                        .map_err(|e| NodeServiceError::collection_cycle(e.to_string()))?;
+                }
             }
         } else {
             // Custom relationship: validate against source node's schema

@@ -203,6 +203,8 @@ impl SqliteStore {
             ()
         ).await.context("Failed to create FTS5 delete trigger")?;
 
+        Self::backfill_fts_if_stale(conn).await?;
+
         // sqlite-vec virtual table for embedding KNN search. Keyed by `embedding.id`
         // (the per-chunk UUID); holds ONLY real, non-stale vectors (see upsert/delete/
         // mark-stale paths). vec0 is a fast brute-force SIMD scan, not an ANN index.
@@ -270,6 +272,44 @@ impl SqliteStore {
         )
         .await
         .context("rebuild idx_emb_modified with origin")?;
+        Ok(())
+    }
+
+    /// One-time FTS5 backfill (#1428). The external-content `node_fts` triggers
+    /// only index FUTURE writes, so any node predating the FTS table (user DBs are
+    /// never reset — same reason `migrate_embedding_origin` exists) is absent from
+    /// the index and never returned by `bm25_search_roots`. Rebuild the index from
+    /// `node`, but ONLY when it is out of sync, so a healthy DB does not re-index
+    /// its whole corpus on every startup.
+    ///
+    /// The staleness signal is the count of ACTUALLY-INDEXED documents, read from
+    /// FTS5's `node_fts_docsize` shadow table — NOT `count(*) FROM node_fts`, which
+    /// for an external-content table reads rowids from the content table (`node`)
+    /// and so always equals the node count regardless of index population. When the
+    /// indexed-doc count differs from `node`, rebuild. No-op on a fresh DB (both 0)
+    /// and after the first rebuild.
+    async fn backfill_fts_if_stale(conn: &libsql::Connection) -> Result<()> {
+        let count = |sql: &'static str| async move {
+            let mut r = conn.query(sql, ()).await?;
+            let n: i64 = r
+                .next()
+                .await?
+                .map(|row| row.get(0))
+                .transpose()?
+                .unwrap_or(0);
+            Ok::<i64, anyhow::Error>(n)
+        };
+        let indexed = count("SELECT count(*) FROM node_fts_docsize")
+            .await
+            .context("Failed to count indexed FTS docs")?;
+        let node_count = count("SELECT count(*) FROM node")
+            .await
+            .context("Failed to count node rows")?;
+        if indexed != node_count {
+            conn.execute("INSERT INTO node_fts(node_fts) VALUES('rebuild')", ())
+                .await
+                .context("Failed to backfill FTS5 index")?;
+        }
         Ok(())
     }
 
@@ -1417,6 +1457,54 @@ impl SqliteStore {
                 Node '{}' is a descendant of node '{}'.",
                 parent_id,
                 child_id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Cycle guard for collection-hierarchy `member_of` edges (#1427). The
+    /// `has_child` tree has `validate_no_cycle`, but collection hierarchy is built
+    /// from `member_of` (a sub-collection is a member_of its parent) and had no
+    /// equivalent — so `a member_of b` + `b member_of a` produced a cycle in the
+    /// supposed DAG, which (post-#1426) makes the recursive members walk loop.
+    ///
+    /// `member_of` stores in_node = child/member, out_node = parent/collection.
+    /// Adding `source member_of target` makes `target` an ancestor of `source`;
+    /// that is a cycle iff `target` is already a DESCENDANT of `source`. Walk the
+    /// member_of subtree downward from `source` (out_node = current → in_node =
+    /// child) and fail if it reaches `target`. A self-edge is trivially a cycle.
+    pub async fn validate_no_member_of_cycle(
+        &self,
+        source_id: &str,
+        target_id: &str,
+    ) -> Result<()> {
+        if source_id == target_id {
+            return Err(anyhow::anyhow!(
+                "collection_cycle: '{}' cannot be a member of itself",
+                source_id
+            ));
+        }
+        let mut rows = self
+            .db
+            .query(
+                r#"WITH RECURSIVE descendants(node_id, depth) AS (
+                SELECT in_node, 1 FROM relationship
+                  WHERE out_node = ?1 AND relationship_type = 'member_of'
+                UNION ALL
+                SELECT r.in_node, d.depth + 1 FROM relationship r
+                JOIN descendants d ON r.out_node = d.node_id
+                WHERE r.relationship_type = 'member_of' AND d.depth < 100
+            )
+            SELECT node_id FROM descendants WHERE node_id = ?2 LIMIT 1"#,
+                libsql::params![source_id.to_string(), target_id.to_string()],
+            )
+            .await
+            .context("Failed to check for member_of cycle")?;
+        if rows.next().await?.is_some() {
+            return Err(anyhow::anyhow!(
+                "collection_cycle: '{}' is already a descendant of '{}', so making it the parent would create a cycle",
+                target_id,
+                source_id
             ));
         }
         Ok(())
@@ -3272,16 +3360,27 @@ impl SqliteStore {
         &self,
         collection_id: &str,
     ) -> Result<Vec<String>> {
-        // Get all collections in the subtree using WITH RECURSIVE
+        // Get all collections in the subtree using WITH RECURSIVE.
+        //
+        // #1426: collection hierarchy is built from `member_of` edges (a
+        // sub-collection is a member_of its parent), NOT `has_child` — the old
+        // recursive arm followed `has_child` and so matched nothing, leaving
+        // `coll_subtree` as just the seed and silently dropping every
+        // sub-collection's members. member_of stores in_node = member/child,
+        // out_node = collection/parent, so we descend parent→child by joining on
+        // `r.out_node = cs.node_id` and taking `r.in_node`, restricted to
+        // collection children (a content member isn't a sub-collection). A depth
+        // cap bounds traversal in case a cycle slips in (see #1427).
         let mut rows = self
             .db
             .query(
-                r#"WITH RECURSIVE coll_subtree(node_id) AS (
-                SELECT ?1
+                r#"WITH RECURSIVE coll_subtree(node_id, depth) AS (
+                SELECT ?1, 0
                 UNION ALL
-                SELECT r.out_node FROM relationship r
-                JOIN coll_subtree cs ON r.in_node = cs.node_id
-                WHERE r.relationship_type = 'has_child'
+                SELECT r.in_node, cs.depth + 1 FROM relationship r
+                JOIN coll_subtree cs ON r.out_node = cs.node_id
+                JOIN node n ON n.id = r.in_node AND n.node_type = 'collection'
+                WHERE r.relationship_type = 'member_of' AND cs.depth < 100
             )
             SELECT DISTINCT r.in_node FROM relationship r
             JOIN coll_subtree cs ON r.out_node = cs.node_id
@@ -3749,6 +3848,144 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("Failed to initialize NodeService: {}", e))?;
 
         Ok((store_arc, temp_dir))
+    }
+
+    #[tokio::test]
+    async fn test_collection_members_recursive_includes_subcollection_members() -> Result<()> {
+        // #1426: members of a SUB-collection must be returned for the parent.
+        // member_of stores in_node = member/child, out_node = collection/parent;
+        // add_to_collection(member, collection) creates that edge.
+        let (store, _t) = create_test_store().await?;
+
+        let parent = Node::new("collection".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let sub = Node::new("collection".to_string(), "Sub".to_string(), json!({}));
+        let sub_id = sub.id.clone();
+        store.create_node(sub, None, None).await?;
+        store.add_to_collection(&sub_id, &parent_id).await?; // Sub member_of Parent
+
+        let direct = Node::new("text".to_string(), "direct member".to_string(), json!({}));
+        let direct_id = direct.id.clone();
+        store.create_node(direct, None, None).await?;
+        store.add_to_collection(&direct_id, &parent_id).await?;
+
+        let nested = Node::new("text".to_string(), "nested member".to_string(), json!({}));
+        let nested_id = nested.id.clone();
+        store.create_node(nested, None, None).await?;
+        store.add_to_collection(&nested_id, &sub_id).await?; // member of the SUB only
+
+        let members = store.get_collection_members_recursive(&parent_id).await?;
+        assert!(
+            members.contains(&nested_id),
+            "a member of a sub-collection must be returned for the parent (was silently dropped); got {members:?}"
+        );
+        assert!(members.contains(&direct_id), "direct member missing");
+        assert!(
+            members.contains(&sub_id),
+            "sub-collection itself is a member of the parent"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_member_of_cycle_is_rejected() -> Result<()> {
+        // #1427: collection hierarchy is a DAG. With `B member_of A`, adding
+        // `A member_of B` would close a cycle and must be rejected.
+        let (store, _t) = create_test_store().await?;
+
+        let a = Node::new("collection".to_string(), "A".to_string(), json!({}));
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+        let b = Node::new("collection".to_string(), "B".to_string(), json!({}));
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+
+        store.add_to_collection(&b_id, &a_id).await?; // B member_of A
+
+        // Adding A member_of B closes the cycle → error.
+        let err = store
+            .validate_no_member_of_cycle(&a_id, &b_id)
+            .await
+            .expect_err("A member_of B must be rejected as a cycle");
+        assert!(err.to_string().contains("collection_cycle"));
+
+        // A self-edge is a cycle.
+        assert!(store
+            .validate_no_member_of_cycle(&a_id, &a_id)
+            .await
+            .is_err());
+
+        // A non-cyclic hierarchy edge is allowed (B member_of A already holds; a
+        // fresh unrelated parent is fine).
+        let c = Node::new("collection".to_string(), "C".to_string(), json!({}));
+        let c_id = c.id.clone();
+        store.create_node(c, None, None).await?;
+        assert!(store
+            .validate_no_member_of_cycle(&a_id, &c_id)
+            .await
+            .is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backfill_fts_reindexes_unindexed_nodes() -> Result<()> {
+        // #1428: a node present in `node` but missing from `node_fts` (the pre-FTS
+        // corpus) must be re-indexed by the one-time backfill.
+        let (store, _t) = create_test_store().await?;
+
+        let node = Node::new(
+            "text".to_string(),
+            "alpha uniquetoken9173".to_string(),
+            json!({}),
+        );
+        let nid = node.id.clone();
+        store.create_node(node, None, None).await?;
+
+        // Simulate a pre-FTS node: drop it from the external-content index.
+        let rowid: i64 = {
+            let mut r = store
+                .db
+                .query(
+                    "SELECT rowid FROM node WHERE id = ?1",
+                    libsql::params![nid.clone()],
+                )
+                .await?;
+            r.next().await?.unwrap().get(0)?
+        };
+        store
+            .db
+            .execute(
+                "INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', ?1, ?2, ?3)",
+                libsql::params![rowid, nid.clone(), "alpha uniquetoken9173"],
+            )
+            .await?;
+
+        let matches = |store: Arc<SqliteStore>| async move {
+            let mut r = store
+                .db
+                .query(
+                    "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'uniquetoken9173'",
+                    (),
+                )
+                .await?;
+            Ok::<i64, anyhow::Error>(r.next().await?.unwrap().get(0)?)
+        };
+        assert_eq!(
+            matches(store.clone()).await?,
+            0,
+            "node should be missing from the index"
+        );
+
+        SqliteStore::backfill_fts_if_stale(&store.db).await?;
+
+        assert_eq!(
+            matches(store.clone()).await?,
+            1,
+            "backfill should re-index the node"
+        );
+        Ok(())
     }
 
     #[tokio::test]
