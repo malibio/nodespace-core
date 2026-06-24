@@ -416,16 +416,30 @@ pub async fn query_nodes(
         );
     }
 
-    // Over-fetch when collection filtering
-    let effective_limit = if collection_member_ids.is_some() {
-        input.limit.map(|l| l * 3).unwrap_or(1000)
-    } else {
-        input.limit.unwrap_or(100)
-    };
-    filter = filter.with_limit(effective_limit);
-
-    if let Some(offset) = input.offset {
-        filter = filter.with_offset(offset);
+    // #1430: pagination differs for a collection-scoped query. Pushing offset/limit
+    // to SQL paginated the WRONG set (membership is filtered after the query), and
+    // the old fixed 1000 over-fetch silently dropped any member outside the newest
+    // 1000 rows. Instead SCOPE the SQL to the collection's members via `with_ids` —
+    // which `NodeQuery.ids` now translates to a chunked `id IN (…)` (bounded by the
+    // member set, NOT a full-table scan) — and apply offset/limit IN MEMORY below.
+    match &collection_member_ids {
+        Some(member_ids) if member_ids.is_empty() => {
+            // Empty collection → no members can match; skip the query entirely.
+            return Ok(QueryNodesOutput {
+                nodes: vec![],
+                count: 0,
+                collection_id,
+            });
+        }
+        Some(member_ids) => {
+            filter = filter.with_ids(member_ids.iter().cloned().collect());
+        }
+        None => {
+            filter = filter.with_limit(input.limit.unwrap_or(100));
+            if let Some(offset) = input.offset {
+                filter = filter.with_offset(offset);
+            }
+        }
     }
 
     // Apply structured filters
@@ -475,12 +489,20 @@ pub async fn query_nodes(
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to query nodes: {}", e)))?;
 
-    // Post-filter by collection membership
+    // Paginate IN MEMORY (#1430). The SQL is already id-scoped to members (the
+    // `id IN (…)` from `with_ids`), so this `member_ids.contains` is a genuine
+    // defensive double-check, not the thing producing correctness. Apply offset +
+    // limit over the membership set (CreatedDesc-ordered) so `offset>0` and `limit`
+    // page the actual members, not the global set.
     let filtered_nodes = if let Some(member_ids) = collection_member_ids {
         let mut result: Vec<_> = nodes
             .into_iter()
             .filter(|n| member_ids.contains(&n.id))
             .collect();
+        let offset = input.offset.unwrap_or(0);
+        if offset > 0 {
+            result = result.into_iter().skip(offset).collect();
+        }
         if let Some(limit) = input.limit {
             result.truncate(limit);
         }

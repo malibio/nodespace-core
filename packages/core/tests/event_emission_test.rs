@@ -141,6 +141,190 @@ mod event_emission_tests {
     }
 
     #[tokio::test]
+    async fn test_collection_query_paginates_members_not_global_set() -> Result<()> {
+        // #1430: offset/limit must paginate the COLLECTION'S members (in memory),
+        // not the global unfiltered set, and non-members must be excluded.
+        let (service, _temp_dir) = create_test_service().await?;
+
+        let coll = nodespace_core::models::Node::new(
+            "collection".to_string(),
+            "Team".to_string(),
+            json!({}),
+        );
+        let coll_id = coll.id.clone();
+        service.create_node(coll).await?;
+
+        // 3 members + 2 non-members (never added to the collection).
+        for i in 0..3 {
+            let m =
+                nodespace_core::models::Node::new("text".to_string(), format!("m{i}"), json!({}));
+            let mid = m.id.clone();
+            service.create_node(m).await?;
+            service.store().add_to_collection(&mid, &coll_id).await?;
+        }
+        for i in 0..2 {
+            let other =
+                nodespace_core::models::Node::new("text".to_string(), format!("x{i}"), json!({}));
+            service.create_node(other).await?;
+        }
+
+        let service = Arc::new(service);
+        let query = |offset: Option<usize>, limit: Option<usize>| {
+            let svc = service.clone();
+            let coll_id = coll_id.clone();
+            async move {
+                nodespace_core::ops::node_ops::query_nodes(
+                    &svc,
+                    nodespace_core::ops::node_ops::QueryNodesInput {
+                        node_type: None,
+                        parent_id: None,
+                        root_id: None,
+                        limit,
+                        offset,
+                        collection_id: Some(coll_id),
+                        collection: None,
+                        filters: None,
+                    },
+                )
+                .await
+            }
+        };
+
+        // All 3 members (non-members excluded).
+        assert_eq!(query(None, Some(10)).await?.count, 3);
+        // offset skips members, not the global set.
+        assert_eq!(query(Some(1), Some(10)).await?.count, 2);
+        assert_eq!(query(Some(1), Some(1)).await?.count, 1);
+        // offset past the end → empty.
+        assert_eq!(query(Some(10), Some(10)).await?.count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collection_query_returns_members_despite_many_newer_nonmembers() -> Result<()> {
+        // #1430 regression guard: members must be returned even when MANY newer
+        // non-member nodes exist. The SQL is id-scoped to the member set, so it can
+        // never be crowded out. This FAILS under a capped-global-limit approach
+        // (the newest N rows would all be non-members → 0 members) and under the
+        // old fixed-1000 over-fetch (members beyond the newest 1000 dropped).
+        let (service, _temp_dir) = create_test_service().await?;
+
+        let coll = nodespace_core::models::Node::new(
+            "collection".to_string(),
+            "Team".to_string(),
+            json!({}),
+        );
+        let coll_id = coll.id.clone();
+        service.create_node(coll).await?;
+
+        // 3 members created FIRST.
+        for i in 0..3 {
+            let m =
+                nodespace_core::models::Node::new("text".to_string(), format!("m{i}"), json!({}));
+            let mid = m.id.clone();
+            service.create_node(m).await?;
+            service.store().add_to_collection(&mid, &coll_id).await?;
+        }
+        // 25 NON-member nodes created AFTER (newer) — would dominate a global limit.
+        for i in 0..25 {
+            service
+                .create_node(nodespace_core::models::Node::new(
+                    "text".to_string(),
+                    format!("x{i}"),
+                    json!({}),
+                ))
+                .await?;
+        }
+
+        let service = Arc::new(service);
+        let out = nodespace_core::ops::node_ops::query_nodes(
+            &service,
+            nodespace_core::ops::node_ops::QueryNodesInput {
+                node_type: None,
+                parent_id: None,
+                root_id: None,
+                limit: Some(10),
+                offset: None,
+                collection_id: Some(coll_id),
+                collection: None,
+                filters: None,
+            },
+        )
+        .await?;
+        // All 3 members returned (not crowded out by the 25 newer non-members).
+        assert_eq!(out.count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_update_emits_changed_properties_and_merges() -> Result<()> {
+        // #1434: bulk_update must emit a NON-empty changed_properties (so
+        // property-change automation fires) and MERGE properties (not wholesale
+        // replace), matching the single-update path.
+        let (service, _temp_dir) = create_test_service().await?;
+        let node = create_root_node(&service, "text").await?;
+        let node_id = node.id.clone();
+
+        // Baseline property via the single-update path.
+        service
+            .with_client(TEST_CLIENT_ID)
+            .update_node_unchecked(
+                &node_id,
+                nodespace_core::models::NodeUpdate {
+                    properties: Some(json!({ "keep": "yes" })),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let mut rx = service.subscribe_to_events();
+
+        // Bulk-update a DIFFERENT property.
+        service
+            .with_client(TEST_CLIENT_ID)
+            .bulk_update(vec![(
+                node_id.clone(),
+                nodespace_core::models::NodeUpdate {
+                    properties: Some(json!({ "add": "new" })),
+                    ..Default::default()
+                },
+            )])
+            .await?;
+
+        let envelope = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("Event should be emitted within 1 second")
+            .expect("Should receive event");
+        match &envelope.event {
+            DomainEvent::NodeUpdated {
+                node_id: id,
+                changed_properties,
+                ..
+            } => {
+                assert_eq!(id, &node_id);
+                assert!(
+                    !changed_properties.is_empty(),
+                    "bulk_update must emit changed_properties (was hardcoded empty)"
+                );
+            }
+            _ => panic!("Expected NodeUpdated event, got {:?}", envelope.event),
+        }
+
+        // Merge, not wholesale replace — the pre-existing property survives.
+        let updated = service.get_node(&node_id).await?.expect("node exists");
+        let props = updated.properties.to_string();
+        assert!(
+            props.contains("keep") && props.contains("yes"),
+            "pre-existing property must survive the bulk update (merge): {props}"
+        );
+        assert!(
+            props.contains("add") && props.contains("new"),
+            "new property must be present after the bulk update: {props}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_delete_node_emits_node_deleted_event() -> Result<()> {
         let (service, _temp_dir) = create_test_service().await?;
 

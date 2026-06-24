@@ -55,6 +55,7 @@ impl NodeService {
         // Convert NodeFilter to NodeQuery
         let query = crate::models::NodeQuery {
             id: None,
+            ids: filter.ids.clone(),
             node_type: filter.node_type.clone(),
             content_contains: filter.content_contains.clone(),
             title_contains: filter.title_contains.clone(),

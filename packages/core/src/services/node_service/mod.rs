@@ -2780,8 +2780,9 @@ mod tests {
         assert_eq!(after_type_update.node_type, "text");
 
         // Update only properties — content and node_type must be preserved.
-        // Note: bulk_update replaces properties entirely (unlike single-node update_node
-        // which merges key-by-key).
+        // #1434: bulk_update now NORMALIZES + deep-MERGES properties exactly like the
+        // single-node update_node path (it previously wholesale-replaced with the raw
+        // client value, diverging from single-update and skipping normalization).
         service
             .bulk_update(vec![(
                 id.clone(),
@@ -2792,7 +2793,11 @@ mod tests {
         let after_props_update = service.get_node(&id).await.unwrap().unwrap();
         assert_eq!(after_props_update.content, "New content");
         assert_eq!(after_props_update.node_type, "text");
-        assert_eq!(after_props_update.properties, json!({"key": "value"}));
+        let props = after_props_update.properties.to_string();
+        assert!(
+            props.contains("key") && props.contains("value"),
+            "property must be merged + normalized into the node: {props}"
+        );
     }
 
     #[tokio::test]

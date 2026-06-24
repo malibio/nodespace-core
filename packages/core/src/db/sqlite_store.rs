@@ -902,6 +902,57 @@ impl SqliteStore {
         })
     }
 
+    /// Atomically delete multiple nodes in a SINGLE transaction (#1433). Either
+    /// every existing target row is removed or none are — a mid-batch failure rolls
+    /// the whole thing back, so a caller that gets `Err` can rely on nothing having
+    /// been deleted. FK CASCADE removes each node's relationships + embeddings (same
+    /// as `delete_node`); children not in `ids` are left in place (edges cascade).
+    /// Emits one `Deleted` notification per node that existed, AFTER commit. Returns
+    /// the nodes that were deleted.
+    pub async fn bulk_delete(&self, ids: &[String], source: Option<String>) -> Result<Vec<Node>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        // Snapshot the rows that actually exist (for the post-commit notifications).
+        let existing = self.get_nodes_by_ids(ids).await?;
+        let to_delete: Vec<Node> = ids
+            .iter()
+            .filter_map(|id| existing.get(id).cloned())
+            .collect();
+        if to_delete.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk delete transaction")?;
+        let placeholders: Vec<String> = (1..=to_delete.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
+        let params: Vec<libsql::Value> = to_delete
+            .iter()
+            .map(|n| libsql::Value::Text(n.id.clone()))
+            .collect();
+        tx.execute(&sql, params)
+            .await
+            .context("Failed to delete nodes in bulk")?;
+        tx.commit()
+            .await
+            .context("Failed to commit bulk delete transaction")?;
+
+        for node in &to_delete {
+            self.notify(StoreChange {
+                operation: StoreOperation::Deleted,
+                node: node.clone(),
+                source: source.clone(),
+                previous_node: None,
+                playbook_context: None,
+            });
+        }
+        Ok(to_delete)
+    }
+
     /// Atomically delete a node and its entire `has_child` subtree in a single transaction.
     ///
     /// **OCC contract:** Version-checks only the target node at `expected_version`. Descendants
@@ -1144,6 +1195,44 @@ impl SqliteStore {
         if let Some(ref nt) = query.node_type {
             conditions.push(format!("node_type = ?{}", param_idx));
             bind_values.push(libsql::Value::Text(nt.clone()));
+        }
+
+        // #1430: id-scoping (e.g. a collection's members). Build `id IN (…)` and
+        // CHUNK it under SQLite's bound-parameter ceiling so a large member set
+        // can't overflow the limit. Each chunk also carries the title/node_type
+        // conditions already collected. The caller (NodeService::query_nodes)
+        // applies order_by + limit/offset in memory, so per-chunk order is
+        // irrelevant here. Empty id set ⇒ no rows can match.
+        if let Some(ref ids) = query.ids {
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            const ID_CHUNK: usize = 900;
+            let mut nodes = Vec::new();
+            for chunk in ids.chunks(ID_CHUNK) {
+                let mut conds = conditions.clone();
+                let mut binds = bind_values.clone();
+                let start = binds.len();
+                let placeholders: Vec<String> = chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", start + i + 1))
+                    .collect();
+                conds.push(format!("id IN ({})", placeholders.join(", ")));
+                for id in chunk {
+                    binds.push(libsql::Value::Text(id.clone()));
+                }
+                let sql = format!("SELECT * FROM node WHERE {}", conds.join(" AND "));
+                let mut rows = self
+                    .db
+                    .query(&sql, binds)
+                    .await
+                    .context("Failed to query nodes by id set")?;
+                while let Some(row) = rows.next().await? {
+                    nodes.push(Self::row_to_node(&row)?);
+                }
+            }
+            return Ok(nodes);
         }
 
         let where_clause = if !conditions.is_empty() {
@@ -4061,6 +4150,36 @@ mod tests {
         assert_eq!(store.persisted_version("does-not-exist").await?, None);
         // A date-format id with no real row must report None (no virtual v1).
         assert_eq!(store.persisted_version("2026-01-01").await?, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_delete_removes_all_in_one_transaction() -> Result<()> {
+        // #1433: bulk_delete deletes every existing target (all-or-nothing) and
+        // returns the deleted nodes; a missing id is simply skipped.
+        let (store, _t) = create_test_store().await?;
+
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let n = Node::new("text".to_string(), format!("n{i}"), json!({}));
+            ids.push(n.id.clone());
+            store.create_node(n, None, None).await?;
+        }
+        ids.push("never-existed".to_string());
+
+        let deleted = store.bulk_delete(&ids, None).await?;
+        assert_eq!(
+            deleted.len(),
+            3,
+            "only the 3 existing nodes are reported deleted"
+        );
+
+        for id in ids.iter().take(3) {
+            assert!(
+                store.get_node(id).await?.is_none(),
+                "node {id} should be gone"
+            );
+        }
         Ok(())
     }
 
