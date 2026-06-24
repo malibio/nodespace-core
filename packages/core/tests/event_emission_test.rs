@@ -201,6 +201,62 @@ mod event_emission_tests {
     }
 
     #[tokio::test]
+    async fn test_collection_query_returns_members_despite_many_newer_nonmembers() -> Result<()> {
+        // #1430 regression guard: members must be returned even when MANY newer
+        // non-member nodes exist. The SQL is id-scoped to the member set, so it can
+        // never be crowded out. This FAILS under a capped-global-limit approach
+        // (the newest N rows would all be non-members → 0 members) and under the
+        // old fixed-1000 over-fetch (members beyond the newest 1000 dropped).
+        let (service, _temp_dir) = create_test_service().await?;
+
+        let coll = nodespace_core::models::Node::new(
+            "collection".to_string(),
+            "Team".to_string(),
+            json!({}),
+        );
+        let coll_id = coll.id.clone();
+        service.create_node(coll).await?;
+
+        // 3 members created FIRST.
+        for i in 0..3 {
+            let m =
+                nodespace_core::models::Node::new("text".to_string(), format!("m{i}"), json!({}));
+            let mid = m.id.clone();
+            service.create_node(m).await?;
+            service.store().add_to_collection(&mid, &coll_id).await?;
+        }
+        // 25 NON-member nodes created AFTER (newer) — would dominate a global limit.
+        for i in 0..25 {
+            service
+                .create_node(nodespace_core::models::Node::new(
+                    "text".to_string(),
+                    format!("x{i}"),
+                    json!({}),
+                ))
+                .await?;
+        }
+
+        let service = Arc::new(service);
+        let out = nodespace_core::ops::node_ops::query_nodes(
+            &service,
+            nodespace_core::ops::node_ops::QueryNodesInput {
+                node_type: None,
+                parent_id: None,
+                root_id: None,
+                limit: Some(10),
+                offset: None,
+                collection_id: Some(coll_id),
+                collection: None,
+                filters: None,
+            },
+        )
+        .await?;
+        // All 3 members returned (not crowded out by the 25 newer non-members).
+        assert_eq!(out.count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_bulk_update_emits_changed_properties_and_merges() -> Result<()> {
         // #1434: bulk_update must emit a NON-empty changed_properties (so
         // property-change automation fires) and MERGE properties (not wholesale

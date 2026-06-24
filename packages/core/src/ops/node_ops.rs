@@ -416,12 +416,12 @@ pub async fn query_nodes(
         );
     }
 
-    // #1430: pagination differs for a collection-scoped query. Membership is a
-    // POST-SQL filter, so pushing offset/limit to the SQL layer paginates the
-    // WRONG (unfiltered) set, and the old fixed 1000 over-fetch silently dropped
-    // any member outside the newest 1000 rows. Instead, SCOPE the query to the
-    // collection's members (bounded) via `with_ids` and apply offset/limit IN
-    // MEMORY below, after the membership filter.
+    // #1430: pagination differs for a collection-scoped query. Pushing offset/limit
+    // to SQL paginated the WRONG set (membership is filtered after the query), and
+    // the old fixed 1000 over-fetch silently dropped any member outside the newest
+    // 1000 rows. Instead SCOPE the SQL to the collection's members via `with_ids` —
+    // which `NodeQuery.ids` now translates to a chunked `id IN (…)` (bounded by the
+    // member set, NOT a full-table scan) — and apply offset/limit IN MEMORY below.
     match &collection_member_ids {
         Some(member_ids) if member_ids.is_empty() => {
             // Empty collection → no members can match; skip the query entirely.
@@ -489,10 +489,11 @@ pub async fn query_nodes(
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to query nodes: {}", e)))?;
 
-    // Post-filter by collection membership, then paginate IN MEMORY (#1430). The
-    // query is already scoped to members via `with_ids`; re-intersect defensively,
-    // then apply offset + limit over the membership-filtered, CreatedDesc-ordered
-    // set — so `offset>0` and `limit` page the actual members, not the global set.
+    // Paginate IN MEMORY (#1430). The SQL is already id-scoped to members (the
+    // `id IN (…)` from `with_ids`), so this `member_ids.contains` is a genuine
+    // defensive double-check, not the thing producing correctness. Apply offset +
+    // limit over the membership set (CreatedDesc-ordered) so `offset>0` and `limit`
+    // page the actual members, not the global set.
     let filtered_nodes = if let Some(member_ids) = collection_member_ids {
         let mut result: Vec<_> = nodes
             .into_iter()

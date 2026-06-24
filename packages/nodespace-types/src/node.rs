@@ -118,6 +118,11 @@ impl Node {
 pub struct NodeQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Restrict the result to this explicit set of ids (e.g. a collection's
+    /// members). Translated to an `id IN (…)` clause, chunked under SQLite's
+    /// bound-parameter ceiling (#1430). `None` = no id restriction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentioned_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -373,6 +373,7 @@ impl GrpcNodeService for NodeServiceImpl {
 
         let query = NodeQuery {
             id: req.id,
+            ids: None,
             mentioned_by: req.mentioned_by,
             content_contains: req.content_contains,
             title_contains: req.title_contains,

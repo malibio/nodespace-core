@@ -1197,6 +1197,44 @@ impl SqliteStore {
             bind_values.push(libsql::Value::Text(nt.clone()));
         }
 
+        // #1430: id-scoping (e.g. a collection's members). Build `id IN (…)` and
+        // CHUNK it under SQLite's bound-parameter ceiling so a large member set
+        // can't overflow the limit. Each chunk also carries the title/node_type
+        // conditions already collected. The caller (NodeService::query_nodes)
+        // applies order_by + limit/offset in memory, so per-chunk order is
+        // irrelevant here. Empty id set ⇒ no rows can match.
+        if let Some(ref ids) = query.ids {
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            const ID_CHUNK: usize = 900;
+            let mut nodes = Vec::new();
+            for chunk in ids.chunks(ID_CHUNK) {
+                let mut conds = conditions.clone();
+                let mut binds = bind_values.clone();
+                let start = binds.len();
+                let placeholders: Vec<String> = chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", start + i + 1))
+                    .collect();
+                conds.push(format!("id IN ({})", placeholders.join(", ")));
+                for id in chunk {
+                    binds.push(libsql::Value::Text(id.clone()));
+                }
+                let sql = format!("SELECT * FROM node WHERE {}", conds.join(" AND "));
+                let mut rows = self
+                    .db
+                    .query(&sql, binds)
+                    .await
+                    .context("Failed to query nodes by id set")?;
+                while let Some(row) = rows.next().await? {
+                    nodes.push(Self::row_to_node(&row)?);
+                }
+            }
+            return Ok(nodes);
+        }
+
         let where_clause = if !conditions.is_empty() {
             format!("WHERE {}", conditions.join(" AND "))
         } else {
