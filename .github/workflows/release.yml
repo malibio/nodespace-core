@@ -14,8 +14,7 @@ on:
           - all
           - macos-arm
           - macos-intel
-          - macos-pkg-arm
-          - macos-pkg-intel
+          - macos-pkg
           - linux-arm
           - linux-x86
           - windows-x86
@@ -287,38 +286,17 @@ jobs:
             target/release/bundle/
           if-no-files-found: warn
 
-      - name: Upload .app bundle for pkg job (macOS Intel only)
-        if: steps.filter.outputs.skip != 'true' && matrix.id == 'macos-intel'
-        uses: actions/upload-artifact@v7
-        with:
-          name: app-bundle-x86_64-apple-darwin
-          path: target/x86_64-apple-darwin/release/bundle/macos/
-          if-no-files-found: error
-
   build-pkg-macos:
-    name: Build macOS .pkg installer
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - triple: aarch64-apple-darwin
-            id: macos-pkg-arm
-          - triple: x86_64-apple-darwin
-            id: macos-pkg-intel
-
+    name: Build macOS .pkg installer (ARM)
     runs-on: macos-latest
-    # ARM pkg depends on the standalone ARM Tauri job; Intel pkg depends on
-    # the matrix Tauri job. Both only run on release or when explicitly selected.
-    needs:
-      - build-tauri-macos-arm
-      - build-tauri
+    needs: build-tauri-macos-arm
     if: >-
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' &&
-       (inputs.platform == 'all' ||
-        inputs.platform == matrix.id))
+       (inputs.platform == 'all' || inputs.platform == 'macos-pkg'))
 
     env:
+      TRIPLE: aarch64-apple-darwin
       APPLE_SIGNING_IDENTITY: "Developer ID Application: Michael Libio (F4M5J7YNLS)"
       APPLE_INSTALLER_IDENTITY: "Developer ID Installer: Michael Libio (F4M5J7YNLS)"
 
@@ -329,7 +307,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.triple }}
+          targets: aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -360,23 +338,21 @@ jobs:
             -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
 
       - name: Download .app bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
-          name: app-bundle-${{ matrix.triple }}
-          path: target/${{ matrix.triple }}/release/bundle/macos/
+          name: app-bundle-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/bundle/macos/
 
       - name: Build nodespaced and nodespace binaries
         run: |
-          TRIPLE="${{ matrix.triple }}"
           # Build the headless binaries that go into /usr/local/bin/ in the .pkg.
           # The .app bundle is reused from the upstream Tauri job (downloaded above).
           cargo build --release \
             --bin nodespaced --bin nodespace \
-            --target "${TRIPLE}"
+            --target aarch64-apple-darwin
 
       - name: Build .pkg installer
         env:
-          TRIPLE: ${{ matrix.triple }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -394,7 +370,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
-          name: installer-${{ matrix.id }}
+          name: installer-macos-pkg
           path: target/pkg-output/*.pkg
           if-no-files-found: warn
 
