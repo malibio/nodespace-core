@@ -988,20 +988,25 @@ impl NodeService {
         {
             Some(updated_node) => Ok(updated_node),
             None => {
-                // Version conflict - need to fetch current version for error message
-                let current_version = self
+                // #1432: the version-gated UPDATE matched no row for one of two
+                // reasons — the node was concurrently DELETED, or its version
+                // moved. Disambiguate against the REAL persisted row: `get_node`
+                // virtualizes a date page, so it would report a phantom version 1
+                // for a deleted date node → a false `version_conflict{actual:1}`
+                // instead of `NotFound` (and an absent regular node → `actual:0`).
+                match self
                     .store
-                    .get_node(node_id)
+                    .persisted_version(node_id)
                     .await
                     .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
-                    .map(|n| n.version)
-                    .unwrap_or(0);
-
-                Err(NodeServiceError::version_conflict(
-                    node_id,
-                    expected_version,
-                    current_version,
-                ))
+                {
+                    None => Err(NodeServiceError::node_not_found(node_id)),
+                    Some(actual) => Err(NodeServiceError::version_conflict(
+                        node_id,
+                        expected_version,
+                        actual,
+                    )),
+                }
             }
         }
     }

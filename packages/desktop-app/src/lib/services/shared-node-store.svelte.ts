@@ -1433,6 +1433,24 @@ export class SharedNodeStore {
       // and surface the divergence.
       if (typeof node.version === 'number' && this.isPlausibleOwnEcho(existingNode, node)) {
         this.serverConfirmedVersions.set(node.id, node.version);
+      } else {
+        // #1437: this is a FOREIGN write to a node the user is actively editing
+        // (not our own echo). We skip the clobber above to protect the optimistic
+        // text, but previously left NO signal — relying on a later OCC to surface
+        // the divergence, which may never fire if our local version was already
+        // synced. So the user keeps typing over a stale base, unaware another
+        // writer changed the node. Proactively raise a version-mismatch
+        // notification (deduped per node) so the conflict is visible.
+        const alreadyFlagged = conflictNotifications.notifications.some(
+          (n) => n.nodeId === node.id && n.conflictType === 'version-mismatch'
+        );
+        if (!alreadyFlagged) {
+          conflictNotifications.add({
+            nodeId: node.id,
+            message: CONFLICT_MESSAGE['version-mismatch'],
+            conflictType: 'version-mismatch'
+          });
+        }
       }
       // `persistedNodeIds.add` is safe here precisely because the guard
       // only runs when `existingNode` is truthy — a database event for a
