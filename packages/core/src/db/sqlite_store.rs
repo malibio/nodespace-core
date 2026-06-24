@@ -517,17 +517,19 @@ impl SqliteStore {
             libsql::params![parent_id.to_string()],
         ).await.context("Failed to get last child order")?;
 
-        let last_order = if let Some(row) = rows.next().await? {
-            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        // #1431: distinguish "no siblings" from "a sibling at order <= 0".
+        // Fractional ordering legitimately yields orders <= 0 (a prepend gives
+        // 0.0, then -1.0…), and `unwrap_or(0.0)` maps a NULL order to 0.0. The old
+        // `last_order > 0.0` sentinel misread a lone child at 0.0 as "no children",
+        // so the next append also got 1.0 → two siblings collided at 1.0. Track
+        // presence as Option and append after the max regardless of sign.
+        let last_order: Option<f64> = if let Some(row) = rows.next().await? {
+            Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
         } else {
-            0.0
+            None
         };
 
-        let new_order = if last_order > 0.0 {
-            FractionalOrderCalculator::calculate_order(Some(last_order), None)
-        } else {
-            FractionalOrderCalculator::calculate_order(None, None)
-        };
+        let new_order = FractionalOrderCalculator::calculate_order(last_order, None);
 
         let properties = if properties.is_null() {
             serde_json::json!({})
@@ -777,6 +779,25 @@ impl SqliteStore {
         });
 
         Ok(node)
+    }
+
+    /// Version of the REAL persisted `node` row, or `None` if no such row exists.
+    /// Unlike `get_node`, this does NOT virtualize a date-page node — so a
+    /// concurrently-deleted date page reports `None`, not a phantom version 1.
+    /// Used to disambiguate a no-op version-checked update (#1432).
+    pub async fn persisted_version(&self, id: &str) -> Result<Option<i64>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT version FROM node WHERE id = ?1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to read persisted node version")?;
+        Ok(match rows.next().await? {
+            Some(row) => Some(row.get::<i64>(0)?),
+            None => None,
+        })
     }
 
     pub async fn update_node_with_version_check(
@@ -3165,17 +3186,15 @@ impl SqliteStore {
             .await
             .context("Failed to get last order for relationship")?;
 
-        let last_order = if let Some(row) = rows.next().await? {
-            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        // #1431: presence-not-sign — append after the max sibling even when its
+        // order is <= 0 (a `> 0.0` sentinel misreads a lone child at 0.0 as none).
+        let last_order: Option<f64> = if let Some(row) = rows.next().await? {
+            Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
         } else {
-            0.0
+            None
         };
 
-        Ok(if last_order > 0.0 {
-            FractionalOrderCalculator::calculate_order(Some(last_order), None)
-        } else {
-            FractionalOrderCalculator::calculate_order(None, None)
-        })
+        Ok(FractionalOrderCalculator::calculate_order(last_order, None))
     }
 
     pub async fn get_next_member_order(&self, collection_id: &str) -> Result<f64> {
@@ -3219,19 +3238,13 @@ impl SqliteStore {
             .await
             .context("Failed to get last member order")?;
 
-        let last_order = if let Some(row) = order_rows.next().await? {
-            row.get::<Option<f64>>(0)?.unwrap_or(0.0)
+        // #1431: presence-not-sign — append after the max member even at order <= 0.
+        let last_order: Option<f64> = if let Some(row) = order_rows.next().await? {
+            Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
         } else {
-            0.0
+            None
         };
-        let new_order = FractionalOrderCalculator::calculate_order(
-            if last_order > 0.0 {
-                Some(last_order)
-            } else {
-                None
-            },
-            None,
-        );
+        let new_order = FractionalOrderCalculator::calculate_order(last_order, None);
 
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -3997,6 +4010,57 @@ mod tests {
             1,
             "backfill should re-index the node"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_order_uses_negative_sibling_not_default() -> Result<()> {
+        // #1431: appending after a sibling whose order is <= 0 must compute from
+        // that real max, not fall back to the first-item default. A sibling at
+        // -1.0 (a legitimate prepend result) → next order 0.0 (= -1.0 + 1.0), NOT
+        // the buggy 1.0 the `last_order > 0.0` sentinel produced.
+        let (store, _t) = create_test_store().await?;
+
+        let coll = Node::new("collection".to_string(), "C".to_string(), json!({}));
+        let cid = coll.id.clone();
+        store.create_node(coll, None, None).await?;
+        let m = Node::new("text".to_string(), "m".to_string(), json!({}));
+        let mid = m.id.clone();
+        store.create_node(m, None, None).await?;
+        store.add_to_collection(&mid, &cid).await?; // member_of: in_node=member, out_node=collection
+
+        store
+            .db
+            .execute(
+                "UPDATE relationship SET properties = json_set(properties, '$.order', -1.0) \
+                 WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
+                libsql::params![mid.clone(), cid.clone()],
+            )
+            .await?;
+
+        let next = store.get_next_member_order(&cid).await?;
+        assert_eq!(
+            next, 0.0,
+            "append after a sibling at -1.0 should be 0.0, not the 1.0 first-item default"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persisted_version_distinguishes_missing_from_present() -> Result<()> {
+        // #1432: the primitive that disambiguates a no-op version-checked update —
+        // a real row reports Some(version); a missing row (incl. a date-format id
+        // that get_node would virtualize) reports None, NOT a phantom version.
+        let (store, _t) = create_test_store().await?;
+
+        let node = Node::new("text".to_string(), "x".to_string(), json!({}));
+        let nid = node.id.clone();
+        let created = store.create_node(node, None, None).await?;
+        assert_eq!(store.persisted_version(&nid).await?, Some(created.version));
+
+        assert_eq!(store.persisted_version("does-not-exist").await?, None);
+        // A date-format id with no real row must report None (no virtual v1).
+        assert_eq!(store.persisted_version("2026-01-01").await?, None);
         Ok(())
     }
 

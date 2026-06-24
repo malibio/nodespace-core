@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import { focusManager } from '../../lib/services/focus-manager.svelte';
 import { structureTree } from '../../lib/stores/reactive-structure-tree.svelte';
+import { conflictNotifications } from '../../lib/stores/conflict-notifications.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 
@@ -46,6 +47,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     SharedNodeStore.resetInstance();
     store = SharedNodeStore.getInstance();
     focusManager.clearEditing();
+    conflictNotifications.dismissAll();
   });
 
   afterEach(() => {
@@ -348,6 +350,52 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(store.getNode('b4')?.version).toBe(1);
       expect(store.getNode('b5')?.content).toBe('new');
       expect(store.getNode('b5')?.version).toBe(7);
+    });
+  });
+
+  // #1437: a foreign write to an actively-edited node is skipped to protect the
+  // optimistic text — but it must NOT be silent. Surface a version-mismatch
+  // conflict notification so the user knows another writer changed the node.
+  describe('foreign-write conflict signal (#1437)', () => {
+    const versionMismatchFor = (nodeId: string) =>
+      conflictNotifications.notifications.filter(
+        (n) => n.nodeId === nodeId && n.conflictType === 'version-mismatch'
+      );
+
+    it('raises a version-mismatch notification when a foreign broadcast hits a focused node', () => {
+      store.setNode(makeNode('shared', 'hello world', 5), viewerSource);
+      focusManager.focusNode('shared', 'default');
+      store.__test_setLastPersistedContent('shared', 'hello world');
+
+      // Bob's foreign write (not a prefix/echo of alice's optimistic content).
+      store.setNode(makeNode('shared', 'totally different text', 7), databaseSource);
+
+      expect(versionMismatchFor('shared')).toHaveLength(1);
+      // Optimistic content still protected (the clobber was skipped).
+      expect(store.getNode('shared')?.content).toBe('hello world');
+    });
+
+    it('does NOT notify for an own-echo broadcast', () => {
+      store.setNode(makeNode('echo', 'hello world', 5), viewerSource);
+      focusManager.focusNode('echo', 'default');
+      // isPlausibleOwnEcho is true iff the incoming content equals our last-sent
+      // content — the daemon echoing back exactly what we persisted.
+      store.__test_setLastPersistedContent('echo', 'hello world');
+
+      store.setNode(makeNode('echo', 'hello world', 6), databaseSource);
+
+      expect(versionMismatchFor('echo')).toHaveLength(0);
+    });
+
+    it('dedupes repeated foreign broadcasts for the same node', () => {
+      store.setNode(makeNode('dup', 'hello world', 5), viewerSource);
+      focusManager.focusNode('dup', 'default');
+      store.__test_setLastPersistedContent('dup', 'hello world');
+
+      store.setNode(makeNode('dup', 'foreign one', 7), databaseSource);
+      store.setNode(makeNode('dup', 'foreign two', 8), databaseSource);
+
+      expect(versionMismatchFor('dup')).toHaveLength(1);
     });
   });
 });
