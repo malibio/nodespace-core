@@ -3655,7 +3655,63 @@ impl SqliteStore {
         }
 
         let start = std::time::Instant::now();
-        let valid_mentions: Vec<_> = mentions.iter().filter(|(s, t)| s != t).collect();
+        let candidate: Vec<_> = mentions.iter().filter(|(s, t)| s != t).collect();
+        let candidate_len = candidate.len();
+        if candidate_len == 0 {
+            return Ok(0);
+        }
+
+        // #1462: a mention edge is FK-constrained — `relationship.in_node` /
+        // `out_node` are `NOT NULL REFERENCES node(id)` with `PRAGMA foreign_keys
+        // = ON` — so a mention to a NON-EXISTENT node (a dangling `[[link]]` to a
+        // doc that wasn't imported, a typo, or an external ref) is an FK violation
+        // on INSERT. Previously all mentions were inserted in ONE transaction with
+        // `?`-propagation, so a single dangling link rolled back the WHOLE batch
+        // and the import created ZERO cross-references. Pre-filter to pairs whose
+        // BOTH endpoints exist; dangling links are skipped (and logged), never
+        // fatal.
+        let mut endpoints: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for m in &candidate {
+            endpoints.insert(m.0.clone());
+            endpoints.insert(m.1.clone());
+        }
+        let endpoint_ids: Vec<String> = endpoints.into_iter().collect();
+        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        const ID_CHUNK: usize = 900;
+        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for chunk in endpoint_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT id FROM node WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to check mention endpoints")?;
+            while let Some(row) = rows.next().await? {
+                let id: String = row.get(0)?;
+                existing.insert(id);
+            }
+        }
+
+        let valid_mentions: Vec<_> = candidate
+            .into_iter()
+            .filter(|m| existing.contains(m.0.as_str()) && existing.contains(m.1.as_str()))
+            .collect();
+        let skipped = candidate_len - valid_mentions.len();
+        if skipped > 0 {
+            tracing::warn!(
+                "bulk_create_mentions: skipped {} mention(s) with a missing endpoint node (dangling [[link]]); keeping {} valid",
+                skipped,
+                valid_mentions.len()
+            );
+        }
         if valid_mentions.is_empty() {
             return Ok(0);
         }
@@ -3999,6 +4055,55 @@ mod tests {
         assert!(
             members.contains(&sub_id),
             "sub-collection itself is a member of the parent"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_create_mentions_skips_dangling_links() -> Result<()> {
+        // #1462: a `[[link]]` to a node that wasn't imported (or a typo) is an FK
+        // violation (relationship.out_node REFERENCES node(id), foreign_keys ON).
+        // The whole-batch transaction used to roll back on the first dangling link
+        // — losing EVERY mention. Now dangling pairs are skipped and the valid ones
+        // still land.
+        let (store, _t) = create_test_store().await?;
+
+        let a = Node::new("text".to_string(), "doc A".to_string(), json!({}));
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+
+        let b = Node::new("text".to_string(), "doc B".to_string(), json!({}));
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+
+        // One valid mention (A→B) interleaved with two dangling ones (targets that
+        // don't exist). Pre-fix the whole batch failed; now only the valid lands.
+        let created = store
+            .bulk_create_mentions(&[
+                (a_id.clone(), "ghost-1".to_string()),
+                (a_id.clone(), b_id.clone()),
+                (a_id.clone(), "ghost-2".to_string()),
+            ])
+            .await?;
+        assert_eq!(
+            created, 1,
+            "the valid mention must be created despite the dangling ones"
+        );
+
+        let out = store.get_outgoing_mentions(&a_id).await?;
+        assert!(out.contains(&b_id), "A→B mention must exist; got {out:?}");
+        assert!(
+            !out.iter().any(|t| t.starts_with("ghost-")),
+            "dangling mentions must NOT have been created; got {out:?}"
+        );
+
+        // A batch that is ENTIRELY dangling is a no-op (0 created), not an error.
+        let none = store
+            .bulk_create_mentions(&[(a_id.clone(), "ghost-3".to_string())])
+            .await?;
+        assert_eq!(
+            none, 0,
+            "an all-dangling batch creates nothing and does not error"
         );
         Ok(())
     }
