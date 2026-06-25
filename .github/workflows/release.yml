@@ -318,6 +318,8 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_CERTIFICATE: ${{ secrets.APPLE_INSTALLER_CERTIFICATE }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
@@ -331,6 +333,12 @@ jobs:
             -k "${KEYCHAIN_PATH}" \
             -P "${APPLE_CERTIFICATE_PASSWORD}" \
             -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+
+          echo "${APPLE_INSTALLER_CERTIFICATE}" | base64 --decode > "$RUNNER_TEMP/installer-cert.p12"
+          security import "$RUNNER_TEMP/installer-cert.p12" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${APPLE_INSTALLER_CERTIFICATE_PASSWORD}" \
             -T /usr/bin/productbuild
 
           security list-keychains -d user -s "${KEYCHAIN_PATH}" "$(security list-keychains -d user | xargs)"
