@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-proto"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generated gRPC proto types for NodeSpace — lightweight client stubs only"
 authors.workspace = true
 edition.workspace = true
