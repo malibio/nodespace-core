@@ -22,19 +22,12 @@ use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager};
 use tokio::time::timeout;
 
-use crate::constants::DAEMON_SOCKET_RELATIVE;
-
 const DAEMON_BIN_DIR: &str = ".nodespace/bin";
 const DAEMON_DB_DIR: &str = ".nodespace/database";
 const DAEMON_LOG_DIR: &str = ".nodespace/logs";
 const DAEMON_BINARY_NAME: &str = "nodespaced";
 const PRO_DAEMON_BINARY_NAME: &str = "nodespaced-pro";
 const CLI_BINARY_NAME: &str = "nodespace";
-
-#[cfg(target_os = "macos")]
-const LAUNCH_AGENT_LABEL: &str = "app.nodespace.daemon";
-#[cfg(target_os = "macos")]
-const PLIST_FILENAME: &str = "app.nodespace.daemon.plist";
 
 #[cfg(target_os = "linux")]
 const SYSTEMD_SERVICE_NAME: &str = "nodespace.service";
@@ -64,6 +57,48 @@ fn daemon_binary_name() -> &'static str {
     }
 }
 
+/// Relative path from HOME to the daemon socket, scoped by build variant.
+///
+/// Scoping prevents dev builds from colliding with the production app and prevents
+/// community builds from colliding with Pro builds on the same machine:
+///   - Release community: `.nodespace/daemon.sock`
+///   - Release Pro:       `.nodespace/daemon-pro.sock`
+///   - Debug community:   `.nodespace/daemon-dev.sock`
+///   - Debug Pro:         `.nodespace/daemon-dev-pro.sock`
+///
+/// grpc_client::resolve_socket_path() calls this function for its fallback, so
+/// the GUI app always dials the same socket the plist points the daemon to.
+pub(crate) fn daemon_socket_relative() -> &'static str {
+    match (cfg!(debug_assertions), is_pro_build()) {
+        (false, false) => ".nodespace/daemon.sock",
+        (false, true) => ".nodespace/daemon-pro.sock",
+        (true, false) => ".nodespace/daemon-dev.sock",
+        (true, true) => ".nodespace/daemon-dev-pro.sock",
+    }
+}
+
+/// macOS launchd label, scoped by build variant (mirrors daemon_socket_relative).
+#[cfg(target_os = "macos")]
+fn launch_agent_label() -> &'static str {
+    match (cfg!(debug_assertions), is_pro_build()) {
+        (false, false) => "app.nodespace.daemon",
+        (false, true) => "app.nodespace.daemon.pro",
+        (true, false) => "app.nodespace.daemon.dev",
+        (true, true) => "app.nodespace.daemon.dev.pro",
+    }
+}
+
+/// macOS plist filename, derived from the label (dots → dots, .plist appended).
+#[cfg(target_os = "macos")]
+fn plist_filename() -> &'static str {
+    match (cfg!(debug_assertions), is_pro_build()) {
+        (false, false) => "app.nodespace.daemon.plist",
+        (false, true) => "app.nodespace.daemon.pro.plist",
+        (true, false) => "app.nodespace.daemon.dev.plist",
+        (true, true) => "app.nodespace.daemon.dev.pro.plist",
+    }
+}
+
 /// Synchronously kill the running daemon if the installed binary differs in size
 /// from the bundled sidecar. Called before the gRPC client is managed so the
 /// frontend never connects to a stale daemon.
@@ -78,7 +113,7 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
         None => return,
     };
     let bin_dir = home.join(DAEMON_BIN_DIR);
-    let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
+    let socket_path = home.join(daemon_socket_relative());
     let installed = bin_dir.join(daemon_binary_name());
 
     let bundled_size = match resolve_sidecar_path_sync(handle) {
@@ -126,20 +161,23 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
                 }
             }
         }
+        let installed_str = installed.to_string_lossy().into_owned();
         for pid in pids_to_check {
+            // Verify the PID's argv[0] matches our installed binary path exactly,
+            // not just a trailing-substring heuristic that could match unrelated processes.
             let exe_check = std::process::Command::new("ps")
-                .args(["-p", &pid.to_string(), "-o", "comm="])
+                .args(["-p", &pid.to_string(), "-o", "args="])
                 .output()
                 .ok();
-            let is_daemon = exe_check
+            let is_our_daemon = exe_check
                 .as_ref()
                 .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .trim()
-                        .ends_with("nodespaced")
+                    let args = String::from_utf8_lossy(&o.stdout);
+                    let argv0 = args.trim().split_whitespace().next().unwrap_or("");
+                    argv0 == installed_str
                 })
                 .unwrap_or(false);
-            if is_daemon {
+            if is_our_daemon {
                 unsafe { libc::kill(pid, libc::SIGKILL) };
                 tracing::info!(pid, "Sent SIGKILL to stale nodespaced");
             }
@@ -181,7 +219,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // check_daemon_socket and wait_for_daemon both dispatch on cfg(windows) so they
     // probe the pipe correctly as long as we pass the right path here.
     #[cfg(unix)]
-    let socket_path = home.join(DAEMON_SOCKET_RELATIVE);
+    let socket_path = home.join(daemon_socket_relative());
     #[cfg(windows)]
     let socket_path = PathBuf::from(crate::services::grpc_client::resolve_pipe_name());
     let daemon_bin = bin_dir.join(daemon_binary_name());
@@ -218,7 +256,7 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // Register and/or start the daemon user service.
     #[cfg(target_os = "macos")]
     {
-        let plist_path = launch_agents_dir(&home).join(PLIST_FILENAME);
+        let plist_path = launch_agents_dir(&home).join(plist_filename());
         write_plist(&home, &plist_path, &daemon_bin).context("Failed to write launchd plist")?;
         bootstrap_launchd_agent(&plist_path)?;
     }
@@ -248,8 +286,9 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
 
 /// Send SIGTERM to the process listening on the socket and wait for it to exit.
 ///
-/// Uses `-F pn` output and verifies each PID's comm against "nodespaced" before
-/// signalling — avoids accidentally terminating gRPC clients sharing the socket.
+/// Uses `-F pn` output and verifies each PID's full binary path against our
+/// installed daemon before signalling — avoids accidentally terminating gRPC
+/// clients or unrelated processes that happen to share the socket.
 #[cfg(unix)]
 async fn kill_running_daemon(socket_path: &Path) {
     if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
@@ -258,11 +297,15 @@ async fn kill_running_daemon(socket_path: &Path) {
 
     // Resolve the PID via lsof rather than storing it, so this works whether the
     // daemon was started by launchd, a previous app launch, or manually.
-    // Parse -F pn output to extract PIDs, then verify each is nodespaced before
-    // sending SIGTERM (same pattern as kill_stale_daemon_sync).
+    // Parse -F pn output to extract PIDs, then verify each against our installed
+    // binary path before sending SIGTERM.
     {
         use std::collections::HashSet;
         use std::process::Command;
+        let installed = home_dir()
+            .map(|h| h.join(DAEMON_BIN_DIR).join(daemon_binary_name()))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let sock = socket_path.to_string_lossy();
         if let Ok(out) = Command::new("lsof")
             .args(["-F", "pn", "-U", sock.as_ref()])
@@ -282,18 +325,18 @@ async fn kill_running_daemon(socket_path: &Path) {
             }
             for pid in pids_to_kill {
                 let exe_check = Command::new("ps")
-                    .args(["-p", &pid.to_string(), "-o", "comm="])
+                    .args(["-p", &pid.to_string(), "-o", "args="])
                     .output()
                     .ok();
-                let is_daemon = exe_check
+                let is_our_daemon = exe_check
                     .as_ref()
                     .map(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .trim()
-                            .ends_with("nodespaced")
+                        let args = String::from_utf8_lossy(&o.stdout);
+                        let argv0 = args.trim().split_whitespace().next().unwrap_or("");
+                        !installed.is_empty() && argv0 == installed
                     })
                     .unwrap_or(false);
-                if is_daemon {
+                if is_our_daemon {
                     // SAFETY: kill() is always safe to call with a valid pid and signal.
                     unsafe { libc::kill(pid, libc::SIGTERM) };
                     tracing::info!("Sent SIGTERM to old nodespaced (pid {})", pid);
@@ -496,7 +539,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
-    let socket_path = xml_escape(&format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE));
+    let socket_path = xml_escape(&format!("{}/{}", home_str, daemon_socket_relative()));
     let db_path = xml_escape(&format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR));
     let log_out = xml_escape(&format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR));
     let log_err = xml_escape(&format!(
@@ -504,7 +547,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         home_str, DAEMON_LOG_DIR
     ));
     let bin_escaped = xml_escape(&bin_str);
-    let label_escaped = xml_escape(LAUNCH_AGENT_LABEL);
+    let label_escaped = xml_escape(launch_agent_label());
 
     // Pro edition: inject the Supabase cloud env the sync daemon needs (#156). The
     // values are baked at build time; all are XML-safe (JWT chars / URLs / schema
@@ -569,12 +612,18 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 /// Register or restart the launchd user agent.
 ///
 /// Uses the modern `launchctl bootstrap gui/<uid>` API (macOS 10.10+).
-/// If already bootstrapped, falls back to `launchctl kickstart -k`.
+/// Any non-success exit code is treated as "might already be registered" — we
+/// attempt `bootout` to clear stale launchd state and then retry `bootstrap`.
+/// This makes recovery from arbitrary launchctl failures (e.g. exit code 5 I/O
+/// error from a diverged plist) self-healing rather than requiring manual
+/// `launchctl bootout` or a reboot.
 #[cfg(target_os = "macos")]
 fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     let uid = get_uid();
     let gui_target = format!("gui/{}", uid);
-    tracing::info!("Bootstrapping launchd agent for {}", gui_target);
+    let label = launch_agent_label();
+    let service_target = format!("{}/{}", gui_target, label);
+    tracing::info!("Bootstrapping launchd agent {} for {}", label, gui_target);
 
     let output = std::process::Command::new("launchctl")
         .args(["bootstrap", &gui_target, &plist_path.to_string_lossy()])
@@ -587,38 +636,56 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    tracing::warn!(
+        "launchctl bootstrap exited with status {} ({}); attempting bootout + retry",
+        output.status,
+        stderr.trim()
+    );
 
-    // Error 37 = EALREADY / Error 36 = ENOTSUP: service already registered.
-    let already_bootstrapped = output.status.code().is_some_and(|c| c == 37 || c == 36)
-        || stderr.contains("already bootstrapped")
-        || stderr.contains("service already exists");
+    // Attempt to remove any stale launchd registration (ignoring errors — the
+    // service may not actually be registered, which is fine).
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &gui_target, &plist_path.to_string_lossy()])
+        .output();
 
-    if already_bootstrapped {
-        tracing::info!("Agent already bootstrapped; kickstarting to restart");
-        let kickstart = std::process::Command::new("launchctl")
-            .args([
-                "kickstart",
-                "-k",
-                &format!("{}/{}", gui_target, LAUNCH_AGENT_LABEL),
-            ])
-            .output()
-            .context("Failed to run launchctl kickstart")?;
+    // Also try by service target label in case the plist path changed.
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &service_target])
+        .output();
 
-        if !kickstart.status.success() {
-            let ks_err = String::from_utf8_lossy(&kickstart.stderr);
-            tracing::warn!(
-                "launchctl kickstart failed (daemon may start on next login): {}",
-                ks_err
-            );
-        }
+    // Retry the bootstrap now that stale state has been cleared.
+    let retry = std::process::Command::new("launchctl")
+        .args(["bootstrap", &gui_target, &plist_path.to_string_lossy()])
+        .output()
+        .context("Failed to run launchctl bootstrap (retry)")?;
+
+    if retry.status.success() {
+        tracing::info!("launchd agent bootstrapped successfully (after bootout)");
         return Ok(());
     }
 
+    // If bootstrap still fails, try kickstart as a last resort (handles the
+    // case where bootout succeeded but the job is immediately re-registered by
+    // launchd's KeepAlive before our retry can bootstrap it).
+    let ks_err_str = String::from_utf8_lossy(&retry.stderr);
     tracing::warn!(
-        "launchctl bootstrap exited with status {}: {}",
-        output.status,
-        stderr
+        "launchctl bootstrap retry failed ({}); attempting kickstart",
+        ks_err_str.trim()
     );
+    let kickstart = std::process::Command::new("launchctl")
+        .args(["kickstart", "-k", &service_target])
+        .output()
+        .context("Failed to run launchctl kickstart")?;
+
+    if !kickstart.status.success() {
+        let ks_err = String::from_utf8_lossy(&kickstart.stderr);
+        tracing::warn!(
+            "launchctl kickstart failed (daemon may start on next login): {}",
+            ks_err.trim()
+        );
+    } else {
+        tracing::info!("launchd agent kickstarted successfully");
+    }
     Ok(())
 }
 
@@ -646,7 +713,7 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
-    let socket_path = format!("{}/{}", home_str, DAEMON_SOCKET_RELATIVE);
+    let socket_path = format!("{}/{}", home_str, daemon_socket_relative());
     let db_path = format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR);
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
