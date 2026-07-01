@@ -33,6 +33,12 @@ service CloudSyncService {
   // No-op if the orchestrator is already in SYNCING.
   rpc TriggerSync (TriggerSyncRequest) returns (TriggerSyncResponse);
 
+  // Explicit sign-out (#199 S6). Drops the in-memory token, wipes the
+  // persisted refresh token from the OS keychain (so a daemon restart
+  // does NOT auto-resume), and tears down the live sync connection —
+  // the orchestrator loop then reports AUTH_REQUIRED. Idempotent.
+  rpc SignOut (SignOutRequest) returns (SignOutResponse);
+
   // --- Team membership (M5, #147). Thin adapters over the cloud
   // membership RPCs; the daemon forwards the signed-in user's JWT, so
   // the same admin / last-admin / open-vs-restricted gates apply
@@ -100,10 +106,18 @@ message SyncStatusEvent {
   State state = 1;
   // Free-form context, e.g. error message or current LIVE SELECT cursor.
   string detail = 2;
+  // Email of the signed-in user, decoded from the session JWT. Empty when
+  // signed out / not yet authenticated. Drives the "signed in as <email>"
+  // affordance (#199 S6), including on the silent-resume path where the
+  // frontend never sees an OAuth response and so otherwise has no identity.
+  string user_email = 3;
 }
 
 message TriggerSyncRequest {}
 message TriggerSyncResponse {}
+
+message SignOutRequest {}
+message SignOutResponse {}
 
 // --- Team membership (M5, #147) ----------------------------------
 // permission is "admin" | "modify" | "readOnly". collection_id / person_id are
