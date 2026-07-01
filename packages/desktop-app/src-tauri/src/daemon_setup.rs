@@ -4,7 +4,9 @@
 //!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
 //!   2. Copy them to ~/.nodespace/bin/ (skipped if dest already matches bundled size).
 //!   3. Register the daemon as a user service:
-//!      - macOS: write ~/Library/LaunchAgents/app.nodespace.daemon.plist and bootstrap it.
+//!      - macOS: write ~/Library/LaunchAgents/<plist_filename()> and bootstrap it.
+//!              The filename and launchd label vary by build variant (debug/release × community/Pro)
+//!              so dev builds and the production app never collide on the same launchd job or socket.
 //!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
 //!      - Windows: spawn the daemon process directly and write an HKCU autorun key.
 //!   4. Wait for the IPC endpoint to appear (UDS on Unix, Named Pipe on Windows).
@@ -88,15 +90,10 @@ fn launch_agent_label() -> &'static str {
     }
 }
 
-/// macOS plist filename, derived from the label (dots → dots, .plist appended).
+/// macOS plist filename — label + ".plist", so label and filename are always in sync.
 #[cfg(target_os = "macos")]
-fn plist_filename() -> &'static str {
-    match (cfg!(debug_assertions), is_pro_build()) {
-        (false, false) => "app.nodespace.daemon.plist",
-        (false, true) => "app.nodespace.daemon.pro.plist",
-        (true, false) => "app.nodespace.daemon.dev.plist",
-        (true, true) => "app.nodespace.daemon.dev.pro.plist",
-    }
+fn plist_filename() -> String {
+    format!("{}.plist", launch_agent_label())
 }
 
 /// Synchronously kill the running daemon if the installed binary differs in size
@@ -667,10 +664,10 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     // If bootstrap still fails, try kickstart as a last resort (handles the
     // case where bootout succeeded but the job is immediately re-registered by
     // launchd's KeepAlive before our retry can bootstrap it).
-    let ks_err_str = String::from_utf8_lossy(&retry.stderr);
+    let retry_stderr = String::from_utf8_lossy(&retry.stderr);
     tracing::warn!(
         "launchctl bootstrap retry failed ({}); attempting kickstart",
-        ks_err_str.trim()
+        retry_stderr.trim()
     );
     let kickstart = std::process::Command::new("launchctl")
         .args(["kickstart", "-k", &service_target])
