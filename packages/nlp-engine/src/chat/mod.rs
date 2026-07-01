@@ -601,10 +601,15 @@ impl ChatEngine {
 
         // Drain any text the splitters held back (a trailing partial marker that
         // never completed, or an unclosed channel/think block truncated by the
-        // token cap).
+        // token cap). channel_splitter's carry must flow through think_splitter
+        // before finalizing it, mirroring the streaming push path above — a
+        // carried "<thi" fragment held by channel_splitter still needs to be
+        // classified as answer vs. reasoning by think_splitter, not emitted raw.
         let (channel_answer, final_reasoning) = channel_splitter.finalize();
-        let (final_answer, final_think_reasoning) = think_splitter.finalize();
-        let final_answer = channel_answer + &final_answer;
+        let (routed_answer, routed_reasoning) = think_splitter.push(&channel_answer);
+        let (think_carry_answer, think_carry_reasoning) = think_splitter.finalize();
+        let final_answer = routed_answer + &think_carry_answer;
+        let final_think_reasoning = routed_reasoning + &think_carry_reasoning;
         if !final_reasoning.is_empty() {
             on_chunk(ChatChunk::Reasoning(final_reasoning));
         }
@@ -1410,6 +1415,60 @@ mod tests {
             "no plain-text leakage of <tool_call> XML expected; got: {:?}",
             chunks
         );
+    }
+
+    #[cfg(feature = "chat-service")]
+    #[test]
+    fn emit_oai_delta_finalize_routes_channel_carry_through_think_splitter() {
+        // Reproduces the production finalize path: a delta leaves ChannelSplitter
+        // holding a carried "<thi" fragment (the prefix of Ornith's <think>
+        // marker) when generation ends mid-token. The old finalize logic emitted
+        // channel_splitter's carry straight to the answer without routing it
+        // through think_splitter first, so a truncated <think> opener would leak
+        // into the visible answer instead of being held as reasoning.
+        let delta = serde_json::json!({
+            "role": "assistant",
+            "content": "answer text<|chan"
+        })
+        .to_string();
+
+        let chunks = std::sync::Mutex::new(Vec::<ChatChunk>::new());
+        let mut ids = std::collections::HashMap::new();
+        let mut splitter = ChannelSplitter::default();
+        let mut think_splitter = ThinkSplitter::default();
+        let push_chunk = |chunk: ChatChunk| chunks.lock().unwrap().push(chunk);
+
+        emit_oai_delta(
+            &delta,
+            &mut ids,
+            &mut splitter,
+            &mut think_splitter,
+            &push_chunk,
+        );
+
+        // ChannelSplitter holds "<|chan" as an unresolved partial-marker carry;
+        // nothing should have been emitted as answer/reasoning for it yet.
+        let (channel_answer, final_reasoning) = splitter.finalize();
+        let (routed_answer, routed_reasoning) = think_splitter.push(&channel_answer);
+        let (think_carry_answer, think_carry_reasoning) = think_splitter.finalize();
+        let final_answer = routed_answer + &think_carry_answer;
+        let final_reasoning_all = final_reasoning + &routed_reasoning + &think_carry_reasoning;
+
+        assert_eq!(
+            final_answer, "<|chan",
+            "channel_splitter's trailing partial marker must survive routing through think_splitter"
+        );
+        assert_eq!(final_reasoning_all, "");
+
+        let chunks = chunks.into_inner().unwrap();
+        let answer_so_far: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ChatChunk::Token(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answer_so_far, "answer text");
     }
 
     #[test]

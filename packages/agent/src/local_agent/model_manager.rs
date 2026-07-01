@@ -169,7 +169,11 @@ const ORNITH_1_9B: CatalogEntry = CatalogEntry {
     size_bytes: 5_614_720_712, // 5.23 GiB
     quantization: "Q4_K_M",
     url: "https://huggingface.co/DeepReinforce/Ornith-1.0-9B-GGUF/resolve/main/ornith-1.0-9b-Q4_K_M.gguf",
-    sha256: "", // Populate before promoting past user-selectable trial status
+    // Policy exception: DeepReinforce is not an official ggml-org/mistralai repo,
+    // so the empty-string skip-verification policy does not strictly apply.
+    // Acceptable here because this is a trial-only, user-selectable entry (#1465);
+    // populate the SHA-256 from the model card before promoting to a default.
+    sha256: "",
     context_window: 32_768,
     default_temperature: 0.6,
     type_k: None, // F16 — recurrent SSM layers keep KV cache small at this size
