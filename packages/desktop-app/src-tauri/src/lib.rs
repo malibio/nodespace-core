@@ -341,6 +341,7 @@ pub fn run() {
                             serde_json::json!({
                                 "state": s.state,
                                 "detail": s.detail,
+                                "user_email": s.user_email,
                             })
                         }),
                     });
@@ -439,6 +440,7 @@ pub fn run() {
             commands::pro_sync::pro_tier,
             commands::pro_sync::pro_subscribe_sync_status,
             commands::pro_sync::pro_initiate_oauth,
+            commands::pro_sync::pro_signout,
             commands::pro_sync::pro_set_member,
             commands::pro_sync::pro_remove_member,
             commands::pro_sync::pro_leave_collection,

@@ -14,7 +14,7 @@ use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{
     AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, InitiateOAuthRequest,
     LeaveCollectionRequest, ListMembersRequest, RemoveMemberRequest, RequestJoinRequest,
-    SetMemberRequest, WatchSyncStatusRequest,
+    SetMemberRequest, SignOutRequest, WatchSyncStatusRequest,
 };
 use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
@@ -87,6 +87,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                     let payload = serde_json::json!({
                         "state": evt.state,
                         "detail": evt.detail,
+                        "user_email": evt.user_email,
                     });
                     if let Err(e) = app_handle.emit("sync:status", payload) {
                         tracing::warn!(error = %e, "failed to emit sync:status");
@@ -122,6 +123,7 @@ fn emit_disconnected(app: &AppHandle, reason: String) {
     let payload = serde_json::json!({
         "state": PbState::Disconnected as i32,
         "detail": reason,
+        "user_email": "",
     });
     if let Err(e) = app.emit("sync:status", payload) {
         tracing::warn!(error = %e, "failed to emit synthetic sync:status DISCONNECTED");
@@ -158,6 +160,25 @@ pub async fn pro_initiate_oauth(
         .map_err(|e| format!("InitiateOAuth failed: {e}"))?
         .into_inner();
     Ok(resp.attempt_id)
+}
+
+/// Sign out of Pro (#199 S6). Tells the daemon to drop its session and wipe the
+/// persisted refresh token from the OS keychain, so a restart won't auto-resume.
+/// The resulting AUTH_REQUIRED transition flows back through the `sync:status`
+/// stream. No-ops in community mode (no `ProClient`), matching the other Pro
+/// commands' side-effect-free contract.
+#[tauri::command]
+pub async fn pro_signout(app: AppHandle) -> Result<(), String> {
+    let Some(pro) = app.try_state::<ProClient>() else {
+        return Ok(());
+    };
+    let mut client = pro.client().await;
+    client
+        .sign_out(SignOutRequest {})
+        .await
+        .map_err(|e| format!("SignOut failed: {e}"))?;
+    tracing::info!("Pro: SignOut");
+    Ok(())
 }
 
 // --- Team membership commands (M5, #147) ----------------------------------

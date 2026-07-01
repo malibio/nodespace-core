@@ -67,6 +67,13 @@ class ProSyncStore {
   tier = $state<ProTier>('unknown');
   state = $state<SyncState>('unspecified');
   detail = $state<string>('');
+  /**
+   * Email of the signed-in user, from the daemon's `SyncStatusEvent.user_email`
+   * (decoded from the session JWT). Empty when signed out / not yet authenticated.
+   * Drives the "signed in as <email>" affordance (#199 S6) — needed because on the
+   * silent-resume path the frontend never sees an OAuth response.
+   */
+  userEmail = $state<string>('');
 
   isPro = $derived(this.tier === 'pro');
 
@@ -97,7 +104,7 @@ class ProSyncStore {
 
     this.unlistenTier = await listen<{
       tier: ProTier;
-      initial_status: { state: number; detail: string } | null;
+      initial_status: { state: number; detail: string; user_email?: string } | null;
     }>('pro:tier-detected', async (event) => {
       const p = event.payload;
       log.info('tier detected', { tier: p.tier });
@@ -105,6 +112,7 @@ class ProSyncStore {
       if (p.initial_status) {
         this.state = decodeState(p.initial_status.state);
         this.detail = p.initial_status.detail;
+        this.userEmail = p.initial_status.user_email ?? '';
       }
       // The first pro_subscribe_sync_status invoke below races the
       // backend's async init (Tauri setup spawns the connect on the
@@ -120,11 +128,12 @@ class ProSyncStore {
       }
     });
 
-    this.unlistenStatus = await listen<{ state: number; detail: string }>(
+    this.unlistenStatus = await listen<{ state: number; detail: string; user_email?: string }>(
       'sync:status',
       (event) => {
         this.state = decodeState(event.payload.state);
         this.detail = event.payload.detail;
+        this.userEmail = event.payload.user_email ?? '';
       }
     );
 
@@ -136,6 +145,23 @@ class ProSyncStore {
     }
 
     return () => this.stop();
+  }
+
+  /**
+   * Manual sign-out (#199 S6). Tells the daemon to drop its session and wipe the
+   * persisted refresh token from the keychain (so a restart won't auto-resume),
+   * then optimistically reflects signed-out locally. The daemon's AUTH_REQUIRED
+   * transition confirms via `sync:status`. No-op in community mode (the backend
+   * command returns early with no `ProClient`).
+   */
+  async signOut(): Promise<void> {
+    try {
+      await invoke('pro_signout');
+    } catch (e) {
+      log.warn('pro_signout invoke failed', { error: e });
+    }
+    this.state = 'auth-required';
+    this.userEmail = '';
   }
 
   stop() {
