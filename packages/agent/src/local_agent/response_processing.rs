@@ -317,6 +317,9 @@ fn strip_ornith_tool_call_leak(text: &str) -> String {
     }
     let result = ornith_tool_call_re().replace_all(text, "").into_owned();
     // Drop a dangling, never-closed tool-call block (truncated mid-generation).
+    // Assumes a dangling opener is always trailing: truncation happens at the
+    // end of generation (token cap or stream cutoff), so there is never
+    // legitimate prose after an unclosed <tool_call> to preserve.
     let result = match result.find("<tool_call>") {
         Some(idx) => result[..idx].to_string(),
         None => result,

@@ -171,8 +171,10 @@ const QWEN35_9B: CatalogEntry = CatalogEntry {
 /// assumed -- a turn requiring N ReAct iterations pays a full-prompt decode cost
 /// N times, compounding with conversation length. A 4-iteration turn (e.g. a
 /// failed tool call requiring 3 retries) took ~108s in practice. This is an
-/// upstream llama.cpp limitation for recurrent/hybrid architectures, still open
-/// as of the issues linked above -- not something fixable in this codebase.
+/// upstream llama.cpp limitation for recurrent/hybrid architectures, open as
+/// of the issues linked above at the time this was written (2026-07-01) --
+/// not something fixable in this codebase. Re-check those issues before
+/// assuming this limitation still applies to a newer vendored llama.cpp.
 const ORNITH_1_9B: CatalogEntry = CatalogEntry {
     id: "ornith-1-9b-q4km",
     family: ModelFamily::Qwen35,
