@@ -425,21 +425,21 @@ fn def_create_node() -> ToolDefinition {
 fn def_update_node() -> ToolDefinition {
     ToolDefinition {
         name: "update_node".into(),
-        description: "Update an existing node's content or properties. The node service recomputes the title automatically after any update.".into(),
+        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes or get_node), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "id": {
                     "type": "string",
-                    "description": "Node ID to update"
+                    "description": "Node ID to update, e.g. \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\""
                 },
                 "content": {
                     "type": "string",
-                    "description": "New content/text for the node (optional)"
+                    "description": "New content/text for the node (optional), e.g. \"Buy milk and eggs\""
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Properties to merge/update (optional)"
+                    "description": "Properties to merge/update (optional), e.g. {\"status\": \"done\"}"
                 }
             },
             "required": ["id"]
