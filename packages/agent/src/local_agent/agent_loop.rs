@@ -868,8 +868,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     }
                     accumulated_reasoning.push_str(tail_reasoning.trim());
                 }
-                if tail_text.is_empty() {
-                    // Synthesize from tool results when model returned nothing
+                let normalized_tail = normalize_response(&tail_text);
+                if normalized_tail.is_empty() {
+                    // Model returned nothing, or its entire response was internal
+                    // plumbing (e.g. a leaked <tool_call> block) stripped down to
+                    // nothing — synthesize a summary from the tool results instead
+                    // of persisting a blank assistant bubble.
                     let mut counts: Vec<(&'static str, usize)> = Vec::new();
                     for t in &all_tool_executions {
                         let label = humanize_tool_name(&t.name);
@@ -891,7 +895,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else {
-                    normalize_response(&tail_text)
+                    normalized_tail
                 }
             } else {
                 // Inference failed — synthesize from executions
