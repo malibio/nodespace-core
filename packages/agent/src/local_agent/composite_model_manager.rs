@@ -82,12 +82,19 @@ impl CompositeModelManager {
     }
 
     /// Set the progress callback for Ollama downloads of a specific model.
+    ///
+    /// `model_id` may carry the `"ollama:"` prefix (as used by the frontend
+    /// and `list()`) — it's stripped here to match the unprefixed id that
+    /// [`Self::download`] passes to the underlying `OllamaModelManager`,
+    /// which is what progress events are actually keyed and looked up by.
     pub async fn set_ollama_progress_callback(
         &self,
         model_id: &str,
         cb: Box<dyn Fn(DownloadEvent) + Send + Sync>,
     ) {
-        self.ollama.set_progress_callback(model_id, cb).await;
+        self.ollama
+            .set_progress_callback(Self::strip_ollama_prefix(model_id), cb)
+            .await;
     }
 
     /// Clear the GGUF progress callback for a specific model, dropping any
@@ -100,8 +107,13 @@ impl CompositeModelManager {
     /// Clear the Ollama progress callback for a specific model, dropping any
     /// resources (e.g. channel senders) it holds. Only affects that model's
     /// callback — concurrent downloads of other models are unaffected.
+    ///
+    /// `model_id` is de-prefixed for the same reason as
+    /// [`Self::set_ollama_progress_callback`].
     pub async fn clear_ollama_progress_callback(&self, model_id: &str) {
-        self.ollama.clear_progress_callback(model_id).await;
+        self.ollama
+            .clear_progress_callback(Self::strip_ollama_prefix(model_id))
+            .await;
     }
 }
 
@@ -233,5 +245,69 @@ mod tests {
             CompositeModelManager::add_ollama_prefix("llama3.2:3b"),
             "ollama:llama3.2:3b"
         );
+    }
+
+    // -- Ollama progress callback de-prefixing (issue #1471 re-review) ------
+    //
+    // `download()` strips the "ollama:" prefix before delegating to the
+    // underlying OllamaModelManager, which keys its progress callbacks and
+    // fires progress events by that same unprefixed id. If
+    // set/clear_ollama_progress_callback didn't also strip the prefix, a
+    // callback registered via the composite manager (with the prefixed id,
+    // as the daemon does) would never be found when progress actually fires,
+    // silently dropping every progress tick for Ollama downloads.
+
+    fn test_composite_manager() -> (CompositeModelManager, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let gguf = Arc::new(GgufModelManager::with_dir(tmp.path().to_path_buf()).unwrap());
+        let ollama = Arc::new(OllamaModelManager::with_base_url(
+            "http://127.0.0.1:19999".to_string(),
+        ));
+        (CompositeModelManager::new(gguf, ollama), tmp)
+    }
+
+    #[tokio::test]
+    async fn ollama_progress_callback_set_with_prefixed_id_is_stored_under_stripped_key() {
+        let (mgr, _tmp) = test_composite_manager();
+        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Register via the composite manager using the prefixed id, exactly
+        // as the daemon does in `local_agent_service.rs`.
+        mgr.set_ollama_progress_callback(
+            "ollama:llama3.2:3b",
+            Box::new(move |_evt| {
+                let _ = tx.try_send(());
+            }),
+        )
+        .await;
+
+        // Clearing via the *unprefixed* id (mirroring how OllamaModelManager
+        // itself would look it up during `fire_progress`, keyed by the
+        // unprefixed id `download()` uses) must find and drop it.
+        mgr.ollama_manager()
+            .clear_progress_callback("llama3.2:3b")
+            .await;
+        assert!(rx.is_closed());
+    }
+
+    #[tokio::test]
+    async fn clear_ollama_progress_callback_accepts_prefixed_id() {
+        let (mgr, _tmp) = test_composite_manager();
+        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        mgr.set_ollama_progress_callback(
+            "ollama:llama3.2:3b",
+            Box::new(move |_evt| {
+                let _ = tx.try_send(());
+            }),
+        )
+        .await;
+        assert!(!rx.is_closed());
+
+        // Clearing through the composite manager with the *same prefixed*
+        // id it was registered with must also successfully remove it.
+        mgr.clear_ollama_progress_callback("ollama:llama3.2:3b")
+            .await;
+        assert!(rx.is_closed());
     }
 }
