@@ -4841,4 +4841,69 @@ mod tests {
 
         Ok(())
     }
+
+    /// #1483: two `SqliteStore`s opened against the same file (simulating a dev +
+    /// production daemon both holding the DB) must not surface SQLITE_BUSY as a
+    /// hard error on the loser of a write race. `busy_timeout` (set in schema.sql,
+    /// applied per-connection in `initialize_schema`) makes the second writer retry
+    /// until the first releases its lock, instead of failing immediately.
+    ///
+    /// Requires a multi-thread runtime: libsql's local connection executes
+    /// synchronously (no `spawn_blocking`), so on a current-thread runtime the
+    /// lock-holder and writer tasks would starve each other instead of running
+    /// concurrently.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_writers_retry_instead_of_erroring_on_busy() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("shared.db");
+
+        let store_a = SqliteStore::new(db_path.clone()).await?;
+        let store_b = SqliteStore::new(db_path.clone()).await?;
+
+        // Hold store_a's write lock open in a background task.
+        let conn_a = store_a.db.clone();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel::<()>();
+        let hold_task = tokio::spawn(async move {
+            conn_a.execute("BEGIN IMMEDIATE", ()).await?;
+            conn_a
+                .execute(
+                    "INSERT INTO node (id, node_type, content, properties, lifecycle_status, version, created_at, modified_at) VALUES ('lock-holder', 'text', '', '{}', 'active', 1, '2026-01-01', '2026-01-01')",
+                    (),
+                )
+                .await?;
+            let _ = locked_tx.send(());
+            // Hold the lock until the test tells us to release it.
+            let _ = release_rx.await;
+            conn_a.execute("COMMIT", ()).await?;
+            anyhow::Ok(())
+        });
+
+        locked_rx
+            .await
+            .context("lock holder failed to acquire write lock")?;
+
+        // store_b attempts a write while store_a holds the lock. Without
+        // busy_timeout this fails immediately with SQLITE_BUSY; with it, the
+        // write blocks until store_a commits (well under the 5s timeout) then
+        // succeeds.
+        let write_task = tokio::spawn(async move {
+            let node = Node::new("text".to_string(), "from store_b".to_string(), json!({}));
+            store_b.create_node(node, None, None).await
+        });
+
+        // Release store_a's lock shortly after store_b's write is issued, so the
+        // retry path is actually exercised rather than racing a lock that's
+        // already free.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = release_tx.send(());
+
+        hold_task.await.context("lock holder task panicked")??;
+        write_task
+            .await
+            .context("writer task panicked")?
+            .context("store_b write should retry and succeed, not error with SQLITE_BUSY")?;
+
+        Ok(())
+    }
 }
