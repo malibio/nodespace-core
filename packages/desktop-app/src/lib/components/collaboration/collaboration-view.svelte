@@ -38,6 +38,21 @@
 	let addRole = $state<Permission>('readOnly');
 	let adding = $state(false);
 
+	// --- Invites & requests (S4 #241), admin-only ---
+	const TTL_PRESETS: { label: string; secs?: number }[] = [
+		{ label: '1 day', secs: 86400 },
+		{ label: '7 days', secs: 604800 },
+		{ label: 'Never', secs: undefined }
+	];
+	let inviteRole = $state<Permission>('readOnly');
+	let inviteEmail = $state('');
+	let inviteTtlIdx = $state(1); // default: 7 days
+	let creatingInvite = $state(false);
+	let mintedCode = $state<string | null>(null);
+	let busyInvite = $state<string | null>(null);
+	let approveRole = $state<Record<string, Permission>>({});
+	let busyRequest = $state<string | null>(null);
+
 	$effect(() => {
 		if (proSync.isPro && collectionId) {
 			membership.loadCollection(collectionId);
@@ -112,6 +127,85 @@
 		} finally {
 			adding = false;
 		}
+	}
+
+	async function createInvite() {
+		actionError = null;
+		creatingInvite = true;
+		mintedCode = null;
+		try {
+			const email = inviteEmail.trim() || undefined;
+			const code = await membership.createInvite(
+				collectionId,
+				inviteRole,
+				email,
+				TTL_PRESETS[inviteTtlIdx].secs
+			);
+			// A bearer (no-email) invite yields a share code to copy; an email-bound
+			// invite is delivered to that address, so don't surface a code for it.
+			if (!email) mintedCode = code;
+			inviteEmail = '';
+		} catch (e) {
+			log.warn('createInvite failed', { error: e });
+			actionError = friendly(e);
+		} finally {
+			creatingInvite = false;
+		}
+	}
+
+	async function copyCode(code: string) {
+		try {
+			if (typeof window !== 'undefined' && window.navigator?.clipboard) {
+				await window.navigator.clipboard.writeText(code);
+			}
+		} catch (e) {
+			log.warn('clipboard write failed', { error: e });
+		}
+	}
+
+	async function revoke(inviteId: string) {
+		actionError = null;
+		busyInvite = inviteId;
+		try {
+			await membership.revokeInvite(collectionId, inviteId);
+		} catch (e) {
+			log.warn('revokeInvite failed', { error: e });
+			actionError = friendly(e);
+		} finally {
+			busyInvite = null;
+		}
+	}
+
+	async function approve(requestId: string) {
+		actionError = null;
+		busyRequest = requestId;
+		try {
+			await membership.approveRequest(collectionId, requestId, approveRole[requestId] ?? 'readOnly');
+		} catch (e) {
+			log.warn('approveRequest failed', { error: e });
+			actionError = friendly(e);
+		} finally {
+			busyRequest = null;
+		}
+	}
+
+	async function reject(requestId: string) {
+		actionError = null;
+		busyRequest = requestId;
+		try {
+			await membership.rejectRequest(collectionId, requestId);
+		} catch (e) {
+			log.warn('rejectRequest failed', { error: e });
+			actionError = friendly(e);
+		} finally {
+			busyRequest = null;
+		}
+	}
+
+	function expiryLabel(iso: string): string {
+		if (!iso) return 'never expires';
+		const d = new Date(iso);
+		return isNaN(d.getTime()) ? iso : `expires ${d.toLocaleDateString()}`;
 	}
 </script>
 
@@ -196,7 +290,107 @@
 							{adding ? 'Adding…' : 'Add'}
 						</button>
 					</div>
-					<p class="hint">To bring in someone new, use <strong>Invites</strong> instead.</p>
+					<p class="hint">To bring in someone new, use <strong>Invites</strong> below.</p>
+				</div>
+
+				<div class="invites">
+					<div class="section-head">
+						<h3>Invites</h3>
+					</div>
+					<div class="add-row">
+						<select class="role-select" bind:value={inviteRole} aria-label="Invite role">
+							{#each PERMISSIONS as p}
+								<option value={p}>{ROLE_LABEL[p]}</option>
+							{/each}
+						</select>
+						<input
+							class="add-input"
+							type="email"
+							placeholder="email (optional)"
+							bind:value={inviteEmail}
+							disabled={creatingInvite}
+						/>
+						<select class="role-select" bind:value={inviteTtlIdx} aria-label="Invite expiry">
+							{#each TTL_PRESETS as t, i}
+								<option value={i}>{t.label}</option>
+							{/each}
+						</select>
+						<button class="btn btn-primary" disabled={creatingInvite} onclick={createInvite}>
+							{creatingInvite ? 'Creating…' : 'Create invite'}
+						</button>
+					</div>
+
+					{#if mintedCode}
+						<div class="minted" role="status">
+							<code>{mintedCode}</code>
+							<button class="btn btn-ghost" onclick={() => mintedCode && copyCode(mintedCode)}
+								>Copy code</button
+							>
+						</div>
+					{/if}
+
+					{#if view.invites.length > 0}
+						<ul class="roster">
+							{#each view.invites as inv (inv.id)}
+								<li class="member">
+									<span class="member-name">{inv.email || '(share code)'}</span>
+									<span class="role-badge" data-role={inv.permission}>{ROLE_LABEL[inv.permission]}</span
+									>
+									<span class="expiry">{expiryLabel(inv.expiresAt)}</span>
+									{#if inv.code}
+										<button class="btn btn-ghost" onclick={() => copyCode(inv.code)}>Copy code</button>
+									{/if}
+									<button
+										class="btn btn-ghost"
+										disabled={busyInvite === inv.id}
+										onclick={() => revoke(inv.id)}>Revoke</button
+									>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="hint">No pending invites.</p>
+					{/if}
+				</div>
+
+				<div class="requests">
+					<div class="section-head">
+						<h3>Join requests</h3>
+						{#if view.requests.length > 0}<span class="count">{view.requests.length}</span>{/if}
+					</div>
+					{#if view.requests.length > 0}
+						<ul class="roster">
+							{#each view.requests as req (req.id)}
+								<li class="member">
+									<span class="member-name" title={req.requestedBy}
+										>{membership.displayFor(req.requestedBy)}</span
+									>
+									<select
+										class="role-select"
+										value={approveRole[req.id] ?? 'readOnly'}
+										onchange={(e) => (approveRole[req.id] = e.currentTarget.value as Permission)}
+										aria-label="Approve role for {req.requestedBy}"
+									>
+										{#each PERMISSIONS as p}
+											<option value={p}>{ROLE_LABEL[p]}</option>
+										{/each}
+									</select>
+									<button
+										class="btn btn-primary"
+										disabled={busyRequest === req.id}
+										onclick={() => approve(req.id)}>Approve</button
+									>
+									<button
+										class="btn btn-ghost"
+										disabled={busyRequest === req.id}
+										onclick={() => reject(req.id)}>Reject</button
+									>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="hint">No pending requests.</p>
+					{/if}
 				</div>
 			{/if}
 		{/if}
@@ -333,5 +527,35 @@
 		font-size: 0.78rem;
 		color: hsl(var(--muted-foreground));
 		margin: 0.4rem 0 0;
+	}
+	.invites,
+	.requests {
+		margin-top: 0.75rem;
+		border-top: 1px solid hsl(var(--border));
+		padding-top: 0.75rem;
+	}
+	.section-head h3 {
+		font-size: 0.85rem;
+		font-weight: 600;
+		margin: 0;
+		color: hsl(var(--foreground));
+	}
+	.minted {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0.5rem 0;
+	}
+	.minted code {
+		font-family: var(--font-mono, monospace);
+		font-size: 0.8rem;
+		background: hsl(var(--muted));
+		padding: 0.2rem 0.45rem;
+		border-radius: 6px;
+		overflow-wrap: anywhere;
+	}
+	.expiry {
+		font-size: 0.75rem;
+		color: hsl(var(--muted-foreground));
 	}
 </style>
