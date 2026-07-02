@@ -86,6 +86,19 @@ describe('MembershipStore', () => {
 		expect(membership.currentUserRole('c1')).toBeNull();
 	});
 
+	it('mutations are inert in community mode (never reach the service)', async () => {
+		proSyncMock.isPro = false;
+		// void mutation: no-ops silently, never touches the service
+		await membership.setMember('c1', 'bob', 'modify');
+		expect(svc.setMember).not.toHaveBeenCalled();
+		// value-returning mutations: throw (never a fake success) and never touch the
+		// service — these are the S5 onboarding entry points, so the guard matters.
+		await expect(membership.acceptInvite('code')).rejects.toThrow(/Pro/);
+		await expect(membership.requestJoin('c1')).rejects.toThrow(/Pro/);
+		expect(svc.acceptInvite).not.toHaveBeenCalled();
+		expect(svc.requestJoin).not.toHaveBeenCalled();
+	});
+
 	it('currentUserRole is null when the caller identity is unknown', async () => {
 		svc.currentPerson.mockResolvedValue({ personId: '', email: '' });
 		svc.listMembers.mockResolvedValue([{ personId: 'someone', permission: 'admin' }]);

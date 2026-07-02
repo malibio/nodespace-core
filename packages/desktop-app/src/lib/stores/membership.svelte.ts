@@ -55,6 +55,16 @@ class MembershipStore {
 		return proSync.isPro;
 	}
 
+	/**
+	 * Guard for the value-returning mutations: throws in community mode so they
+	 * never reach the (Pro-only) `pro_*` commands. The void-returning mutations
+	 * early-`return` instead. Keeps the store's community-inert contract whole even
+	 * though today's only callers are already Pro-gated.
+	 */
+	private requirePro(): void {
+		if (!this.isPro) throw new Error('Pro sync is required for membership operations');
+	}
+
 	/** Snapshot for a collection (empty, non-null, when not yet loaded). */
 	get(collectionId: string): CollectionMembership {
 		return this.byCollection[collectionId] ?? emptyMembership();
@@ -91,9 +101,15 @@ class MembershipStore {
 		return personId;
 	}
 
-	/** Ensure the caller's identity is loaded (once). No-op in community mode. */
+	/**
+	 * Ensure the caller's identity is loaded. No-op in community mode, or once a
+	 * *bound* identity is cached. Keeps retrying while `personId` is empty so a
+	 * mid-session identity bind (device signs in after the store first ran) is
+	 * picked up on the next load rather than leaving `currentUserRole` null all
+	 * session.
+	 */
 	async ensureIdentity(): Promise<void> {
-		if (!this.isPro || this.currentPerson) return;
+		if (!this.isPro || this.currentPerson?.personId) return;
 		try {
 			this.currentPerson = await membershipService.currentPerson();
 		} catch (e) {
@@ -116,15 +132,16 @@ class MembershipStore {
 			// Determine admin-ness from the freshly-loaded roster (not stale cache).
 			const me = this.currentPerson?.personId;
 			const amAdmin = !!me && members.some((m) => m.personId === me && m.permission === 'admin');
-			let invites: Invite[] = [];
-			let requests: JoinRequest[] = [];
+			// Commit the roster immediately so a failure of the admin-only listings
+			// below doesn't discard an already-fetched roster (patch merges).
+			this.patch(collectionId, { members, loading: false, error: null });
 			if (amAdmin) {
-				[invites, requests] = await Promise.all([
+				const [invites, requests] = await Promise.all([
 					membershipService.listInvites(collectionId),
 					membershipService.listRequests(collectionId)
 				]);
+				this.patch(collectionId, { invites, requests });
 			}
-			this.patch(collectionId, { members, invites, requests, loading: false, error: null });
 		} catch (e) {
 			log.warn('loadCollection failed', { collectionId, error: e });
 			this.patch(collectionId, { loading: false, error: String(e) });
@@ -135,16 +152,19 @@ class MembershipStore {
 	//     affected collection so the cached roster/invites/requests stay in sync. ---
 
 	async setMember(collectionId: string, personId: string, permission: Permission): Promise<void> {
+		if (!this.isPro) return;
 		await membershipService.setMember(collectionId, personId, permission);
 		await this.loadCollection(collectionId);
 	}
 
 	async removeMember(collectionId: string, personId: string): Promise<void> {
+		if (!this.isPro) return;
 		await membershipService.removeMember(collectionId, personId);
 		await this.loadCollection(collectionId);
 	}
 
 	async leaveCollection(collectionId: string): Promise<void> {
+		if (!this.isPro) return;
 		await membershipService.leaveCollection(collectionId);
 		// After leaving, the caller can no longer read the roster — drop the cache entry.
 		const next = { ...this.byCollection };
@@ -158,12 +178,14 @@ class MembershipStore {
 		email?: string,
 		ttlSecs?: number
 	): Promise<string> {
+		this.requirePro();
 		const code = await membershipService.createInvite(collectionId, permission, email, ttlSecs);
 		await this.loadCollection(collectionId);
 		return code;
 	}
 
 	async revokeInvite(collectionId: string, inviteId: string): Promise<void> {
+		if (!this.isPro) return;
 		await membershipService.revokeInvite(inviteId);
 		await this.loadCollection(collectionId);
 	}
@@ -173,11 +195,13 @@ class MembershipStore {
 		requestId: string,
 		permission?: Permission
 	): Promise<void> {
+		if (!this.isPro) return;
 		await membershipService.approveRequest(requestId, permission);
 		await this.loadCollection(collectionId);
 	}
 
 	async rejectRequest(collectionId: string, requestId: string): Promise<void> {
+		if (!this.isPro) return;
 		// Rejecting a request reuses revoke_invite (same collection_invites row).
 		await membershipService.revokeInvite(requestId);
 		await this.loadCollection(collectionId);
@@ -189,11 +213,13 @@ class MembershipStore {
 	 * collection is loaded on demand by its view).
 	 */
 	async acceptInvite(code: string): Promise<string> {
+		this.requirePro();
 		return membershipService.acceptInvite(code);
 	}
 
 	/** Ask to join a restricted collection (onboarding, S5). Returns the request id. */
 	async requestJoin(collectionId: string): Promise<string> {
+		this.requirePro();
 		return membershipService.requestJoin(collectionId);
 	}
 
