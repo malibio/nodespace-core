@@ -11,6 +11,7 @@
   } from '$lib/stores/settings';
   import { ollamaAvailable, chatModelList } from '$lib/services/tauri-commands';
   import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
+  import type { ModelFamily } from '$lib/types/agent-types';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ModelManager');
@@ -23,8 +24,11 @@
   const MIN_RAM_GB = 16;
   const ramTooLow = $derived(systemRamGb > 0 && systemRamGb < MIN_RAM_GB);
 
-  // We only show Ministral models in settings (catalog is already filtered at Tauri layer)
-  const localModels = $derived(models.filter((m) => m.family === 'ministral'));
+  // Settings shows the curated set already filtered at the Tauri layer
+  // (see EXPOSED_GGUF_MODEL_IDS in chat_models.rs); families listed here must
+  // match whatever that allowlist currently exposes.
+  const LOCAL_FAMILIES: ModelFamily[] = ['ministral', 'qwen35'];
+  const localModels = $derived(models.filter((m) => LOCAL_FAMILIES.includes(m.family)));
 
   // --- Ollama state ---
   let ollamaRunning = $state(false);
@@ -95,7 +99,7 @@
   function buildDefaultOptions() {
     const opts: { label: string; value: string }[] = [];
     // Local models
-    for (const m of models.filter((m) => m.family === 'ministral')) {
+    for (const m of models.filter((m) => LOCAL_FAMILIES.includes(m.family))) {
       if (m.status.status === 'ready' || m.status.status === 'loaded') {
         opts.push({ label: `Local — ${m.name}`, value: encodeSelection({ provider: 'native', modelId: m.id }) });
       }
@@ -230,6 +234,14 @@
               {getStatusLabel(m.status.status)}
             </span>
           </div>
+
+          {#if m.family === 'qwen35'}
+            <p class="mm-notice mm-notice--warn">
+              Multi-step tool-calling turns get progressively slower with each retry — this
+              model's architecture can't reuse prior turns' work, so longer agent
+              conversations may feel slow. Best for simple, single-step requests.
+            </p>
+          {/if}
 
           {#if progress !== undefined}
             <div class="progress-row">

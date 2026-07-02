@@ -152,6 +152,52 @@ const QWEN35_9B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
+/// Ornith 1.0 9B -- DeepReinforce (June 2026), MIT licensed. Hybrid SSM/attention
+/// (`qwen35` arch in llama.cpp): 24 of 32 layers are Gated Delta Net (recurrent),
+/// 8 are full attention. Uses `ModelFamily::Qwen35` (same OAI-compat Jinja path);
+/// no dedicated variant needed unless behavior diverges from Qwen3.5 in practice.
+///
+/// KNOWN LIMITATION -- NOT auto-recommended, user-selectable only: recurrent
+/// (SSM) layers cannot do partial KV-cache reuse (`llama_memory_seq_rm` returns
+/// `false` on a partial range for this architecture -- confirmed both in our own
+/// logs, "KV cache partial trim returned false, falling back to full decode",
+/// and upstream: ggml-org/llama.cpp issues #19858, #20003, #20153, #20225,
+/// #21912 all report the same full-reprocess behavior for Qwen 3.5-based hybrid
+/// models). This means every ReAct loop iteration re-decodes the ENTIRE growing
+/// prompt from scratch, not just the new turn -- unlike Ministral/Gemma, which
+/// reuse the cached prefix. Single-shot decode speed is genuinely flat across
+/// context depths (validated in #1464, 12.0 t/s at 1k, 11.9 t/s at 8k), but that
+/// finding does NOT extend to multi-iteration tool-calling turns as originally
+/// assumed -- a turn requiring N ReAct iterations pays a full-prompt decode cost
+/// N times, compounding with conversation length. A 4-iteration turn (e.g. a
+/// failed tool call requiring 3 retries) took ~108s in practice. This is an
+/// upstream llama.cpp limitation for recurrent/hybrid architectures, open as
+/// of the issues linked above at the time this was written (2026-07-01) --
+/// not something fixable in this codebase. Re-check those issues before
+/// assuming this limitation still applies to a newer vendored llama.cpp.
+const ORNITH_1_9B: CatalogEntry = CatalogEntry {
+    id: "ornith-1-9b-q4km",
+    family: ModelFamily::Qwen35,
+    name: "Ornith 1.0 9B Instruct Q4_K_M",
+    filename: "ornith-1.0-9b-Q4_K_M.gguf",
+    size_bytes: 5_629_108_704, // verified via HEAD request, 5.24 GiB
+    quantization: "Q4_K_M",
+    // NOTE: org is "deepreinforce-ai" (lowercase, hyphenated) -- NOT "DeepReinforce".
+    // The original URL used the wrong casing/org name and 404/401'd; verified this
+    // one resolves via `curl -sIL` before committing.
+    url: "https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF/resolve/main/ornith-1.0-9b-Q4_K_M.gguf",
+    // Policy exception: deepreinforce-ai is not an official ggml-org/mistralai repo,
+    // so the empty-string skip-verification policy does not strictly apply.
+    // Acceptable here because this is a trial-only, user-selectable entry (#1465);
+    // populate the SHA-256 from the model card before promoting to a default.
+    sha256: "",
+    context_window: 32_768,
+    default_temperature: 0.6,
+    type_k: None, // F16 — recurrent SSM layers keep KV cache small at this size
+    type_v: None,
+    min_memory_gb: 16,
+};
+
 /// Qwen3.6 35B-A3B -- MoE: 35B total parameters, 3B active. Fast inference
 /// (similar speed to a 3B dense model) with large-model capacity.
 /// ~22 GB on disk; fits on 48 GB Apple Silicon. Trial only.
@@ -304,6 +350,7 @@ const CATALOG: &[&CatalogEntry] = &[
     &QWEN3_8B,
     &QWEN35_9B,
     &QWEN36_35B_A3B,
+    &ORNITH_1_9B,
     &GEMMA_4_E4B,
     &GEMMA_4_12B,
     &GEMMA_4_12B_UNSLOTH,
@@ -1103,12 +1150,13 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 12);
+        assert_eq!(models.len(), 13);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-12b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-31b-q4km"));
+        assert!(models.iter().any(|m| m.id == "ornith-1-9b-q4km"));
     }
 
     #[tokio::test]

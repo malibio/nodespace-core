@@ -22,7 +22,9 @@ pub mod parser;
 pub mod types;
 
 pub use error::{ChatError, Result};
-pub use parser::{parse_tool_calls, ParseResult, ParsedToolCall, StreamingToolCallParser};
+pub use parser::{
+    parse_tool_calls, parse_tool_calls_xml, ParseResult, ParsedToolCall, StreamingToolCallParser,
+};
 pub use types::{
     ChatChunk, ChatConfig, ChatMessage, ChatUsage, LoadedModelInfo, Role, ToolCallRaw, ToolSpec,
 };
@@ -451,10 +453,12 @@ impl ChatEngine {
         let mut tool_call_ids: std::collections::HashMap<u32, String> =
             std::collections::HashMap::new();
 
-        // Route the model's `<|channel> … <channel|>` reasoning out of the answer
-        // stream. Held across the whole loop so a span (or marker) that straddles
-        // a delta boundary is resolved correctly.
+        // Route the model's `<|channel> … <channel|>` (Gemma 4) and `<think> …
+        // </think>` (Ornith) reasoning out of the answer stream. Held across the
+        // whole loop so a span (or marker) that straddles a delta boundary is
+        // resolved correctly.
         let mut channel_splitter = ChannelSplitter::default();
+        let mut think_splitter = ThinkSplitter::default();
 
         // --- Token generation loop ---
         // Reborrow model and context separately to satisfy the borrow checker.
@@ -533,6 +537,7 @@ impl ChatEngine {
                             &delta_json,
                             &mut tool_call_ids,
                             &mut channel_splitter,
+                            &mut think_splitter,
                             on_chunk,
                         );
                     }
@@ -586,6 +591,7 @@ impl ChatEngine {
                         &delta_json,
                         &mut tool_call_ids,
                         &mut channel_splitter,
+                        &mut think_splitter,
                         on_chunk,
                     );
                 }
@@ -593,11 +599,22 @@ impl ChatEngine {
             Err(e) => tracing::warn!("OAI parser finalize error: {}", e),
         }
 
-        // Drain any text the splitter held back (a trailing partial marker that
-        // never completed, or an unclosed channel truncated by the token cap).
-        let (final_answer, final_reasoning) = channel_splitter.finalize();
+        // Drain any text the splitters held back (a trailing partial marker that
+        // never completed, or an unclosed channel/think block truncated by the
+        // token cap). channel_splitter's carry must flow through think_splitter
+        // before finalizing it, mirroring the streaming push path above — a
+        // carried "<thi" fragment held by channel_splitter still needs to be
+        // classified as answer vs. reasoning by think_splitter, not emitted raw.
+        let (channel_answer, final_reasoning) = channel_splitter.finalize();
+        let (routed_answer, routed_reasoning) = think_splitter.push(&channel_answer);
+        let (think_carry_answer, think_carry_reasoning) = think_splitter.finalize();
+        let final_answer = routed_answer + &think_carry_answer;
+        let final_think_reasoning = routed_reasoning + &think_carry_reasoning;
         if !final_reasoning.is_empty() {
             on_chunk(ChatChunk::Reasoning(final_reasoning));
+        }
+        if !final_think_reasoning.is_empty() {
+            on_chunk(ChatChunk::Reasoning(final_think_reasoning));
         }
         let final_cleaned = strip_gemma_special_tokens(&final_answer);
         if !final_cleaned.is_empty() {
@@ -706,6 +723,84 @@ impl ChannelSplitter {
     fn finalize(&mut self) -> (String, String) {
         let carried = std::mem::take(&mut self.carry);
         if self.in_channel {
+            (String::new(), carried)
+        } else {
+            (carried, String::new())
+        }
+    }
+}
+
+/// Reasoning markers Ornith (Qwen3.5-based) uses to wrap its internal
+/// chain-of-thought when `enable_thinking` is set.
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// Splits a streamed content sequence into answer text and reasoning text
+/// using `<think> … </think>` markers.
+///
+/// Mirrors [`ChannelSplitter`] (Gemma 4's `<|channel> … <channel|>` markers)
+/// but for Ornith's `<think>`/`</think>` convention. A separate struct rather
+/// than a parameterized one because both marker pairs are `const` string
+/// slices baked into each `find` call, and the two splitters are unit-tested
+/// independently against their own marker text.
+#[derive(Debug, Default)]
+struct ThinkSplitter {
+    /// True while between an opener and its (not-yet-seen) closer.
+    in_think: bool,
+    /// Tail of the last delta that may be the prefix of a marker spanning the
+    /// boundary into the next delta. Always marker-free text otherwise.
+    carry: String,
+}
+
+impl ThinkSplitter {
+    /// Feed a content delta, returning `(answer, reasoning)` text resolved so far.
+    fn push(&mut self, content: &str) -> (String, String) {
+        let mut answer = String::new();
+        let mut reasoning = String::new();
+
+        let mut buf = std::mem::take(&mut self.carry);
+        buf.push_str(content);
+
+        let mut rest = buf.as_str();
+        loop {
+            let marker = if self.in_think {
+                THINK_CLOSE
+            } else {
+                THINK_OPEN
+            };
+            match rest.find(marker) {
+                Some(idx) => {
+                    let before = &rest[..idx];
+                    if self.in_think {
+                        reasoning.push_str(before);
+                    } else {
+                        answer.push_str(before);
+                    }
+                    self.in_think = !self.in_think;
+                    rest = &rest[idx + marker.len()..];
+                }
+                None => {
+                    let keep = partial_marker_suffix_len(rest, marker);
+                    let split = rest.len() - keep;
+                    let emit = &rest[..split];
+                    if self.in_think {
+                        reasoning.push_str(emit);
+                    } else {
+                        answer.push_str(emit);
+                    }
+                    self.carry = rest[split..].to_string();
+                    break;
+                }
+            }
+        }
+
+        (answer, reasoning)
+    }
+
+    /// Flush any carried text once generation is complete.
+    fn finalize(&mut self) -> (String, String) {
+        let carried = std::mem::take(&mut self.carry);
+        if self.in_think {
             (String::new(), carried)
         } else {
             (carried, String::new())
@@ -862,6 +957,7 @@ fn emit_oai_delta(
     delta_json: &str,
     tool_call_ids: &mut std::collections::HashMap<u32, String>,
     splitter: &mut ChannelSplitter,
+    think_splitter: &mut ThinkSplitter,
     on_chunk: &(impl Fn(ChatChunk) + Send),
 ) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(delta_json) else {
@@ -869,16 +965,47 @@ fn emit_oai_delta(
         return;
     };
 
-    // Plain text content. Route `<|channel> … <channel|>` spans to a separate
-    // reasoning stream (the splitter is stateful across deltas; a span or even a
-    // single marker may straddle a delta boundary). The answer part still passes
-    // through `strip_gemma_special_tokens` so other residual special tokens (e.g.
+    // Plain text content. Route `<|channel> … <channel|>` (Gemma 4) and
+    // `<think> … </think>` (Ornith) spans to a separate reasoning stream (both
+    // splitters are stateful across deltas; a span or even a single marker may
+    // straddle a delta boundary). The answer part still passes through
+    // `strip_gemma_special_tokens` so other residual special tokens (e.g.
     // "<|tool_call>", "<|"|>") the PEG parser leaks before recognising a tool-call
     // boundary are scrubbed.
     if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
+        // Ornith / Qwen3.5 models emit tool calls as XML `<tool_call>...</tool_call>`
+        // blocks inside the content field (the OAI-compat Jinja parser passes them
+        // through as plain text). Intercept complete blocks and emit ToolCallStart /
+        // ToolCallArgs events so the caller sees a uniform tool-call interface.
+        if content.contains("<tool_call>") {
+            match parse_tool_calls_xml(content) {
+                ParseResult::ToolCalls(calls) => {
+                    for call in calls {
+                        let id = format!("tc_{}", uuid_v4_simple());
+                        on_chunk(ChatChunk::ToolCallStart {
+                            id: id.clone(),
+                            name: call.name,
+                        });
+                        on_chunk(ChatChunk::ToolCallArgs {
+                            id,
+                            json: call.args.to_string(),
+                        });
+                    }
+                    return;
+                }
+                // Partial block (streaming): not yet complete — fall through and
+                // emit as buffered text; the next delta will complete the block.
+                ParseResult::PlainText(_) | ParseResult::Error(_) => {}
+            }
+        }
+
         let (answer, reasoning) = splitter.push(content);
+        let (answer, think_reasoning) = think_splitter.push(&answer);
         if !reasoning.is_empty() {
             on_chunk(ChatChunk::Reasoning(reasoning));
+        }
+        if !think_reasoning.is_empty() {
+            on_chunk(ChatChunk::Reasoning(think_reasoning));
         }
         let cleaned = strip_gemma_special_tokens(&answer);
         if !cleaned.is_empty() {
@@ -1190,6 +1317,160 @@ mod tests {
         assert_eq!(reasoning, "think");
     }
 
+    // --- ThinkSplitter: route <think> … </think> reasoning out of answer (Ornith) ---
+
+    /// Drive a `ThinkSplitter` over a sequence of deltas, returning the fully
+    /// accumulated `(answer, reasoning)` including the finalize flush.
+    fn think_split_all(deltas: &[&str]) -> (String, String) {
+        let mut s = ThinkSplitter::default();
+        let mut answer = String::new();
+        let mut reasoning = String::new();
+        for d in deltas {
+            let (a, r) = s.push(d);
+            answer.push_str(&a);
+            reasoning.push_str(&r);
+        }
+        let (a, r) = s.finalize();
+        answer.push_str(&a);
+        reasoning.push_str(&r);
+        (answer, reasoning)
+    }
+
+    #[test]
+    fn think_splitter_marker_within_one_delta() {
+        let (answer, reasoning) =
+            think_split_all(&["Done.<think>I should add the node.</think>Added it!"]);
+        assert_eq!(answer, "Done.Added it!");
+        assert_eq!(reasoning, "I should add the node.");
+    }
+
+    #[test]
+    fn think_splitter_marker_split_across_deltas() {
+        let (answer, reasoning) =
+            think_split_all(&["Hi<thi", "nk>think", "ing more</thin", "k>the answer"]);
+        assert_eq!(answer, "Hithe answer");
+        assert_eq!(reasoning, "thinking more");
+    }
+
+    #[test]
+    fn think_splitter_opener_without_closer_is_all_reasoning() {
+        let (answer, reasoning) = think_split_all(&["Here.<think>reasoning that never closes"]);
+        assert_eq!(answer, "Here.");
+        assert_eq!(reasoning, "reasoning that never closes");
+    }
+
+    #[test]
+    fn think_splitter_clean_content_has_no_reasoning() {
+        let (answer, reasoning) = think_split_all(&["Just a normal ", "answer."]);
+        assert_eq!(answer, "Just a normal answer.");
+        assert_eq!(reasoning, "");
+    }
+
+    #[cfg(feature = "chat-service")]
+    #[test]
+    fn emit_oai_delta_routes_ornith_xml_tool_call_to_chunks() {
+        // Ornith emits `<tool_call>` XML in the content field rather than a
+        // structured tool_calls array — emit_oai_delta must intercept it.
+        let delta = serde_json::json!({
+            "role": "assistant",
+            "content": "<tool_call>\n<function=search_nodes>\n<parameter=query>\nRust programming\n</parameter>\n</function>\n</tool_call>"
+        })
+        .to_string();
+
+        let chunks = std::sync::Mutex::new(Vec::<ChatChunk>::new());
+        let mut ids = std::collections::HashMap::new();
+        let mut splitter = ChannelSplitter::default();
+        let mut think_splitter = ThinkSplitter::default();
+        emit_oai_delta(
+            &delta,
+            &mut ids,
+            &mut splitter,
+            &mut think_splitter,
+            &|chunk| {
+                chunks.lock().unwrap().push(chunk);
+            },
+        );
+        let chunks = chunks.into_inner().unwrap();
+
+        let start = chunks
+            .iter()
+            .find(|c| matches!(c, ChatChunk::ToolCallStart { name, .. } if name == "search_nodes"));
+        assert!(
+            start.is_some(),
+            "emit_oai_delta must emit ToolCallStart for Ornith XML tool_call; got: {:?}",
+            chunks
+        );
+        let args = chunks
+            .iter()
+            .find_map(|c| match c {
+                ChatChunk::ToolCallArgs { json, .. } => Some(json.clone()),
+                _ => None,
+            })
+            .expect("expected ToolCallArgs chunk");
+        let parsed: serde_json::Value = serde_json::from_str(&args).unwrap();
+        assert_eq!(parsed["query"], "Rust programming");
+
+        assert!(
+            !chunks.iter().any(|c| matches!(c, ChatChunk::Token(_))),
+            "no plain-text leakage of <tool_call> XML expected; got: {:?}",
+            chunks
+        );
+    }
+
+    #[cfg(feature = "chat-service")]
+    #[test]
+    fn emit_oai_delta_finalize_routes_channel_carry_through_think_splitter() {
+        // Reproduces the production finalize path: a delta leaves ChannelSplitter
+        // holding a carried "<thi" fragment (the prefix of Ornith's <think>
+        // marker) when generation ends mid-token. The old finalize logic emitted
+        // channel_splitter's carry straight to the answer without routing it
+        // through think_splitter first, so a truncated <think> opener would leak
+        // into the visible answer instead of being held as reasoning.
+        let delta = serde_json::json!({
+            "role": "assistant",
+            "content": "answer text<|chan"
+        })
+        .to_string();
+
+        let chunks = std::sync::Mutex::new(Vec::<ChatChunk>::new());
+        let mut ids = std::collections::HashMap::new();
+        let mut splitter = ChannelSplitter::default();
+        let mut think_splitter = ThinkSplitter::default();
+        let push_chunk = |chunk: ChatChunk| chunks.lock().unwrap().push(chunk);
+
+        emit_oai_delta(
+            &delta,
+            &mut ids,
+            &mut splitter,
+            &mut think_splitter,
+            &push_chunk,
+        );
+
+        // ChannelSplitter holds "<|chan" as an unresolved partial-marker carry;
+        // nothing should have been emitted as answer/reasoning for it yet.
+        let (channel_answer, final_reasoning) = splitter.finalize();
+        let (routed_answer, routed_reasoning) = think_splitter.push(&channel_answer);
+        let (think_carry_answer, think_carry_reasoning) = think_splitter.finalize();
+        let final_answer = routed_answer + &think_carry_answer;
+        let final_reasoning_all = final_reasoning + &routed_reasoning + &think_carry_reasoning;
+
+        assert_eq!(
+            final_answer, "<|chan",
+            "channel_splitter's trailing partial marker must survive routing through think_splitter"
+        );
+        assert_eq!(final_reasoning_all, "");
+
+        let chunks = chunks.into_inner().unwrap();
+        let answer_so_far: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ChatChunk::Token(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answer_so_far, "answer text");
+    }
+
     #[test]
     fn test_chat_engine_creation() {
         let config = ChatConfig::default();
@@ -1396,9 +1677,16 @@ mod tests {
         let chunks = std::sync::Mutex::new(Vec::<ChatChunk>::new());
         let mut ids = std::collections::HashMap::new();
         let mut splitter = ChannelSplitter::default();
-        emit_oai_delta(delta, &mut ids, &mut splitter, &|chunk| {
-            chunks.lock().unwrap().push(chunk);
-        });
+        let mut think_splitter = ThinkSplitter::default();
+        emit_oai_delta(
+            delta,
+            &mut ids,
+            &mut splitter,
+            &mut think_splitter,
+            &|chunk| {
+                chunks.lock().unwrap().push(chunk);
+            },
+        );
         let chunks = chunks.into_inner().unwrap();
 
         let start = chunks.iter().find(

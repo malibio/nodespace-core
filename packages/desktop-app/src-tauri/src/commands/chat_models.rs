@@ -37,12 +37,28 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
     }
 }
 
+/// GGUF catalog IDs exposed to the frontend model picker.
+///
+/// Deliberately curated, not the full Rust catalog — models are added here
+/// only after evaluation. Gemma 4 was previously exposed but pulled after
+/// issues; the remaining lineup is the RAM-tier-appropriate set considered
+/// stable today.
+///
+/// Ornith 1.0 9B (`ornith-1-9b-q4km`) is intentionally NOT included here yet,
+/// despite being fully wired up (catalog entry, download, tool-call parsing,
+/// response-leak fix — see #1465). Live testing found its recurrent (SSM)
+/// layers can't do partial KV-cache reuse, so multi-step tool-calling turns
+/// get progressively slower with each retry (an upstream llama.cpp
+/// limitation — see the `ORNITH_1_9B` catalog entry's doc comment in
+/// `model_manager.rs` for details). Re-add it here once #1477 is resolved.
+const EXPOSED_GGUF_MODEL_IDS: &[&str] = &["ministral-8b-q4km"];
+
 /// List models in the catalog with their current status.
 ///
-/// Returns a filtered set of GGUF models (Ministral 8B as the primary model,
-/// Ministral 3B as the low-RAM fallback) plus any `ollama:`-prefixed models
-/// when the Ollama daemon is running. Other GGUF models remain in the Rust
-/// catalog for internal use but are not exposed to the frontend.
+/// Returns a curated set of GGUF models ([`EXPOSED_GGUF_MODEL_IDS`]) plus any
+/// `ollama:`-prefixed models when the Ollama daemon is running. Other GGUF
+/// models remain in the Rust catalog for internal use but are not exposed to
+/// the frontend.
 #[tauri::command]
 pub async fn chat_model_list(
     grpc: State<'_, GrpcClient>,
@@ -59,8 +75,7 @@ pub async fn chat_model_list(
         .models
         .into_iter()
         .filter(|entry| {
-            // Only Ministral 8B for the local GGUF path; all Ollama models pass through.
-            entry.backend != "gguf" || entry.id == "ministral-8b-q4km"
+            entry.backend != "gguf" || EXPOSED_GGUF_MODEL_IDS.contains(&entry.id.as_str())
         })
         .map(|entry| {
             serde_json::json!({
