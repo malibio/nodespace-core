@@ -855,6 +855,25 @@ export class SharedNodeStore {
     return this.nodes.size;
   }
 
+  /**
+   * Cache-first node fetch. Returns the in-memory node if present; otherwise
+   * fetches from the backend, stores it, and returns it. Returns undefined if
+   * the backend returns null (node does not exist or was deleted).
+   *
+   * Called by pane-content before mounting any viewer so every viewer mounts
+   * with the guarantee that sharedNodeStore.getNode(nodeId) is defined.
+   */
+  async ensureNode(nodeId: string): Promise<Node | undefined> {
+    const cached = this.nodes.get(nodeId);
+    if (cached) return cached;
+
+    const fetched = await backendAdapter.getNode(nodeId);
+    if (!fetched) return undefined;
+
+    this.setNode(fetched, { type: 'database', reason: 'ensure-node' });
+    return fetched;
+  }
+
   // ========================================================================
   // Update Operations with Conflict Detection
   // ========================================================================

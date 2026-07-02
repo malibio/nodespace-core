@@ -3,6 +3,7 @@
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import { tabState, updateTabTitle, updateTabContent, closeTab } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
+  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import type { Pane } from '$lib/stores/navigation.js';
   import { createLogger } from '$lib/utils/logger';
   import SettingsPane from '$lib/components/settings/settings-pane.svelte';
@@ -29,6 +30,10 @@
   let viewerComponents = $state<Map<string, unknown>>(new Map());
   let viewerLoadErrors = $state<Map<string, string>>(new Map());
   let viewerLoading = $state<Set<string>>(new Set());
+
+  // Track node hydration state per nodeId. A node is hydrated once ensureNode()
+  // has confirmed it is present in sharedNodeStore (or closed the tab if not found).
+  let hydratedNodeIds = $state<Set<string>>(new Set());
 
   // Load viewer when needed - moved to function called from onMount to avoid derived context issues
   async function loadViewerForNodeType(nodeType: string) {
@@ -63,6 +68,19 @@
     }
   }
 
+  async function hydrateNode(nodeId: string, tabId: string) {
+    if (hydratedNodeIds.has(nodeId)) return;
+
+    const node = await sharedNodeStore.ensureNode(nodeId);
+    if (!node) {
+      log.warn(`Node ${nodeId} not found — closing stale tab`);
+      closeTab(tabId);
+      return;
+    }
+
+    hydratedNodeIds = new Set(hydratedNodeIds).add(nodeId);
+  }
+
   // Derive viewer component for active tab.
   // Returns null while the viewer module is still loading (prevents BaseNodeViewer fallback
   // from rendering with an incompatible nodeId, e.g. a schema id passed to QueryNodeViewer)
@@ -82,13 +100,23 @@
     return viewerLoading.has(nodeType);
   });
 
-  // Load viewer when active tab changes - use $effect but call async function
-  // untrack the call to loadViewerForNodeType so mutations to viewerLoading/viewerComponents
-  // inside that function don't re-trigger this effect
+  const isNodeHydrated = $derived.by(() => {
+    const nodeId = activeTab?.content?.nodeId;
+    if (!nodeId) return true; // settings tabs and placeholder tabs need no hydration
+    return hydratedNodeIds.has(nodeId);
+  });
+
+  // Load viewer and hydrate parent node when active tab changes.
+  // Both run in parallel — viewer module load and node fetch are independent.
   $effect(() => {
     const nodeType = activeTab?.content?.nodeType;
+    const nodeId = activeTab?.content?.nodeId;
+    const tabId = activeTabId;
     if (nodeType) {
       untrack(() => loadViewerForNodeType(nodeType));
+    }
+    if (nodeId && tabId) {
+      untrack(() => hydrateNode(nodeId, tabId));
     }
   });
 
@@ -108,8 +136,8 @@
       <p class="error-message">{loadError}</p>
       <p class="help-text">Try refreshing the page or contact support if the problem persists.</p>
     </div>
-  {:else if isViewerLoading}
-    <!-- Viewer module still loading — don't render BaseNodeViewer as fallback -->
+  {:else if isViewerLoading || !isNodeHydrated}
+    <!-- Viewer module still loading or parent node not yet hydrated -->
     <div class="loading-state">
       <span>Loading...</span>
     </div>
