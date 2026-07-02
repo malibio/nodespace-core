@@ -72,26 +72,36 @@ impl CompositeModelManager {
         self.ollama.is_available().await
     }
 
-    /// Set the progress callback for GGUF downloads.
-    pub async fn set_gguf_progress_callback(&self, cb: Box<dyn Fn(DownloadEvent) + Send + Sync>) {
-        self.gguf.set_progress_callback(cb).await;
+    /// Set the progress callback for GGUF downloads of a specific model.
+    pub async fn set_gguf_progress_callback(
+        &self,
+        model_id: &str,
+        cb: Box<dyn Fn(DownloadEvent) + Send + Sync>,
+    ) {
+        self.gguf.set_progress_callback(model_id, cb).await;
     }
 
-    /// Set the progress callback for Ollama downloads.
-    pub async fn set_ollama_progress_callback(&self, cb: Box<dyn Fn(DownloadEvent) + Send + Sync>) {
-        self.ollama.set_progress_callback(cb).await;
+    /// Set the progress callback for Ollama downloads of a specific model.
+    pub async fn set_ollama_progress_callback(
+        &self,
+        model_id: &str,
+        cb: Box<dyn Fn(DownloadEvent) + Send + Sync>,
+    ) {
+        self.ollama.set_progress_callback(model_id, cb).await;
     }
 
-    /// Clear the GGUF progress callback, dropping any resources (e.g. channel
-    /// senders) it holds.
-    pub async fn clear_gguf_progress_callback(&self) {
-        self.gguf.clear_progress_callback().await;
+    /// Clear the GGUF progress callback for a specific model, dropping any
+    /// resources (e.g. channel senders) it holds. Only affects that model's
+    /// callback — concurrent downloads of other models are unaffected.
+    pub async fn clear_gguf_progress_callback(&self, model_id: &str) {
+        self.gguf.clear_progress_callback(model_id).await;
     }
 
-    /// Clear the Ollama progress callback, dropping any resources (e.g.
-    /// channel senders) it holds.
-    pub async fn clear_ollama_progress_callback(&self) {
-        self.ollama.clear_progress_callback().await;
+    /// Clear the Ollama progress callback for a specific model, dropping any
+    /// resources (e.g. channel senders) it holds. Only affects that model's
+    /// callback — concurrent downloads of other models are unaffected.
+    pub async fn clear_ollama_progress_callback(&self, model_id: &str) {
+        self.ollama.clear_progress_callback(model_id).await;
     }
 }
 

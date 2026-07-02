@@ -26,8 +26,11 @@ use crate::agent_types::{
 // Type aliases
 // ---------------------------------------------------------------------------
 
-/// Shared, thread-safe progress callback for download events.
-type ProgressCallback = Arc<RwLock<Option<Box<dyn Fn(DownloadEvent) + Send + Sync>>>>;
+/// Shared, thread-safe progress callbacks for download events, keyed by
+/// model_id so concurrent downloads of different models don't clobber each
+/// other's callback (registering or clearing one model's callback must not
+/// affect another's).
+type ProgressCallback = Arc<RwLock<HashMap<String, Box<dyn Fn(DownloadEvent) + Send + Sync>>>>;
 
 // ---------------------------------------------------------------------------
 // Catalog constants
@@ -437,22 +440,26 @@ impl GgufModelManager {
             statuses: Arc::new(RwLock::new(initial_statuses)),
             active_downloads: Arc::new(RwLock::new(HashMap::new())),
             http_client: reqwest::Client::new(),
-            on_progress: Arc::new(RwLock::new(None)),
+            on_progress: Arc::new(RwLock::new(HashMap::new())),
             loaded_model_id: Arc::new(RwLock::new(None)),
         })
     }
 
-    /// Register a progress callback for download events.
-    pub async fn set_progress_callback(&self, callback: Box<dyn Fn(DownloadEvent) + Send + Sync>) {
+    /// Register a progress callback for download events for a specific model.
+    pub async fn set_progress_callback(
+        &self,
+        model_id: &str,
+        callback: Box<dyn Fn(DownloadEvent) + Send + Sync>,
+    ) {
         let mut guard = self.on_progress.write().await;
-        *guard = Some(callback);
+        guard.insert(model_id.to_string(), callback);
     }
 
-    /// Clear the registered progress callback, dropping any resources
-    /// (e.g. channel senders) it holds.
-    pub async fn clear_progress_callback(&self) {
+    /// Clear the registered progress callback for a specific model, dropping
+    /// any resources (e.g. channel senders) it holds.
+    pub async fn clear_progress_callback(&self, model_id: &str) {
         let mut guard = self.on_progress.write().await;
-        *guard = None;
+        guard.remove(model_id);
     }
 
     /// Get the recommended model based on system RAM.
@@ -974,7 +981,7 @@ async fn perform_download(params: DownloadParams) -> Result<(), ModelError> {
                             // Fire progress callback
                             {
                                 let guard = on_progress.read().await;
-                                if let Some(cb) = guard.as_ref() {
+                                if let Some(cb) = guard.get(&model_id) {
                                     cb(DownloadEvent {
                                         model_id: model_id.clone(),
                                         bytes_downloaded,
@@ -1517,23 +1524,28 @@ mod tests {
     // the channel (and therefore the stream) open forever, hanging the
     // frontend's await on the streaming Tauri command indefinitely. These
     // tests verify `clear_progress_callback` actually drops the callback (and
-    // whatever it's holding), rather than merely a no-op.
+    // whatever it's holding), rather than merely a no-op -- and that
+    // callbacks are keyed per model_id, so completing one download can't
+    // clobber another concurrently-downloading model's callback.
 
     #[tokio::test]
     async fn clear_progress_callback_drops_previously_set_callback() {
         let (mgr, _tmp) = test_manager();
         let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        mgr.set_progress_callback(Box::new(move |_evt| {
-            // Hold a sender clone, mirroring the daemon's real callback.
-            let _ = tx.try_send(());
-        }))
+        mgr.set_progress_callback(
+            "ministral-8b-q4km",
+            Box::new(move |_evt| {
+                // Hold a sender clone, mirroring the daemon's real callback.
+                let _ = tx.try_send(());
+            }),
+        )
         .await;
 
         // Sender is alive via the stored callback: the channel is not yet closed.
         assert!(!rx.is_closed());
 
-        mgr.clear_progress_callback().await;
+        mgr.clear_progress_callback("ministral-8b-q4km").await;
 
         // With no other sender clones outstanding, dropping the callback
         // must drop its captured sender, which closes the channel.
@@ -1544,7 +1556,44 @@ mod tests {
     async fn clear_progress_callback_is_idempotent_when_unset() {
         let (mgr, _tmp) = test_manager();
         // Clearing with nothing registered must not panic.
-        mgr.clear_progress_callback().await;
-        mgr.clear_progress_callback().await;
+        mgr.clear_progress_callback("ministral-8b-q4km").await;
+        mgr.clear_progress_callback("ministral-8b-q4km").await;
+    }
+
+    #[tokio::test]
+    async fn clearing_one_models_callback_does_not_affect_a_concurrent_download() {
+        // Regression test for the concurrency hazard a shared, unkeyed
+        // callback slot would introduce: downloading two different models at
+        // once and completing one must not silently kill the other's
+        // in-flight progress/ready events.
+        let (mgr, _tmp) = test_manager();
+        let (tx_a, rx_a) = tokio::sync::mpsc::channel::<()>(1);
+        let (tx_b, rx_b) = tokio::sync::mpsc::channel::<()>(1);
+
+        mgr.set_progress_callback(
+            "ministral-8b-q4km",
+            Box::new(move |_evt| {
+                let _ = tx_a.try_send(());
+            }),
+        )
+        .await;
+        mgr.set_progress_callback(
+            "ministral-3b-q4km",
+            Box::new(move |_evt| {
+                let _ = tx_b.try_send(());
+            }),
+        )
+        .await;
+
+        // Model A's download finishes and its callback is cleared...
+        mgr.clear_progress_callback("ministral-8b-q4km").await;
+        assert!(rx_a.is_closed());
+
+        // ...but model B's download is still in flight, so its callback (and
+        // the sender it holds) must remain untouched.
+        assert!(!rx_b.is_closed());
+        let guard = mgr.on_progress.read().await;
+        assert!(guard.contains_key("ministral-3b-q4km"));
+        assert!(!guard.contains_key("ministral-8b-q4km"));
     }
 }
