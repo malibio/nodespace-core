@@ -173,9 +173,10 @@ function createCollectionsDataStore() {
 
 export const collectionsData = createCollectionsDataStore();
 
-// Retry once the daemon becomes reachable, so a load that failed while the
-// daemon was still starting up recovers automatically without a manual
-// reload (see #1470).
+// Registered once at module load (this file is a singleton — ES modules only
+// evaluate once), not per component mount. Retries loadCollections whenever
+// the daemon becomes reachable, so a load that failed while the daemon was
+// still starting up recovers automatically without a manual reload (see #1470).
 onDaemonReconnect(() => collectionsData.loadCollections());
 
 // ============================================================================

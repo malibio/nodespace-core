@@ -43,6 +43,27 @@ describe('daemon-status service (#1470)', () => {
     daemonStatusHandler = null;
   });
 
+  it('clears connecting via the grace-period timer if no daemon-status event ever arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const { daemonStatus, startDaemonStatusListener } = await import(
+        '$lib/services/daemon-status'
+      );
+      startDaemonStatusListener();
+      // Allow the async listen() registration to resolve without advancing timers.
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(get(daemonStatus).connecting).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(get(daemonStatus).connecting).toBe(false);
+      expect(get(daemonStatus).unreachable).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('starts in a connecting state and clears it once a healthy event arrives', async () => {
     const { daemonStatus, startDaemonStatusListener } = await import('$lib/services/daemon-status');
     startDaemonStatusListener();

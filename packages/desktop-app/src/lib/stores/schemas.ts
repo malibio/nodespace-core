@@ -47,7 +47,8 @@ export const customSchemas = derived(_schemas, ($s) => $s.filter((s) => !s.isCor
 
 export const schemasData = { loadSchemas };
 
-// Retry once the daemon becomes reachable, so a load that failed while the
-// daemon was still starting up recovers automatically without a manual
-// reload (see #1470).
+// Registered once at module load (this file is a singleton — ES modules only
+// evaluate once), not per component mount. Retries loadSchemas whenever the
+// daemon becomes reachable, so a load that failed while the daemon was still
+// starting up recovers automatically without a manual reload (see #1470).
 onDaemonReconnect(loadSchemas);
