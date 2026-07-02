@@ -5,8 +5,8 @@
 //!   2. Copy them to ~/.nodespace/bin/ (skipped if dest already matches bundled size).
 //!   3. Register the daemon as a user service:
 //!      - macOS: write ~/Library/LaunchAgents/<plist_filename()> and bootstrap it.
-//!              The filename and launchd label vary by build variant (debug/release × community/Pro)
-//!              so dev builds and the production app never collide on the same launchd job or socket.
+//!        The filename and launchd label vary by build variant (debug/release × community/Pro)
+//!        so dev builds and the production app never collide on the same launchd job or socket.
 //!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
 //!      - Windows: spawn the daemon process directly and write an HKCU autorun key.
 //!   4. Wait for the IPC endpoint to appear (UDS on Unix, Named Pipe on Windows).
@@ -170,7 +170,7 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
                 .as_ref()
                 .map(|o| {
                     let args = String::from_utf8_lossy(&o.stdout);
-                    let argv0 = args.trim().split_whitespace().next().unwrap_or("");
+                    let argv0 = args.split_whitespace().next().unwrap_or("");
                     argv0 == installed_str
                 })
                 .unwrap_or(false);
@@ -329,7 +329,7 @@ async fn kill_running_daemon(socket_path: &Path) {
                     .as_ref()
                     .map(|o| {
                         let args = String::from_utf8_lossy(&o.stdout);
-                        let argv0 = args.trim().split_whitespace().next().unwrap_or("");
+                        let argv0 = args.split_whitespace().next().unwrap_or("");
                         !installed.is_empty() && argv0 == installed
                     })
                     .unwrap_or(false);
