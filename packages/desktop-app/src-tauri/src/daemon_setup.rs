@@ -548,9 +548,12 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 
     // The UI binary path: this function runs inside nodespace-app, so current_exe()
     // returns the path the daemon needs to re-launch the GUI from the tray.
+    // canonicalize() resolves symlinks/wrapper paths that some macOS launch contexts produce.
     let ui_binary = xml_escape(
         &std::env::current_exe()
             .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
+            .canonicalize()
+            .context("Cannot canonicalize current executable path for NODESPACE_UI_BINARY")?
             .to_string_lossy(),
     );
 
@@ -728,10 +731,17 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
 
     // This function runs inside nodespace-app, so current_exe() is the UI binary
     // the daemon needs to re-launch the GUI from the tray.
+    // canonicalize() resolves any symlinks that some Linux launch contexts produce.
     let ui_binary = std::env::current_exe()
         .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
+        .canonicalize()
+        .context("Cannot canonicalize current executable path for NODESPACE_UI_BINARY")?
         .to_string_lossy()
         .into_owned();
+
+    // systemd Environment= values with spaces must be single-quoted. Escape embedded
+    // single quotes as '\'' (end quote, literal single quote, reopen quote).
+    let sq_escape = |s: &str| s.replace('\'', r"'\''");
 
     let unit = format!(
         "[Unit]\n\
@@ -741,9 +751,9 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
          [Service]\n\
          Type=simple\n\
          ExecStart={bin}\n\
-         Environment=NODESPACED_SOCKET={socket}\n\
-         Environment=NODESPACED_DB_PATH={db}\n\
-         Environment=NODESPACE_UI_BINARY={ui_binary}\n\
+         Environment=NODESPACED_SOCKET='{socket}'\n\
+         Environment=NODESPACED_DB_PATH='{db}'\n\
+         Environment=NODESPACE_UI_BINARY='{ui_binary}'\n\
          StandardOutput=append:{log_out}\n\
          StandardError=append:{log_err}\n\
          Restart=on-failure\n\
@@ -751,9 +761,9 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
          [Install]\n\
          WantedBy=default.target\n",
         bin = bin_str,
-        socket = socket_path,
-        db = db_path,
-        ui_binary = ui_binary,
+        socket = sq_escape(&socket_path),
+        db = sq_escape(&db_path),
+        ui_binary = sq_escape(&ui_binary),
         log_out = log_out,
         log_err = log_err,
     );
