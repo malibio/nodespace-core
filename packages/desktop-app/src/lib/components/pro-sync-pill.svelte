@@ -20,6 +20,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { proSync, type SyncState } from '$lib/stores/pro-sync.svelte';
+  import { membership } from '$lib/stores/membership.svelte';
+  import InvitationsInbox from '$lib/components/collaboration/invitations-inbox.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ProSyncPill');
@@ -61,6 +63,26 @@
   let menuOpen = $state(false);
   let signingOut = $state(false);
 
+  // Invitations inbox (onboarding, #199 S5). Opened from the account menu and,
+  // once per device, automatically on the first sign-in.
+  let inboxOpen = $state(false);
+
+  const FIRST_RUN_KEY = 'ns:invitations-firstrun-seen';
+  function firstRunSeen(): boolean {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(FIRST_RUN_KEY) === '1';
+    } catch {
+      return true; // storage unavailable — don't pester
+    }
+  }
+  function markFirstRunSeen() {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(FIRST_RUN_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Signed in = the daemon surfaced an identity (#199 S6). When set, clicking the
   // pill opens the account menu ("signed in as <email>" + Sign out) instead of
   // starting a new sign-in.
@@ -69,6 +91,15 @@
   let pillTitle = $derived(
     signedIn ? `Signed in as ${proSync.userEmail}` : proSync.detail || labels[proSync.state]
   );
+
+  // First-run onboarding: the first time a user signs in on this device, surface
+  // the Invitations inbox once so they can paste a share code or request access.
+  $effect(() => {
+    if (signedIn && !firstRunSeen()) {
+      markFirstRunSeen();
+      inboxOpen = true;
+    }
+  });
 
   async function onClick() {
     if (pending) return;
@@ -103,6 +134,9 @@
     signingOut = true;
     try {
       await proSync.signOut();
+      // Drop cached membership state so the next user doesn't inherit this
+      // session's roster/identity (#199 S5; identity is per-session).
+      membership.reset();
       log.info('signed out');
     } finally {
       signingOut = false;
@@ -141,6 +175,17 @@
           <span class="menu-email">{proSync.userEmail}</span>
         </div>
         <button
+          class="menu-item"
+          type="button"
+          role="menuitem"
+          onclick={() => {
+            inboxOpen = true;
+            menuOpen = false;
+          }}
+        >
+          Invitations
+        </button>
+        <button
           class="menu-signout"
           type="button"
           role="menuitem"
@@ -152,6 +197,8 @@
       </div>
     {/if}
   </div>
+
+  <InvitationsInbox open={inboxOpen} onClose={() => (inboxOpen = false)} />
 {/if}
 
 <style>
@@ -260,6 +307,7 @@
     overflow-wrap: anywhere;
   }
 
+  .menu-item,
   .menu-signout {
     appearance: none;
     text-align: left;
@@ -273,6 +321,7 @@
     cursor: pointer;
   }
 
+  .menu-item:hover:not(:disabled),
   .menu-signout:hover:not(:disabled) {
     background: var(--surface-2, #f3f4f6);
   }
