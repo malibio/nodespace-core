@@ -108,6 +108,9 @@
 
   // Load viewer and hydrate parent node when active tab changes.
   // Both run in parallel — viewer module load and node fetch are independent.
+  // tabId is captured synchronously before untrack() so that if the user switches
+  // tabs during the async fetch, closeTab targets the tab that triggered the fetch,
+  // not the newly-active one.
   $effect(() => {
     const nodeType = activeTab?.content?.nodeType;
     const nodeId = activeTab?.content?.nodeId;
