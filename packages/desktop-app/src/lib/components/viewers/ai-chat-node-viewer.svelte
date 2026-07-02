@@ -272,19 +272,8 @@
   onMount(async () => {
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
-    let hydrationSucceeded = false;
     try {
-      // ai-chat nodes are always in the store by the time the viewer mounts —
-      // base-node-viewer's loadChildrenForParent puts them there with the current
-      // DB version. A separate re-fetch here would race with WatchNodes updates
-      // and overwrite the store with a stale version, causing OCC conflicts on send.
-      if (!sharedNodeStore.getNode(nodeId)) {
-        log.debug('Node not in store on mount, will become ready via WatchNodes', { nodeId });
-        return;
-      }
-
-      hydrationSucceeded = true;
-
+      // pane-content guarantees the node is in sharedNodeStore before mounting this viewer.
       const currentNode = sharedNodeStore.getNode(nodeId);
       if (currentNode?.content) onTitleChange?.(currentNode.content);
 
@@ -324,10 +313,9 @@
           streamingContent = '';
         });
         eventUnlisteners.push(unlistenError);
-
       }
     } finally {
-      if (hydrationSucceeded) nodeReady = true;
+      nodeReady = true;
     }
   });
 
@@ -345,14 +333,6 @@
   // Update title when node content changes.
   $effect(() => {
     if (node?.content) onTitleChange?.(node.content);
-  });
-
-  // If onMount couldn't mark nodeReady (node wasn't in store yet), watch for the
-  // node to arrive via WatchNodes and complete setup reactively — no tab reopen needed.
-  $effect(() => {
-    if (!nodeReady && node) {
-      nodeReady = true;
-    }
   });
 
   // In browser mode (no Tauri streaming events), poll the backend while processing

@@ -855,6 +855,49 @@ export class SharedNodeStore {
     return this.nodes.size;
   }
 
+  /**
+   * Cache-first node fetch. Returns the in-memory node if present; otherwise
+   * fetches from the backend, stores it, and returns it. Returns undefined if
+   * the backend returns null (node does not exist or was deleted).
+   *
+   * Special case: date nodes are virtual — they are created lazily in the backend
+   * when their first child is saved. A brand-new date node that has never been
+   * persisted will return null from the backend. Synthesize a minimal in-memory
+   * node so pane-content does not mistake it for a deleted node and close the tab
+   * (mirrors the same logic in doLoadChildrenTree, issue #941).
+   *
+   * Called by pane-content before mounting any viewer so every viewer mounts
+   * with the guarantee that sharedNodeStore.getNode(nodeId) is defined.
+   */
+  async ensureNode(nodeId: string): Promise<Node | undefined> {
+    const cached = this.nodes.get(nodeId);
+    if (cached) return cached;
+
+    const fetched = await backendAdapter.getNode(nodeId);
+    if (fetched) {
+      this.setNode(fetched, { type: 'database', reason: 'ensure-node' });
+      return fetched;
+    }
+
+    if (isValidDateId(nodeId)) {
+      const now = new Date().toISOString();
+      const virtualDateNode: Node = {
+        id: nodeId,
+        nodeType: 'date',
+        content: '',
+        version: 0,
+        createdAt: now,
+        modifiedAt: now,
+        properties: {}
+      };
+      // database source prevents determinePersistenceBehavior from triggering an unwanted write.
+      this.setNode(virtualDateNode, { type: 'database', reason: 'virtual-date-node' });
+      return virtualDateNode;
+    }
+
+    return undefined;
+  }
+
   // ========================================================================
   // Update Operations with Conflict Detection
   // ========================================================================
