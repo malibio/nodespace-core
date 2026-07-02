@@ -2,6 +2,7 @@ import { writable, derived } from 'svelte/store';
 import { collectionService, type CollectionInfo } from '$lib/services/collection-service';
 import type { Node } from '$lib/types';
 import { createLogger } from '$lib/utils/logger';
+import { onDaemonReconnect } from '$lib/services/daemon-status';
 
 const log = createLogger('CollectionsStore');
 
@@ -171,6 +172,11 @@ function createCollectionsDataStore() {
 }
 
 export const collectionsData = createCollectionsDataStore();
+
+// Retry once the daemon becomes reachable, so a load that failed while the
+// daemon was still starting up recovers automatically without a manual
+// reload (see #1470).
+onDaemonReconnect(() => collectionsData.loadCollections());
 
 // ============================================================================
 // Collections UI State Store

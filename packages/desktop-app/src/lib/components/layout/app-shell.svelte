@@ -33,13 +33,24 @@
   import ConflictToast from '$lib/components/conflict-toast.svelte';
   import { recoveredItems } from '$lib/stores/recovered-items.svelte';
   import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
+  import { daemonStatus, startDaemonStatusListener } from '$lib/services/daemon-status';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
 
-  // Daemon connectivity state (Issue #1179). Set to true when Tauri signals
-  // that nodespaced could not be reached within 5 seconds of app launch.
+  // Daemon connectivity state (Issue #1179, generalized in #1470). `connecting`
+  // covers the brief window before the first daemon-status event arrives (or
+  // a short grace period elapses); `unreachable` reflects a terminal
+  // `not_running` event.
+  let daemonConnecting = $state(true);
   let daemonUnreachable = $state(false);
+  $effect(() => {
+    const unsubscribe = daemonStatus.subscribe((s) => {
+      daemonConnecting = s.connecting;
+      daemonUnreachable = s.unreachable;
+    });
+    return unsubscribe;
+  });
 
   // First-launch onboarding wizard (Issue #1180).
   let showOnboarding = $state(false);
@@ -234,7 +245,6 @@
     let unlistenDatabase: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
     let unlistenIntegrations: Promise<() => void> | null = null;
-    let unlistenDaemonStatus: Promise<() => void> | null = null;
     let unlistenSkillCliMissing: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
@@ -266,8 +276,10 @@
           log.debug('Could not sync theme from backend preferences:', err);
         });
 
-      // Re-load schemas and collections once the daemon signals it is ready (pro:tier-detected).
-      // This handles the case where the initial load in NavigationSidebar fired before gRPC was available.
+      // Re-load schemas and collections once the daemon's Pro-tier capability probe
+      // resolves. Kept in addition to the generic daemon-reconnect hook below since
+      // Pro tier detection is a distinct signal that can complete after the initial
+      // healthy event (it depends on gRPC being reachable, not just the socket).
       unlistenTier = listen('pro:tier-detected', () => {
         schemasData.loadSchemas();
         collectionsData.loadCollections();
@@ -279,16 +291,10 @@
         statusBar.error(event.payload.warning);
       });
 
-      // Listen for daemon connectivity failures (Issue #1179).
-      // Emitted by lib.rs when nodespaced is not reachable after 5s.
-      unlistenDaemonStatus = listen<string>('daemon-status', (event) => {
-        if (event.payload === 'not_running') {
-          log.warn('nodespaced is not reachable — showing error state');
-          daemonUnreachable = true;
-        } else {
-          daemonUnreachable = false;
-        }
-      });
+      // Start the shared daemon-status listener (Issue #1179, generalized in #1470).
+      // Drives daemonConnecting/daemonUnreachable above and fans out reconnect
+      // events to any store registered via onDaemonReconnect.
+      startDaemonStatusListener();
 
       // Show first-launch onboarding wizard if setup has not been completed (Issue #1180).
       invoke<{ completed: boolean }>('check_onboarding_status')
@@ -594,9 +600,6 @@
       if (unlistenIntegrations) {
         (await unlistenIntegrations)();
       }
-      if (unlistenDaemonStatus) {
-        (await unlistenDaemonStatus)();
-      }
       if (unlistenSkillCliMissing) {
         (await unlistenSkillCliMissing)();
       }
@@ -656,6 +659,10 @@
           >
             Retry
           </button>
+        </div>
+      {:else if daemonConnecting}
+        <div class="daemon-connecting-banner" role="status">
+          <span>Connecting to local service…</span>
         </div>
       {/if}
       <div
@@ -729,6 +736,18 @@
 
   .daemon-error-banner button:hover {
     background: hsl(var(--destructive) / 0.2);
+  }
+
+  .daemon-connecting-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    background: hsl(var(--muted) / 0.5);
+    border-bottom: 1px solid hsl(var(--border));
+    color: hsl(var(--muted-foreground));
+    font-size: 0.875rem;
+    z-index: 100;
   }
 
   /* Container for app-shell and status bar (flexbox column) */

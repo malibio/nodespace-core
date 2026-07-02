@@ -32,6 +32,7 @@
   import type { Snippet } from 'svelte';
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
   import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
+  import { onDaemonReconnect } from '$lib/services/daemon-status';
 
   // Get paneId from context (set by PaneContent)
   const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -297,15 +298,20 @@
       return scrollCleanup || undefined;
     }
 
-    // Load children asynchronously (non-blocking)
-    (async () => {
+    // Capture into a const so the closures below retain the narrowed
+    // (non-null) type even though `nodeId` is a mutable prop.
+    const currentNodeId = nodeId;
+    let loadFailed = false;
+
+    async function loadAndSettle(forceRefresh = false) {
       try {
         // Capture disableTitleUpdates at mount time
         const shouldDisableTitleUpdates = disableTitleUpdates;
 
         // Load children asynchronously
         // Note: loadChildrenForParent has internal cache checking, so this is efficient
-        await loadChildrenForParent(nodeId);
+        await loadChildrenForParent(currentNodeId, forceRefresh);
+        loadFailed = false;
 
         // CRITICAL: Prevent state updates after component destruction
         if (isDestroyed) {
@@ -317,9 +323,9 @@
         // Header content derived from currentViewedNode - no manual assignment needed
 
         // Check if node exists after loading
-        const node = sharedNodeStore.getNode(nodeId);
+        const node = sharedNodeStore.getNode(currentNodeId);
         if (!node) {
-          log.warn(`Node ${nodeId} not found — closing stale tab`);
+          log.warn(`Node ${currentNodeId} not found — closing stale tab`);
           onNodeNotFound?.();
           return;
         }
@@ -338,12 +344,26 @@
           updateTabTitle(node.title || node.content);
         }
       } catch (error) {
+        loadFailed = true;
         log.error('Failed to load children:', error);
       }
-    })();
+    }
+
+    // Load children asynchronously (non-blocking)
+    loadAndSettle();
+
+    // If the initial load failed (e.g. daemon still starting up), retry once
+    // the daemon reconnects instead of leaving this viewer permanently empty (#1470).
+    const unsubscribeReconnect = onDaemonReconnect(() => {
+      if (isDestroyed || !loadFailed) return;
+      loadAndSettle(true);
+    });
 
     // Return cleanup function
-    return scrollCleanup || undefined;
+    return () => {
+      unsubscribeReconnect();
+      scrollCleanup?.();
+    };
   });
 
   /**
