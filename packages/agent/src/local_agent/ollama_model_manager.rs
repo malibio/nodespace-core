@@ -6,6 +6,7 @@
 //!
 //! Issue #1058
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,8 +23,10 @@ use crate::agent_types::{
 // Type aliases
 // ---------------------------------------------------------------------------
 
-/// Shared, thread-safe progress callback for download events.
-type ProgressCallback = Arc<RwLock<Option<Box<dyn Fn(DownloadEvent) + Send + Sync>>>>;
+/// Shared, thread-safe progress callbacks for download events, keyed by
+/// model_id so concurrent downloads of different models don't clobber each
+/// other's callback.
+type ProgressCallback = Arc<RwLock<HashMap<String, Box<dyn Fn(DownloadEvent) + Send + Sync>>>>;
 
 // ---------------------------------------------------------------------------
 // Ollama API response types (private)
@@ -93,14 +96,27 @@ impl OllamaModelManager {
         Self {
             http_client: reqwest::Client::new(),
             base_url,
-            on_progress: Arc::new(RwLock::new(None)),
+            on_progress: Arc::new(RwLock::new(HashMap::new())),
             loaded_model_id: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Set the progress callback for download events.
-    pub async fn set_progress_callback(&self, cb: Box<dyn Fn(DownloadEvent) + Send + Sync>) {
-        *self.on_progress.write().await = Some(cb);
+    /// Set the progress callback for download events for a specific model.
+    pub async fn set_progress_callback(
+        &self,
+        model_id: &str,
+        cb: Box<dyn Fn(DownloadEvent) + Send + Sync>,
+    ) {
+        self.on_progress
+            .write()
+            .await
+            .insert(model_id.to_string(), cb);
+    }
+
+    /// Clear the registered progress callback for a specific model, dropping
+    /// any resources (e.g. channel senders) it holds.
+    pub async fn clear_progress_callback(&self, model_id: &str) {
+        self.on_progress.write().await.remove(model_id);
     }
 
     /// Check if Ollama daemon is reachable.
@@ -122,7 +138,7 @@ impl OllamaModelManager {
 
     /// Helper to fire a progress event.
     async fn fire_progress(&self, event: DownloadEvent) {
-        if let Some(cb) = self.on_progress.read().await.as_ref() {
+        if let Some(cb) = self.on_progress.read().await.get(&event.model_id) {
             cb(event);
         }
     }

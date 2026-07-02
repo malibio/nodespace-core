@@ -740,31 +740,37 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let tx_gguf = tx.clone();
         let mid_gguf = model_id.clone();
         manager
-            .set_gguf_progress_callback(Box::new(move |evt| {
-                let event = ModelLoadProgressEvent {
-                    event_type: "downloading".to_string(),
-                    model_id: mid_gguf.clone(),
-                    bytes_downloaded: Some(evt.bytes_downloaded as i64),
-                    bytes_total: Some(evt.bytes_total as i64),
-                    ..Default::default()
-                };
-                let _ = tx_gguf.try_send(Ok(event));
-            }))
+            .set_gguf_progress_callback(
+                &model_id,
+                Box::new(move |evt| {
+                    let event = ModelLoadProgressEvent {
+                        event_type: "downloading".to_string(),
+                        model_id: mid_gguf.clone(),
+                        bytes_downloaded: Some(evt.bytes_downloaded as i64),
+                        bytes_total: Some(evt.bytes_total as i64),
+                        ..Default::default()
+                    };
+                    let _ = tx_gguf.try_send(Ok(event));
+                }),
+            )
             .await;
 
         let tx_ollama = tx.clone();
         let mid_ollama = model_id.clone();
         manager
-            .set_ollama_progress_callback(Box::new(move |evt| {
-                let event = ModelLoadProgressEvent {
-                    event_type: "downloading".to_string(),
-                    model_id: mid_ollama.clone(),
-                    bytes_downloaded: Some(evt.bytes_downloaded as i64),
-                    bytes_total: Some(evt.bytes_total as i64),
-                    ..Default::default()
-                };
-                let _ = tx_ollama.try_send(Ok(event));
-            }))
+            .set_ollama_progress_callback(
+                &model_id,
+                Box::new(move |evt| {
+                    let event = ModelLoadProgressEvent {
+                        event_type: "downloading".to_string(),
+                        model_id: mid_ollama.clone(),
+                        bytes_downloaded: Some(evt.bytes_downloaded as i64),
+                        bytes_total: Some(evt.bytes_total as i64),
+                        ..Default::default()
+                    };
+                    let _ = tx_ollama.try_send(Ok(event));
+                }),
+            )
             .await;
 
         tokio::spawn(async move {
@@ -773,7 +779,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                     let _ = tx
                         .send(Ok(ModelLoadProgressEvent {
                             event_type: "ready".to_string(),
-                            model_id: model_id_clone,
+                            model_id: model_id_clone.clone(),
                             ..Default::default()
                         }))
                         .await;
@@ -782,13 +788,26 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                     let _ = tx
                         .send(Ok(ModelLoadProgressEvent {
                             event_type: "error".to_string(),
-                            model_id: model_id_clone,
+                            model_id: model_id_clone.clone(),
                             error_message: Some(e.to_string()),
                             ..Default::default()
                         }))
                         .await;
                 }
             }
+            drop(tx);
+
+            // Each progress callback holds a `Sender` clone, so the stream
+            // above only closes (and the Tauri command awaiting it only
+            // returns) once those clones are also dropped. Without this, a
+            // completed download's channel is kept open indefinitely by its
+            // own now-unused callback, hanging the frontend's await forever.
+            // Cleared by model_id, not wholesale, so a concurrent download of
+            // a different model is unaffected.
+            manager.clear_gguf_progress_callback(&model_id_clone).await;
+            manager
+                .clear_ollama_progress_callback(&model_id_clone)
+                .await;
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))

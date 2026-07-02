@@ -8,7 +8,13 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
-import type { ModelInfo, ModelFamily, ModelStatus, DownloadEvent } from '$lib/types/agent-types';
+import type {
+  ModelInfo,
+  ModelFamily,
+  ModelStatus,
+  DownloadEvent,
+  ModelDownloadReadyEvent,
+} from '$lib/types/agent-types';
 import { AGENT_EVENTS } from '$lib/types/agent-types';
 import * as tauriCommands from '$lib/services/tauri-commands';
 import type { ChatModelEntry, ChatModelStatus } from '$lib/services/tauri-commands';
@@ -273,10 +279,30 @@ class ModelStore {
       );
       this.eventUnlisteners.push(unlisten);
 
+      // Listen for the ready event so the UI can flip to "ready" the moment
+      // the daemon confirms completion, rather than waiting on the download
+      // stream to fully close before refreshModels() can run.
+      const unlistenReady = await listen<ModelDownloadReadyEvent>(
+        AGENT_EVENTS.MODEL_DOWNLOAD_READY,
+        (event) => {
+          if (event.payload.model_id === modelId) {
+            const idx = this.models.findIndex((m) => m.id === modelId);
+            if (idx !== -1) {
+              this.updateModelStatus(idx, { status: 'ready' });
+            }
+            const { [modelId]: _removed, ...remaining } = this.downloadProgress;
+            this.downloadProgress = remaining;
+          }
+        }
+      );
+      this.eventUnlisteners.push(unlistenReady);
+
       // Start the download
       await tauriCommands.chatModelDownload(modelId);
 
-      // Download completed successfully -- refresh to get final status
+      // Refresh to reconcile with the backend's authoritative status
+      // (covers any model whose ready event was missed, e.g. a listener
+      // race on app startup).
       await this.refreshModels();
 
       const { [modelId]: _removed, ...remaining } = this.downloadProgress;

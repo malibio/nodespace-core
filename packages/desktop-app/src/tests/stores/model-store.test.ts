@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { modelStore, formatBytes } from '$lib/stores/model-store.svelte';
+import * as tauriCommands from '$lib/services/tauri-commands';
 
 // Mock the logger
 vi.mock('$lib/utils/logger', () => ({
@@ -14,6 +15,39 @@ vi.mock('$lib/utils/logger', () => ({
     error: vi.fn(),
   }),
 }));
+
+interface MockTauriEvent<T = unknown> {
+  payload: T;
+}
+
+const mockEventListeners = new Map<string, (event: MockTauriEvent) => void>();
+
+function emitTauriEvent(eventName: string, payload: unknown) {
+  const handler = mockEventListeners.get(eventName);
+  if (handler) {
+    handler({ payload });
+  }
+}
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (eventName: string, handler: (event: MockTauriEvent) => void) => {
+    mockEventListeners.set(eventName, handler);
+    return () => {
+      mockEventListeners.delete(eventName);
+    };
+  }),
+}));
+
+function mockTauriEnvironment(isTauri: boolean) {
+  interface WindowWithTauri extends Window {
+    __TAURI_INTERNALS__?: Record<string, unknown>;
+  }
+  if (isTauri) {
+    (window as WindowWithTauri).__TAURI_INTERNALS__ = {};
+  } else {
+    delete (window as WindowWithTauri).__TAURI_INTERNALS__;
+  }
+}
 
 describe('ModelStore', () => {
   beforeEach(() => {
@@ -169,6 +203,81 @@ describe('ModelStore', () => {
       await promise;
 
       expect(modelStore.hasDownloadedModel).toBe(true);
+    });
+  });
+
+  describe('downloadModel via Tauri (download-ready event)', () => {
+    beforeEach(() => {
+      mockTauriEnvironment(true);
+      mockEventListeners.clear();
+    });
+
+    afterEach(() => {
+      mockTauriEnvironment(false);
+    });
+
+    it('transitions status to ready as soon as the download-ready event fires, without waiting on chatModelDownload to resolve', async () => {
+      let promise = modelStore.refreshModels();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const modelId = modelStore.models[0].id;
+
+      // Simulate the daemon hanging (issue #1471): chatModelDownload's
+      // returned promise never resolves because a stale progress-callback
+      // sender keeps the gRPC stream open. The regression fix is that the
+      // ready event alone -- independent of that promise -- must flip the
+      // status to "ready".
+      let resolveDownload: () => void = () => {};
+      vi.spyOn(tauriCommands, 'chatModelDownload').mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveDownload = resolve;
+          })
+      );
+
+      promise = modelStore.downloadModel(modelId);
+      await vi.waitFor(() => {
+        expect(mockEventListeners.has('model://download-ready')).toBe(true);
+      });
+
+      emitTauriEvent('model://download-ready', { model_id: modelId });
+
+      const model = modelStore.models.find((m) => m.id === modelId);
+      expect(model!.status.status).toBe('ready');
+
+      // Clean up the still-pending downloadModel() call so it doesn't leak
+      // into other tests.
+      resolveDownload();
+      vi.spyOn(tauriCommands, 'chatModelList').mockResolvedValue([]);
+      await promise;
+    });
+
+    it('hides the Cancel affordance once status flips to ready via the download-ready event', async () => {
+      let promise = modelStore.refreshModels();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const modelId = modelStore.models[0].id;
+
+      vi.spyOn(tauriCommands, 'chatModelDownload').mockImplementation(
+        () => new Promise<void>(() => {})
+      );
+      vi.spyOn(tauriCommands, 'chatModelList').mockResolvedValue([]);
+
+      void modelStore.downloadModel(modelId);
+      await vi.waitFor(() => {
+        expect(mockEventListeners.has('model://download-ready')).toBe(true);
+      });
+
+      expect(modelStore.models.find((m) => m.id === modelId)!.status.status).toBe('downloading');
+
+      emitTauriEvent('model://download-ready', { model_id: modelId });
+
+      // The Cancel button in model-manager.svelte is rendered purely from
+      // `status.status === 'downloading'`, so once status flips to "ready"
+      // the button is gone without any separate UI-side fix.
+      expect(modelStore.models.find((m) => m.id === modelId)!.status.status).toBe('ready');
     });
   });
 
