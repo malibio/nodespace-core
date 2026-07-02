@@ -789,6 +789,15 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                         .await;
                 }
             }
+            drop(tx);
+
+            // The progress callbacks each hold a `Sender` clone, so the stream
+            // above only closes (and the Tauri command awaiting it only
+            // returns) once those clones are also dropped. Without this, a
+            // completed download's channel is kept open indefinitely by its
+            // own now-unused callback, hanging the frontend's await forever.
+            manager.clear_gguf_progress_callback().await;
+            manager.clear_ollama_progress_callback().await;
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))

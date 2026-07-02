@@ -316,6 +316,11 @@ export interface DownloadEvent {
 	readonly speed_bps: number;
 }
 
+/** Event payload emitted once a model download completes and is verified. */
+export interface ModelDownloadReadyEvent {
+	readonly model_id: string;
+}
+
 /** State of a local agent conversation session. */
 export interface AgentSession {
 	readonly id: string;

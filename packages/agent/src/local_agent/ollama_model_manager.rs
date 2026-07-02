@@ -103,6 +103,12 @@ impl OllamaModelManager {
         *self.on_progress.write().await = Some(cb);
     }
 
+    /// Clear the registered progress callback, dropping any resources
+    /// (e.g. channel senders) it holds.
+    pub async fn clear_progress_callback(&self) {
+        *self.on_progress.write().await = None;
+    }
+
     /// Check if Ollama daemon is reachable.
     ///
     /// Makes a GET request to `/api/tags` with a 2-second timeout.

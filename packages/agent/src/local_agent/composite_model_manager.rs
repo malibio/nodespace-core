@@ -81,6 +81,18 @@ impl CompositeModelManager {
     pub async fn set_ollama_progress_callback(&self, cb: Box<dyn Fn(DownloadEvent) + Send + Sync>) {
         self.ollama.set_progress_callback(cb).await;
     }
+
+    /// Clear the GGUF progress callback, dropping any resources (e.g. channel
+    /// senders) it holds.
+    pub async fn clear_gguf_progress_callback(&self) {
+        self.gguf.clear_progress_callback().await;
+    }
+
+    /// Clear the Ollama progress callback, dropping any resources (e.g.
+    /// channel senders) it holds.
+    pub async fn clear_ollama_progress_callback(&self) {
+        self.ollama.clear_progress_callback().await;
+    }
 }
 
 #[async_trait]

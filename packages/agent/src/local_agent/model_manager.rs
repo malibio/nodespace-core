@@ -448,6 +448,13 @@ impl GgufModelManager {
         *guard = Some(callback);
     }
 
+    /// Clear the registered progress callback, dropping any resources
+    /// (e.g. channel senders) it holds.
+    pub async fn clear_progress_callback(&self) {
+        let mut guard = self.on_progress.write().await;
+        *guard = None;
+    }
+
     /// Get the recommended model based on system RAM.
     ///
     /// Returns Ministral 8B as the primary llama.cpp default. Ministral 8B
@@ -1500,5 +1507,44 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         // Requesting 1 byte should always pass
         check_disk_space(tmp.path(), 1).unwrap();
+    }
+
+    // -- Progress callback lifecycle (issue #1471) --------------------------
+    //
+    // A download's gRPC response stream is backed by an mpsc channel whose
+    // sender is cloned into the progress callback. If that callback is never
+    // cleared after the download completes, the sender clone it holds keeps
+    // the channel (and therefore the stream) open forever, hanging the
+    // frontend's await on the streaming Tauri command indefinitely. These
+    // tests verify `clear_progress_callback` actually drops the callback (and
+    // whatever it's holding), rather than merely a no-op.
+
+    #[tokio::test]
+    async fn clear_progress_callback_drops_previously_set_callback() {
+        let (mgr, _tmp) = test_manager();
+        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        mgr.set_progress_callback(Box::new(move |_evt| {
+            // Hold a sender clone, mirroring the daemon's real callback.
+            let _ = tx.try_send(());
+        }))
+        .await;
+
+        // Sender is alive via the stored callback: the channel is not yet closed.
+        assert!(!rx.is_closed());
+
+        mgr.clear_progress_callback().await;
+
+        // With no other sender clones outstanding, dropping the callback
+        // must drop its captured sender, which closes the channel.
+        assert!(rx.is_closed());
+    }
+
+    #[tokio::test]
+    async fn clear_progress_callback_is_idempotent_when_unset() {
+        let (mgr, _tmp) = test_manager();
+        // Clearing with nothing registered must not panic.
+        mgr.clear_progress_callback().await;
+        mgr.clear_progress_callback().await;
     }
 }
