@@ -9,89 +9,84 @@
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { initializeApp } from '$lib/services/app-initialization';
-  import { isTauri } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
+  import { onDaemonReconnect } from '$lib/services/daemon-status';
 
   let isInitialized = false;
   let initError: string | null = null;
 
-  /** Wait for daemon-status: healthy or not_running (max 30s). */
-  async function waitForDaemon(): Promise<void> {
-    if (!isTauri()) return;
-    // Wire resolve through a shared mutable slot so the listen callback and the
-    // timeout both reference the same resolver without an async promise executor.
-    let resolveWait!: () => void;
-    const wait = new Promise<void>((r) => {
-      resolveWait = r;
-    });
-    // Await listen registration before starting the timer — guarantees the
-    // unlisten handle is captured and no events are missed.
-    const unlisten = await listen<string>('daemon-status', (event) => {
-      if (event.payload === 'healthy' || event.payload === 'not_running') {
-        unlisten();
-        resolveWait();
+  // Retry schema plugin registration + sync listener init once the daemon
+  // reconnects, in case the initial attempt ran while it was still starting.
+  let schemaPluginsReady = false;
+  let syncListenersReady = false;
+
+  async function loadSchemaPlugins() {
+    try {
+      const result = await initializeSchemaPluginSystem();
+
+      if (!result.success) {
+        console.warn(
+          `[App Layout] Custom entities unavailable: ${result.error}. ` +
+            `Core functionality will work normally.`
+        );
+        // Don't block app startup on plugin registration failure
+        // Custom entities will be unavailable but app remains functional
+      } else {
+        schemaPluginsReady = true;
+        console.log(
+          `[App Layout] Custom entity system ready (${result.registeredCount} entities loaded)`
+        );
       }
-    });
-    const timer = setTimeout(() => {
-      unlisten();
-      resolveWait();
-    }, 30_000);
-    await wait;
-    clearTimeout(timer);
+    } catch (error) {
+      console.error('[App Layout] Schema plugin initialization failed:', error);
+    }
   }
 
-  // Initialize database first, then schema plugins, then sync listeners
+  async function loadSyncListeners() {
+    try {
+      await initializeTauriSyncListeners();
+      syncListenersReady = true;
+    } catch (error) {
+      console.warn('[App Layout] Tauri sync listeners failed to initialize:', error);
+      // Don't block app startup if sync listeners fail
+      // App will continue to work, just without real-time updates
+    }
+  }
+
+  // Initialize Tauri injection, then render AppShell immediately. Daemon
+  // readiness is NOT a render-blocking gate — AppShell owns its own
+  // connecting/unreachable UI via the daemon-status service, and each
+  // daemon-dependent store retries its load on daemon reconnect. See #1470.
   onMount(async () => {
     try {
-      // Register the daemon listener BEFORE initializeApp() to avoid a race
-      // where Rust emits 'daemon-status: healthy' before the JS listen() call
-      // completes, which would cause waitForDaemon to block for the full 30s.
-      const daemonReady = waitForDaemon();
-
-      // Step 1: Initialize database and Tauri services
+      // Step 1: Initialize Tauri injection (fast, one-time environment check)
       await initializeApp();
-
-      // Step 2: Wait for the daemon to be ready before issuing any gRPC calls.
-      await daemonReady;
-
-      // Step 3: Initialize schema plugin auto-registration system
-      // This must happen after database is ready
-      try {
-        const result = await initializeSchemaPluginSystem();
-
-        if (!result.success) {
-          console.warn(
-            `[App Layout] Custom entities unavailable: ${result.error}. ` +
-              `Core functionality will work normally.`
-          );
-          // Don't block app startup on plugin registration failure
-          // Custom entities will be unavailable but app remains functional
-        } else {
-          console.log(
-            `[App Layout] Custom entity system ready (${result.registeredCount} entities loaded)`
-          );
-        }
-      } catch (error) {
-        console.error('[App Layout] Schema plugin initialization failed:', error);
-      }
-
-      // Step 4: Initialize Tauri domain event listeners for real-time synchronization
-      try {
-        await initializeTauriSyncListeners();
-      } catch (error) {
-        console.warn('[App Layout] Tauri sync listeners failed to initialize:', error);
-        // Don't block app startup if sync listeners fail
-        // App will continue to work, just without real-time updates
-      }
 
       // Mark as initialized - this will trigger the app to render
       isInitialized = true;
-      console.log('[App Layout] Initialization complete, rendering app');
+      console.log('[App Layout] Tauri ready, rendering app');
+
+      // Step 2: Initialize schema plugin auto-registration system.
+      // Not render-blocking — schemas load opportunistically and retry on
+      // daemon reconnect (see schema-plugin-loader / schemas store).
+      await loadSchemaPlugins();
+
+      // Step 3: Initialize Tauri domain event listeners for real-time synchronization
+      await loadSyncListeners();
     } catch (error) {
       console.error('[App Layout] Critical initialization error:', error);
       // Store error for display on screen
       initError = error instanceof Error ? error.message : String(error);
     }
+  });
+
+  // Retry whichever of the above didn't succeed on the first attempt once
+  // the daemon signals it is reachable (#1470).
+  onMount(() => {
+    const unsubscribe = onDaemonReconnect(() => {
+      if (!schemaPluginsReady) loadSchemaPlugins();
+      if (!syncListenersReady) loadSyncListeners();
+    });
+    return unsubscribe;
   });
 
   // Flush pending saves on window close to prevent data loss

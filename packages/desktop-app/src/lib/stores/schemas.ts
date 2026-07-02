@@ -11,6 +11,7 @@
 import { writable, derived } from 'svelte/store';
 import { backendAdapter } from '$lib/services/backend-adapter';
 import { createLogger } from '$lib/utils/logger';
+import { onDaemonReconnect } from '$lib/services/daemon-status';
 import type { SchemaNode } from '$lib/types/schema-node';
 
 const log = createLogger('SchemasStore');
@@ -45,3 +46,9 @@ export const builtInSchemas = derived(_schemas, ($s) =>
 export const customSchemas = derived(_schemas, ($s) => $s.filter((s) => !s.isCore));
 
 export const schemasData = { loadSchemas };
+
+// Registered once at module load (this file is a singleton — ES modules only
+// evaluate once), not per component mount. Retries loadSchemas whenever the
+// daemon becomes reachable, so a load that failed while the daemon was still
+// starting up recovers automatically without a manual reload (see #1470).
+onDaemonReconnect(loadSchemas);
