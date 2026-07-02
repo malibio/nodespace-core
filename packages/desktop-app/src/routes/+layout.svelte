@@ -81,12 +81,13 @@
 
   // Retry whichever of the above didn't succeed on the first attempt once
   // the daemon signals it is reachable (#1470).
-  onMount(() =>
-    onDaemonReconnect(() => {
+  onMount(() => {
+    const unsubscribe = onDaemonReconnect(() => {
       if (!schemaPluginsReady) loadSchemaPlugins();
       if (!syncListenersReady) loadSyncListeners();
-    })
-  );
+    });
+    return unsubscribe;
+  });
 
   // Flush pending saves on window close to prevent data loss
   onMount(() => {
