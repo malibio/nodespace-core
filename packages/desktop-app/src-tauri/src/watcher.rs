@@ -19,8 +19,8 @@
 //!
 //! # Behavior
 //!
-//! - Opens a `WatchNodes` stream against `~/.nodespace/daemon.sock` (or the path
-//!   from `NODESPACED_SOCKET`).
+//! - Opens a `WatchNodes` stream against the build-variant-scoped socket
+//!   (see `daemon_setup::daemon_socket_relative`), or the path from `NODESPACED_SOCKET`.
 //! - Translates each proto `NodeEvent` to a Tauri event with the same payload
 //!   shape as `DomainEventForwarder` (id + optional node_type).
 //! - On stream error or disconnection, reconnects with exponential backoff
@@ -52,7 +52,8 @@ struct NodeIdPayload {
     node_type: Option<String>,
 }
 
-/// Resolve the daemon socket path. Honors `NODESPACED_SOCKET`.
+/// Resolve the daemon socket path. Honors `NODESPACED_SOCKET`, then falls back
+/// to the build-variant-scoped default (see daemon_setup::daemon_socket_relative).
 #[cfg(unix)]
 fn socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
@@ -60,8 +61,7 @@ fn socket_path() -> std::path::PathBuf {
     }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".nodespace")
-        .join("daemon.sock")
+        .join(crate::daemon_setup::daemon_socket_relative())
 }
 
 /// Spawn the watcher as a Tokio task. Returns immediately; the task runs

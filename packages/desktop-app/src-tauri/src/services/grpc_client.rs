@@ -3,7 +3,7 @@
 //!
 //! Socket path resolution order:
 //!   1. `NODESPACED_SOCKET` environment variable
-//!   2. `~/.nodespace/daemon.sock` (default)
+//!   2. Build-variant-scoped default (see daemon_setup::daemon_socket_relative)
 //!
 //! The `GrpcClient` is registered as Tauri managed state once and cloned
 //! cheaply per command (tonic `Channel` is an `Arc` internally).
@@ -158,11 +158,11 @@ impl GrpcClient {
 
 /// Resolve the daemon socket path.
 ///
-/// Checks `NODESPACED_SOCKET` env var first, then falls back to
-/// `~/.nodespace/daemon.sock`. `pub(crate)` so the daemon-reachability checks in
-/// `lib.rs` probe the SAME socket the client actually dials — otherwise a
-/// `NODESPACED_SOCKET` override (two-window demo, custom setups) makes them check
-/// the wrong path and falsely report "not running".
+/// Checks `NODESPACED_SOCKET` env var first, then falls back to the build-variant-
+/// scoped default from `daemon_setup::daemon_socket_relative()`. `pub(crate)` so
+/// the daemon-reachability checks in `lib.rs` probe the SAME socket the client
+/// actually dials — otherwise a `NODESPACED_SOCKET` override (two-window demo,
+/// custom setups) makes them check the wrong path and falsely report "not running".
 #[cfg(unix)]
 pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
@@ -170,8 +170,7 @@ pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
     }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".nodespace")
-        .join("daemon.sock")
+        .join(crate::daemon_setup::daemon_socket_relative())
 }
 
 /// Resolve the Named Pipe name used on Windows.
@@ -289,9 +288,14 @@ mod tests {
         );
 
         std::env::remove_var("NODESPACED_SOCKET");
+        let default_path = resolve_socket_path();
         assert!(
-            resolve_socket_path().ends_with(".nodespace/daemon.sock"),
-            "with no override, fall back to the default socket"
+            default_path.starts_with(dirs::home_dir().unwrap()),
+            "with no override, fall back to a path under HOME"
+        );
+        assert!(
+            default_path.to_string_lossy().contains(".nodespace/daemon"),
+            "with no override, fall back to a .nodespace/daemon* socket"
         );
 
         // Restore prior state so we don't leak into other tests.
