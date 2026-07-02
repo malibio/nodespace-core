@@ -546,6 +546,14 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let bin_escaped = xml_escape(&bin_str);
     let label_escaped = xml_escape(launch_agent_label());
 
+    // The UI binary path: this function runs inside nodespace-app, so current_exe()
+    // returns the path the daemon needs to re-launch the GUI from the tray.
+    let ui_binary = xml_escape(
+        &std::env::current_exe()
+            .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
+            .to_string_lossy(),
+    );
+
     // Pro edition: inject the Supabase cloud env the sync daemon needs (#156). The
     // values are baked at build time; all are XML-safe (JWT chars / URLs / schema
     // names contain no `<>&`). Empty for a community build.
@@ -581,6 +589,8 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         <string>{socket}</string>
         <key>NODESPACED_DB_PATH</key>
         <string>{db}</string>
+        <key>NODESPACE_UI_BINARY</key>
+        <string>{ui_binary}</string>
 {pro_env}    </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -597,6 +607,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         bin = bin_escaped,
         socket = socket_path,
         db = db_path,
+        ui_binary = ui_binary,
         pro_env = pro_env,
         log_out = log_out,
         log_err = log_err,
@@ -715,6 +726,13 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
 
+    // This function runs inside nodespace-app, so current_exe() is the UI binary
+    // the daemon needs to re-launch the GUI from the tray.
+    let ui_binary = std::env::current_exe()
+        .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
+        .to_string_lossy()
+        .into_owned();
+
     let unit = format!(
         "[Unit]\n\
          Description=NodeSpace daemon\n\
@@ -725,6 +743,7 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
          ExecStart={bin}\n\
          Environment=NODESPACED_SOCKET={socket}\n\
          Environment=NODESPACED_DB_PATH={db}\n\
+         Environment=NODESPACE_UI_BINARY={ui_binary}\n\
          StandardOutput=append:{log_out}\n\
          StandardError=append:{log_err}\n\
          Restart=on-failure\n\
@@ -734,6 +753,7 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
         bin = bin_str,
         socket = socket_path,
         db = db_path,
+        ui_binary = ui_binary,
         log_out = log_out,
         log_err = log_err,
     );
