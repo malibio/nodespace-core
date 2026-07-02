@@ -33,6 +33,12 @@ service CloudSyncService {
   // No-op if the orchestrator is already in SYNCING.
   rpc TriggerSync (TriggerSyncRequest) returns (TriggerSyncResponse);
 
+  // Explicit sign-out (#199 S6). Drops the in-memory token, wipes the
+  // persisted refresh token from the OS keychain (so a daemon restart
+  // does NOT auto-resume), and tears down the live sync connection —
+  // the orchestrator loop then reports AUTH_REQUIRED. Idempotent.
+  rpc SignOut (SignOutRequest) returns (SignOutResponse);
+
   // --- Team membership (M5, #147). Thin adapters over the cloud
   // membership RPCs; the daemon forwards the signed-in user's JWT, so
   // the same admin / last-admin / open-vs-restricted gates apply
@@ -45,6 +51,24 @@ service CloudSyncService {
   rpc AcceptInvite (AcceptInviteRequest) returns (MembershipAck);
   rpc RequestJoin (RequestJoinRequest) returns (RequestJoinResponse);
   rpc ApproveRequest (ApproveRequestRequest) returns (MembershipAck);
+
+  // --- Invite / request listings + revocation (S2, #239). These three cloud
+  // RPCs existed only in Postgres (no daemon/Tauri binding), so a client could
+  // mint/accept an invite but never list the pending ones or cancel one. Wiring
+  // them here completes the admin surface. Same JWT-forwarding + server-side
+  // admin gate as the eight above (a non-admin gets 42501 → PERMISSION_DENIED).
+  rpc ListInvites (ListInvitesRequest) returns (ListInvitesResponse);
+  rpc ListRequests (ListRequestsRequest) returns (ListRequestsResponse);
+  rpc RevokeInvite (RevokeInviteRequest) returns (MembershipAck);
+
+  // Caller identity (#238/#239). Returns THIS device's bound PersonNode id (+
+  // the signed-in email) so the UI can tell which roster row is "me" and gate
+  // admin controls on the caller's own per-collection role. A dedicated one-shot
+  // query rather than threading person_id through the SyncStatusEvent stream:
+  // identity is stable per session (set at bind, cleared at sign-out), so the
+  // client fetches once on connect and clears on sign-out — keeping the hot
+  // status path untouched. person_node_id is empty when the bind hasn't landed.
+  rpc GetIdentity (GetIdentityRequest) returns (GetIdentityResponse);
 }
 
 // --- Messages -----------------------------------------------------
@@ -100,10 +124,18 @@ message SyncStatusEvent {
   State state = 1;
   // Free-form context, e.g. error message or current LIVE SELECT cursor.
   string detail = 2;
+  // Email of the signed-in user, decoded from the session JWT. Empty when
+  // signed out / not yet authenticated. Lets the UI show a "signed in as
+  // <email>" affordance on the silent-resume path (#199 S6), where the
+  // frontend never sees an OAuth response and so otherwise has no identity.
+  string user_email = 3;
 }
 
 message TriggerSyncRequest {}
 message TriggerSyncResponse {}
+
+message SignOutRequest {}
+message SignOutResponse {}
 
 // --- Team membership (M5, #147) ----------------------------------
 // permission is "admin" | "modify" | "readOnly". collection_id / person_id are
@@ -158,8 +190,47 @@ message ApproveRequestRequest {
   string permission = 2;
 }
 // Generic ack for membership mutations. `detail` is "ok" for SetMember /
-// RemoveMember / LeaveCollection / ApproveRequest; for AcceptInvite it is the
-// joined collection id (so the caller can pull it).
+// RemoveMember / LeaveCollection / ApproveRequest / RevokeInvite; for
+// AcceptInvite it is the joined collection id (so the caller can pull it).
 message MembershipAck {
   string detail = 1;
+}
+
+// --- Invite / request listings + revocation (S2, #239) -----------
+
+message ListInvitesRequest {
+  string collection_id = 1;
+}
+// A pending invite (list_invites returns only status='pending' rows, admin-only).
+message Invite {
+  string id = 1;          // uuid — the handle RevokeInvite takes
+  string code = 2;        // 64-hex share code (bearer); may be surfaced to copy
+  string email = 3;       // bound invitee email; empty for a bearer share-code
+  string permission = 4;  // "admin" | "modify" | "readOnly"
+  string expires_at = 5;  // RFC3339; empty when the invite never expires
+}
+message ListInvitesResponse {
+  repeated Invite invites = 1;
+}
+message ListRequestsRequest {
+  string collection_id = 1;
+}
+// A pending join request (status='requested', admin-only).
+message JoinRequest {
+  string id = 1;            // uuid — ApproveRequest / RevokeInvite handle
+  string requested_by = 2;  // requester's person_node_id
+  string created_at = 3;    // RFC3339
+}
+message ListRequestsResponse {
+  repeated JoinRequest requests = 1;
+}
+message RevokeInviteRequest {
+  string invite_id = 1;  // uuid of the pending invite OR join request to cancel
+}
+
+// --- Caller identity (S1/S2, #238/#239) --------------------------
+message GetIdentityRequest {}
+message GetIdentityResponse {
+  string person_node_id = 1;  // empty until the identity bind lands
+  string email = 2;           // signed-in email; empty when signed out
 }

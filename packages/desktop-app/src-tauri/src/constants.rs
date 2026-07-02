@@ -1,6 +1,6 @@
 //! Shared constants used across the application.
-
-/// Relative path from HOME to the nodespaced Unix Domain Socket.
-/// Shared by daemon_setup (launchd plist) and lib.rs (health check command).
-/// watcher.rs uses its own resolver that also honors NODESPACED_SOCKET env override.
-pub const DAEMON_SOCKET_RELATIVE: &str = ".nodespace/daemon.sock";
+//!
+//! The daemon socket path is NOT a constant — it varies by build variant
+//! (debug vs release, community vs Pro). Use daemon_setup::daemon_socket_relative()
+//! for the active socket path, or grpc_client::resolve_socket_path() which also
+//! honors the NODESPACED_SOCKET env override.

@@ -21,6 +21,12 @@
   import { tabState, addTab, setActiveTab } from '$lib/stores/navigation';
   import { createLogger } from '$lib/utils/logger';
   import { v4 as uuidv4 } from 'uuid';
+  import CollaborationView from '$lib/components/collaboration/collaboration-view.svelte';
+  import { proSync } from '$lib/stores/pro-sync.svelte';
+
+  // Collection sub-view: "contents" (member nodes, the default/community view) or
+  // "collaboration" (people & roles, Pro only — the tab strip only appears for Pro).
+  let activeView = $state<'contents' | 'collaboration'>('contents');
 
   const log = createLogger('CollectionNodeViewer');
 
@@ -175,8 +181,31 @@
     {#if collection?.properties?.description}
       <p class="collection-description">{collection.properties.description}</p>
     {/if}
+
+    {#if proSync.isPro}
+      <!-- Pro-only: switch between the collection's content nodes and its people. -->
+      <div class="collection-tabs" role="tablist">
+        <button
+          class="tab"
+          class:active={activeView === 'contents'}
+          role="tab"
+          aria-selected={activeView === 'contents'}
+          onclick={() => (activeView = 'contents')}>Contents</button
+        >
+        <button
+          class="tab"
+          class:active={activeView === 'collaboration'}
+          role="tab"
+          aria-selected={activeView === 'collaboration'}
+          onclick={() => (activeView = 'collaboration')}>Collaboration</button
+        >
+      </div>
+    {/if}
   </div>
 
+  {#if proSync.isPro && activeView === 'collaboration'}
+    <CollaborationView collectionId={nodeId} />
+  {:else}
   <!-- Content -->
   <div class="collection-content">
     {#if loading}
@@ -225,6 +254,7 @@
       </ul>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -233,6 +263,25 @@
     flex-direction: column;
     height: 100%;
     background: hsl(var(--background));
+  }
+
+  .collection-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 1rem;
+  }
+  .collection-tabs .tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.875rem;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+  }
+  .collection-tabs .tab.active {
+    color: hsl(var(--foreground));
+    border-bottom-color: hsl(var(--primary));
   }
 
   .collection-header {

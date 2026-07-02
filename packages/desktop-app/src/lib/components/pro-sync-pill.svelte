@@ -20,6 +20,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { proSync, type SyncState } from '$lib/stores/pro-sync.svelte';
+  import { membership } from '$lib/stores/membership.svelte';
+  import InvitationsInbox from '$lib/components/collaboration/invitations-inbox.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ProSyncPill');
@@ -57,9 +59,54 @@
   // While an InitiateOAuth call is in flight, disable the pill so a
   // double-click doesn't spawn two browser windows.
   let pending = $state(false);
+  // Account menu (shown when signed in) + its in-flight sign-out.
+  let menuOpen = $state(false);
+  let signingOut = $state(false);
+
+  // Invitations inbox (onboarding, #199 S5). Opened from the account menu and,
+  // once per device, automatically on the first sign-in.
+  let inboxOpen = $state(false);
+
+  const FIRST_RUN_KEY = 'ns:invitations-firstrun-seen';
+  function firstRunSeen(): boolean {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(FIRST_RUN_KEY) === '1';
+    } catch {
+      return true; // storage unavailable — don't pester
+    }
+  }
+  function markFirstRunSeen() {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(FIRST_RUN_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Signed in = the daemon surfaced an identity (#199 S6). When set, clicking the
+  // pill opens the account menu ("signed in as <email>" + Sign out) instead of
+  // starting a new sign-in.
+  let signedIn = $derived(proSync.userEmail !== '');
+  let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
+  let pillTitle = $derived(
+    signedIn ? `Signed in as ${proSync.userEmail}` : proSync.detail || labels[proSync.state]
+  );
+
+  // First-run onboarding: the first time a user signs in on this device, surface
+  // the Invitations inbox once so they can paste a share code or request access.
+  $effect(() => {
+    if (signedIn && !firstRunSeen()) {
+      markFirstRunSeen();
+      inboxOpen = true;
+    }
+  });
 
   async function onClick() {
     if (pending) return;
+    if (signedIn) {
+      menuOpen = !menuOpen;
+      return;
+    }
     if (!SIGN_IN_STATES.includes(proSync.state)) return;
     pending = true;
     try {
@@ -74,26 +121,92 @@
     }
   }
 
-  let clickable = $derived(SIGN_IN_STATES.includes(proSync.state));
+  function closeMenu() {
+    menuOpen = false;
+  }
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && menuOpen) closeMenu();
+  }
+
+  async function onSignOut() {
+    if (signingOut) return;
+    signingOut = true;
+    try {
+      await proSync.signOut();
+      // Drop cached membership state so the next user doesn't inherit this
+      // session's roster/identity (#199 S5; identity is per-session).
+      membership.reset();
+      log.info('signed out');
+    } finally {
+      signingOut = false;
+      menuOpen = false;
+    }
+  }
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 {#if proSync.isPro}
-  <button
-    class="pro-sync-pill"
-    class:clickable
-    data-tone={tones[proSync.state]}
-    title={proSync.detail || labels[proSync.state]}
-    type="button"
-    aria-label="NodeSpace Pro sync status: {labels[proSync.state]}"
-    disabled={pending || !clickable}
-    onclick={onClick}
-  >
-    <span class="dot" aria-hidden="true"></span>
-    <span class="label">{labels[proSync.state]}</span>
-  </button>
+  <div class="pro-sync-pill-wrap">
+    <button
+      class="pro-sync-pill"
+      class:clickable
+      data-tone={tones[proSync.state]}
+      title={pillTitle}
+      type="button"
+      aria-label="NodeSpace Pro sync status: {labels[proSync.state]}"
+      aria-haspopup={signedIn ? 'menu' : undefined}
+      aria-expanded={signedIn ? menuOpen : undefined}
+      disabled={pending || !clickable}
+      onclick={onClick}
+    >
+      <span class="dot" aria-hidden="true"></span>
+      <span class="label">{labels[proSync.state]}</span>
+    </button>
+
+    {#if menuOpen && signedIn}
+      <!-- Transparent backdrop so a click anywhere else closes the menu. -->
+      <button class="menu-backdrop" type="button" aria-label="Close account menu" onclick={closeMenu}
+      ></button>
+      <div class="menu" role="menu">
+        <div class="menu-identity">
+          <span class="menu-identity-label">Signed in as</span>
+          <span class="menu-email">{proSync.userEmail}</span>
+        </div>
+        <button
+          class="menu-item"
+          type="button"
+          role="menuitem"
+          onclick={() => {
+            inboxOpen = true;
+            menuOpen = false;
+          }}
+        >
+          Invitations
+        </button>
+        <button
+          class="menu-signout"
+          type="button"
+          role="menuitem"
+          disabled={signingOut}
+          onclick={onSignOut}
+        >
+          {signingOut ? 'Signing out…' : 'Sign out'}
+        </button>
+      </div>
+    {/if}
+  </div>
+
+  <InvitationsInbox open={inboxOpen} onClose={() => (inboxOpen = false)} />
 {/if}
 
 <style>
+  .pro-sync-pill-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+
   .pro-sync-pill {
     display: inline-flex;
     align-items: center;
@@ -146,6 +259,78 @@
     box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
   }
 
+  /* Account menu (#199 S6) — shown when signed in. */
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: default;
+  }
+
+  .menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 21;
+    min-width: 180px;
+    max-width: 260px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #d1d5db);
+    background: var(--surface-1, #ffffff);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  }
+
+  .menu-identity {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px 4px 6px;
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+  }
+
+  .menu-identity-label {
+    font-size: 11px;
+    color: var(--text-secondary, #6b7280);
+  }
+
+  .menu-email {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary, #1f2937);
+    overflow-wrap: anywhere;
+  }
+
+  .menu-item,
+  .menu-signout {
+    appearance: none;
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary, #1f2937);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .menu-item:hover:not(:disabled),
+  .menu-signout:hover:not(:disabled) {
+    background: var(--surface-2, #f3f4f6);
+  }
+
+  .menu-signout:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
   @media (prefers-color-scheme: dark) {
     .pro-sync-pill {
       background: var(--surface-1, #1f2937);
@@ -153,6 +338,22 @@
       color: var(--text-primary, #e5e7eb);
     }
     .pro-sync-pill:hover {
+      background: var(--surface-2, #374151);
+    }
+    .menu {
+      background: var(--surface-1, #1f2937);
+      border-color: var(--border-color, #374151);
+    }
+    .menu-identity {
+      border-bottom-color: var(--border-color, #374151);
+    }
+    .menu-email {
+      color: var(--text-primary, #e5e7eb);
+    }
+    .menu-signout {
+      color: var(--text-primary, #e5e7eb);
+    }
+    .menu-signout:hover:not(:disabled) {
       background: var(--surface-2, #374151);
     }
   }
