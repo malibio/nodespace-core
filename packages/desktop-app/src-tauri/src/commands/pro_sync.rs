@@ -139,12 +139,15 @@ fn emit_disconnected(app: &AppHandle, reason: String) {
 /// `worker_url` defaults to `http://127.0.0.1:8787` (the
 /// `nodespace-sync/cloud-worker` default). `user_hint` is shown in
 /// the worker's login form so users see which account they're
-/// signing into; empty string is fine.
+/// signing into; empty string is fine. `provider` selects a social
+/// sign-in — empty = the Worker email/password form (default),
+/// `"google"` = direct Supabase GoTrue OAuth.
 #[tauri::command]
 pub async fn pro_initiate_oauth(
     app: AppHandle,
     worker_url: Option<String>,
     user_hint: Option<String>,
+    provider: Option<String>,
 ) -> Result<String, String> {
     let Some(pro) = app.try_state::<ProClient>() else {
         return Err("community tier — Pro sign-in unavailable".into());
@@ -153,8 +156,9 @@ pub async fn pro_initiate_oauth(
     let req = InitiateOAuthRequest {
         worker_url: worker_url.unwrap_or_else(|| DEFAULT_WORKER_URL.to_string()),
         user_hint: user_hint.unwrap_or_default(),
+        provider: provider.unwrap_or_default(),
     };
-    tracing::info!(worker = %req.worker_url, user_hint = %req.user_hint, "Pro: InitiateOAuth");
+    tracing::info!(worker = %req.worker_url, user_hint = %req.user_hint, provider = %req.provider, "Pro: InitiateOAuth");
     let resp = client
         .initiate_o_auth(req)
         .await
