@@ -80,6 +80,11 @@ message InitiateOAuthRequest {
   // Hint passed to the worker login form so the user knows which
   // account they're signing into (typically the local OS username).
   string user_hint = 2;
+  // Social OAuth provider to sign in with. Empty = the Worker-brokered
+  // email/password flow (default). "google" = sign in directly against
+  // Supabase GoTrue's provider OAuth (PKCE), bypassing the Worker form.
+  // The Worker is still used for the later refresh grant regardless.
+  string provider = 3;
 }
 
 message InitiateOAuthResponse {

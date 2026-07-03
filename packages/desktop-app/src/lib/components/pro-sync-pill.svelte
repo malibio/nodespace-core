@@ -101,21 +101,35 @@
     }
   });
 
-  async function onClick() {
+  // A pill click opens a menu — the account menu when signed in, the
+  // sign-in options menu when signed out — so a single click never
+  // commits to one sign-in method (email vs Google).
+  function onClick() {
     if (pending) return;
     if (signedIn) {
       menuOpen = !menuOpen;
       return;
     }
     if (!SIGN_IN_STATES.includes(proSync.state)) return;
+    menuOpen = !menuOpen;
+  }
+
+  // Kick off a PKCE sign-in. `provider` empty = the Worker email/password
+  // form; `'google'` = direct Supabase GoTrue OAuth. The daemon opens the
+  // browser; this UI just tracks progress via the `sync:status` stream.
+  async function startSignIn(provider = '') {
+    if (pending) return;
+    if (!SIGN_IN_STATES.includes(proSync.state)) return;
+    menuOpen = false;
     pending = true;
     try {
-      const attemptId = await invoke<string>('pro_initiate_oauth', {
-        // workerUrl + userHint omitted — backend defaults apply.
-      });
-      log.info('PKCE attempt started', { attemptId });
+      const attemptId = await invoke<string>(
+        'pro_initiate_oauth',
+        provider ? { provider } : {}
+      );
+      log.info('PKCE attempt started', { attemptId, provider: provider || 'email' });
     } catch (e) {
-      log.warn('pro_initiate_oauth failed', { error: e });
+      log.warn('pro_initiate_oauth failed', { error: e, provider });
     } finally {
       pending = false;
     }
@@ -156,8 +170,8 @@
       title={pillTitle}
       type="button"
       aria-label="NodeSpace Pro sync status: {labels[proSync.state]}"
-      aria-haspopup={signedIn ? 'menu' : undefined}
-      aria-expanded={signedIn ? menuOpen : undefined}
+      aria-haspopup={clickable ? 'menu' : undefined}
+      aria-expanded={clickable ? menuOpen : undefined}
       disabled={pending || !clickable}
       onclick={onClick}
     >
@@ -165,35 +179,54 @@
       <span class="label">{labels[proSync.state]}</span>
     </button>
 
-    {#if menuOpen && signedIn}
+    {#if menuOpen && clickable}
       <!-- Transparent backdrop so a click anywhere else closes the menu. -->
-      <button class="menu-backdrop" type="button" aria-label="Close account menu" onclick={closeMenu}
+      <button class="menu-backdrop" type="button" aria-label="Close menu" onclick={closeMenu}
       ></button>
       <div class="menu" role="menu">
-        <div class="menu-identity">
-          <span class="menu-identity-label">Signed in as</span>
-          <span class="menu-email">{proSync.userEmail}</span>
-        </div>
-        <button
-          class="menu-item"
-          type="button"
-          role="menuitem"
-          onclick={() => {
-            inboxOpen = true;
-            menuOpen = false;
-          }}
-        >
-          Invitations
-        </button>
-        <button
-          class="menu-signout"
-          type="button"
-          role="menuitem"
-          disabled={signingOut}
-          onclick={onSignOut}
-        >
-          {signingOut ? 'Signing out…' : 'Sign out'}
-        </button>
+        {#if signedIn}
+          <div class="menu-identity">
+            <span class="menu-identity-label">Signed in as</span>
+            <span class="menu-email">{proSync.userEmail}</span>
+          </div>
+          <button
+            class="menu-item"
+            type="button"
+            role="menuitem"
+            onclick={() => {
+              inboxOpen = true;
+              menuOpen = false;
+            }}
+          >
+            Invitations
+          </button>
+          <button
+            class="menu-signout"
+            type="button"
+            role="menuitem"
+            disabled={signingOut}
+            onclick={onSignOut}
+          >
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
+        {:else}
+          <button
+            class="menu-item"
+            type="button"
+            role="menuitem"
+            onclick={() => startSignIn('google')}
+          >
+            Continue with Google
+          </button>
+          <button
+            class="menu-item"
+            type="button"
+            role="menuitem"
+            onclick={() => startSignIn('')}
+          >
+            Sign in with email
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
