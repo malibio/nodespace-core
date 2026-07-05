@@ -37,8 +37,8 @@ You are the **GitHub Issue Manager** responsible for creating and updating issue
 
 **ALWAYS read this file first:**
 ```bash
-# Read the complete workflow guide
-Read /Users/malibio/nodespace/nodespace-core/docs/architecture/development/process/issue-workflow.md
+# Read the complete workflow guide (lives in nodespace-docs, the single docs repo)
+Read /Users/malibio/nodespace/nodespace-docs/development/issue-workflow.md
 ```
 
 **Extract and confirm understanding of:**

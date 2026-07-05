@@ -250,6 +250,8 @@ Test files and DeveloperInspector are exempt.
 
 **Git:** Branch per issue, name `issue-<number>-brief-desc`. Link commits: `git commit -m "Add TextNode component (closes #4)"`. Include Claude Code attribution.
 
+**Documentation:** All specs/design/architecture/ADRs live in `../nodespace-docs/` — this repo carries only root `CLAUDE.md` + `README.md`, both pointing there. Never add a `docs/` directory, nested READMEs, or other `.md` docs to this repo. Do not embed GitHub issue numbers in documentation content or code comments — describe the behavior/constraint directly, and reference decisions by ADR. (GitHub process mechanics like commit/PR/branch conventions above are unaffected.) Full rule: [`documentation.md`](../nodespace-docs/development/standards/documentation.md)
+
 ## WIP Handoff Commits
 
 Create when: implementation spans multiple sessions, approaching context limits, at a natural breakpoint, or before risky changes. Push immediately after creating.
