@@ -246,7 +246,7 @@ fn def_execute_query() -> ToolDefinition {
                             "type": {
                                 "type": "string",
                                 "enum": ["property", "content", "metadata", "relationship"],
-                                "description": "Filter category: 'property' for schema fields, 'content' for node text, 'metadata' for built-in fields (created_at, modified_at, node_type), 'relationship' for graph edges"
+                                "description": "Filter category: 'property' for ANY schema/node field (status, due_date, priority, and all custom schema fields) — use this for status. 'content' for node text. 'metadata' ONLY for the 4 built-in fields created_at, modified_at, node_type, content — NEVER use 'metadata' for status or any schema field, it will fail with 'Invalid metadata field'. 'relationship' for graph edges."
                             },
                             "operator": {
                                 "type": "string",
@@ -255,7 +255,7 @@ fn def_execute_query() -> ToolDefinition {
                             },
                             "property": {
                                 "type": "string",
-                                "description": "Property key for property/metadata filters (e.g. 'status', 'due_date')"
+                                "description": "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata."
                             },
                             "value": {
                                 "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
