@@ -130,6 +130,16 @@
    * only touch the trailing block, so unchanged siblings — and any
    * NodeCardInline components mounted inside them — are left untouched
    * instead of being torn down and remounted on every content change.
+   *
+   * This is a positional index diff, not a keyed/LCS diff: block N is only
+   * ever compared against the previous render's block N. That's correct for
+   * the append-only way chat content grows (streaming appends to the last
+   * block or adds new trailing blocks) but would cause needless remounts of
+   * every following block if a block were ever reordered or inserted before
+   * the end — there's no such path today. Node-cards are also reconciled at
+   * block granularity, not individually: if two node-cards share one
+   * top-level block (e.g. the same paragraph) and any part of that block's
+   * text changes, both remount together.
    */
   function patchContent(newHtml: string): void {
     const template = document.createElement('template');
