@@ -154,15 +154,22 @@ async function findFreePort(): Promise<number> {
   });
 }
 
+/** One-shot UDS reachability probe — mirrors the Rust `check_daemon_socket` semantics. */
+async function probeSocket(socketPath: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const sock = net.createConnection(socketPath);
+    sock.once('connect', () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.once('error', () => resolve(false));
+  });
+}
+
 async function waitForSocket(socketPath: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const connected = await new Promise<boolean>((resolve) => {
-      const sock = net.createConnection(socketPath);
-      sock.once('connect', () => { sock.destroy(); resolve(true); });
-      sock.once('error', () => resolve(false));
-    });
-    if (connected) return;
+    if (await probeSocket(socketPath)) return;
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`Daemon socket ${socketPath} not ready after ${timeoutMs}ms`);
@@ -180,6 +187,96 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`HTTP endpoint ${url} not ready after ${timeoutMs}ms`);
+}
+
+interface SpawnedProcesses {
+  tmpDir: string;
+  socketPath: string;
+  proxyPort: number;
+  daemonProc: child_process.ChildProcess;
+  proxyProc: child_process.ChildProcess;
+  daemonSpawnError: Error | undefined;
+  proxySpawnError: Error | undefined;
+}
+
+/**
+ * Spawn the daemon and dev-proxy processes without waiting on either's
+ * readiness — shared by `start()` (which waits for both) and
+ * `startDeferred()` (which only waits for the proxy).
+ */
+async function spawnDaemonAndProxy(): Promise<SpawnedProcesses> {
+  const binary = resolveDaemonBinary();
+  const devProxyScript = resolveDevProxyScript();
+
+  if (!fs.existsSync(binary)) {
+    throw new Error(
+      `nodespaced binary not found at ${binary}. ` +
+      `Build with 'cargo build -p nodespaced' or set NODESPACED_BINARY.`
+    );
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodespace-e2e-'));
+  const socketPath = path.join(tmpDir, 'daemon.sock');
+  const dbPath = path.join(tmpDir, 'test-db');
+  const proxyPort = await findFreePort();
+
+  const daemonEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODESPACED_SOCKET: socketPath,
+    NODESPACED_DB_PATH: dbPath,
+    NODESPACED_HEADLESS: '1',
+    RUST_LOG: 'warn'
+  };
+
+  const daemonProc = child_process.spawn(binary, [], {
+    env: daemonEnv,
+    stdio: 'pipe',
+    detached: false
+  });
+
+  daemonProc.stderr?.on('data', (chunk: Buffer) => {
+    if (process.env.E2E_VERBOSE) {
+      process.stderr.write(`[daemon] ${chunk.toString()}`);
+    }
+  });
+
+  let daemonSpawnError: Error | undefined;
+  daemonProc.on('error', (err: Error) => {
+    daemonSpawnError = err;
+  });
+
+  const proxyEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODESPACED_SOCKET: socketPath,
+    DEV_PROXY_PORT: String(proxyPort)
+  };
+
+  const proxyProc = child_process.spawn('bun', ['run', devProxyScript], {
+    env: proxyEnv,
+    stdio: 'pipe',
+    detached: false
+  });
+
+  proxyProc.stderr?.on('data', (chunk: Buffer) => {
+    if (process.env.E2E_VERBOSE) {
+      process.stderr.write(`[proxy] ${chunk.toString()}`);
+    }
+  });
+
+  let proxySpawnError: Error | undefined;
+  proxyProc.on('error', (err: Error) => {
+    proxySpawnError = err;
+  });
+
+  return {
+    tmpDir,
+    socketPath,
+    proxyPort,
+    daemonProc,
+    proxyProc,
+    daemonSpawnError,
+    proxySpawnError
+  };
 }
 
 // ============================================================================
@@ -212,101 +309,119 @@ export class DaemonTestHarness {
 
   static async start(): Promise<DaemonTestHarness> {
     const timeoutMs = parseInt(process.env.E2E_DAEMON_TIMEOUT ?? '10000', 10);
-    const binary = resolveDaemonBinary();
-    const devProxyScript = resolveDevProxyScript();
-
-    if (!fs.existsSync(binary)) {
-      throw new Error(
-        `nodespaced binary not found at ${binary}. ` +
-        `Build with 'cargo build -p nodespaced' or set NODESPACED_BINARY.`
-      );
-    }
-
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodespace-e2e-'));
-    const socketPath = path.join(tmpDir, 'daemon.sock');
-    const dbPath = path.join(tmpDir, 'test-db');
-    const proxyPort = await findFreePort();
-
-    // Spawn daemon
-    const daemonEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      NODESPACED_SOCKET: socketPath,
-      NODESPACED_DB_PATH: dbPath,
-      NODESPACED_HEADLESS: '1',
-      RUST_LOG: 'warn'
-    };
-
-    const daemonProc = child_process.spawn(binary, [], {
-      env: daemonEnv,
-      stdio: 'pipe',
-      detached: false
-    });
-
-    daemonProc.stderr?.on('data', (chunk: Buffer) => {
-      // Only log daemon output on test failure debugging
-      if (process.env.E2E_VERBOSE) {
-        process.stderr.write(`[daemon] ${chunk.toString()}`);
-      }
-    });
-
-    // Store spawn errors so waitForSocket can surface them as clear messages
-    // rather than silent timeouts.
-    let daemonSpawnError: Error | undefined;
-    daemonProc.on('error', (err: Error) => {
-      daemonSpawnError = err;
-    });
+    const spawned = await spawnDaemonAndProxy();
 
     // Wait for daemon socket
     try {
-      await waitForSocket(socketPath, timeoutMs);
-      if (daemonSpawnError !== undefined) {
-        throw new Error(`nodespaced spawn failed: ${daemonSpawnError.message}`);
+      await waitForSocket(spawned.socketPath, timeoutMs);
+      if (spawned.daemonSpawnError !== undefined) {
+        throw new Error(`nodespaced spawn failed: ${spawned.daemonSpawnError.message}`);
       }
     } catch (err) {
-      daemonProc.kill();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      spawned.daemonProc.kill();
+      spawned.proxyProc.kill();
+      fs.rmSync(spawned.tmpDir, { recursive: true, force: true });
       throw err;
     }
-
-    // Spawn dev-proxy via bun
-    const proxyEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      NODESPACED_SOCKET: socketPath,
-      DEV_PROXY_PORT: String(proxyPort)
-    };
-
-    const proxyProc = child_process.spawn('bun', ['run', devProxyScript], {
-      env: proxyEnv,
-      stdio: 'pipe',
-      detached: false
-    });
-
-    proxyProc.stderr?.on('data', (chunk: Buffer) => {
-      if (process.env.E2E_VERBOSE) {
-        process.stderr.write(`[proxy] ${chunk.toString()}`);
-      }
-    });
-
-    let proxySpawnError: Error | undefined;
-    proxyProc.on('error', (err: Error) => {
-      proxySpawnError = err;
-    });
 
     // Wait for proxy HTTP health
     try {
-      await waitForHttp(`http://localhost:${proxyPort}/health`, timeoutMs);
-      if (proxySpawnError !== undefined) {
-        throw new Error(`dev-proxy spawn failed: ${proxySpawnError.message}`);
+      await waitForHttp(`http://localhost:${spawned.proxyPort}/health`, timeoutMs);
+      if (spawned.proxySpawnError !== undefined) {
+        throw new Error(`dev-proxy spawn failed: ${spawned.proxySpawnError.message}`);
       }
     } catch (err) {
-      proxyProc.kill();
-      daemonProc.kill();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      spawned.proxyProc.kill();
+      spawned.daemonProc.kill();
+      fs.rmSync(spawned.tmpDir, { recursive: true, force: true });
       throw err;
     }
 
-    const adapter = new HttpAdapter(`http://localhost:${proxyPort}`);
-    return new DaemonTestHarness({ adapter, tmpDir, socketPath, proxyPort, daemonProc, proxyProc });
+    const adapter = new HttpAdapter(`http://localhost:${spawned.proxyPort}`);
+    return new DaemonTestHarness({
+      adapter,
+      tmpDir: spawned.tmpDir,
+      socketPath: spawned.socketPath,
+      proxyPort: spawned.proxyPort,
+      daemonProc: spawned.daemonProc,
+      proxyProc: spawned.proxyProc
+    });
+  }
+
+  /**
+   * Spawn the daemon and dev-proxy WITHOUT waiting for the daemon's socket
+   * to be reachable — only for the proxy's own HTTP liveness (its `/health`
+   * reports the proxy process is up, independent of daemon reachability,
+   * since gRPC-js channels dial lazily).
+   *
+   * For tests that need to observe a genuine not-ready → healthy transition
+   * against a real daemon (readiness-contract tests), rather than always
+   * starting from an already-healthy daemon like `start()` does.
+   */
+  static async startDeferred(): Promise<DaemonTestHarness> {
+    const timeoutMs = parseInt(process.env.E2E_DAEMON_TIMEOUT ?? '10000', 10);
+    const spawned = await spawnDaemonAndProxy();
+
+    try {
+      await waitForHttp(`http://localhost:${spawned.proxyPort}/health`, timeoutMs);
+      if (spawned.proxySpawnError !== undefined) {
+        throw new Error(`dev-proxy spawn failed: ${spawned.proxySpawnError.message}`);
+      }
+    } catch (err) {
+      spawned.proxyProc.kill();
+      spawned.daemonProc.kill();
+      fs.rmSync(spawned.tmpDir, { recursive: true, force: true });
+      throw err;
+    }
+
+    const adapter = new HttpAdapter(`http://localhost:${spawned.proxyPort}`);
+    return new DaemonTestHarness({
+      adapter,
+      tmpDir: spawned.tmpDir,
+      socketPath: spawned.socketPath,
+      proxyPort: spawned.proxyPort,
+      daemonProc: spawned.daemonProc,
+      proxyProc: spawned.proxyProc
+    });
+  }
+
+  /** One-shot UDS reachability probe for the daemon this harness spawned. */
+  async isDaemonReachable(): Promise<boolean> {
+    return probeSocket(this.socketPath);
+  }
+
+  /**
+   * Poll until a real RPC through the FULL stack under test — HTTP ->
+   * dev-proxy -> gRPC -> daemon — actually succeeds, not just until the
+   * daemon's own socket is reachable.
+   *
+   * These are two different readiness layers when `startDeferred()` is
+   * used: the dev-proxy's gRPC-js client is constructed once, at proxy
+   * startup, against a socket that may not exist yet. gRPC-js's channel
+   * then owns its own reconnect/backoff state machine, independent of the
+   * caller — unlike the production Tauri path's tonic lazy channel, which
+   * has no such state and simply retries fresh on the next call (verified
+   * directly: a call issued right after the daemon binds succeeds
+   * immediately). So a daemon whose SOCKET is reachable does not imply the
+   * dev-proxy's CHANNEL to it is usable yet; waiting on the real round-trip
+   * this harness's callers are about to make is the only signal that means
+   * what "ready" needs to mean here.
+   */
+  async waitUntilProxyReady(timeoutMs = 30_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        await this.adapter.getAllSchemas();
+        return;
+      } catch (err) {
+        lastError = err;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    throw new Error(
+      `dev-proxy never reached the daemon after ${timeoutMs}ms (last error: ${String(lastError)})`
+    );
   }
 
   /** SSE endpoint URL for WatchNodes event tests. */

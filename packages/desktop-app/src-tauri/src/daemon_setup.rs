@@ -423,7 +423,10 @@ pub async fn check_daemon_socket(socket_path: &Path) -> DaemonStatus {
 }
 
 /// Poll the socket until the daemon is healthy or the timeout expires.
-async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonStatus {
+///
+/// `pub` (not `pub(crate)`) so the readiness integration test — which lives
+/// in `tests/`, a separate crate — can drive it against a real daemon.
+pub async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonStatus {
     let deadline = tokio::time::Instant::now() + max_wait;
     loop {
         let status = check_daemon_socket(socket_path).await;

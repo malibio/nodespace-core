@@ -69,6 +69,17 @@ fn frontend_log(line: String) {
 /// to decide whether to show an error state (Issue #1179).
 #[tauri::command]
 async fn check_daemon_status() -> String {
+    daemon_status_body().await
+}
+
+/// The body of [`check_daemon_status`], factored out and made `pub` so the
+/// readiness integration test in `tests/` — a separate crate — can call the
+/// exact same logic the Tauri command invokes, including its
+/// `resolve_socket_path()` call. Kept out of the `#[tauri::command]`-
+/// annotated function itself: that macro generates hidden crate-scoped
+/// items keyed to the function's identifier, and marking the annotated
+/// function `pub` collides with them (`E0255`, defined multiple times).
+pub async fn daemon_status_body() -> String {
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
         use daemon_setup::{check_daemon_socket, DaemonStatus};

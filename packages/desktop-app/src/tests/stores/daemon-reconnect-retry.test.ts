@@ -27,8 +27,13 @@ vi.mock('$lib/services/collection-service', () => ({
 }));
 
 const mockIsTauri = vi.fn(() => true);
+// Defaults to a promise that never resolves so the initial pull in
+// startDaemonStatusListener() doesn't fire a spurious reconnect before
+// goHealthy() drives the push-event path these tests exercise.
+const mockInvoke = vi.fn((_cmd: string) => new Promise<string>(() => {}));
 vi.mock('@tauri-apps/api/core', () => ({
-  isTauri: () => mockIsTauri()
+  isTauri: () => mockIsTauri(),
+  invoke: (cmd: string) => mockInvoke(cmd)
 }));
 
 let daemonStatusHandler: ((event: { payload: string }) => void) | null = null;
@@ -56,6 +61,7 @@ describe('daemon-reconnect retry wiring (#1470)', () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockIsTauri.mockReturnValue(true);
+    mockInvoke.mockReturnValue(new Promise<string>(() => {}));
     daemonStatusHandler = null;
     mockGetAllSchemas.mockResolvedValue([]);
     mockGetAllCollections.mockResolvedValue([]);
