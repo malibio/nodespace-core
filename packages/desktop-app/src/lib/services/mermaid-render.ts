@@ -1,4 +1,5 @@
 import { createLogger } from '$lib/utils/logger';
+import createDOMPurify from 'dompurify';
 import type { Mermaid } from 'mermaid';
 
 const log = createLogger('MermaidRender');
@@ -89,18 +90,30 @@ function buildThemeVariables(isDark: boolean) {
   };
 }
 
+// Build a DOMPurify instance bound to document.defaultView rather than relying on the module-
+// level default export or the global `window` binding. In tests each file gets a fresh
+// happy-dom document, and other test files' global-`window` stubbing/teardown can leave the
+// global `window` binding stale/detached from the live document by the time this runs, even
+// though `document` itself is always current.
+function getDOMPurify() {
+  const purify = createDOMPurify(document.defaultView ?? undefined);
+  // DOMPurify treats `style` as a URI-safe attribute and does not parse its CSS content, so
+  // it won't strip a javascript: URI hidden inside url(...) in an inline style. Mermaid relies
+  // on inline styles for theming, so we can't forbid the attribute outright — scrub dangerous
+  // CSS constructs from it directly instead. Known gap: CSS backslash-escapes/whitespace
+  // splicing (e.g. "jav\61script:") can obfuscate past this regex. Accepted for now since the
+  // app's CSP (script-src 'self', object-src 'none') already blocks javascript: URIs from
+  // executing in any modern webview — revisit if that CSP is ever relaxed.
+  purify.addHook('uponSanitizeAttribute', (_node, data) => {
+    if (data.attrName === 'style') {
+      data.attrValue = data.attrValue.replace(/(?:javascript|vbscript):/gi, '').replace(/expression\s*\(/gi, '');
+    }
+  });
+  return purify;
+}
+
 export function sanitizeSvg(svg: string): string {
-  // Remove script tags
-  let result = svg.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-  // Remove event handler attributes (all quoting styles: "...", '...', or unquoted)
-  result = result.replace(/\s+on\w+(\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/gi, '');
-  // Strip javascript: URIs from navigable/action attributes (mirrors data: URI treatment above)
-  result = result.replace(/(href|src|xlink:href|action|formaction)\s*=\s*["']\s*javascript\s*:[^"']*/gi, '$1=""');
-  // Strip data: URIs from href, src, and xlink:href attributes (can carry executable payloads)
-  result = result.replace(/(href|src|xlink:href)\s*=\s*["']\s*data:[^"']*/gi, '$1=""');
-  // Strip url(javascript:...) from inline styles and <style> blocks
-  result = result.replace(/url\s*\(\s*['"]?\s*javascript\s*:[^)]*\)/gi, 'url(about:blank)');
-  return result;
+  return getDOMPurify().sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
 }
 
 // Returns sanitized SVG string, or null on failure

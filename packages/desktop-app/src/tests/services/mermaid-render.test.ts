@@ -11,19 +11,17 @@ vi.mock('mermaid', () => ({
 
 describe('sanitizeSvg', () => {
   it('removes script tags from SVG output', () => {
-    const svg = '<svg><script>alert("xss")</script><rect/></svg>';
+    const svg = '<svg><script>alert("xss")</script></svg>';
     const result = sanitizeSvg(svg);
     expect(result).not.toContain('<script');
     expect(result).not.toContain('alert("xss")');
-    expect(result).toContain('<rect/>');
   });
 
   it('removes multiline script tags', () => {
-    const svg = '<svg><script type="text/javascript">\nalert("xss");\n</script><rect/></svg>';
+    const svg = '<svg><script type="text/javascript">\nalert("xss");\n</script></svg>';
     const result = sanitizeSvg(svg);
     expect(result).not.toContain('<script');
     expect(result).not.toContain('alert');
-    expect(result).toContain('<rect/>');
   });
 
   it('removes event handler attributes with double-quoted values', () => {
@@ -31,6 +29,7 @@ describe('sanitizeSvg', () => {
     const result = sanitizeSvg(svg);
     expect(result).not.toContain('onclick');
     expect(result).not.toContain('onmouseover');
+    expect(result).toContain('<rect');
   });
 
   it('removes event handler attributes with single-quoted values', () => {
@@ -40,7 +39,6 @@ describe('sanitizeSvg', () => {
   });
 
   it('removes event handler attributes with unquoted values', () => {
-    // Unquoted handlers were not caught by the previous regex
     const svg = '<svg><rect onclick=alert(1)/></svg>';
     const result = sanitizeSvg(svg);
     expect(result).not.toContain('onclick');
@@ -53,11 +51,22 @@ describe('sanitizeSvg', () => {
   });
 
   it('removes javascript: URIs with whitespace after colon', () => {
-    // "javascript: alert(1)" (with space) was not caught by the previous regex
     const svg = '<svg><a href="javascript: alert(1)">click</a></svg>';
     const result = sanitizeSvg(svg);
     expect(result).not.toContain('javascript:');
     expect(result).not.toContain('javascript');
+  });
+
+  it('removes data: URIs from href attributes', () => {
+    const svg = '<svg><a href="data:text/html,<script>alert(1)</script>">click</a></svg>';
+    const result = sanitizeSvg(svg);
+    expect(result).not.toContain('data:text/html');
+  });
+
+  it('removes url(javascript:...) from inline styles', () => {
+    const svg = '<svg><rect style="fill:url(javascript:alert(1))"/></svg>';
+    const result = sanitizeSvg(svg);
+    expect(result).not.toContain('javascript:');
   });
 
   it('preserves legitimate SVG content', () => {
@@ -76,7 +85,10 @@ describe('sanitizeSvg', () => {
   it('handles SVG with no threats', () => {
     const clean = '<svg><circle cx="50" cy="50" r="40"/></svg>';
     const result = sanitizeSvg(clean);
-    expect(result).toBe(clean);
+    expect(result).toContain('<circle');
+    expect(result).toContain('cx="50"');
+    expect(result).toContain('cy="50"');
+    expect(result).toContain('r="40"');
   });
 });
 
