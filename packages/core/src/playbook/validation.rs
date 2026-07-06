@@ -19,6 +19,7 @@ use crate::playbook::path_extractor;
 use crate::playbook::types::{ActionType, ParsedAction, ParsedRule, ParsedTrigger};
 use crate::services::NodeService;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -61,6 +62,12 @@ pub enum PlaybookValidationError {
     BrokenPath {
         path: String,
         segment: String,
+        message: String,
+        location: String,
+    },
+    /// A `scheduled` trigger's cron expression failed to parse.
+    InvalidCronExpression {
+        cron: String,
         message: String,
         location: String,
     },
@@ -116,6 +123,15 @@ impl std::fmt::Display for PlaybookValidationError {
                     path, location, segment, message
                 )
             }
+            Self::InvalidCronExpression {
+                cron,
+                message,
+                location,
+            } => write!(
+                f,
+                "invalid cron expression '{}' at {}: {}",
+                cron, location, message
+            ),
         }
     }
 }
@@ -155,6 +171,17 @@ pub async fn validate_playbook(
             {
                 errors.push(PlaybookValidationError::UnknownNodeType {
                     node_type: nt.clone(),
+                    location: format!("rule[{}].trigger", rule_idx),
+                });
+            }
+        }
+
+        // -- Validate cron expression on scheduled triggers --
+        if let ParsedTrigger::Scheduled { cron, .. } = &rule.trigger {
+            if let Err(e) = cron::Schedule::from_str(cron) {
+                errors.push(PlaybookValidationError::InvalidCronExpression {
+                    cron: cron.clone(),
+                    message: e.to_string(),
                     location: format!("rule[{}].trigger", rule_idx),
                 });
             }
@@ -1151,6 +1178,66 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_invalid_cron_expression_rejected() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vt_cron_valid_target", 1, json!([])).await;
+
+            let rules = vec![make_scheduled_rule(
+                "not a cron expression",
+                "vt_cron_valid_target",
+                vec![],
+            )];
+            let result = validate_playbook(&rules, &svc).await;
+            assert!(result.is_err());
+            let errors = result.unwrap_err();
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvalidCronExpression { cron, .. } if cron == "not a cron expression"
+                )),
+                "expected InvalidCronExpression error, got {:?}",
+                errors
+            );
+        }
+
+        #[tokio::test]
+        async fn test_wrong_field_count_cron_rejected() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vt_cron_field_count", 1, json!([])).await;
+
+            // Standard 5-field cron (no seconds/year) — this engine requires 7 fields
+            let rules = vec![make_scheduled_rule(
+                "* * * * *",
+                "vt_cron_field_count",
+                vec![],
+            )];
+            let result = validate_playbook(&rules, &svc).await;
+            assert!(result.is_err());
+            let errors = result.unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e, PlaybookValidationError::InvalidCronExpression { .. })),
+                "expected InvalidCronExpression error for wrong field count, got {:?}",
+                errors
+            );
+        }
+
+        #[tokio::test]
+        async fn test_valid_cron_expression_passes() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vt_cron_ok_target", 1, json!([])).await;
+
+            let rules = vec![make_scheduled_rule(
+                "0 * * * * * *",
+                "vt_cron_ok_target",
+                vec![],
+            )];
+            let result = validate_playbook(&rules, &svc).await;
+            assert!(result.is_ok(), "valid cron should pass: {:?}", result);
+        }
+
+        #[tokio::test]
         async fn test_empty_rules_passes() {
             let (svc, _tmp) = create_test_service().await;
 
@@ -1581,6 +1668,38 @@ mod tests {
             assert!(
                 result.is_err(),
                 "playbook with invalid CEL should be rejected"
+            );
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Playbook validation failed"),
+                "error should indicate validation failure: {}",
+                msg
+            );
+        }
+
+        #[tokio::test]
+        async fn test_invalid_cron_rejected_on_create() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vg_cron_item", 1).await;
+
+            let playbook_node = Node::new_with_id(
+                "pb-gate-6".to_string(),
+                "playbook".to_string(),
+                "Bad Cron Playbook".to_string(),
+                json!({
+                    "rules": [{
+                        "name": "r1",
+                        "trigger": { "type": "scheduled", "cron": "not a cron expression", "node_type": "vg_cron_item" },
+                        "conditions": [],
+                        "actions": []
+                    }]
+                }),
+            );
+
+            let result = svc.create_node(playbook_node).await;
+            assert!(
+                result.is_err(),
+                "playbook with invalid cron expression should be rejected"
             );
             let msg = result.unwrap_err().to_string();
             assert!(
