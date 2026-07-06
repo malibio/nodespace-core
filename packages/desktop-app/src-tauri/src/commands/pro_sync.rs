@@ -20,10 +20,10 @@ use crate::services::pro_client::pb::{
 use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
 
-/// Default auth-Worker URL when the frontend doesn't supply one. Release builds
-/// hit the deployed canonical domain (`pro.nodespace.ai`, nodespace-cloud#21);
-/// debug builds hit the local `wrangler dev` worker (`127.0.0.1:8787`, what
-/// `device-sync.sh` runs). Either is overridable via the optional `worker_url` arg.
+/// Auth-Worker URL used for the OAuth flow — not client-configurable.
+/// Release builds hit the deployed canonical domain (`pro.nodespace.ai`,
+/// nodespace-cloud#21); debug builds hit the local `wrangler dev` worker
+/// (`127.0.0.1:8787`, what `device-sync.sh` runs).
 #[cfg(debug_assertions)]
 const DEFAULT_WORKER_URL: &str = "http://127.0.0.1:8787";
 #[cfg(not(debug_assertions))]
@@ -136,16 +136,16 @@ fn emit_disconnected(app: &AppHandle, reason: String) {
 /// returns the attempt ID synchronously. UI tracks progress via the
 /// `sync:status` stream wired in `pro_subscribe_sync_status`.
 ///
-/// `worker_url` defaults to `http://127.0.0.1:8787` (the
-/// `nodespace-sync/cloud-worker` default). `user_hint` is shown in
-/// the worker's login form so users see which account they're
-/// signing into; empty string is fine. `provider` selects a social
-/// sign-in — empty = the Worker email/password form (default),
-/// `"google"` = direct Supabase GoTrue OAuth.
+/// The worker URL always resolves to [`DEFAULT_WORKER_URL`] — it's not
+/// client-configurable, since accepting an arbitrary URL from the
+/// frontend would let it redirect the OAuth flow to an attacker-controlled
+/// worker. `user_hint` is shown in the worker's login form so users see
+/// which account they're signing into; empty string is fine. `provider`
+/// selects a social sign-in — empty = the Worker email/password form
+/// (default), `"google"` = direct Supabase GoTrue OAuth.
 #[tauri::command]
 pub async fn pro_initiate_oauth(
     app: AppHandle,
-    worker_url: Option<String>,
     user_hint: Option<String>,
     provider: Option<String>,
 ) -> Result<String, String> {
@@ -154,7 +154,7 @@ pub async fn pro_initiate_oauth(
     };
     let mut client = pro.client().await;
     let req = InitiateOAuthRequest {
-        worker_url: worker_url.unwrap_or_else(|| DEFAULT_WORKER_URL.to_string()),
+        worker_url: DEFAULT_WORKER_URL.to_string(),
         user_hint: user_hint.unwrap_or_default(),
         provider: provider.unwrap_or_default(),
     };
