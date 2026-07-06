@@ -88,8 +88,16 @@
   // starting a new sign-in.
   let signedIn = $derived(proSync.userEmail !== '');
   let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
+  // While the daemon catches up in the background (state 'syncing'), the app is
+  // fully usable on the local cache — so the tooltip surfaces that progress even
+  // when signed in, rather than only "Signed in as <email>". Never a blocking gate;
+  // the pill is purely a status indicator (#249).
   let pillTitle = $derived(
-    signedIn ? `Signed in as ${proSync.userEmail}` : proSync.detail || labels[proSync.state]
+    signedIn
+      ? proSync.state === 'syncing'
+        ? `${labels.syncing} — signed in as ${proSync.userEmail}`
+        : `Signed in as ${proSync.userEmail}`
+      : proSync.detail || labels[proSync.state]
   );
 
   // First-run onboarding: the first time a user signs in on this device, surface
