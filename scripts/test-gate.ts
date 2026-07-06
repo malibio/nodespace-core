@@ -7,6 +7,11 @@
  * the machine. This repo has no CI runner for tests — this hook is the only
  * gate. See ADR-047.
  *
+ * This gate only activates once Husky has wired it in via the `prepare`
+ * script (i.e. after `bun install`). It is a local convenience, not a
+ * server-side enforcement backstop — a push from a machine that never ran
+ * `bun install` is not gated.
+ *
  * Bypass (intentional WIP pushes only): git push --no-verify
  */
 
@@ -26,7 +31,8 @@ async function run(label: string, cmd: () => Promise<unknown>) {
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
 await run("bun run test:e2e (headless daemon round-trip)", () => {
-  const binary = `${process.cwd()}/target/debug/nodespaced`;
+  const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
+  const binary = `${process.cwd()}/target/debug/${binaryName}`;
   return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
 });
 
