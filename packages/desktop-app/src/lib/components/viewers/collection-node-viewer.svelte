@@ -14,6 +14,7 @@
 -->
 
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
   import { collectionsData } from '$lib/stores/collections';
@@ -55,7 +56,7 @@
   // Set initial tab title when collection is loaded
   $effect(() => {
     if (collection) {
-      onTitleChange?.(collection.content || 'Collection');
+      untrack(() => onTitleChange?.(collection!.content || 'Collection'));
     }
   });
 

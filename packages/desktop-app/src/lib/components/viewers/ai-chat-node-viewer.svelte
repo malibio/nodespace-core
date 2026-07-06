@@ -21,7 +21,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import ChatMessage from '$lib/components/chat/chat-message.svelte';
@@ -332,7 +332,7 @@
 
   // Update title when node content changes.
   $effect(() => {
-    if (node?.content) onTitleChange?.(node.content);
+    if (node?.content) untrack(() => onTitleChange?.(node!.content));
   });
 
   // In browser mode (no Tauri streaming events), poll the backend while processing

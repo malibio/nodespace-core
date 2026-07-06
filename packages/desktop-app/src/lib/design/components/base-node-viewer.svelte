@@ -7,7 +7,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, getContext, tick } from 'svelte';
+  import { onMount, onDestroy, getContext, tick, untrack } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
   import { formatTabTitle } from '$lib/utils/text-formatting';
   import BaseNode from '$lib/design/components/base-node.svelte';
@@ -383,15 +383,6 @@
 
     // Strip markdown header syntax (same logic as formatTabTitle)
     return rawContent.replace(/^#+\s*/, '');
-  });
-
-  // Keep tab title in sync with headerDisplayValue (e.g. when title_template computes a new title)
-  $effect(() => {
-    if (disableTitleUpdates) return;
-    const title = headerDisplayValue || (hasTitleTemplate && genericSchema?.titleTemplate) || '';
-    if (!title) return;
-    // Defer to avoid state_unsafe_mutation (this effect is triggered by $derived headerDisplayValue)
-    tick().then(() => updateTabTitle(title));
   });
 
   /**
@@ -1231,6 +1222,18 @@
 
   /** True when the current schema has a title_template — header should be read-only */
   const hasTitleTemplate = $derived(genericSchema?.titleTemplate != null);
+
+  /** Effective tab title — falls back to the schema's title_template while headerDisplayValue is empty */
+  const computedTabTitle = $derived(
+    headerDisplayValue || (hasTitleTemplate && genericSchema?.titleTemplate) || ''
+  );
+
+  // Push the computed title out to the parent's tab state. untrack() prevents this
+  // imperative push from re-triggering the effect via reads inside updateTabTitle.
+  $effect(() => {
+    if (disableTitleUpdates || !computedTabTitle) return;
+    untrack(() => updateTabTitle(computedTabTitle));
+  });
 
   /** UUID regex — custom schema node types are stored as UUIDs */
   /** Core built-in node types that ship with NodeSpace — everything else is a custom schema type */

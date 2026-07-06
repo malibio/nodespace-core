@@ -75,7 +75,22 @@ class ProSyncStore {
    */
   userEmail = $state<string>('');
 
+  /**
+   * Bumped each time `state` transitions into `'auth-required'` from some other
+   * state. Lets consumers (e.g. the re-login modal's dismissal) distinguish a
+   * fresh auth-required episode from the one already dismissed, without an
+   * effect that reads and writes its own dismissal flag.
+   */
+  authRequiredEpisode = $state(0);
+
   isPro = $derived(this.tier === 'pro');
+
+  private setState(next: SyncState) {
+    if (next === 'auth-required' && this.state !== 'auth-required') {
+      this.authRequiredEpisode++;
+    }
+    this.state = next;
+  }
 
   private unlistenTier: UnlistenFn | null = null;
   private unlistenStatus: UnlistenFn | null = null;
@@ -110,7 +125,7 @@ class ProSyncStore {
       log.info('tier detected', { tier: p.tier });
       this.tier = p.tier;
       if (p.initial_status) {
-        this.state = decodeState(p.initial_status.state);
+        this.setState(decodeState(p.initial_status.state));
         this.detail = p.initial_status.detail;
         this.userEmail = p.initial_status.user_email ?? '';
       }
@@ -131,7 +146,7 @@ class ProSyncStore {
     this.unlistenStatus = await listen<{ state: number; detail: string; user_email?: string }>(
       'sync:status',
       (event) => {
-        this.state = decodeState(event.payload.state);
+        this.setState(decodeState(event.payload.state));
         this.detail = event.payload.detail;
         this.userEmail = event.payload.user_email ?? '';
       }
@@ -160,7 +175,7 @@ class ProSyncStore {
     } catch (e) {
       log.warn('pro_signout invoke failed', { error: e });
     }
-    this.state = 'auth-required';
+    this.setState('auth-required');
     this.userEmail = '';
   }
 
