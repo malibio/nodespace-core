@@ -76,9 +76,25 @@ pub(crate) async fn check_and_enqueue(
 ) {
     let now = chrono::Local::now();
 
-    // Read cron registry (short read lock, then release)
+    // Read cron registry (short read lock, then release).
+    // A poisoned lock (some other thread panicked while holding it) still
+    // holds a valid `PlaybookLifecycleManager` — recover it instead of
+    // propagating the panic, which would permanently kill this polling loop.
+    // `into_inner()` trades a hard failure (permanently dead cron loop) for a
+    // best-effort read of whatever state existed at the panic: `active_playbooks`,
+    // `trigger_index`, and `cron_registry` are plain HashMap/Vec collections with
+    // no unsafe invariants, so the recovered guard can't be a type-invalid or
+    // corrupted value — but `activate_playbook` does update `trigger_index`/
+    // `cron_registry` before `active_playbooks` in a loop over a playbook's rules,
+    // so a panic mid-activation could in principle leave a stale/partial entry
+    // for a playbook that never finished activating. That's an existing risk of
+    // this lock (any `.expect(...)` reader hitting it mid-activation would panic
+    // instead), not something this recovery path introduces — it just avoids
+    // amplifying "one bad activation" into "the cron loop is dead forever."
     let entries: Vec<CronEntry> = {
-        let guard = lifecycle.read().expect("lifecycle lock poisoned");
+        let guard = lifecycle
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.cron_registry().clone()
     };
 
@@ -502,6 +518,64 @@ mod tests {
             assert!(
                 rx.try_recv().is_err(),
                 "non-matching cron should not enqueue any work items"
+            );
+        }
+
+        #[tokio::test]
+        async fn check_and_enqueue_recovers_from_poisoned_lock() {
+            let (svc, _tmp) = create_test_service().await;
+
+            let schema = Node::new_with_id(
+                "cr_task_poison".to_string(),
+                "schema".to_string(),
+                "cr_task_poison".to_string(),
+                json!({
+                    "isCore": false,
+                    "schemaVersion": 1,
+                    "description": "cr_task_poison schema",
+                    "fields": [{"name": "status", "type": "string"}],
+                    "relationships": []
+                }),
+            );
+            svc.create_node(schema).await.unwrap();
+
+            let node = Node::new_with_id(
+                "cr-t4".to_string(),
+                "cr_task_poison".to_string(),
+                "task 4".to_string(),
+                json!({"status": "open"}),
+            );
+            svc.create_node(node).await.unwrap();
+
+            let lifecycle = make_lifecycle_with_cron("0 * * * * * *", "cr_task_poison");
+
+            // Poison the lock: panic while holding the write guard.
+            {
+                let lifecycle = Arc::clone(&lifecycle);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _guard = lifecycle.write().unwrap();
+                    panic!("simulated panic while holding lifecycle lock");
+                }));
+                assert!(result.is_err(), "the simulated panic should have occurred");
+            }
+            assert!(
+                lifecycle.is_poisoned(),
+                "lock should be poisoned after the panic"
+            );
+
+            // check_and_enqueue must recover from the poisoned lock instead of
+            // panicking itself — that panic would permanently kill the cron loop.
+            let (tx, mut rx) = mpsc::channel::<ExecutionWorkItem>(100);
+            check_and_enqueue(&lifecycle, &svc, &tx).await;
+
+            let mut received = vec![];
+            while let Ok(item) = rx.try_recv() {
+                received.push(item);
+            }
+            assert_eq!(
+                received.len(),
+                1,
+                "should still enqueue work items after recovering from a poisoned lock"
             );
         }
     }

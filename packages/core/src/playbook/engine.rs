@@ -34,6 +34,13 @@ pub(crate) const EXECUTION_QUEUE_CAPACITY: usize = 1024;
 pub struct PlaybookEngine {
     /// Lifecycle manager behind RwLock for concurrent access.
     /// Read: event subscriber (frequent). Write: lifecycle ops (infrequent).
+    ///
+    /// `cron_runner.rs`'s poll loop recovers from a poisoned lock (`into_inner()`)
+    /// rather than panicking, since a panic there would permanently kill the
+    /// 60-second cron loop. The `.expect(...)` call sites in this file still
+    /// propagate a poisoned lock as a panic — deliberately deferred, not an
+    /// oversight, since those run on the event-subscriber/lifecycle-mutation
+    /// paths rather than an unattended background loop.
     lifecycle: Arc<RwLock<PlaybookLifecycleManager>>,
     /// NodeService for fetching playbook nodes and (later) executing actions.
     node_service: Arc<NodeService>,
