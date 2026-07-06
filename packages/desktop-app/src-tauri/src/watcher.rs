@@ -1,28 +1,20 @@
 //! gRPC-backed watcher that bridges `nodespaced`'s `WatchNodes` stream to the
 //! Tauri frontend via `app.emit("node:*", ...)`.
 //!
-//! # Status (issue #1114)
+//! # Status
 //!
-//! This module is **ready-to-use but inert** in the current codebase. It is
-//! not started by `lib.rs` because the in-process `DomainEventForwarder` is
-//! still the live source of `node:created` / `node:updated` / `node:deleted`
-//! Tauri events. Running both simultaneously would double-emit every node
-//! event to the frontend.
-//!
-//! Activation belongs to issue #1113 (Migrate Tauri command handlers to thin
-//! gRPC proxy wrappers): once the Tauri process stops holding `NodeService`
-//! in-process and talks to `nodespaced` exclusively over gRPC,
-//! `DomainEventForwarder` becomes the dead code path and this watcher takes
-//! over. The frontend event contract (`node:created` / `node:updated` /
-//! `node:deleted` with `NodeIdPayload`) is intentionally identical so that
-//! the swap is invisible to Svelte stores.
+//! This is the sole, currently-active source of `node:created` /
+//! `node:updated` / `node:deleted` / `relationship:*` Tauri events — started
+//! unconditionally from `lib.rs`'s setup closure via `watcher::spawn(...)`.
+//! There is no in-process forwarder alongside it; the Tauri process talks to
+//! `nodespaced` exclusively over gRPC, and this watcher is that seam's event
+//! path.
 //!
 //! # Behavior
 //!
 //! - Opens a `WatchNodes` stream against the build-variant-scoped socket
 //!   (see `daemon_setup::daemon_socket_relative`), or the path from `NODESPACED_SOCKET`.
-//! - Translates each proto `NodeEvent` to a Tauri event with the same payload
-//!   shape as `DomainEventForwarder` (id + optional node_type).
+//! - Translates each proto `NodeEvent` to a Tauri event (id + optional node_type).
 //! - On stream error or disconnection, reconnects with exponential backoff
 //!   starting at 1 second and capped at 30 seconds.
 //! - Exits cleanly when the supplied cancellation token is cancelled.
@@ -33,7 +25,7 @@ use anyhow::{Context, Result};
 use nodespace_proto::nodespace::{node_event::Event as NodeEventKind, WatchRequest};
 use nodespace_proto::NodeServiceClient;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
@@ -84,8 +76,17 @@ pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
 
 /// Watcher loop. Connects, streams events, and reconnects with exponential
 /// backoff on any failure. Exits when `cancel_token` fires.
+///
+/// Generic over `Runtime` (rather than hardcoded to the real `Wry` runtime,
+/// like the rest of this module's public API) SOLELY so the ADR-048
+/// integration test can drive it against `tauri::test`'s `MockRuntime` — a
+/// real event bus with no webview. The production `spawn` entry point above
+/// still only ever instantiates this with the real runtime.
 #[cfg(unix)]
-async fn run(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) -> Result<()> {
+pub async fn run<R: Runtime>(
+    app: AppHandle<R>,
+    cancel_token: tokio_util::sync::CancellationToken,
+) -> Result<()> {
     let sock = socket_path();
     info!("Node watcher starting (sock={})", sock.display());
 
@@ -129,7 +130,7 @@ async fn run(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
 /// or errors. Returns `Ok(())` on clean stream end, `Err` on transport or
 /// stream error.
 #[cfg(unix)]
-async fn stream_once(app: &AppHandle, sock: &std::path::Path) -> Result<()> {
+async fn stream_once<R: Runtime>(app: &AppHandle<R>, sock: &std::path::Path) -> Result<()> {
     use hyper_util::rt::TokioIo;
     use tokio::net::UnixStream;
     use tonic::transport::{Endpoint, Uri};
@@ -162,7 +163,7 @@ async fn stream_once(app: &AppHandle, sock: &std::path::Path) -> Result<()> {
 }
 
 /// Translate a proto `NodeEvent` into the corresponding Tauri event.
-fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
+fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::NodeEvent) {
     let Some(kind) = event.event else {
         debug!("Received NodeEvent with no event variant; ignoring");
         return;
@@ -179,8 +180,8 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
             }
         }
         NodeEventKind::Updated(data) => {
-            // Match DomainEventForwarder: node:updated payload omits node_type
-            // because the frontend already knows the type from its cached node.
+            // node:updated payload omits node_type because the frontend
+            // already knows the type from its cached node.
             debug!(
                 node_id = %data.id,
                 node_type = %data.node_type,
@@ -195,10 +196,9 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
             }
         }
         NodeEventKind::Deleted(d) => {
-            // node_type is required to match the in-process DomainEventForwarder
-            // contract — consumers (e.g. collections sidebar) apply type-aware
-            // cleanup logic for schema/collection deletions without fetching
-            // the already-deleted node.
+            // node_type is required — consumers (e.g. collections sidebar)
+            // apply type-aware cleanup logic for schema/collection deletions
+            // without fetching the already-deleted node.
             let payload = NodeIdPayload {
                 id: d.node_id.clone(),
                 node_type: Some(d.node_type),
@@ -207,15 +207,11 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
                 error!("Failed to emit node:deleted for {}: {e}", d.node_id);
             }
         }
-        // Relationship variants — added so cloud-sync / cross-window
-        // hierarchy changes reach the frontend's reactiveStructureTree
-        // (issue #1202). Payload shape mirrors the in-process
-        // DomainEventForwarder's `relationship:*` Tauri events so
-        // `tauri-sync-listener.ts` works unchanged. `properties`
-        // arrives JSON-encoded on the wire (proto schema is stable);
-        // re-parse it here before emitting so the frontend gets a
-        // real object (the `has_child` listener reads
-        // `properties.order`).
+        // Relationship variants — so cloud-sync / cross-window hierarchy
+        // changes reach the frontend's reactiveStructureTree.
+        // `properties` arrives JSON-encoded on the wire (proto schema is
+        // stable); re-parse it here before emitting so the frontend gets a
+        // real object (the `has_child` listener reads `properties.order`).
         NodeEventKind::RelationshipCreated(r) => emit_relationship(app, "relationship:created", r),
         NodeEventKind::RelationshipUpdated(r) => emit_relationship(app, "relationship:updated", r),
         NodeEventKind::RelationshipDeleted(r) => {
@@ -232,11 +228,8 @@ fn forward(app: &AppHandle, event: nodespace_proto::nodespace::NodeEvent) {
     }
 }
 
-/// Frontend payload for `relationship:created` / `relationship:updated`.
-/// Must stay structurally identical to the in-process
-/// `DomainEventForwarder`'s emission of the core `RelationshipEvent`
-/// struct (camelCase via serde rename), so `tauri-sync-listener.ts`
-/// works unchanged across the two forwarding paths.
+/// Frontend payload for `relationship:created` / `relationship:updated`
+/// (camelCase via serde rename) — the shape `tauri-sync-listener.ts` expects.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RelationshipPayloadOut {
@@ -247,8 +240,7 @@ struct RelationshipPayloadOut {
     properties: serde_json::Value,
 }
 
-/// Frontend payload for `relationship:deleted` — mirrors the
-/// `DomainEventForwarder` shape (no `properties` field).
+/// Frontend payload for `relationship:deleted` (no `properties` field).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RelationshipDeletedOut {
@@ -258,8 +250,8 @@ struct RelationshipDeletedOut {
     relationship_type: String,
 }
 
-fn emit_relationship(
-    app: &AppHandle,
+fn emit_relationship<R: Runtime>(
+    app: &AppHandle<R>,
     name: &str,
     r: nodespace_proto::nodespace::RelationshipPayload,
 ) {

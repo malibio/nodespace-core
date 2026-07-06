@@ -79,6 +79,13 @@ impl Drop for SpawnedDaemon {
 /// socket happened to be live at the moment its `connect()` future actually
 /// polled, not the daemon its own test spawned. Held across the `.await` in
 /// `connect()`, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
+///
+/// `watcher::run` re-resolves `NODESPACED_SOCKET` itself (independently of
+/// `GrpcClient`) the moment its spawned task starts, which can be AFTER
+/// `connected_client`'s own `EnvGuard` has already restored the prior value.
+/// Tests that spawn the watcher must hold a guard from
+/// `hold_connect_mutex_and_socket_env` for the watcher's entire lifetime,
+/// not just through `connect()` — see `optimistic_echo_race_test.rs`.
 static CONNECT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Wait until the daemon's socket is reachable, then connect a real
@@ -101,6 +108,20 @@ async fn connected_client(daemon: &SpawnedDaemon, timeout: Duration) -> GrpcClie
     GrpcClient::connect()
         .await
         .unwrap_or_else(|e| panic!("failed to connect GrpcClient to spawned daemon: {e}"))
+}
+
+/// Holds `CONNECT_MUTEX` AND keeps `NODESPACED_SOCKET` set to `daemon`'s
+/// socket for as long as the returned guard lives — for tests that spawn
+/// `watcher::run`, which re-resolves the env var independently of
+/// `GrpcClient` when its task actually starts running, not at `connect()`
+/// time. Drop the returned guard only after the watcher task has been
+/// cancelled and joined.
+pub async fn hold_connect_mutex_and_socket_env(
+    daemon: &SpawnedDaemon,
+) -> (tokio::sync::MutexGuard<'static, ()>, EnvGuard) {
+    let mutex_guard = CONNECT_MUTEX.lock().await;
+    let env_guard = EnvGuard::set("NODESPACED_SOCKET", &daemon.socket_path);
+    (mutex_guard, env_guard)
 }
 
 /// A `tauri::test::mock_app()` (`MockRuntime`, no webview, no display) with a
