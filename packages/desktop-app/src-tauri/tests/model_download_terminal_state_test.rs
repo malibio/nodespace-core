@@ -29,12 +29,34 @@ use std::time::Duration;
 use nodespace_app_lib::commands::chat_models::{
     chat_model_cancel_download, chat_model_list, chat_model_load, chat_model_unload,
 };
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{model_file_available, SpawnedDaemon, TauriTestApp};
 use nodespace_proto::nodespace::DownloadModelRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
 const MODEL_ID: &str = "ministral-3b-q4km";
+// Filename mapped from MODEL_ID by the CATALOG entry in
+// packages/agent/src/local_agent/model_manager.rs — kept in sync manually
+// since this test has no dependency on that crate.
+const MODEL_FILENAME: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
+
+/// No provisioning step downloads this model in bun install/test-gate.ts
+/// today. Tests that need it already present skip cleanly with a clear
+/// message rather than silently kicking off a live multi-gigabyte
+/// HuggingFace fetch and hanging the pre-push gate on a machine that hasn't
+/// run `model load` for it before.
+macro_rules! skip_if_model_absent {
+    () => {
+        if !model_file_available(MODEL_FILENAME) {
+            eprintln!(
+                "SKIPPED: {MODEL_ID} not found under ~/.nodespace/models/{MODEL_FILENAME} — \
+                 run `target/debug/nodespace model load {MODEL_ID}` once to provision it, \
+                 then re-run this test."
+            );
+            return;
+        }
+    };
+}
 
 /// Drains the real `DownloadModel` stream (same RPC `chat_model_download`
 /// proxies) and returns the sequence of `event_type`s observed.
@@ -64,6 +86,7 @@ async fn drain_download_events(harness: &TauriTestApp, model_id: &str) -> Vec<St
 
 #[tokio::test]
 async fn download_of_an_already_present_model_reaches_ready_with_no_error() {
+    skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
     let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
 
@@ -81,6 +104,7 @@ async fn download_of_an_already_present_model_reaches_ready_with_no_error() {
 
 #[tokio::test]
 async fn chat_model_list_still_succeeds_after_a_download() {
+    skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
     let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
     let state = harness.client_state();
@@ -130,6 +154,7 @@ async fn cancel_of_a_download_with_no_stray_downloading_state_left_behind() {
 
 #[tokio::test]
 async fn load_then_unload_reaches_a_clean_terminal_state() {
+    skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
     let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
     let state = harness.client_state();

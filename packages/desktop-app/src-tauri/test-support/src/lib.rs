@@ -113,15 +113,17 @@ impl Drop for SpawnedDaemon {
     }
 }
 
-/// Serializes every test that connects a `GrpcClient`: the only way to point
-/// `GrpcClient::connect()` at a specific spawned daemon is the process-global
-/// `NODESPACED_SOCKET` env var (`connect()` resolves it internally; there is
-/// no per-call socket argument). Without this mutex, two `#[tokio::test]`s
-/// running concurrently — the default — can interleave their
-/// `EnvGuard::set`/restore, so a client ends up dialing whichever socket
-/// happened to be live at the moment its `connect()` future actually polled,
-/// not the daemon its own test spawned. Held across the `.await` in
-/// `connect()`, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
+/// The ONE process-wide lock for every test in this crate's consumers that
+/// mutates the process-global `NODESPACED_SOCKET` env var — whether via
+/// `GrpcClient::connect()` (which resolves it internally; there is no
+/// per-call socket argument), `GrpcClient::connect_lazy()`, or a raw
+/// `EnvGuard::set` for a Tauri command that reads it directly (e.g.
+/// `check_daemon_status`, `watcher::run`). Without this mutex, two
+/// `#[tokio::test]`s running concurrently — the default — can interleave
+/// their env mutations, so one test's client ends up dialing whichever
+/// socket happened to be live at the moment its call actually resolved the
+/// env var, not the daemon its own test spawned. Held across `.await`
+/// points, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
 ///
 /// `watcher::run` re-resolves `NODESPACED_SOCKET` itself (independently of
 /// `GrpcClient`) the moment its spawned task starts, which can be AFTER
@@ -129,7 +131,15 @@ impl Drop for SpawnedDaemon {
 /// Tests that spawn the watcher must hold a guard from
 /// `hold_connect_mutex_and_socket_env` for the watcher's entire lifetime,
 /// not just through `connect()` — see `optimistic_echo_race_test.rs`.
-static CONNECT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+///
+/// `pub` so every `tests/*.rs` file that mutates `NODESPACED_SOCKET` shares
+/// this ONE lock rather than each defining its own same-purpose mutex under
+/// a different name (`daemon_readiness_test.rs` used to define its own
+/// `ENV_MUTEX` before this was made shared — harmless in practice, since
+/// each `tests/*.rs` file compiles to its own process and the env var is
+/// process-local, but a duplicated concept under two names invites a third
+/// file inventing a fourth).
+pub static CONNECT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Wait until the daemon's socket is reachable, then connect a real
 /// `GrpcClient` to it — the same client type `#[tauri::command]` handlers
@@ -226,6 +236,26 @@ impl Drop for EnvGuard {
             None => std::env::remove_var(self.key),
         }
     }
+}
+
+/// True if `~/.nodespace/models/<filename>` already exists — the same
+/// resolution `GgufModelManager::new()` uses (`$HOME/.nodespace/models`).
+/// Tests that need a REAL loaded model (ai-chat send, model-download
+/// terminal state) call this to skip cleanly with a clear message on a
+/// machine that hasn't downloaded the model, instead of silently kicking
+/// off a live multi-gigabyte fetch from HuggingFace and hanging the pre-push
+/// gate for anyone but the one machine that already has it cached. There is
+/// no provisioning step in `bun install`/`test-gate.ts` for this file today —
+/// see the panic message for how to fetch it.
+pub fn model_file_available(filename: &str) -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    PathBuf::from(home)
+        .join(".nodespace")
+        .join("models")
+        .join(filename)
+        .exists()
 }
 
 /// Resolve the `nodespaced` binary to spawn.

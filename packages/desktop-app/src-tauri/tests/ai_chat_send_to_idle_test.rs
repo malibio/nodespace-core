@@ -28,12 +28,18 @@ use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{create_node, get_node, update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{model_file_available, SpawnedDaemon, TauriTestApp};
 use nodespace_proto::nodespace::EnsureModelReadyRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
 const MODEL_ID: &str = "ministral-3b-q4km";
+// Filename mapped from MODEL_ID by the CATALOG entry in
+// packages/agent/src/local_agent/model_manager.rs — kept in sync manually
+// since this test has no dependency on that crate. If this test starts
+// failing the `model_file_available` skip-check spuriously, confirm that
+// mapping hasn't changed.
+const MODEL_FILENAME: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
 
 fn ai_chat_input(
     id: &str,
@@ -94,6 +100,19 @@ async fn poll_until_idle_with_new_assistant_reply(
 
 #[tokio::test]
 async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
+    // No provisioning step downloads this model in bun install/test-gate.ts
+    // today. Skip cleanly with a clear message rather than silently kicking
+    // off a live multi-gigabyte HuggingFace fetch and hanging the pre-push
+    // gate on a machine that hasn't run `model load` for it before.
+    if !model_file_available(MODEL_FILENAME) {
+        eprintln!(
+            "SKIPPED: {MODEL_ID} not found under ~/.nodespace/models/{MODEL_FILENAME} — \
+             run `target/debug/nodespace model load {MODEL_ID}` once to provision it, \
+             then re-run this test."
+        );
+        return;
+    }
+
     let daemon = SpawnedDaemon::spawn();
     let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
     let state = harness.client_state();

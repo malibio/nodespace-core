@@ -84,6 +84,12 @@ async fn wait_for_updates(
 #[tokio::test]
 async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     let daemon = SpawnedDaemon::spawn();
+    // TauriTestApp::connect briefly acquires and releases CONNECT_MUTEX
+    // internally (it's safe on its own: the GrpcClient's channel is fixed to
+    // whatever socket NODESPACED_SOCKET resolved to at connect() time and is
+    // immune to later env changes). The guard acquired below is a SEPARATE,
+    // later, longer-held acquisition — for watcher::run, not for this
+    // connect() call.
     let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
     let state = harness.client_state();
     let handle = harness.handle();
