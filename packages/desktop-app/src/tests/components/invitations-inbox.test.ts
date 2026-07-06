@@ -77,4 +77,23 @@ describe('InvitationsInbox', () => {
 		expect(onClose).toHaveBeenCalled();
 		cleanup();
 	});
+
+	it('shows a Log out button only when onLogout is provided, and invokes it (#248)', async () => {
+		// No onLogout → no logout affordance (existing callers unaffected).
+		const { queryByText, unmount } = render(InvitationsInbox, {
+			props: { open: true, onClose: vi.fn() }
+		});
+		expect(queryByText('Log out')).toBeNull();
+		unmount();
+
+		// With onLogout → a signed-in user with no code/membership can revert to
+		// the free/signed-out state from here.
+		const onLogout = vi.fn(() => Promise.resolve());
+		const { getByText } = render(InvitationsInbox, {
+			props: { open: true, onClose: vi.fn(), onLogout }
+		});
+		await fireEvent.click(getByText('Log out'));
+		expect(onLogout).toHaveBeenCalled();
+		cleanup();
+	});
 });
