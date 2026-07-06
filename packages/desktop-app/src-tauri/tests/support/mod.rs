@@ -60,6 +60,34 @@ impl Drop for SpawnedDaemon {
     }
 }
 
+/// Sets an env var and restores its prior value on drop — including on a
+/// panicking test, where plain "restore at the end of the function" code
+/// never runs. Tests that mutate a process-global env var (like
+/// `NODESPACED_SOCKET`) under a shared mutex should hold one of these for
+/// the duration, so a failed assertion can't leak the mutated value to
+/// whichever test acquires the mutex next.
+pub struct EnvGuard {
+    key: &'static str,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    pub fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prev = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 /// Resolve the `nodespaced` binary to spawn.
 ///
 /// Checked in order:

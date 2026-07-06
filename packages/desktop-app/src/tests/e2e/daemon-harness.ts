@@ -390,11 +390,6 @@ export class DaemonTestHarness {
     return probeSocket(this.socketPath);
   }
 
-  /** Poll until the daemon's socket is reachable or the timeout elapses. */
-  async waitUntilDaemonReady(timeoutMs = 30_000): Promise<void> {
-    await waitForSocket(this.socketPath, timeoutMs);
-  }
-
   /**
    * Poll until a real RPC through the FULL stack under test — HTTP ->
    * dev-proxy -> gRPC -> daemon — actually succeeds, not just until the

@@ -17,8 +17,8 @@
  *   - "recovered" spawns the real daemon via `DaemonTestHarness.startDeferred()`
  *     and waits on `waitUntilProxyReady()` — a real data-plane round-trip
  *     through the full HTTP -> dev-proxy -> gRPC -> daemon stack, not just
- *     the daemon's own socket. `waitUntilDaemonReady()` (socket-only) is
- *     NOT sufficient here: `startDeferred()` starts the dev-proxy before the
+ *     the daemon's own socket. A socket-reachability probe alone is NOT
+ *     sufficient here: `startDeferred()` starts the dev-proxy before the
  *     daemon binds, and the proxy's gRPC-js client — constructed once at
  *     proxy startup against a not-yet-existing socket — owns its own
  *     reconnect/backoff state independent of the daemon's actual socket

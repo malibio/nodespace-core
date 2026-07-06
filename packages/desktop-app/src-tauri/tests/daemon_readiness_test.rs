@@ -28,7 +28,7 @@ mod support;
 use std::time::Duration;
 
 use nodespace_app_lib::daemon_setup::{check_daemon_socket, wait_for_daemon, DaemonStatus};
-use support::SpawnedDaemon;
+use support::{EnvGuard, SpawnedDaemon};
 
 /// Serializes tests in this file that mutate the process-global
 /// `NODESPACED_SOCKET` env var, mirroring the single-threaded discipline
@@ -89,11 +89,13 @@ async fn wait_for_daemon_observes_a_real_bind_as_healthy() {
 
 #[tokio::test]
 async fn check_daemon_status_command_agrees_with_the_real_daemon() {
-    let _guard = ENV_MUTEX.lock().await;
-    let prev = std::env::var_os("NODESPACED_SOCKET");
+    let _mutex_guard = ENV_MUTEX.lock().await;
 
     let daemon = SpawnedDaemon::spawn();
-    std::env::set_var("NODESPACED_SOCKET", &daemon.socket_path);
+    // Restores NODESPACED_SOCKET on drop — including if an assertion below
+    // panics, so a failed run can't leak the mutated value to whichever
+    // test acquires ENV_MUTEX next.
+    let _env_guard = EnvGuard::set("NODESPACED_SOCKET", &daemon.socket_path);
 
     // Wait for the real daemon to finish starting (however long that takes;
     // see the comment above these tests for why we don't race an
@@ -106,34 +108,23 @@ async fn check_daemon_status_command_agrees_with_the_real_daemon() {
         "healthy",
         "check_daemon_status must report healthy once the daemon is reachable"
     );
-
-    match prev {
-        Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
-        None => std::env::remove_var("NODESPACED_SOCKET"),
-    }
 }
 
 #[tokio::test]
 async fn check_daemon_status_command_reports_not_running_for_an_unbound_socket() {
-    let _guard = ENV_MUTEX.lock().await;
-    let prev = std::env::var_os("NODESPACED_SOCKET");
+    let _mutex_guard = ENV_MUTEX.lock().await;
 
     // Deterministic by construction: no process is ever spawned for this
     // socket path, so there is nothing to race.
     let tmp = tempfile::tempdir().unwrap();
     let socket_path = tmp.path().join("daemon.sock");
-    std::env::set_var("NODESPACED_SOCKET", &socket_path);
+    let _env_guard = EnvGuard::set("NODESPACED_SOCKET", &socket_path);
 
     assert_eq!(
         nodespace_app_lib::daemon_status_body().await,
         "not_running",
         "check_daemon_status must report not_running for a socket nothing is listening on"
     );
-
-    match prev {
-        Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
-        None => std::env::remove_var("NODESPACED_SOCKET"),
-    }
 }
 
 // `Starting` is produced only when the 500ms connect itself times out
