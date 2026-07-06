@@ -232,6 +232,11 @@ pub async fn import_markdown_directory(
         return Err("Path is not a directory".to_string());
     }
 
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve directory: {}", e))?;
+    check_within_allowed_base(&dir)?;
+
     let mut opts = options.unwrap_or_default();
     let exclude_patterns = opts.exclude_patterns.clone();
 
@@ -252,6 +257,29 @@ pub async fn import_markdown_directory(
     );
 
     import_markdown_files(app, grpc, md_files, Some(opts)).await
+}
+
+/// Reject import directories outside the user's home directory.
+///
+/// Defense-in-depth: under the current single-user-local trust model the
+/// Tauri command boundary is already restricted to the daemon owner, but this
+/// keeps a directory-import call from walking arbitrary system paths (e.g.
+/// `/etc`, `/System`) if that boundary is ever weakened. `dir` must already be
+/// canonicalized so symlink/`..` tricks can't escape the check.
+fn check_within_allowed_base(dir: &std::path::Path) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
+    let home = home
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve home directory: {}", e))?;
+
+    if !dir.starts_with(&home) {
+        return Err(format!(
+            "Import directory must be within the home directory ({})",
+            home.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn collect_markdown_files_with_exclusions(
@@ -290,4 +318,35 @@ fn collect_markdown_files_with_exclusions(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_home_directory_itself() {
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        assert!(check_within_allowed_base(&home).is_ok());
+    }
+
+    #[test]
+    fn accepts_subdirectory_of_home() {
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        assert!(check_within_allowed_base(&home.join("Documents")).is_ok());
+    }
+
+    #[test]
+    fn rejects_path_outside_home() {
+        let outside = std::path::Path::new("/etc");
+        let result = check_within_allowed_base(outside);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("home directory"));
+    }
+
+    #[test]
+    fn rejects_root() {
+        let result = check_within_allowed_base(std::path::Path::new("/"));
+        assert!(result.is_err());
+    }
 }
