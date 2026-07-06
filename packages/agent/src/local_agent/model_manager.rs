@@ -1016,10 +1016,10 @@ async fn perform_download(params: DownloadParams) -> Result<(), ModelError> {
         s.insert(model_id.clone(), ModelStatus::Verifying);
     }
 
-    // Stream-verify SHA-256. An empty expected hash is a catalog configuration
-    // error, not an opt-out -- `find_catalog_entry` rejects it before a
-    // download is ever started, so reaching this point with an empty hash
-    // means the catalog itself is misconfigured.
+    // Stream-verify SHA-256. `download()` already rejects an empty hash
+    // before starting the transfer, so this branch should be unreachable in
+    // practice; it stays as defense-in-depth in case `perform_download` is
+    // ever called from a path that skips that guard.
     if expected_sha256.is_empty() {
         let _ = tokio::fs::remove_file(&partial_path).await;
         return Err(ModelError::VerificationFailed(format!(
@@ -1252,6 +1252,29 @@ mod tests {
                 !url.contains("/resolve/main/"),
                 "model '{}' url pins a moving ref instead of a commit: {}",
                 m.id,
+                url
+            );
+            // A commit SHA is 40 lowercase hex chars, immediately after
+            // "/resolve/" and followed by "/". Assert that segment actually
+            // looks like a commit, not just "not literally main".
+            let ref_segment = url
+                .split("/resolve/")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default();
+            assert_eq!(
+                ref_segment.len(),
+                40,
+                "model '{}' resolve ref '{}' is not a 40-char commit SHA: {}",
+                m.id,
+                ref_segment,
+                url
+            );
+            assert!(
+                ref_segment.chars().all(|c| c.is_ascii_hexdigit()),
+                "model '{}' resolve ref '{}' is not hex: {}",
+                m.id,
+                ref_segment,
                 url
             );
         }
