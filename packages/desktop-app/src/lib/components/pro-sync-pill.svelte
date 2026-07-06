@@ -246,9 +246,9 @@
     gap: 6px;
     padding: 4px 10px;
     border-radius: 999px;
-    border: 1px solid var(--border-color, #d1d5db);
-    background: var(--surface-1, #f9fafb);
-    color: var(--text-primary, #1f2937);
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--card));
+    color: hsl(var(--foreground));
     font-size: 12px;
     font-weight: 500;
     line-height: 1;
@@ -256,7 +256,7 @@
   }
 
   .pro-sync-pill:hover:not(:disabled) {
-    background: var(--surface-2, #f3f4f6);
+    background: hsl(var(--muted));
   }
 
   .pro-sync-pill:disabled {
@@ -315,8 +315,8 @@
     gap: 6px;
     padding: 8px;
     border-radius: 8px;
-    border: 1px solid var(--border-color, #d1d5db);
-    background: var(--surface-1, #ffffff);
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--popover));
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
   }
 
@@ -325,18 +325,18 @@
     flex-direction: column;
     gap: 2px;
     padding: 2px 4px 6px;
-    border-bottom: 1px solid var(--border-color, #e5e7eb);
+    border-bottom: 1px solid hsl(var(--border));
   }
 
   .menu-identity-label {
     font-size: 11px;
-    color: var(--text-secondary, #6b7280);
+    color: hsl(var(--muted-foreground));
   }
 
   .menu-email {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-primary, #1f2937);
+    color: hsl(var(--popover-foreground));
     overflow-wrap: anywhere;
   }
 
@@ -348,7 +348,7 @@
     border-radius: 6px;
     border: none;
     background: transparent;
-    color: var(--text-primary, #1f2937);
+    color: hsl(var(--popover-foreground));
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -356,38 +356,11 @@
 
   .menu-item:hover:not(:disabled),
   .menu-signout:hover:not(:disabled) {
-    background: var(--surface-2, #f3f4f6);
+    background: hsl(var(--muted));
   }
 
   .menu-signout:disabled {
     cursor: default;
     opacity: 0.7;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .pro-sync-pill {
-      background: var(--surface-1, #1f2937);
-      border-color: var(--border-color, #374151);
-      color: var(--text-primary, #e5e7eb);
-    }
-    .pro-sync-pill:hover {
-      background: var(--surface-2, #374151);
-    }
-    .menu {
-      background: var(--surface-1, #1f2937);
-      border-color: var(--border-color, #374151);
-    }
-    .menu-identity {
-      border-bottom-color: var(--border-color, #374151);
-    }
-    .menu-email {
-      color: var(--text-primary, #e5e7eb);
-    }
-    .menu-signout {
-      color: var(--text-primary, #e5e7eb);
-    }
-    .menu-signout:hover:not(:disabled) {
-      background: var(--surface-2, #374151);
-    }
   }
 </style>
