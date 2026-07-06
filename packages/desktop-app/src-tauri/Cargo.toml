@@ -54,3 +54,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Adds tauri::test (mock AppHandle with a real event bus, no webview) for the
+# ADR-048 Tauri-seam integration tests — ONLY active for `cargo test`, since
+# Cargo unifies dev-dependency features into the main build for test targets
+# but not for the release binary.
+tauri = { version = "2", features = ["test"] }

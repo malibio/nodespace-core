@@ -12,7 +12,7 @@
  */
 
 import { $ } from 'bun';
-import { existsSync } from 'fs';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { arch } from 'os';
 
@@ -28,6 +28,10 @@ const BIN_DIR = join(import.meta.dir, '..', 'packages', 'desktop-app', 'src-taur
 const TARGET_DIR = join(import.meta.dir, '..', 'target', profile);
 
 console.log(`Building sidecars (${profile}) for ${triple}...`);
+
+// binaries/ is .gitignore'd (never committed) so a fresh checkout/worktree
+// won't have the directory at all — create it before cp fails on a missing parent.
+mkdirSync(BIN_DIR, { recursive: true });
 
 await $`cargo build ${profileFlag} --bin nodespaced --bin nodespace`.quiet();
 

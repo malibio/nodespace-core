@@ -1,16 +1,26 @@
-//! Reusable fixture for integration tests that need a real, headless
-//! `nodespaced` with a controlled lifecycle (spawn now, bind the socket
-//! whenever the caller lets it).
+//! Reusable fixtures for ADR-048 Tauri-seam integration tests: a real,
+//! headless `nodespaced` with a controlled lifecycle (spawn now, bind the
+//! socket whenever the caller lets it), plus a `GrpcClient` connected to it
+//! so tests can call the actual `#[tauri::command]` handler functions
+//! directly — no webview.
 //!
-//! This is deliberately narrow: it spawns the real daemon binary against a
-//! real socket path and a real temp-dir SQLite store, and gives the caller
-//! the socket path plus a handle to kill the process. It does not attempt
-//! to be the full ADR-048 Tauri-command harness (state injection, watch
-//! streams, multi-client convergence) — those are properly scoped to the
-//! node-CRUD round-trip flow that actually needs them.
+//! `tauri::State<'_, T>` has no public constructor outside Tauri's own IPC
+//! machinery (its inner field is private, and there is no `From<&T>` impl —
+//! confirmed against the `tauri` 2.11 source). The sanctioned way to get one
+//! is `Manager::state::<T>()` after `Manager::manage(state)`, both of which
+//! `tauri::test::mock_app()`'s `App<MockRuntime>` implements — and neither
+//! needs a `WebviewWindow`. So every test uses `mock_app()` + `.manage(client)`
+//! + `.state()` to obtain a real `State<GrpcClient>`, never a hand-built one.
+//! This also means the same `app` doubles as the real event bus the
+//! optimistic-echo-race test needs (`Emitter`/`Listener`), so there is only
+//! one fixture shape, not two.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::time::Duration;
+
+use nodespace_app_lib::services::GrpcClient;
+use tauri::Manager;
 
 /// A running headless `nodespaced` pointed at a temp-dir socket and database.
 /// Killed on drop so a panicking test never leaks the process.
@@ -57,6 +67,65 @@ impl Drop for SpawnedDaemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Serializes every test in this binary that connects a `GrpcClient`: the
+/// only way to point `GrpcClient::connect()` at a specific spawned daemon is
+/// the process-global `NODESPACED_SOCKET` env var (`connect()` resolves it
+/// internally; there is no per-call socket argument). Without this mutex,
+/// two `#[tokio::test]`s running concurrently — the default — can interleave
+/// their `EnvGuard::set`/restore, so a client ends up dialing whichever
+/// socket happened to be live at the moment its `connect()` future actually
+/// polled, not the daemon its own test spawned. Held across the `.await` in
+/// `connect()`, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
+static CONNECT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Wait until the daemon's socket is reachable, then connect a real
+/// `GrpcClient` to it — the same client type `#[tauri::command]` handlers
+/// take as `State<'_, GrpcClient>`.
+async fn connected_client(daemon: &SpawnedDaemon, timeout: Duration) -> GrpcClient {
+    use nodespace_app_lib::daemon_setup::{wait_for_daemon, DaemonStatus};
+
+    let _mutex_guard = CONNECT_MUTEX.lock().await;
+    let _env_guard = EnvGuard::set("NODESPACED_SOCKET", &daemon.socket_path);
+
+    let status = wait_for_daemon(&daemon.socket_path, timeout).await;
+    assert_eq!(
+        status,
+        DaemonStatus::Healthy,
+        "daemon never became healthy at {}",
+        daemon.socket_path.display()
+    );
+
+    GrpcClient::connect()
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect GrpcClient to spawned daemon: {e}"))
+}
+
+/// A `tauri::test::mock_app()` (`MockRuntime`, no webview, no display) with a
+/// real `GrpcClient` connected to `daemon` registered as managed state, so
+/// tests can obtain `tauri::State<GrpcClient>` the sanctioned way —
+/// `Manager::state()` — and call `#[tauri::command]` handler functions
+/// directly. Also usable as the real Tauri event bus (`app.emit`/`app.listen`)
+/// for tests that need to observe the watcher's forwarded events.
+pub struct TauriTestApp {
+    pub app: tauri::App<tauri::test::MockRuntime>,
+}
+
+impl TauriTestApp {
+    /// Build a mock app and connect+manage a `GrpcClient` against `daemon`.
+    pub async fn connect(daemon: &SpawnedDaemon, timeout: Duration) -> Self {
+        let client = connected_client(daemon, timeout).await;
+        let app = tauri::test::mock_app();
+        app.manage(client);
+        Self { app }
+    }
+
+    /// The managed `GrpcClient` as the `State<'_, GrpcClient>` a
+    /// `#[tauri::command]` handler expects as its first argument.
+    pub fn client_state(&self) -> tauri::State<'_, GrpcClient> {
+        self.app.state::<GrpcClient>()
     }
 }
 
