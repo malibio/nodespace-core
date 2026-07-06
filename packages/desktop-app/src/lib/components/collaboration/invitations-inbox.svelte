@@ -16,7 +16,30 @@
 
 	const log = createLogger('InvitationsInbox');
 
-	let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
+	let {
+		open = false,
+		onClose,
+		onLogout
+	}: {
+		open?: boolean;
+		onClose: () => void;
+		// When provided, a signed-in user with no code/membership can log out from
+		// here — reverting to the free/signed-out state (#248). Omitted callers get
+		// the plain Close-only footer.
+		onLogout?: () => void | Promise<void>;
+	} = $props();
+
+	let loggingOut = $state(false);
+
+	async function logout() {
+		if (!onLogout || loggingOut) return;
+		loggingOut = true;
+		try {
+			await onLogout();
+		} finally {
+			loggingOut = false;
+		}
+	}
 
 	let code = $state('');
 	let redeeming = $state(false);
@@ -130,6 +153,16 @@
 			</section>
 
 			<div class="actions">
+				{#if onLogout}
+					<button
+						class="btn btn-logout"
+						type="button"
+						disabled={loggingOut}
+						onclick={logout}
+					>
+						{loggingOut ? 'Logging out…' : 'Log out'}
+					</button>
+				{/if}
 				<button class="btn btn-ghost" onclick={onClose}>Close</button>
 			</div>
 		</div>
@@ -206,6 +239,11 @@
 		background: var(--surface-2, #e5e7eb);
 		color: var(--text-primary, #1f2937);
 	}
+	.btn-logout {
+		background: transparent;
+		border-color: var(--border-color, #d1d5db);
+		color: #dc2626;
+	}
 	.ok {
 		margin: 8px 0 0;
 		font-size: 0.8rem;
@@ -218,7 +256,8 @@
 	}
 	.actions {
 		display: flex;
-		justify-content: flex-end;
+		justify-content: space-between;
+		gap: 8px;
 		margin-top: 8px;
 	}
 </style>

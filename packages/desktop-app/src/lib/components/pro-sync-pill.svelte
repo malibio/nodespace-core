@@ -231,7 +231,14 @@
     {/if}
   </div>
 
-  <InvitationsInbox open={inboxOpen} onClose={() => (inboxOpen = false)} />
+  <InvitationsInbox
+    open={inboxOpen}
+    onClose={() => (inboxOpen = false)}
+    onLogout={async () => {
+      await onSignOut();
+      inboxOpen = false;
+    }}
+  />
 {/if}
 
 <style>
