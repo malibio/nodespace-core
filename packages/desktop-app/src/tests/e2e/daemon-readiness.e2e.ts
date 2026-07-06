@@ -15,13 +15,24 @@
  *   - "not ready" uses a socket path nothing was ever spawned against —
  *     deterministic, since there is nothing to race.
  *   - "recovered" spawns the real daemon via `DaemonTestHarness.startDeferred()`
- *     and waits on it via `waitUntilDaemonReady()` (timing-tolerant by
- *     design) rather than asserting an intermediate "not yet bound" read
- *     against a real process. A real headless `nodespaced` here binds its
- *     socket in well under 100ms on a warm local machine — far faster than
- *     ADR-044's ~9s cold-start figure for a heavier path — so asserting
- *     "not ready" against a just-spawned real process would only pass when
- *     the test wins that race: a coverage lottery, not a behavior guarantee.
+ *     and waits on `waitUntilProxyReady()` — a real data-plane round-trip
+ *     through the full HTTP -> dev-proxy -> gRPC -> daemon stack, not just
+ *     the daemon's own socket. `waitUntilDaemonReady()` (socket-only) is
+ *     NOT sufficient here: `startDeferred()` starts the dev-proxy before the
+ *     daemon binds, and the proxy's gRPC-js client — constructed once at
+ *     proxy startup against a not-yet-existing socket — owns its own
+ *     reconnect/backoff state independent of the daemon's actual socket
+ *     becoming reachable moments later (confirmed by instrumenting a real
+ *     run: the daemon's socket read as reachable while the proxy's gRPC
+ *     channel was still mid-backoff, "reconnecting in 2s", so a store
+ *     reload triggered right then failed silently). Waiting on the real
+ *     round-trip the test is about to exercise is the only signal that
+ *     means what "ready" needs to mean here — the same "reachable at one
+ *     layer is not usable end-to-end" gap #1525 exists to close, this time
+ *     surfacing in the test's own harness rather than the app. (Checked
+ *     separately: production's tonic lazy channel does NOT have this gap —
+ *     a call issued right after the daemon binds succeeds immediately, no
+ *     cached backoff state. This is specific to the gRPC-js dev-proxy path.)
  *
  * `daemon-status.ts` is Tauri-event-driven in production, and this harness
  * has no Tauri runtime — so both tests bind a harness-backed
@@ -136,41 +147,32 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         const source = harnessStatusSource(h);
         startDaemonStatusListener(source);
 
-        // Recovered: wait for the real daemon to finish starting (however
-        // long that actually takes — no race), then re-pull status through
-        // the shared contract. This is what fires schemasData's own
-        // onDaemonReconnect hook, not a call this test makes to
-        // loadSchemas directly.
-        await h.waitUntilDaemonReady(30_000);
+        // Recovered: wait for the full stack this test is about to exercise
+        // — HTTP -> dev-proxy -> gRPC -> daemon — to actually work, not just
+        // for the daemon's socket to be reachable (see the module doc
+        // comment for why those are different readiness layers here). Only
+        // then re-pull status through the shared contract, which is what
+        // fires schemasData's own onDaemonReconnect hook.
+        await h.waitUntilProxyReady(30_000);
         await refreshDaemonStatus();
 
         expect(get(daemonStatus).unreachable).toBe(false);
 
-        // Poll for the auto-retried load to land — the reconnect callback
-        // fires loadSchemas() asynchronously and this test has no direct
-        // handle on that exact call to await. Generous window: under CI/
-        // pre-push load (a fresh cargo build just finished, machine still
-        // contended), the real HTTP round-trip through dev-proxy -> gRPC ->
-        // daemon can take meaningfully longer than on an idle machine.
-        const deadline = Date.now() + 20_000;
+        // Poll briefly for the auto-retried load to land — the reconnect
+        // callback fires loadSchemas() asynchronously and this test has no
+        // direct handle on that exact call to await. Short window: the
+        // round-trip itself was already proven to work by
+        // waitUntilProxyReady() above, so this is only waiting on
+        // scheduling, not on the network.
+        const deadline = Date.now() + 5_000;
         let total = 0;
         while (Date.now() < deadline) {
           total = get(builtInSchemas).length + get(customSchemas).length;
           if (total > 0) break;
-          await new Promise((r) => setTimeout(r, 100));
+          await new Promise((r) => setTimeout(r, 50));
         }
 
-        if (total === 0) {
-          // Distinguish "still catching up" from "genuinely broken": call
-          // the same real adapter path directly so a failure here surfaces
-          // the actual error instead of a bare "expected 0 to be > 0".
-          const direct = await h.adapter.getAllSchemas();
-          throw new Error(
-            `schemasData never landed data after reconnect (waited 20s), but a direct ` +
-              `getAllSchemas() call returned ${direct.length} schemas — the reconnect ` +
-              `hook itself did not fire or its load did not update the store.`
-          );
-        }
+        expect(total).toBeGreaterThan(0);
 
         // Confirm it's real data, not a fixture: every schema the store
         // landed is one the harness's own daemon actually reports (core
@@ -184,7 +186,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
           expect(realIds.has(s.id)).toBe(true);
         }
       },
-      60_000
+      45_000
     );
   });
 });

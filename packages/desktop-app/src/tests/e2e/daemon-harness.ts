@@ -395,6 +395,40 @@ export class DaemonTestHarness {
     await waitForSocket(this.socketPath, timeoutMs);
   }
 
+  /**
+   * Poll until a real RPC through the FULL stack under test — HTTP ->
+   * dev-proxy -> gRPC -> daemon — actually succeeds, not just until the
+   * daemon's own socket is reachable.
+   *
+   * These are two different readiness layers when `startDeferred()` is
+   * used: the dev-proxy's gRPC-js client is constructed once, at proxy
+   * startup, against a socket that may not exist yet. gRPC-js's channel
+   * then owns its own reconnect/backoff state machine, independent of the
+   * caller — unlike the production Tauri path's tonic lazy channel, which
+   * has no such state and simply retries fresh on the next call (verified
+   * directly: a call issued right after the daemon binds succeeds
+   * immediately). So a daemon whose SOCKET is reachable does not imply the
+   * dev-proxy's CHANNEL to it is usable yet; waiting on the real round-trip
+   * this harness's callers are about to make is the only signal that means
+   * what "ready" needs to mean here.
+   */
+  async waitUntilProxyReady(timeoutMs = 30_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        await this.adapter.getAllSchemas();
+        return;
+      } catch (err) {
+        lastError = err;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    throw new Error(
+      `dev-proxy never reached the daemon after ${timeoutMs}ms (last error: ${String(lastError)})`
+    );
+  }
+
   /** SSE endpoint URL for WatchNodes event tests. */
   get sseUrl(): string {
     return `http://localhost:${this.proxyPort}/api/events`;
