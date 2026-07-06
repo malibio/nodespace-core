@@ -363,6 +363,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_sibling_with_home_as_string_prefix() {
+        // Regression guard for a component-wise Path::starts_with vs a naive
+        // string-prefix check: "/Users/malibio-other" starts with the string
+        // "/Users/malibio" but is not actually inside that directory.
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        let sibling = home.with_file_name(format!(
+            "{}-other",
+            home.file_name().unwrap().to_str().unwrap()
+        ));
+
+        let result = check_within_allowed_base(&sibling);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn does_not_follow_symlinked_directories_during_collection() {
         let tmp =
             std::env::temp_dir().join(format!("ns-import-symlink-test-{}", std::process::id()));
