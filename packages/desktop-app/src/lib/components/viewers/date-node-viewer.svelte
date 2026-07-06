@@ -24,12 +24,12 @@
   // onTitleChange called from event handlers (not effects) to update tab title
   let {
     nodeId,
-    onNodeIdChange,
-    onTitleChange
+    onTitleChange,
+    onNavigate
   }: {
     nodeId: string;
-    onNodeIdChange?: (_nodeId: string) => void;
     onTitleChange?: (_title: string) => void;
+    onNavigate?: (_nodeId: string, _title: string) => void;
   } = $props();
 
   // Set initial tab title on mount - viewer is the source of truth for tab titles
@@ -61,9 +61,10 @@
   const currentDateId = $derived(formatDateISO(currentDate));
 
   /**
-   * Navigate to previous or next day
-   * Calls onNodeIdChange to update content, and onTitleChange to update tab title
-   * Both are event-driven (not effect-driven) - no $effect anti-pattern
+   * Navigate to previous or next day.
+   * Uses onNavigate to update content (nodeId) and tab title in one atomic call, so
+   * subscribers never observe a tab whose title and content refer to different dates.
+   * Event-driven (not effect-driven) - no $effect anti-pattern.
    */
   function navigateDate(direction: 'prev' | 'next') {
     const newDate = new Date(currentDate);
@@ -75,10 +76,7 @@
     const normalizedDate = normalizeDate(newDate);
     const newNodeId = formatDateISO(normalizedDate);
 
-    // Update content (nodeId) and tab title via parent callbacks
-    // This is event-driven, not effect-driven - proper pattern
-    onNodeIdChange?.(newNodeId);
-    onTitleChange?.(formatDateTitle(normalizedDate));
+    onNavigate?.(newNodeId, formatDateTitle(normalizedDate));
   }
 
   /**

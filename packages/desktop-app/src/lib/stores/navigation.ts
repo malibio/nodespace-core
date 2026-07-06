@@ -522,6 +522,21 @@ export function updateTabContent(tabId: string, content: { nodeId: string; nodeT
 }
 
 /**
+ * Update a tab's content and title in a single store write so subscribers never observe
+ * a state where the title reflects one node and the content another (issue #1564).
+ */
+export function updateTabContentAndTitle(
+  tabId: string,
+  content: { nodeId: string; nodeType?: string },
+  title: string
+) {
+  tabState.update((state) => ({
+    ...state,
+    tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content, title } : tab))
+  }));
+}
+
+/**
  * Get ordered tabs for a specific pane
  * @param state - The current tab state
  * @param paneId - The pane ID to get tabs for

@@ -70,6 +70,7 @@
     tabId?: string;
     onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
+    onNavigate?: (_nodeId: string, _title: string) => void; // In type for interface, not used by BaseNodeViewer
     onNodeNotFound?: () => void;
     disableTitleUpdates?: boolean;
   } = $props();

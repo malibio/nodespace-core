@@ -19,6 +19,7 @@ import {
   loadPersistedState,
   updateTabTitle,
   updateTabContent,
+  updateTabContentAndTitle,
   getOrderedTabsForPane,
   DEFAULT_PANE_ID,
   DAILY_JOURNAL_TAB_ID,
@@ -1119,6 +1120,67 @@ describe('Navigation Store - Tab Management', () => {
       const stateAfter = get(tabState);
       const otherTab = stateAfter.tabs.find((t) => t.id === newTab.id);
       expect(otherTab?.content).toEqual(otherTabContent);
+    });
+  });
+
+  describe('updateTabContentAndTitle', () => {
+    it('updates content and title in a single store write (issue #1564)', () => {
+      const tabId = DAILY_JOURNAL_TAB_ID;
+      const newContent = { nodeId: '2026-07-07', nodeType: 'date' };
+
+      updateTabContentAndTitle(tabId, newContent, 'July 7, 2026');
+
+      const state = get(tabState);
+      const updatedTab = state.tabs.find((t) => t.id === tabId);
+      expect(updatedTab?.content).toEqual(newContent);
+      expect(updatedTab?.title).toBe('July 7, 2026');
+    });
+
+    it('never leaves title and content pointing at different dates across subscriber notifications', () => {
+      // Regression for #1564: separate updateTabContent + updateTabTitle calls left a window
+      // where a subscriber firing between them would see title/content from different dates.
+      const tabId = DAILY_JOURNAL_TAB_ID;
+      const seenMismatches: Array<{ nodeId: string; title: string }> = [];
+
+      const unsubscribe = tabState.subscribe((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId);
+        if (!tab?.content) return;
+        // A "mismatch" here is content/title pairs that don't correspond to the same
+        // navigation call - simulated by checking the nodeId encoded in the title below.
+        if (tab.title.includes(tab.content.nodeId) === false && tab.title !== 'Daily Journal') {
+          seenMismatches.push({ nodeId: tab.content.nodeId, title: tab.title });
+        }
+      });
+
+      updateTabContentAndTitle(tabId, { nodeId: '2026-07-07', nodeType: 'date' }, 'title-2026-07-07');
+      updateTabContentAndTitle(tabId, { nodeId: '2026-07-08', nodeType: 'date' }, 'title-2026-07-08');
+
+      unsubscribe();
+
+      expect(seenMismatches).toEqual([]);
+    });
+
+    it('does not affect other tabs', () => {
+      const newTab: Tab = {
+        id: 'test-tab-1',
+        title: 'Test Tab',
+        type: 'node',
+        content: { nodeId: 'test-node-1', nodeType: 'text' },
+        closeable: true,
+        paneId: DEFAULT_PANE_ID
+      };
+      addTab(newTab);
+
+      updateTabContentAndTitle(
+        DAILY_JOURNAL_TAB_ID,
+        { nodeId: 'changed-id', nodeType: 'date' },
+        'Changed Title'
+      );
+
+      const state = get(tabState);
+      const otherTab = state.tabs.find((t) => t.id === newTab.id);
+      expect(otherTab?.content).toEqual({ nodeId: 'test-node-1', nodeType: 'text' });
+      expect(otherTab?.title).toBe('Test Tab');
     });
   });
 

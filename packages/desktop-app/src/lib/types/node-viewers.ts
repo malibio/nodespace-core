@@ -15,6 +15,10 @@ export interface NodeViewerProps {
   nodeId: string; // The node to display (date string "2025-10-20", UUID, etc.)
   onTitleChange?: (title: string) => void; // Callback when viewer wants to update its title
   onNodeIdChange?: (nodeId: string) => void; // Callback when viewer navigates to different node
+  // Callback for navigation that changes BOTH nodeId and title together. Prefer this over
+  // separate onNodeIdChange/onTitleChange calls when both change as one logical action —
+  // it updates the tab atomically so subscribers never see a title/content mismatch.
+  onNavigate?: (nodeId: string, title: string) => void;
   header?: Snippet; // Optional custom header snippet
 }
 
