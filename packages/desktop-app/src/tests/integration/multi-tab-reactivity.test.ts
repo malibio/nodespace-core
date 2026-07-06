@@ -89,9 +89,9 @@ describe('Multi-Tab/Pane Reactivity', () => {
       const nodeAfter = sharedNodeStore.getNode('shared-node-1');
       expect(nodeAfter?.content).toBe('Updated content from viewer 1');
 
-      // Both viewers should have triggered their update mechanisms
-      expect(viewer1._updateTrigger).toBeGreaterThan(0);
-      expect(viewer2._updateTrigger).toBeGreaterThan(0);
+      // Both viewers read the same SharedNodeStore, so both see the update directly
+      expect(viewer1.findNode('shared-node-1')?.content).toBe('Updated content from viewer 1');
+      expect(viewer2.findNode('shared-node-1')?.content).toBe('Updated content from viewer 1');
     });
 
     it('should update all viewers within milliseconds (no network round-trip)', async () => {

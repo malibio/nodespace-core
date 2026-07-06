@@ -113,10 +113,7 @@ describe('ReactiveNodeService - Service Lifecycle', () => {
     expect(service.activeNodeId).toBeUndefined();
   });
 
-  it('destroy() cleans up subscriptions', () => {
-    const initialUpdateTrigger = service._updateTrigger;
-
-    // Add a node to trigger subscription
+  it('reflects SharedNodeStore changes via findNode (no subscription needed)', () => {
     const node: Node = {
       id: 'test-1',
       nodeType: 'text',
@@ -128,19 +125,10 @@ describe('ReactiveNodeService - Service Lifecycle', () => {
     };
 
     _sharedNodeStore.setNode(node, { type: 'database', reason: 'test' });
+    expect(service.findNode('test-1')?.content).toBe('Test');
 
-    // Update trigger should have incremented
-    expect(service._updateTrigger).toBeGreaterThan(initialUpdateTrigger);
-
-    // Destroy the service
-    service.destroy();
-
-    // Further changes should not update this service instance
-    const triggerAfterDestroy = service._updateTrigger;
     _sharedNodeStore.updateNode('test-1', { content: 'Updated' }, { type: 'database', reason: 'test' });
-
-    // Trigger should not change after destroy
-    expect(service._updateTrigger).toBe(triggerAfterDestroy);
+    expect(service.findNode('test-1')?.content).toBe('Updated');
   });
 
   it('destroy() is idempotent (safe to call multiple times)', () => {
@@ -1177,9 +1165,7 @@ describe('ReactiveNodeService - Reactive Updates', () => {
     service.destroy();
   });
 
-  it('_updateTrigger increments when SharedNodeStore changes', () => {
-    const initialTrigger = service._updateTrigger;
-
+  it('findNode reflects SharedNodeStore changes with no manual trigger needed', () => {
     const node: Node = {
       id: 'reactive-test',
       nodeType: 'text',
@@ -1192,7 +1178,7 @@ describe('ReactiveNodeService - Reactive Updates', () => {
 
     _sharedNodeStore.setNode(node, { type: 'database', reason: 'test' });
 
-    expect(service._updateTrigger).toBeGreaterThan(initialTrigger);
+    expect(service.findNode('reactive-test')?.content).toBe('Test');
   });
 
   it('initializes UI state for new nodes added to SharedNodeStore', () => {

@@ -48,29 +48,8 @@
   let isOpen = $state(false); // Collapsed by default
   let schemaError = $state<string | null>(null);
 
-  // Reactive node data - updates when store changes via subscription
-  // Initialized to null; the $effect below handles loading and reactivity
-  let node = $state<Node | null>(null);
-
-  // Subscribe to node changes
-  $effect(() => {
-    if (!nodeId) {
-      node = null;
-      return;
-    }
-
-    // Initial load
-    node = sharedNodeStore.getNode(nodeId) || null;
-
-    // Subscribe to updates
-    const unsubscribe = sharedNodeStore.subscribe(nodeId, (updatedNode) => {
-      node = updatedNode;
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  });
+  // Reactive node data - direct read from the store's SvelteMap
+  const node = $derived(nodeId ? (sharedNodeStore.getNode(nodeId) ?? null) : null);
 
   // Combobox state for text fields that could have autocomplete (like assignee)
   let comboboxOpen = $state<Record<string, boolean>>({});

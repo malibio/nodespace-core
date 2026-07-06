@@ -14,6 +14,7 @@
  * - Database writes coordinated through existing queueDatabaseWrite()
  */
 
+import { SvelteMap } from 'svelte/reactivity';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
@@ -483,12 +484,9 @@ interface ActiveBatch {
 export class SharedNodeStore {
   private static instance: SharedNodeStore | null = null;
 
-  // Core node storage. Map mutations (set/delete) are NOT intercepted by Svelte's reactive
-  // proxy (Map.prototype !== object_prototype, so proxy() returns it unwrapped). We use a
-  // separate $state version counter that increments on every mutation; getNode() reads it to
-  // register a reactive dependency, so $derived consumers re-run on any store change.
-  nodes = new Map<string, Node>();
-  private nodesVersion = $state(0);
+  // Core node storage. SvelteMap tracks reads/writes at per-key granularity, so a mutation to
+  // one node only invalidates $derived/$effect consumers that read that specific node.
+  nodes = new SvelteMap<string, Node>();
 
   // Track which nodes have been persisted to database
   // Avoids querying database on every update to check existence
@@ -749,31 +747,22 @@ export class SharedNodeStore {
   // Core Node Operations
   // ========================================================================
 
-  /** Set a node and bump the reactive version counter so $derived consumers re-run. */
   private nodesSet(nodeId: string, node: Node): void {
     this.nodes.set(nodeId, node);
-    this.nodesVersion++;
   }
 
-  /** Delete a node and bump the reactive version counter. */
   private nodesDelete(nodeId: string): void {
     this.nodes.delete(nodeId);
-    this.nodesVersion++;
   }
 
-  /** Clear all nodes and bump the reactive version counter. */
   private nodesClear(): void {
     this.nodes.clear();
-    this.nodesVersion++;
   }
 
   /**
    * Get a node by ID
    */
   getNode(nodeId: string): Node | undefined {
-    // Read nodesVersion to register a reactive dependency — any nodes.set/delete
-    // increments this, causing $derived consumers to re-run.
-    void this.nodesVersion;
     return this.nodes.get(nodeId);
   }
 
@@ -781,7 +770,6 @@ export class SharedNodeStore {
    * Get all nodes (returns reactive Map)
    */
   getAllNodes(): Map<string, Node> {
-    void this.nodesVersion;
     return this.nodes;
   }
 
@@ -843,7 +831,6 @@ export class SharedNodeStore {
    * Check if a node exists
    */
   hasNode(nodeId: string): boolean {
-    void this.nodesVersion;
     return this.nodes.has(nodeId);
   }
 
@@ -851,7 +838,6 @@ export class SharedNodeStore {
    * Get node count
    */
   getNodeCount(): number {
-    void this.nodesVersion;
     return this.nodes.size;
   }
 
@@ -3310,9 +3296,8 @@ export class SharedNodeStore {
     // Clear current nodes and restore from snapshot
     this.nodes.clear();
     for (const [nodeId, node] of snapshotMap) {
-      this.nodes.set(nodeId, node);  // use direct Map.set — nodesClear below bumps version
+      this.nodes.set(nodeId, node);
     }
-    this.nodesVersion++;
 
     // Notify all subscribers about the restore
     this.notifyAllSubscribers();
