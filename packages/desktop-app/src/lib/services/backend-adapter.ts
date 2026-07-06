@@ -88,6 +88,13 @@ class TauriAdapter implements BackendAdapter {
   }
 
   async updateTaskNode(id: string, version: number, update: TaskNodeUpdate): Promise<TaskNode> {
+    // Forwards `update` as-is rather than calling buildTaskNodeUpdatePatch —
+    // the tri-state clear/set/no-change encoding for this path is done by
+    // the Rust #[tauri::command] handler, not here. That handler and
+    // dev-proxy's buildTaskNodeUpdatePatch call site can't literally share
+    // code across the language boundary; ADR-048 decision 2 (a Rust-side
+    // integration test driving the Tauri command layer directly) is the
+    // planned way to prove the two encodings still agree.
     return withDiagnosticLogging(
       'updateTaskNode',
       () => invoke<TaskNode>('update_task_node', { id, version, update }),

@@ -12,6 +12,11 @@
  * silently — it becomes one function to update, used everywhere.
  */
 
+// This file is imported directly by packages/dev-tools/src/dev-proxy.ts via a
+// relative path (a separate workspace package with no SvelteKit/$lib alias
+// resolution). Keep every `$lib`-aliased import type-only — TypeScript erases
+// type-only imports before Bun ever needs to resolve the specifier, but a
+// value-level `$lib` import here would break dev-proxy at runtime.
 import type { Node, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
 
