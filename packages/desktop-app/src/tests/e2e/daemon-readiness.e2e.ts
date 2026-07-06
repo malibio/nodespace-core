@@ -127,8 +127,10 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         // the "just became healthy" transition needs a subscriber in place
         // to observe it — same ordering requirement production has at app
         // startup.
-        // Imported for its module-load side effect (registering the
-        // reconnect hook above) — not referenced directly below.
+        // Imported for its module-load side effect (registering
+        // onDaemonReconnect(loadSchemas) — a reference to schemas.ts's
+        // private loadSchemas, not schemasData.loadSchemas, so it cannot be
+        // spied on from here to await its exact settlement).
         const { builtInSchemas, customSchemas } = await import('$lib/stores/schemas');
 
         const source = harnessStatusSource(h);
@@ -144,18 +146,31 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
 
         expect(get(daemonStatus).unreachable).toBe(false);
 
-        // Poll briefly for the auto-retried load to land — the reconnect
-        // callback fires loadSchemas() asynchronously and this test has no
-        // other signal for "that promise settled".
-        const deadline = Date.now() + 5_000;
+        // Poll for the auto-retried load to land — the reconnect callback
+        // fires loadSchemas() asynchronously and this test has no direct
+        // handle on that exact call to await. Generous window: under CI/
+        // pre-push load (a fresh cargo build just finished, machine still
+        // contended), the real HTTP round-trip through dev-proxy -> gRPC ->
+        // daemon can take meaningfully longer than on an idle machine.
+        const deadline = Date.now() + 20_000;
         let total = 0;
         while (Date.now() < deadline) {
           total = get(builtInSchemas).length + get(customSchemas).length;
           if (total > 0) break;
-          await new Promise((r) => setTimeout(r, 50));
+          await new Promise((r) => setTimeout(r, 100));
         }
 
-        expect(total).toBeGreaterThan(0);
+        if (total === 0) {
+          // Distinguish "still catching up" from "genuinely broken": call
+          // the same real adapter path directly so a failure here surfaces
+          // the actual error instead of a bare "expected 0 to be > 0".
+          const direct = await h.adapter.getAllSchemas();
+          throw new Error(
+            `schemasData never landed data after reconnect (waited 20s), but a direct ` +
+              `getAllSchemas() call returned ${direct.length} schemas — the reconnect ` +
+              `hook itself did not fire or its load did not update the store.`
+          );
+        }
 
         // Confirm it's real data, not a fixture: every schema the store
         // landed is one the harness's own daemon actually reports (core
@@ -169,7 +184,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
           expect(realIds.has(s.id)).toBe(true);
         }
       },
-      45_000
+      60_000
     );
   });
 });
