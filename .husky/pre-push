@@ -1,0 +1,1 @@
+bun run scripts/test-gate.ts
