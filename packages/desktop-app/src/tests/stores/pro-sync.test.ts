@@ -68,3 +68,65 @@ describe('ProSync store — signed-in identity + sign-out (#199 S6)', () => {
     expect(proSync.state).toBe('auth-required');
   });
 });
+
+describe('ProSync store — authRequiredEpisode transition counter', () => {
+  // proSync is a module-level singleton, so state carries over between tests.
+  // Force a known non-auth-required starting state before each test so the
+  // transition-into-auth-required edge is always exercised freshly.
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockInvoke.mockResolvedValue('pro');
+    await proSync.start();
+    emit('sync:status', { state: 6, detail: '', user_email: 'mayank@nodespace.dev' });
+    expect(proSync.state).toBe('connected');
+  });
+
+  it('bumps the episode counter when transitioning into auth-required', () => {
+    const before = proSync.authRequiredEpisode;
+
+    emit('sync:status', { state: 4, detail: 'signed out', user_email: '' });
+
+    expect(proSync.state).toBe('auth-required');
+    expect(proSync.authRequiredEpisode).toBe(before + 1);
+  });
+
+  it('does not re-bump the counter while repeatedly re-entering auth-required via redundant events', () => {
+    emit('sync:status', { state: 4, detail: '', user_email: '' });
+    const afterFirst = proSync.authRequiredEpisode;
+
+    // Same state delivered again (e.g. a duplicate/retried sync:status event).
+    emit('sync:status', { state: 4, detail: '', user_email: '' });
+
+    expect(proSync.authRequiredEpisode).toBe(afterFirst);
+  });
+
+  it('bumps the counter again on a distinct re-entry into auth-required', () => {
+    emit('sync:status', { state: 4, detail: '', user_email: '' });
+    const firstEpisode = proSync.authRequiredEpisode;
+
+    // Leaves auth-required...
+    emit('sync:status', { state: 6, detail: '', user_email: 'mayank@nodespace.dev' });
+    expect(proSync.state).toBe('connected');
+
+    // ...then re-enters it. This is a new episode and must be distinguishable
+    // from the first, so a dismissal recorded against firstEpisode doesn't
+    // silently suppress the re-login prompt for the new episode.
+    emit('sync:status', { state: 4, detail: '', user_email: '' });
+
+    expect(proSync.authRequiredEpisode).toBe(firstEpisode + 1);
+  });
+
+  it('bumps the counter when the cold-start initial_status is already auth-required', async () => {
+    // A fresh cold-start: tier-detected delivers initial_status directly,
+    // without any prior sync:status event establishing a baseline state.
+    const before = proSync.authRequiredEpisode;
+
+    emit('pro:tier-detected', {
+      tier: 'pro',
+      initial_status: { state: 4, detail: '', user_email: '' }
+    });
+
+    expect(proSync.state).toBe('auth-required');
+    expect(proSync.authRequiredEpisode).toBe(before + 1);
+  });
+});

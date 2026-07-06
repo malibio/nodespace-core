@@ -1439,6 +1439,9 @@
     </div>
   {:else if currentViewedNode && nodeId && genericSchema && isCustomSchemaType(currentViewedNode.nodeType)}
     <!-- Issue #965: Generic schema form for custom schema node types (UUID nodeType) -->
+    <!-- autoOpen is captured once at GenericSchemaForm mount time (not reactively synced).
+         Safe only because this branch doesn't render until genericSchema is loaded, so
+         hasTitleTemplate is already final by the time autoOpen is read. -->
     <div class="schema-form-container">
       <GenericSchemaForm {nodeId} schema={genericSchema} autoOpen={hasTitleTemplate} />
     </div>
