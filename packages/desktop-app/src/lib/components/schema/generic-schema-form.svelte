@@ -35,11 +35,9 @@
 
   let { nodeId, schema, autoOpen = false }: { nodeId: string; schema: SchemaNode; autoOpen?: boolean } = $props();
 
-  let isOpen = $state(false);
-  // Sync isOpen with the autoOpen prop (captures reactive updates, not just initial value)
-  $effect(() => {
-    if (autoOpen) isOpen = true;
-  });
+  // Initial value only (IIFE avoids Svelte's state_referenced_locally warning) — after
+  // mount isOpen is fully user-controlled via bind:open below.
+  let isOpen = $state((() => autoOpen)());
   let formEl = $state<HTMLElement | null>(null);
   let autoFocusDone = false;
 

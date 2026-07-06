@@ -62,12 +62,13 @@
   let navElement: HTMLElement | null = $state(null);
   let subPanelElement: HTMLElement | null = $state(null);
 
-  // Close sub-panel when sidebar collapses
-  $effect(() => {
-    if (isCollapsed && subPanelOpen) {
+  // Close sub-panel when the sidebar collapses (sidebar can only collapse via handleToggleSidebar)
+  function handleToggleSidebar() {
+    toggleSidebar();
+    if (subPanelOpen) {
       collectionsState.clearSelection();
     }
-  });
+  }
 
   // Click-outside handler for sub-panel dismissal
   $effect(() => {
@@ -253,7 +254,7 @@
   <!-- Hamburger menu button -->
   <button
     class="hamburger-button"
-    onclick={toggleSidebar}
+    onclick={handleToggleSidebar}
     aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
     aria-expanded={!isCollapsed}
   >

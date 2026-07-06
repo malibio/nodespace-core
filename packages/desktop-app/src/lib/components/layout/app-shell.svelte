@@ -61,21 +61,17 @@
 
   // Pro re-login prompt (T18, #1304). The daemon emits AUTH_REQUIRED when the
   // persisted refresh token can't be renewed; we surface a modal offering a
-  // fresh sign-in or working offline. `reloginDismissed` is per-episode so
-  // "Work Offline" doesn't keep nagging, and is re-armed once the daemon
-  // leaves the auth-required state so a later failure prompts again.
-  let reloginDismissed = $state(false);
+  // fresh sign-in or working offline. Dismissal is tracked per-episode via
+  // proSync.authRequiredEpisode (bumped each time the daemon re-enters
+  // auth-required), so the modal re-arms automatically with no effect needed.
+  let dismissedEpisode = $state(-1);
   let reloginPending = $state(false);
 
   let showReloginModal = $derived(
-    proSync.isPro && proSync.state === 'auth-required' && !reloginDismissed
+    proSync.isPro &&
+      proSync.state === 'auth-required' &&
+      dismissedEpisode !== proSync.authRequiredEpisode
   );
-
-  $effect(() => {
-    if (proSync.state !== 'auth-required' && reloginDismissed) {
-      reloginDismissed = false;
-    }
-  });
 
   // Recovered Items (core#1303): once the daemon's probe confirms Pro tier, load
   // the local-only recovery log. If the daemon preserved any conflict "losers",
@@ -114,7 +110,7 @@
   }
 
   function handleReloginWorkOffline() {
-    reloginDismissed = true;
+    dismissedEpisode = proSync.authRequiredEpisode;
   }
 
   /**
