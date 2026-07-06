@@ -55,7 +55,9 @@ around them. Treat the sections below as the authoritative starting point.
 /// local llama.cpp tool executor).
 struct ShimTool {
     /// Wire name used by every shim (`nodespace-tools.json`, `nodespace-hook.ts`,
-    /// `nodespace-plugin.ts`). Changing this must be mirrored in all four shim files.
+    /// `nodespace-plugin.ts`). Changing this must be mirrored in all four shim files —
+    /// `shim_tools_match_gemini_manifest` (below) enforces this against the Gemini
+    /// JSON manifest only; the other three `.ts` shims must be checked by hand.
     name: &'static str,
     description: &'static str,
 }
