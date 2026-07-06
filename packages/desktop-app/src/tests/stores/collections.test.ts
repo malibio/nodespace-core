@@ -7,6 +7,7 @@ import { get } from 'svelte/store';
 import {
   collectionsState,
   collectionsData,
+  collectionsTree,
   selectedCollection,
   selectedCollectionMembers,
   findCollectionById,
@@ -418,6 +419,76 @@ describe('Collections Store', () => {
 
       const members = get(selectedCollectionMembers);
       expect(members).toEqual([]);
+    });
+  });
+
+  describe('collectionsTree hide-empty filter', () => {
+    it('hides top-level collections with no visible members', () => {
+      // Fixtures include col-3 "Research Papers" with memberCount: 0 (leaf).
+      collectionsData._setTestData(flattenCollections(mockCollections), createTestMembers());
+
+      const tree = get(collectionsTree);
+      const ids = tree.map((c) => c.id);
+
+      expect(ids).not.toContain('col-3');
+      // Populated top-level collections remain.
+      expect(ids).toEqual(expect.arrayContaining(['col-1', 'col-2', 'col-4']));
+    });
+
+    it('keeps an empty parent when a descendant has visible members', () => {
+      const collections: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: 'parent', name: 'Empty Parent', memberCount: 0 }),
+          parentCollectionIds: []
+        },
+        {
+          ...createTestCollectionInfo({ id: 'child', name: 'Populated Child', memberCount: 2 }),
+          parentCollectionIds: ['parent']
+        }
+      ];
+      collectionsData._setTestData(collections, new Map());
+
+      const tree = get(collectionsTree);
+      expect(tree.map((c) => c.id)).toEqual(['parent']);
+      expect(tree[0].children?.map((c) => c.id)).toEqual(['child']);
+    });
+
+    it('prunes empty children while keeping populated siblings', () => {
+      const collections: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: 'parent', name: 'Parent', memberCount: 1 }),
+          parentCollectionIds: []
+        },
+        {
+          ...createTestCollectionInfo({ id: 'empty-child', name: 'Empty', memberCount: 0 }),
+          parentCollectionIds: ['parent']
+        },
+        {
+          ...createTestCollectionInfo({ id: 'full-child', name: 'Full', memberCount: 3 }),
+          parentCollectionIds: ['parent']
+        }
+      ];
+      collectionsData._setTestData(collections, new Map());
+
+      const tree = get(collectionsTree);
+      expect(tree).toHaveLength(1);
+      expect(tree[0].children?.map((c) => c.id)).toEqual(['full-child']);
+    });
+
+    it('drops an empty parent whose descendants are all empty', () => {
+      const collections: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: 'parent', name: 'Parent', memberCount: 0 }),
+          parentCollectionIds: []
+        },
+        {
+          ...createTestCollectionInfo({ id: 'child', name: 'Child', memberCount: 0 }),
+          parentCollectionIds: ['parent']
+        }
+      ];
+      collectionsData._setTestData(collections, new Map());
+
+      expect(get(collectionsTree)).toEqual([]);
     });
   });
 
