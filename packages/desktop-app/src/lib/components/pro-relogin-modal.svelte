@@ -81,8 +81,8 @@
   }
 
   .relogin-content {
-    background: var(--surface-1, #ffffff);
-    color: var(--text-primary, #1f2937);
+    background: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
     border-radius: 8px;
     padding: 24px;
     width: min(440px, calc(100vw - 48px));
@@ -98,16 +98,16 @@
     margin: 0;
     font-size: 14px;
     line-height: 1.5;
-    color: var(--text-secondary, #4b5563);
+    color: hsl(var(--muted-foreground));
   }
 
   .relogin-detail {
     margin: 12px 0 0 0;
     padding: 8px 10px;
-    background: var(--surface-2, #f3f4f6);
+    background: hsl(var(--muted));
     border-radius: 4px;
     font-size: 12px;
-    color: var(--text-secondary, #6b7280);
+    color: hsl(var(--muted-foreground));
     word-break: break-word;
   }
 
@@ -142,25 +142,11 @@
   }
 
   .btn-secondary {
-    background-color: var(--surface-2, #e5e7eb);
-    color: var(--text-primary, #1f2937);
+    background-color: hsl(var(--muted));
+    color: hsl(var(--foreground));
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background-color: var(--surface-3, #d1d5db);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .relogin-content {
-      background: var(--surface-1, #1f2937);
-      color: var(--text-primary, #e5e7eb);
-    }
-    .btn-secondary {
-      background-color: var(--surface-2, #374151);
-      color: var(--text-primary, #e5e7eb);
-    }
-    .btn-secondary:hover:not(:disabled) {
-      background-color: var(--surface-3, #4b5563);
-    }
+    background-color: hsl(var(--muted) / 0.7);
   }
 </style>
