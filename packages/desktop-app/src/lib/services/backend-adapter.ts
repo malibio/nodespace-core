@@ -9,7 +9,7 @@
  * - **TauriAdapter**: Uses Tauri's `invoke()` for IPC communication (desktop app)
  * - **HttpAdapter**: Uses `fetch()` to communicate with HTTP dev-proxy on port 3001 (browser dev)
  * - **MockAdapter**: Returns empty/default values for test environment
- * - **Auto-detection**: Runtime detection based on `window.__TAURI__` existence
+ * - **Auto-detection**: Runtime detection based on `window.__TAURI_INTERNALS__` existence
  *
  * # Usage
  *

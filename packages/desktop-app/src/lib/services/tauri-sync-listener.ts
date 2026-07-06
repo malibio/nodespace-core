@@ -353,5 +353,8 @@ export async function initializeTauriSyncListeners(): Promise<void> {
  * Check if running in Tauri environment
  */
 function isRunningInTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return (
+    typeof window !== 'undefined' &&
+    ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+  );
 }

@@ -13,21 +13,11 @@ import { sharedNodeStore } from './shared-node-store.svelte';
 
 const log = createLogger('AppInit');
 
-// Tauri API types
-interface TauriCore {
-  invoke: (command: string, ...args: unknown[]) => Promise<unknown>;
+interface WindowWithTauriInternals extends Window {
+  __TAURI_INTERNALS__?: unknown;
 }
 
-interface TauriAPI {
-  core?: TauriCore;
-  invoke?: (command: string, ...args: unknown[]) => Promise<unknown>;
-}
-
-interface WindowWithTauri extends Window {
-  __TAURI__?: TauriAPI;
-}
-
-declare const window: WindowWithTauri;
+declare const window: WindowWithTauriInternals;
 
 let initialized = false;
 
@@ -42,10 +32,11 @@ function isTauriEnvironment(): boolean {
 }
 
 /**
- * Wait for Tauri API to be available
+ * Wait for the Tauri IPC bridge to be available.
  *
- * Tauri injects the API asynchronously after the webview loads.
- * We need to wait for window.__TAURI__.core.invoke to be available.
+ * Tauri injects `__TAURI_INTERNALS__` asynchronously after the webview
+ * loads; it's present regardless of the `withGlobalTauri` config option,
+ * unlike `window.__TAURI__` which requires that flag.
  */
 async function waitForTauriReady(): Promise<void> {
   const maxAttempts = 200; // 10 seconds with 50ms delays
@@ -53,22 +44,8 @@ async function waitForTauriReady(): Promise<void> {
   const delayMs = 50;
 
   while (attempts < maxAttempts) {
-    // Tauri 2.x uses __TAURI__.core.invoke
-    if (
-      typeof window !== 'undefined' &&
-      typeof window.__TAURI__ !== 'undefined' &&
-      typeof window.__TAURI__.core?.invoke === 'function'
-    ) {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       log.debug(`Tauri API ready after ${attempts * delayMs}ms`);
-      return;
-    }
-
-    // Fallback for older Tauri versions that use __TAURI__.invoke
-    if (
-      typeof window !== 'undefined' &&
-      typeof window.__TAURI__?.invoke === 'function'
-    ) {
-      log.debug(`Tauri API ready (legacy) after ${attempts * delayMs}ms`);
       return;
     }
 
@@ -76,23 +53,14 @@ async function waitForTauriReady(): Promise<void> {
     attempts++;
   }
 
-  // More detailed error message for debugging
   const isWindow = typeof window !== 'undefined';
-  const hasTauri = isWindow && typeof window.__TAURI__ !== 'undefined';
-  const hasInvokeCore = hasTauri && typeof window.__TAURI__?.core?.invoke === 'function';
-  const hasInvokeLegacy = hasTauri && typeof window.__TAURI__?.invoke === 'function';
+  const hasInternals = isWindow && '__TAURI_INTERNALS__' in window;
 
-  log.error('Tauri API check results:', {
-    isWindow,
-    hasTauri,
-    hasInvokeCore,
-    hasInvokeLegacy,
-    tauriKeys: hasTauri && window.__TAURI__ ? Object.keys(window.__TAURI__) : 'N/A'
-  });
+  log.error('Tauri API check results:', { isWindow, hasInternals });
 
   throw new Error(
     `Tauri API did not become available after ${maxAttempts * delayMs}ms. ` +
-    `isWindow=${isWindow}, hasTauri=${hasTauri}, hasInvokeCore=${hasInvokeCore}, hasInvokeLegacy=${hasInvokeLegacy}`
+    `isWindow=${isWindow}, hasInternals=${hasInternals}`
   );
 }
 
