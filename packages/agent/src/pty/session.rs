@@ -56,6 +56,27 @@ const READ_BUFFER_BYTES: usize = 4096;
 const DEFAULT_PTY_ROWS: u16 = 24;
 const DEFAULT_PTY_COLS: u16 = 80;
 
+/// Environment variables every PTY child gets regardless of which agent is
+/// spawned — the minimum a POSIX CLI needs to resolve binaries, find the
+/// user's home, and render correctly in a terminal. Everything else is
+/// dropped via `env_clear()`; auth vars are layered in per agent via
+/// [`AgentDefinition::auth_env_vars`].
+const BASE_ENV_ALLOWLIST: &[&str] = &["HOME", "PATH", "TERM", "SHELL", "LANG", "USER"];
+
+/// Clear the command's inherited environment and repopulate it from
+/// `std::env::var` using `BASE_ENV_ALLOWLIST` plus `extra_vars` (typically an
+/// agent's `auth_env_vars`). Only variables actually present in the daemon's
+/// environment are forwarded — a missing var is silently skipped rather than
+/// passed through empty.
+fn apply_env_allowlist(cmd: &mut CommandBuilder, extra_vars: &[&str]) {
+    cmd.env_clear();
+    for key in BASE_ENV_ALLOWLIST.iter().chain(extra_vars) {
+        if let Ok(value) = std::env::var(key) {
+            cmd.env(key, value);
+        }
+    }
+}
+
 /// One chunk of raw bytes read from the PTY master.
 ///
 /// The PTY merges stdout and stderr into a single byte stream — there is no
@@ -174,6 +195,7 @@ impl PtySession {
             session_dir,
             DEFAULT_PTY_ROWS,
             DEFAULT_PTY_COLS,
+            definition.auth_env_vars,
         )
     }
 
@@ -181,6 +203,7 @@ impl PtySession {
     /// reader / exit-watcher tasks. Split out from [`launch`](Self::launch)
     /// so tests can construct sessions without going through
     /// [`GraphContextAssembler`].
+    #[allow(clippy::too_many_arguments)]
     fn spawn_in_pty(
         id: Uuid,
         agent_type: AgentType,
@@ -189,6 +212,7 @@ impl PtySession {
         session_dir: PathBuf,
         rows: u16,
         cols: u16,
+        auth_env_vars: &[&str],
     ) -> anyhow::Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -200,6 +224,7 @@ impl PtySession {
 
         let mut cmd = CommandBuilder::new(binary_path);
         cmd.cwd(&session_dir);
+        apply_env_allowlist(&mut cmd, auth_env_vars);
         if let Some(prompt) = initial_prompt {
             cmd.arg(prompt);
         }
@@ -423,6 +448,7 @@ impl PtySession {
         })?;
         let mut cmd = CommandBuilder::new(binary_path);
         cmd.cwd(&session_dir);
+        apply_env_allowlist(&mut cmd, &[]);
         for a in &args {
             cmd.arg(a);
         }
@@ -731,5 +757,93 @@ mod tests {
         .expect("writer + resizer complete without deadlock");
 
         session.terminate().await.expect("terminate cat");
+    }
+
+    // ---- Regression: env allowlist (issue #1521) ------------------------
+
+    /// A secret-shaped var present in the daemon's own environment must NOT
+    /// reach the PTY child — only `BASE_ENV_ALLOWLIST` entries and explicitly
+    /// passed `extra_vars` survive `env_clear()`.
+    #[tokio::test]
+    async fn unlisted_env_var_does_not_reach_pty_child() {
+        // SAFETY: test-only; no other test in this process reads this key.
+        unsafe {
+            std::env::set_var("NODESPACE_TEST_SECRET_1521", "should-not-leak");
+        }
+
+        let session = PtySession::launch_for_test("sh", vec!["-c".into(), "env".into()])
+            .expect("launch env session");
+
+        let mut rx = session.subscribe_output();
+        let mut exit_rx = session.subscribe_exit();
+        let output = collect_output(&mut rx, Duration::from_secs(2), 64).await;
+        await_exit(&mut exit_rx, Duration::from_secs(2)).await;
+
+        unsafe {
+            std::env::remove_var("NODESPACE_TEST_SECRET_1521");
+        }
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            !text.contains("NODESPACE_TEST_SECRET_1521"),
+            "unlisted env var leaked into PTY child: {:?}",
+            text
+        );
+    }
+
+    /// Base allowlist entries (`PATH` in particular) must still reach the
+    /// child — otherwise `which`-resolved binaries and shell builtins break.
+    #[tokio::test]
+    async fn base_allowlist_vars_still_reach_pty_child() {
+        let session = PtySession::launch_for_test("sh", vec!["-c".into(), "env".into()])
+            .expect("launch env session");
+
+        let mut rx = session.subscribe_output();
+        let mut exit_rx = session.subscribe_exit();
+        let output = collect_output(&mut rx, Duration::from_secs(2), 64).await;
+        await_exit(&mut exit_rx, Duration::from_secs(2)).await;
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            text.contains("PATH="),
+            "PATH should be forwarded to the PTY child, got: {:?}",
+            text
+        );
+    }
+
+    /// [`apply_env_allowlist`] forwards `extra_vars` (the per-agent auth env
+    /// vars) in addition to the base allowlist, but only when they are
+    /// actually set in the current process's environment.
+    #[test]
+    fn apply_env_allowlist_forwards_extra_vars_when_present() {
+        // SAFETY: test-only; unique key not touched by other tests.
+        unsafe {
+            std::env::set_var("NODESPACE_TEST_AUTH_VAR_1521", "token-value");
+        }
+
+        let mut cmd = CommandBuilder::new("sh");
+        apply_env_allowlist(
+            &mut cmd,
+            &["NODESPACE_TEST_AUTH_VAR_1521", "NODESPACE_TEST_UNSET"],
+        );
+
+        let auth_var = cmd
+            .get_env("NODESPACE_TEST_AUTH_VAR_1521")
+            .map(|v| v.to_owned());
+        let unset_var = cmd.get_env("NODESPACE_TEST_UNSET");
+
+        unsafe {
+            std::env::remove_var("NODESPACE_TEST_AUTH_VAR_1521");
+        }
+
+        assert_eq!(
+            auth_var.as_deref(),
+            Some(std::ffi::OsStr::new("token-value")),
+            "present extra var should be forwarded"
+        );
+        assert!(
+            unset_var.is_none(),
+            "extra var absent from process env should not appear"
+        );
     }
 }

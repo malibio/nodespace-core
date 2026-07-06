@@ -20,6 +20,10 @@ pub struct AgentDefinition {
     pub context_file: ContextFile,
     /// CLI flag used to resume a prior session, if the agent supports one.
     pub resume_flag: Option<&'static str>,
+    /// Auth-related environment variables this agent reads. PTY children get
+    /// a cleared environment plus a fixed base allowlist plus these — never
+    /// the daemon's full environment (see [`crate::pty::session`]).
+    pub auth_env_vars: &'static [&'static str],
 }
 
 /// Hardcoded catalog of PTY-spawnable external agents.
@@ -30,6 +34,7 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         binary: "claude",
         context_file: ContextFile::ClaudeMd,
         resume_flag: Some("--resume"),
+        auth_env_vars: &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     },
     AgentDefinition {
         agent_type: AgentType::Codex,
@@ -37,6 +42,7 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         binary: "codex",
         context_file: ContextFile::AgentsMd,
         resume_flag: Some("resume"),
+        auth_env_vars: &["OPENAI_API_KEY"],
     },
     AgentDefinition {
         agent_type: AgentType::GeminiCli,
@@ -45,6 +51,7 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         context_file: ContextFile::AgentsMd,
         // Gemini CLI uses checkpoint-based resumption with no single flag.
         resume_flag: None,
+        auth_env_vars: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     },
     AgentDefinition {
         agent_type: AgentType::Pi,
@@ -53,6 +60,13 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         context_file: ContextFile::AgentsMd,
         // Pi is session-aware but does not take an explicit resume flag.
         resume_flag: None,
+        // Pi is multi-provider; pass through every provider key it may need.
+        auth_env_vars: &[
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ],
     },
     AgentDefinition {
         agent_type: AgentType::OpenCode,
@@ -61,6 +75,12 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         context_file: ContextFile::AgentsMd,
         // OpenCode is stateless across invocations.
         resume_flag: None,
+        auth_env_vars: &[
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ],
     },
 ];
 
@@ -142,6 +162,26 @@ mod tests {
                 agent_type
             );
         }
+    }
+
+    #[test]
+    fn every_catalog_entry_declares_at_least_one_auth_env_var() {
+        let registry = SystemAgentRegistry::new();
+        for def in registry.all() {
+            assert!(
+                !def.auth_env_vars.is_empty(),
+                "{:?} should declare auth env vars for the PTY allowlist",
+                def.agent_type
+            );
+        }
+    }
+
+    #[test]
+    fn claude_code_auth_env_vars_cover_key_and_oauth_token() {
+        let registry = SystemAgentRegistry::new();
+        let def = registry.get(AgentType::ClaudeCode).unwrap();
+        assert!(def.auth_env_vars.contains(&"ANTHROPIC_API_KEY"));
+        assert!(def.auth_env_vars.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
     }
 
     #[test]
