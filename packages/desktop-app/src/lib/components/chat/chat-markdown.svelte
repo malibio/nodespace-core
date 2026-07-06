@@ -10,12 +10,29 @@
 -->
 
 <script lang="ts">
-  import { marked, Renderer, type Tokens } from 'marked';
-  import DOMPurify from 'dompurify';
+  import { Marked, Renderer, type Tokens } from 'marked';
+  import createDOMPurify from 'dompurify';
   import { mount, unmount } from 'svelte';
   import NodeCardInline from './node-card-inline.svelte';
 
   let { content = '' }: { content: string } = $props();
+
+  // A private Marked instance, NOT the shared `marked` singleton — the
+  // singleton is mutated process-wide by marked-config.ts's marked.use()
+  // (for the node editor's inline-only rendering), which would otherwise
+  // leak into and corrupt this component's full-markdown chat rendering.
+  const chatMarked = new Marked();
+
+  /**
+   * DOMPurify's default export is a singleton bound to whatever `window`
+   * existed the first time the module was imported anywhere in the process
+   * (see dompurify's createDOMPurify()). Binding explicitly to the live
+   * `window` on every call avoids depending on that import-order-sensitive
+   * global state.
+   */
+  function getDOMPurify() {
+    return createDOMPurify(document.defaultView ?? undefined);
+  }
 
   // Custom renderer that handles nodespace:// URIs
   const chatRenderer = new Renderer();
@@ -49,14 +66,14 @@
   function renderMarkdown(md: string): string {
     if (!md) return '';
     try {
-      const raw = marked(autolinkNodespaceUris(md), {
+      const raw = chatMarked.parse(autolinkNodespaceUris(md), {
         renderer: chatRenderer,
         breaks: true,
         gfm: true,
       });
       if (typeof raw !== 'string') return md;
       // Allow nodespace:// protocol and data attributes for node card placeholders
-      return DOMPurify.sanitize(raw, {
+      return getDOMPurify().sanitize(raw, {
         ADD_ATTR: ['data-node-id', 'data-display-text'],
         ALLOW_UNKNOWN_PROTOCOLS: true,
       });
@@ -68,46 +85,108 @@
   // nodespace:// link clicks are handled by the global click handler
   // in app-shell.svelte — no local handler needed.
 
-  // Inject DOMPurify-sanitized HTML via DOM, then hydrate node card placeholders
   let containerEl: HTMLDivElement;
-  let mountedComponents: ReturnType<typeof mount>[] = [];
+  const mountedByEl = new Map<Element, ReturnType<typeof mount>>();
+  // Pre-hydration snapshot of each top-level node's outerHTML/textContent, so
+  // diffing compares against what was actually rendered rather than the live
+  // DOM — which NodeCardInline mutates in place once mounted (it injects
+  // child elements into the placeholder span), making the live node never
+  // equal a freshly-parsed placeholder even when nothing changed.
+  let lastRenderedNodes: Node[] = [];
 
-  // Single effect: render HTML + hydrate node card placeholders + cleanup on destroy
-  $effect(() => {
-    if (!containerEl) return;
+  function isPlaceholder(el: Element): boolean {
+    return el.classList.contains('ns-node-card-placeholder');
+  }
 
-    // Track content reactively so Svelte re-runs when it changes
-    const _content = content;
-    void _content;
-
-    // Clean up previously mounted components
-    for (const comp of mountedComponents) {
-      unmount(comp);
-    }
-    mountedComponents = [];
-
-    containerEl.innerHTML = rendered;
-
-    // Hydrate node card placeholders with Svelte components
-    const placeholders = containerEl.querySelectorAll('.ns-node-card-placeholder');
+  function hydratePlaceholders(root: Element): void {
+    const placeholders: Element[] = isPlaceholder(root) ? [root] : [];
+    placeholders.push(...root.querySelectorAll('.ns-node-card-placeholder'));
     for (const el of placeholders) {
+      if (mountedByEl.has(el)) continue;
       const nodeId = el.getAttribute('data-node-id');
       const displayText = el.getAttribute('data-display-text') || undefined;
       if (nodeId) {
-        const comp = mount(NodeCardInline, {
-          target: el,
-          props: { nodeId, displayText }
-        });
-        mountedComponents.push(comp);
+        const comp = mount(NodeCardInline, { target: el, props: { nodeId, displayText } });
+        mountedByEl.set(el, comp);
+      }
+    }
+  }
+
+  function unmountPlaceholders(root: Element): void {
+    const placeholders: Element[] = isPlaceholder(root) ? [root] : [];
+    placeholders.push(...root.querySelectorAll('.ns-node-card-placeholder'));
+    for (const el of placeholders) {
+      const comp = mountedByEl.get(el);
+      if (comp) {
+        unmount(comp);
+        mountedByEl.delete(el);
+      }
+    }
+  }
+
+  /**
+   * Patch containerEl's top-level children to match newHtml, replacing only
+   * the top-level nodes that actually changed. Streaming updates typically
+   * only touch the trailing block, so unchanged siblings — and any
+   * NodeCardInline components mounted inside them — are left untouched
+   * instead of being torn down and remounted on every content change.
+   *
+   * This is a positional index diff, not a keyed/LCS diff: block N is only
+   * ever compared against the previous render's block N. That's correct for
+   * the append-only way chat content grows (streaming appends to the last
+   * block or adds new trailing blocks) but would cause needless remounts of
+   * every following block if a block were ever reordered or inserted before
+   * the end — there's no such path today. Node-cards are also reconciled at
+   * block granularity, not individually: if two node-cards share one
+   * top-level block (e.g. the same paragraph) and any part of that block's
+   * text changes, both remount together.
+   */
+  function patchContent(newHtml: string): void {
+    const template = document.createElement('template');
+    template.innerHTML = newHtml;
+    const newNodes = Array.from(template.content.childNodes);
+    const oldNodes = lastRenderedNodes;
+    const liveNodes = Array.from(containerEl.childNodes);
+
+    const max = Math.max(newNodes.length, oldNodes.length);
+    for (let i = 0; i < max; i++) {
+      const oldNode = oldNodes[i];
+      const newNode = newNodes[i];
+      const liveNode = liveNodes[i];
+
+      if (oldNode && newNode && oldNode.isEqualNode(newNode)) {
+        continue;
+      }
+
+      if (liveNode instanceof Element) unmountPlaceholders(liveNode);
+
+      if (liveNode && newNode) {
+        containerEl.replaceChild(newNode, liveNode);
+      } else if (liveNode) {
+        containerEl.removeChild(liveNode);
+      } else if (newNode) {
+        containerEl.appendChild(newNode);
       }
     }
 
-    // Cleanup mounted components when effect re-runs or component is destroyed
+    // Snapshot pre-hydration nodes for the next diff, then hydrate the live tree.
+    lastRenderedNodes = Array.from(containerEl.childNodes).map((n) => n.cloneNode(true));
+    for (const node of Array.from(containerEl.childNodes)) {
+      if (node instanceof Element) hydratePlaceholders(node);
+    }
+  }
+
+  $effect(() => {
+    if (!containerEl) return;
+    patchContent(rendered);
+  });
+
+  $effect(() => {
     return () => {
-      for (const comp of mountedComponents) {
+      for (const comp of mountedByEl.values()) {
         unmount(comp);
       }
-      mountedComponents = [];
+      mountedByEl.clear();
     };
   });
 </script>
