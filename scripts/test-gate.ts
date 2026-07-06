@@ -39,5 +39,10 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
   return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
 });
+await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)", () => {
+  const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
+  const binary = `${process.cwd()}/target/debug/${binaryName}`;
+  return $`cargo test -p nodespace-app`.env({ ...process.env, NODESPACED_TEST_BIN: binary });
+});
 
 console.log("\n✓ All tests passed — pushing.\n");

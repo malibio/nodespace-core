@@ -26,10 +26,13 @@
  *    between them a compile/test error instead of a runtime surprise — a
  *    renamed or reshaped builder call breaks this test immediately.
  *
- * A true Tauri-IPC round-trip (invoke() through a real webview against the
- * command layer) requires a Rust-side integration test — that is ADR-048
- * decision 2, tracked separately, not something a TypeScript harness without
- * a webview can drive.
+ * A true Tauri command-layer round-trip (no webview needed — `tauri::State`
+ * obtained via `Manager::state()`, not IPC) is the Rust-side counterpart:
+ * `packages/desktop-app/src-tauri/tests/adapter_contract_test.rs` drives the
+ * SAME three scenarios below (task tri-state update, create-with-position,
+ * move-with-position) through the real `#[tauri::command]` functions. Two
+ * suites independently pinning the same documented contract is what makes a
+ * divergence between the paths a test failure rather than a silent drift.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

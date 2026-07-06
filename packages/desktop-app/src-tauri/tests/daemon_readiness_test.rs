@@ -23,20 +23,10 @@
 //! generates (see the comment on `daemon_status_body` in `lib.rs`). No
 //! Tauri mock runtime is needed to exercise it for real.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::daemon_setup::{check_daemon_socket, wait_for_daemon, DaemonStatus};
-use support::{EnvGuard, SpawnedDaemon};
-
-/// Serializes tests in this file that mutate the process-global
-/// `NODESPACED_SOCKET` env var, mirroring the single-threaded discipline
-/// `grpc_client`'s own `resolve_socket_path` test already uses. An
-/// async-aware mutex — the critical section spans `.await` points (waiting
-/// for the real daemon), which a `std::sync::Mutex` guard may not be held
-/// across.
-static ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+use nodespace_app_test_support::{EnvGuard, SpawnedDaemon, CONNECT_MUTEX};
 
 #[tokio::test]
 async fn not_running_before_daemon_starts() {
@@ -89,12 +79,12 @@ async fn wait_for_daemon_observes_a_real_bind_as_healthy() {
 
 #[tokio::test]
 async fn check_daemon_status_command_agrees_with_the_real_daemon() {
-    let _mutex_guard = ENV_MUTEX.lock().await;
+    let _mutex_guard = CONNECT_MUTEX.lock().await;
 
     let daemon = SpawnedDaemon::spawn();
     // Restores NODESPACED_SOCKET on drop — including if an assertion below
     // panics, so a failed run can't leak the mutated value to whichever
-    // test acquires ENV_MUTEX next.
+    // test acquires CONNECT_MUTEX next.
     let _env_guard = EnvGuard::set("NODESPACED_SOCKET", &daemon.socket_path);
 
     // Wait for the real daemon to finish starting (however long that takes;
@@ -112,7 +102,7 @@ async fn check_daemon_status_command_agrees_with_the_real_daemon() {
 
 #[tokio::test]
 async fn check_daemon_status_command_reports_not_running_for_an_unbound_socket() {
-    let _mutex_guard = ENV_MUTEX.lock().await;
+    let _mutex_guard = CONNECT_MUTEX.lock().await;
 
     // Deterministic by construction: no process is ever spawned for this
     // socket path, so there is nothing to race.

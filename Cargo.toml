@@ -7,7 +7,8 @@ members = [
     "packages/proto",
     "packages/daemon",
     "packages/cli",
-    "packages/desktop-app/src-tauri"
+    "packages/desktop-app/src-tauri",
+    "packages/desktop-app/src-tauri/test-support"
 ]
 resolver = "2"
 
