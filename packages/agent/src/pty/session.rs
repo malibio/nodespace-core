@@ -61,7 +61,7 @@ const DEFAULT_PTY_COLS: u16 = 80;
 /// user's home, and render correctly in a terminal. Everything else is
 /// dropped via `env_clear()`; auth vars are layered in per agent via
 /// [`AgentDefinition::auth_env_vars`].
-const BASE_ENV_ALLOWLIST: &[&str] = &["HOME", "PATH", "TERM", "SHELL", "LANG", "USER"];
+const BASE_ENV_ALLOWLIST: &[&str] = &["HOME", "PATH", "TERM", "SHELL", "LANG", "USER", "TMPDIR"];
 
 /// Clear the command's inherited environment and repopulate it from
 /// `std::env::var` using `BASE_ENV_ALLOWLIST` plus `extra_vars` (typically an
@@ -521,6 +521,33 @@ mod tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
+    /// RAII guard that sets a process env var for the duration of a test and
+    /// removes it on drop, even if the test panics — avoids leaking test-only
+    /// vars into later tests in the same process.
+    struct EnvVarGuard {
+        key: &'static str,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            // SAFETY: test-only; each call site uses a unique key not read
+            // by other tests running in this process.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: see `set` above.
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     /// Drain at most `max_chunks` chunks within `wait` from a subscriber and
     /// return the concatenated bytes. Used by tests that need to inspect the
     /// PTY's output stream without depending on exact chunk boundaries.
@@ -766,10 +793,7 @@ mod tests {
     /// passed `extra_vars` survive `env_clear()`.
     #[tokio::test]
     async fn unlisted_env_var_does_not_reach_pty_child() {
-        // SAFETY: test-only; no other test in this process reads this key.
-        unsafe {
-            std::env::set_var("NODESPACE_TEST_SECRET_1521", "should-not-leak");
-        }
+        let _guard = EnvVarGuard::set("NODESPACE_TEST_SECRET_1521", "should-not-leak");
 
         let session = PtySession::launch_for_test("sh", vec!["-c".into(), "env".into()])
             .expect("launch env session");
@@ -778,10 +802,6 @@ mod tests {
         let mut exit_rx = session.subscribe_exit();
         let output = collect_output(&mut rx, Duration::from_secs(2), 64).await;
         await_exit(&mut exit_rx, Duration::from_secs(2)).await;
-
-        unsafe {
-            std::env::remove_var("NODESPACE_TEST_SECRET_1521");
-        }
 
         let text = String::from_utf8_lossy(&output);
         assert!(
@@ -816,10 +836,7 @@ mod tests {
     /// actually set in the current process's environment.
     #[test]
     fn apply_env_allowlist_forwards_extra_vars_when_present() {
-        // SAFETY: test-only; unique key not touched by other tests.
-        unsafe {
-            std::env::set_var("NODESPACE_TEST_AUTH_VAR_1521", "token-value");
-        }
+        let _guard = EnvVarGuard::set("NODESPACE_TEST_AUTH_VAR_1521", "token-value");
 
         let mut cmd = CommandBuilder::new("sh");
         apply_env_allowlist(
@@ -831,10 +848,6 @@ mod tests {
             .get_env("NODESPACE_TEST_AUTH_VAR_1521")
             .map(|v| v.to_owned());
         let unset_var = cmd.get_env("NODESPACE_TEST_UNSET");
-
-        unsafe {
-            std::env::remove_var("NODESPACE_TEST_AUTH_VAR_1521");
-        }
 
         assert_eq!(
             auth_var.as_deref(),
