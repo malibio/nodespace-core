@@ -80,11 +80,13 @@
     "release:view": "bun run scripts/release.ts view",
     "release:delete": "bun run scripts/release.ts delete",
     "release:bump": "bun run scripts/release.ts bump",
-    "release:help": "bun run scripts/release.ts --help"
+    "release:help": "bun run scripts/release.ts --help",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@types/jsdom": "^21.1.7",
     "bun-types": "latest",
+    "husky": "^9.1.7",
     "jsdom": "^26.1.0"
   },
   "license": "MIT",

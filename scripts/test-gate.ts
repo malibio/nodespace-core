@@ -1,0 +1,33 @@
+#!/usr/bin/env bun
+
+/**
+ * Local pre-push test gate.
+ *
+ * Runs the full test pyramid (frontend, skill, Rust, e2e) before code leaves
+ * the machine. This repo has no CI runner for tests — this hook is the only
+ * gate. See ADR-047.
+ *
+ * Bypass (intentional WIP pushes only): git push --no-verify
+ */
+
+import { $ } from "bun";
+
+async function run(label: string, cmd: () => Promise<unknown>) {
+  console.log(`\n▶ ${label}`);
+  try {
+    await cmd();
+  } catch {
+    console.error(`\n✗ ${label} failed — push blocked.`);
+    console.error("  Fix the failure, or bypass intentionally with: git push --no-verify\n");
+    process.exit(1);
+  }
+}
+
+await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
+await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
+await run("bun run test:e2e (headless daemon round-trip)", () => {
+  const binary = `${process.cwd()}/target/debug/nodespaced`;
+  return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
+});
+
+console.log("\n✓ All tests passed — pushing.\n");
