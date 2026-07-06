@@ -33,7 +33,11 @@
   import ConflictToast from '$lib/components/conflict-toast.svelte';
   import { recoveredItems } from '$lib/stores/recovered-items.svelte';
   import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
-  import { daemonStatus, startDaemonStatusListener } from '$lib/services/daemon-status';
+  import {
+    daemonStatus,
+    startDaemonStatusListener,
+    refreshDaemonStatus
+  } from '$lib/services/daemon-status';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -654,11 +658,7 @@
           <span>
             NodeSpace background service is not running. Some features may be unavailable.
           </span>
-          <button
-            onclick={() => invoke('check_daemon_status').then((s) => { if (s === 'healthy') daemonUnreachable = false; })}
-          >
-            Retry
-          </button>
+          <button onclick={() => refreshDaemonStatus()}> Retry </button>
         </div>
       {:else if daemonConnecting}
         <div class="daemon-connecting-banner" role="status">
