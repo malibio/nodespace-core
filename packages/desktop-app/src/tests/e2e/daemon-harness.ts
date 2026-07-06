@@ -16,94 +16,11 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-
-// Import HttpAdapter by constructing it directly — avoid the singleton
-// `backendAdapter` export, which detects the test environment and returns
-// a MockAdapter.
-class HttpAdapter {
-  private readonly baseUrl: string;
-
-  constructor(baseUrl: string) {
-    this.baseUrl = baseUrl;
-  }
-
-  private async handleResponse<T>(response: Response): Promise<T> {
-    if (!response.ok) {
-      let message = `HTTP ${response.status}: ${response.statusText}`;
-      try {
-        const body = await response.json() as { message?: string };
-        if (body.message) message = body.message;
-      } catch {
-        // non-JSON body — keep default message
-      }
-      throw new Error(message);
-    }
-    if (response.status === 204 || response.headers.get('content-length') === '0') {
-      return undefined as T;
-    }
-    return response.json() as Promise<T>;
-  }
-
-  async createNode(input: {
-    id: string;
-    nodeType: string;
-    content: string;
-    properties?: Record<string, unknown>;
-    mentions?: string[];
-    parentId?: string | null;
-  }): Promise<string> {
-    const now = new Date().toISOString();
-    const response = await fetch(`${this.baseUrl}/api/nodes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input, properties: input.properties ?? {}, mentions: input.mentions ?? [], createdAt: now, modifiedAt: now, version: 1 })
-    });
-    return this.handleResponse<string>(response);
-  }
-
-  async getNode(id: string): Promise<Record<string, unknown> | null> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`);
-    if (response.status === 404) return null;
-    return this.handleResponse<Record<string, unknown>>(response);
-  }
-
-  async updateNode(id: string, version: number, update: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...update, version })
-    });
-    return this.handleResponse<Record<string, unknown>>(response);
-  }
-
-  async deleteNode(id: string, version: number): Promise<{ existed: boolean; deletedCount: number }> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version })
-    });
-    return this.handleResponse<{ existed: boolean; deletedCount: number }>(response);
-  }
-
-  async getChildren(parentId: string): Promise<Record<string, unknown>[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(parentId)}/children`);
-    return this.handleResponse<Record<string, unknown>[]>(response);
-  }
-
-  async getAllSchemas(): Promise<Record<string, unknown>[]> {
-    const response = await fetch(`${this.baseUrl}/api/schemas`);
-    return this.handleResponse<Record<string, unknown>[]>(response);
-  }
-
-  async getSchema(schemaId: string): Promise<Record<string, unknown>> {
-    const response = await fetch(`${this.baseUrl}/api/schemas/${encodeURIComponent(schemaId)}`);
-    return this.handleResponse<Record<string, unknown>>(response);
-  }
-
-  get baseURL(): string {
-    return this.baseUrl;
-  }
-}
+// Import the real HttpAdapter directly (bypassing the `backendAdapter`
+// singleton export, which detects the test environment and returns a
+// MockAdapter) so this harness drives the same production request-shaping
+// code as the browser dev path — not a fourth hand-synced copy of it.
+import { HttpAdapter } from '$lib/services/backend-adapter';
 
 // ============================================================================
 // Helpers

@@ -45,6 +45,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DaemonTestHarness } from './daemon-harness';
 import type { DaemonStatusSource } from '$lib/services/daemon-status';
+import type { SchemaNode } from '$lib/types/schema-node';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })
@@ -54,13 +55,20 @@ vi.mock('$lib/utils/logger', () => ({
 // its getAllSchemas() to whatever adapter the active test wires up (a
 // harness pointed at a real daemon, or one pointed at nothing) instead of
 // the MockAdapter the singleton would otherwise resolve to under
-// NODE_ENV=test.
-let getAllSchemasImpl: () => Promise<Record<string, unknown>[]>;
-vi.mock('$lib/services/backend-adapter', () => ({
-  backendAdapter: {
-    getAllSchemas: () => getAllSchemasImpl()
-  }
-}));
+// NODE_ENV=test. Keep the real HttpAdapter export intact (via importActual)
+// since daemon-harness.ts imports it from this same module to drive the
+// harness's live daemon connection — only the `backendAdapter` singleton
+// needs redirecting here.
+let getAllSchemasImpl: () => Promise<SchemaNode[]>;
+vi.mock('$lib/services/backend-adapter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/services/backend-adapter')>();
+  return {
+    ...actual,
+    backendAdapter: {
+      getAllSchemas: () => getAllSchemasImpl()
+    }
+  };
+});
 
 /** A DaemonStatusSource backed by real UDS probes against a harness's daemon. */
 function harnessStatusSource(h: DaemonTestHarness): DaemonStatusSource {

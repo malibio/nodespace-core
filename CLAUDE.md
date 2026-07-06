@@ -195,6 +195,8 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    bun run gh:pr <number>    # Creates PR, updates status to "Ready for Review"
    ```
 
+   > ⚠️ **`git push` runs a pre-push gate (`scripts/test-gate.ts`, ADR-047)** that re-runs `test:all`, then `cargo build --bin nodespaced`, then the full `test:e2e` suite — every push, not just the first. On a fresh worktree with no Rust build cache this can take **several minutes** (cold `cargo build` alone can exceed 5 minutes). Give the push command a long timeout (10+ minutes) or run it in the background and wait for completion — a command that times out before the hook finishes looks identical to a real failure but isn't one; check the tail of the actual output for a real test failure vs. an incomplete cold build before concluding the push failed. Do not reach for `--no-verify` to work around slowness — it's reserved for WIP Handoff Commits.
+
 5. **Code Review** — run `/pragmatic-code-review` on every PR before merge. NEVER merge without it.
 
 6. **Merge & Clean Up** — order matters:

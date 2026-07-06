@@ -11,6 +11,10 @@
  * - **MockAdapter**: Returns empty/default values for test environment
  * - **Auto-detection**: Runtime detection based on `window.__TAURI_INTERNALS__` existence
  *
+ * Both adapters are thin transport shims — the request/response shaping rules
+ * (which fields are optional-omit vs. tri-state-clearable, matching
+ * node_service.proto) live in ./adapter-core so the two paths cannot drift.
+ *
  * # Usage
  *
  * ```typescript
@@ -25,110 +29,32 @@ import type { SchemaNode } from '$lib/types/schema-node';
 import { createLogger } from '$lib/utils/logger';
 import { withDiagnosticLogging } from './diagnostic-logger';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  buildCreateNodeFields,
+  normalizeChildrenTree,
+  HTTP_ROUTES,
+  type BackendAdapter,
+  type CreateNodeInput,
+  type UpdateNodeInput,
+  type DeleteResult,
+  type NodeQuery,
+  type CreateContainerInput,
+  type InsertPosition,
+} from './adapter-core';
 
 const log = createLogger('BackendAdapter');
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/** Explicit insertion position for new or moved nodes. */
-export type InsertPosition =
-  | { type: 'beginning' }
-  | { type: 'end' }
-  | { type: 'after'; siblingId: string };
-
-/** Factory helpers for building InsertPosition values. */
-export const insertPosition = {
-  beginning: (): InsertPosition => ({ type: 'beginning' }),
-  end: (): InsertPosition => ({ type: 'end' }),
-  after: (siblingId: string): InsertPosition => ({ type: 'after', siblingId }),
-} as const;
-
-export interface CreateNodeInput {
-  id: string;
-  nodeType: string;
-  content: string;
-  properties?: Record<string, unknown>;
-  mentions?: string[];
-  parentId?: string | null;
-  /** Where to insert among siblings. Omit for End (default). */
-  insertPosition?: InsertPosition | null;
-}
-
-export interface UpdateNodeInput {
-  content?: string;
-  nodeType?: string;
-  properties?: Record<string, unknown>;
-  mentions?: string[];
-}
-
-export interface DeleteResult {
-  existed: boolean;
-  deletedCount: number;
-}
-
-export interface EdgeRecord {
-  id: string;
-  in: string;
-  out: string;
-  order: number;
-}
-
-export interface NodeQuery {
-  id?: string;
-  mentionedBy?: string;
-  contentContains?: string;
-  nodeType?: string;
-  limit?: number;
-}
-
-export interface CreateContainerInput {
-  content: string;
-  nodeType: string;
-  properties?: Record<string, unknown>;
-  mentionedBy?: string;
-}
-
-
-// ============================================================================
-// Backend Adapter Interface
-// ============================================================================
-
-export interface BackendAdapter {
-  // Node CRUD
-  createNode(input: CreateNodeInput | Node): Promise<string>;
-  getNode(id: string): Promise<Node | null>;
-  updateNode(id: string, version: number, update: UpdateNodeInput): Promise<Node>;
-  updateTaskNode(id: string, version: number, update: TaskNodeUpdate): Promise<TaskNode>;
-  deleteNode(id: string, version: number): Promise<DeleteResult>;
-
-  // Hierarchy
-  getChildren(parentId: string): Promise<Node[]>;
-  getDescendants(rootNodeId: string): Promise<Node[]>;
-  getChildrenTree(parentId: string): Promise<NodeWithChildren | null>;
-  moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node>;
-  moveChildrenToParent(newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]>;
-
-  // Mentions
-  createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void>;
-  deleteMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void>;
-  getOutgoingMentions(nodeId: string): Promise<string[]>;
-  getIncomingMentions(nodeId: string): Promise<string[]>;
-  getMentioningContainers(nodeId: string): Promise<string[]>;
-
-  // Queries
-  queryNodes(query: NodeQuery): Promise<Node[]>;
-  mentionAutocomplete(query: string, limit?: number): Promise<Node[]>;
-
-  // Composite operations
-  createContainerNode(input: CreateContainerInput): Promise<string>;
-
-  // Schema operations (read-only - mutation commands removed in Issue #690)
-  // Returns SchemaNode with typed top-level fields (isCore, schemaVersion, description, fields)
-  getAllSchemas(): Promise<SchemaNode[]>;
-  getSchema(schemaId: string): Promise<SchemaNode>;
-}
+export type {
+  BackendAdapter,
+  InsertPosition,
+  CreateNodeInput,
+  UpdateNodeInput,
+  DeleteResult,
+  EdgeRecord,
+  NodeQuery,
+  CreateContainerInput,
+} from './adapter-core';
+export { insertPosition } from './adapter-core';
 
 // ============================================================================
 // Tauri Adapter (Desktop App - IPC)
@@ -137,15 +63,7 @@ export interface BackendAdapter {
 class TauriAdapter implements BackendAdapter {
   async createNode(input: CreateNodeInput | Node): Promise<string> {
     // Tauri 2.x with #[serde(rename_all = "camelCase")] expects camelCase field names
-    const nodeInput = {
-      id: input.id,
-      nodeType: input.nodeType,
-      content: input.content,
-      properties: input.properties ?? {},
-      mentions: input.mentions ?? [],
-      parentId: (input as CreateNodeInput).parentId ?? null,
-      insertPosition: (input as CreateNodeInput).insertPosition ?? null
-    };
+    const nodeInput = buildCreateNodeFields(input);
     return withDiagnosticLogging(
       'createNode',
       () => invoke<string>('create_node', { node: nodeInput }),
@@ -170,6 +88,13 @@ class TauriAdapter implements BackendAdapter {
   }
 
   async updateTaskNode(id: string, version: number, update: TaskNodeUpdate): Promise<TaskNode> {
+    // Forwards `update` as-is rather than calling buildTaskNodeUpdatePatch —
+    // the tri-state clear/set/no-change encoding for this path is done by
+    // the Rust #[tauri::command] handler, not here. That handler and
+    // dev-proxy's buildTaskNodeUpdatePatch call site can't literally share
+    // code across the language boundary; ADR-048 decision 2 (a Rust-side
+    // integration test driving the Tauri command layer directly) is the
+    // planned way to prove the two encodings still agree.
     return withDiagnosticLogging(
       'updateTaskNode',
       () => invoke<TaskNode>('update_task_node', { id, version, update }),
@@ -195,19 +120,7 @@ class TauriAdapter implements BackendAdapter {
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
-    // Recursively fetch all descendants using getChildren
-    const allNodes: Node[] = [];
-    const queue: string[] = [rootNodeId];
-
-    while (queue.length > 0) {
-      const parentId = queue.shift()!;
-      const children = await this.getChildren(parentId);
-      allNodes.push(...children);
-      // Add children to queue for recursive traversal
-      queue.push(...children.map((c) => c.id));
-    }
-
-    return allNodes;
+    return getDescendantsViaChildren(rootNodeId, (parentId) => this.getChildren(parentId));
   }
 
   async getChildrenTree(parentId: string): Promise<NodeWithChildren | null> {
@@ -216,11 +129,7 @@ class TauriAdapter implements BackendAdapter {
       'getChildrenTree',
       async () => {
         const result = await invoke<NodeWithChildren | Record<string, never>>('get_children_tree', { parentId });
-        // Backend returns {} for non-existent parent, normalize to null
-        if (!result || Object.keys(result).length === 0) {
-          return null;
-        }
-        return result as NodeWithChildren;
+        return normalizeChildrenTree(result);
       },
       [parentId]
     );
@@ -353,7 +262,7 @@ class TauriAdapter implements BackendAdapter {
 // HTTP Adapter (Browser Dev Mode - fetch to dev-proxy)
 // ============================================================================
 
-class HttpAdapter implements BackendAdapter {
+export class HttpAdapter implements BackendAdapter {
   private readonly baseUrl: string;
 
   constructor(baseUrl: string = 'http://localhost:3001') {
@@ -390,20 +299,15 @@ class HttpAdapter implements BackendAdapter {
 
   async createNode(input: CreateNodeInput | Node): Promise<string> {
     const now = new Date().toISOString();
+    const fields = buildCreateNodeFields(input);
     const requestBody = {
-      id: input.id,
-      nodeType: input.nodeType,
-      content: input.content,
-      properties: input.properties ?? {},
-      mentions: input.mentions ?? [],
-      parentId: (input as CreateNodeInput).parentId ?? null,
-      insertPosition: (input as CreateNodeInput).insertPosition ?? null,
+      ...fields,
       createdAt: now,
       modifiedAt: now,
       version: 1
     };
 
-    const response = await fetch(`${this.baseUrl}/api/nodes`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.createNode()}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(requestBody)
@@ -413,13 +317,13 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getNode(id: string): Promise<Node | null> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getNode(id)}`);
     if (response.status === 404) return null;
     return await this.handleResponse<Node>(response);
   }
 
   async updateNode(id: string, version: number, update: UpdateNodeInput): Promise<Node> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.updateNode(id)}`, {
       method: 'PATCH',
       headers: this.getHeaders(),
       body: JSON.stringify({ ...update, version })
@@ -428,7 +332,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async updateTaskNode(id: string, version: number, update: TaskNodeUpdate): Promise<TaskNode> {
-    const response = await fetch(`${this.baseUrl}/api/tasks/${encodeURIComponent(id)}`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.updateTaskNode(id)}`, {
       method: 'PATCH',
       headers: this.getHeaders(),
       body: JSON.stringify({ ...update, version })
@@ -437,7 +341,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async deleteNode(id: string, version: number): Promise<DeleteResult> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(id)}`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.deleteNode(id)}`, {
       method: 'DELETE',
       headers: this.getHeaders(),
       body: JSON.stringify({ version })
@@ -446,38 +350,22 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getChildren(parentId: string): Promise<Node[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(parentId)}/children`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getChildren(parentId)}`);
     return await this.handleResponse<Node[]>(response);
   }
 
   async getDescendants(rootNodeId: string): Promise<Node[]> {
-    // Recursively fetch all descendants using getChildren
-    const allNodes: Node[] = [];
-    const queue: string[] = [rootNodeId];
-
-    while (queue.length > 0) {
-      const parentId = queue.shift()!;
-      const children = await this.getChildren(parentId);
-      allNodes.push(...children);
-      // Add children to queue for recursive traversal
-      queue.push(...children.map((c) => c.id));
-    }
-
-    return allNodes;
+    return getDescendantsViaChildren(rootNodeId, (parentId) => this.getChildren(parentId));
   }
 
   async getChildrenTree(parentId: string): Promise<NodeWithChildren | null> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(parentId)}/children-tree`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getChildrenTree(parentId)}`);
     const result = await this.handleResponse<NodeWithChildren | Record<string, never>>(response);
-    // Backend returns {} for non-existent parent, normalize to null
-    if (!result || Object.keys(result).length === 0) {
-      return null;
-    }
-    return result as NodeWithChildren;
+    return normalizeChildrenTree(result);
   }
 
   async moveNode(nodeId: string, version: number, newParentId: string | null, insertPosition: InsertPosition | null): Promise<Node> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/parent`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.moveNode(nodeId)}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ version, parentId: newParentId, insertPosition })
@@ -486,7 +374,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async moveChildrenToParent(newParentId: string, children: Array<{ id: string; version: number }>): Promise<Node[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(newParentId)}/move-children`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.moveChildrenToParent(newParentId)}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ children: children.map(c => ({ nodeId: c.id, version: c.version })) })
@@ -495,7 +383,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async createMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/mentions`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.createMention()}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ sourceId: mentioningNodeId, targetId: mentionedNodeId })
@@ -504,7 +392,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async deleteMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/mentions`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.deleteMention()}`, {
       method: 'DELETE',
       headers: this.getHeaders(),
       body: JSON.stringify({ sourceId: mentioningNodeId, targetId: mentionedNodeId })
@@ -513,22 +401,22 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getOutgoingMentions(nodeId: string): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/outgoing`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getOutgoingMentions(nodeId)}`);
     return await this.handleResponse<string[]>(response);
   }
 
   async getIncomingMentions(nodeId: string): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/incoming`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getIncomingMentions(nodeId)}`);
     return await this.handleResponse<string[]>(response);
   }
 
   async getMentioningContainers(nodeId: string): Promise<string[]> {
-    const response = await fetch(`${this.baseUrl}/api/nodes/${encodeURIComponent(nodeId)}/mentions/roots`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getMentioningContainers(nodeId)}`);
     return await this.handleResponse<string[]>(response);
   }
 
   async queryNodes(query: NodeQuery): Promise<Node[]> {
-    const response = await fetch(`${this.baseUrl}/api/query`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.queryNodes()}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(query)
@@ -537,7 +425,7 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async mentionAutocomplete(query: string, limit?: number): Promise<Node[]> {
-    const response = await fetch(`${this.baseUrl}/api/mentions/autocomplete`, {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.mentionAutocomplete()}`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ query, limit })
@@ -558,14 +446,35 @@ class HttpAdapter implements BackendAdapter {
   }
 
   async getAllSchemas(): Promise<SchemaNode[]> {
-    const response = await fetch(`${this.baseUrl}/api/schemas`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getAllSchemas()}`);
     return this.handleResponse<SchemaNode[]>(response);
   }
 
   async getSchema(schemaId: string): Promise<SchemaNode> {
-    const response = await fetch(`${this.baseUrl}/api/schemas/${encodeURIComponent(schemaId)}`);
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getSchema(schemaId)}`);
     return this.handleResponse<SchemaNode>(response);
   }
+}
+
+// ============================================================================
+// Shared helper (not transport-specific — recursion, not wire shaping)
+// ============================================================================
+
+async function getDescendantsViaChildren(
+  rootNodeId: string,
+  getChildren: (parentId: string) => Promise<Node[]>,
+): Promise<Node[]> {
+  const allNodes: Node[] = [];
+  const queue: string[] = [rootNodeId];
+
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    const children = await getChildren(parentId);
+    allNodes.push(...children);
+    queue.push(...children.map((c) => c.id));
+  }
+
+  return allNodes;
 }
 
 // ============================================================================
