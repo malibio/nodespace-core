@@ -232,6 +232,11 @@ pub async fn import_markdown_directory(
         return Err("Path is not a directory".to_string());
     }
 
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve directory: {}", e))?;
+    check_within_allowed_base(&dir)?;
+
     let mut opts = options.unwrap_or_default();
     let exclude_patterns = opts.exclude_patterns.clone();
 
@@ -252,6 +257,29 @@ pub async fn import_markdown_directory(
     );
 
     import_markdown_files(app, grpc, md_files, Some(opts)).await
+}
+
+/// Reject import directories outside the user's home directory.
+///
+/// Defense-in-depth: under the current single-user-local trust model the
+/// Tauri command boundary is already restricted to the daemon owner, but this
+/// keeps a directory-import call from walking arbitrary system paths (e.g.
+/// `/etc`, `/System`) if that boundary is ever weakened. `dir` must already be
+/// canonicalized so symlink/`..` tricks can't escape the check.
+fn check_within_allowed_base(dir: &std::path::Path) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
+    let home = home
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve home directory: {}", e))?;
+
+    if !dir.starts_with(&home) {
+        return Err(format!(
+            "Import directory must be within the home directory ({})",
+            home.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn collect_markdown_files_with_exclusions(
@@ -280,9 +308,21 @@ fn collect_markdown_files_with_exclusions(
             continue;
         }
 
-        if path.is_dir() {
+        // Use symlink_metadata (lstat semantics) rather than path.is_dir()/is_file(),
+        // which follow symlinks: a symlink inside the confined root could otherwise
+        // point outside the allowed base and bypass check_within_allowed_base.
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read metadata for {}: {}", path_str, e))?;
+
+        if metadata.is_symlink() {
+            tracing::debug!("Skipping symlink: {}", path_str);
+            continue;
+        }
+
+        if metadata.is_dir() {
             collect_markdown_files_with_exclusions(&path, files, exclude_patterns)?;
-        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+        } else if metadata.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Some(s) = path.to_str() {
                 files.push(s.to_string());
             }
@@ -290,4 +330,80 @@ fn collect_markdown_files_with_exclusions(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_home_directory_itself() {
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        assert!(check_within_allowed_base(&home).is_ok());
+    }
+
+    #[test]
+    fn accepts_subdirectory_of_home() {
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        assert!(check_within_allowed_base(&home.join("Documents")).is_ok());
+    }
+
+    #[test]
+    fn rejects_path_outside_home() {
+        let outside = std::path::Path::new("/etc");
+        let result = check_within_allowed_base(outside);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("home directory"));
+    }
+
+    #[test]
+    fn rejects_root() {
+        let result = check_within_allowed_base(std::path::Path::new("/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_sibling_with_home_as_string_prefix() {
+        // Regression guard for a component-wise Path::starts_with vs a naive
+        // string-prefix check: "/Users/malibio-other" starts with the string
+        // "/Users/malibio" but is not actually inside that directory.
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        let sibling = home.with_file_name(format!(
+            "{}-other",
+            home.file_name().unwrap().to_str().unwrap()
+        ));
+
+        let result = check_within_allowed_base(&sibling);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn does_not_follow_symlinked_directories_during_collection() {
+        let tmp =
+            std::env::temp_dir().join(format!("ns-import-symlink-test-{}", std::process::id()));
+        let import_root = tmp.join("import_root");
+        let outside = tmp.join("outside");
+        let outside_file = outside.join("secret.md");
+        let link = import_root.join("escape");
+
+        std::fs::create_dir_all(&import_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(&outside_file, "# secret").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&outside, &link).unwrap();
+
+        let mut files = Vec::new();
+        collect_markdown_files_with_exclusions(&import_root, &mut files, &[]).unwrap();
+
+        assert!(
+            files.is_empty(),
+            "symlinked directory outside the import root should not be traversed, found: {:?}",
+            files
+        );
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 }
