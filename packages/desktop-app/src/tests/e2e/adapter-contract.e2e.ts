@@ -120,20 +120,24 @@ describe('Adapter contract: live round-trip (HttpAdapter → dev-proxy → daemo
 
     // dev-proxy must translate this into { clear:false, value:'alice' } for
     // assignee via buildTaskNodeUpdatePatch, not a hand-rolled equivalent.
+    // The raw dev-proxy response stores task fields flat under properties
+    // (packages/core/src/models/task_node.rs) — client-side promotion to
+    // top-level TaskNode fields is a separate concern (nodeToTaskNode), not
+    // something this HTTP-shape contract test needs to exercise.
     const updated = (await h.adapter.updateTaskNode(id, created!.version, {
       assignee: 'alice',
       status: 'in_progress',
-    })) as unknown as { assignee?: string; status?: string; version: number };
+    })) as unknown as { properties: { assignee?: string; status?: string }; version: number };
 
-    expect(updated.assignee).toBe('alice');
-    expect(updated.status).toBe('in_progress');
+    expect(updated.properties.assignee).toBe('alice');
+    expect(updated.properties.status).toBe('in_progress');
 
     // Clearing assignee (null) must round-trip to "no assignee", not the
     // literal string "null" or an unset-vs-cleared ambiguity.
     const cleared = (await h.adapter.updateTaskNode(id, updated.version, {
       assignee: null,
-    })) as unknown as { assignee?: string | null };
-    expect(cleared.assignee == null).toBe(true);
+    })) as unknown as { properties: { assignee?: string | null } };
+    expect(cleared.properties.assignee == null).toBe(true);
   });
 
   it('createNode honors an explicit InsertPosition the same way move/reorder do', async () => {
