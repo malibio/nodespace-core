@@ -147,6 +147,8 @@ class SimplePersistenceCoordinator {
       // than sitting on a debounce timer. `operation()` here does NOT force
       // early execution — it just resolves once the coordinator's own
       // finally-chain runs the queued write after confirmation lands.
+      // resolve/reject below are dead no-ops: real settlement flows through
+      // `promise` (== queuedPromise), settled via queued.resolve/reject.
       this.pendingOperations.set(nodeId, {
         nodeId,
         operation: () => queuedPromise,
@@ -220,6 +222,9 @@ class SimplePersistenceCoordinator {
           // queue time) so waitForPersistence()/flush callers awaiting
           // `pending.promise` block on the actual queued write, not resolve
           // prematurely.
+          // resolve/reject below are dead no-ops: real settlement flows
+          // through `promise` (== queued.promise), settled via runOperation's
+          // onDone/onError, which are queued.resolve/reject.
           this.pendingOperations.set(nodeId, {
             nodeId,
             operation: () => runOperation(queued.operation, queued.options.dependencies, queued.resolve, queued.reject),
@@ -298,11 +303,23 @@ class SimplePersistenceCoordinator {
 
   /**
    * Clear any queued operation for a node (e.g., after OCC conflict to prevent stale retries)
+   *
+   * CRITICAL: Must settle the queued op's promise and drop its pendingOperations
+   * placeholder here. Both were registered at queue time (see `persist()`), and
+   * without this, discarding the queue entry mid-flight leaves that promise
+   * unsettled forever and hasPending(nodeId) stuck `true` — silently blocking
+   * database broadcasts for this node and hanging any flush/wait call on it.
    */
   clearQueued(nodeId: string): void {
-    if (this.queuedOperations.has(nodeId)) {
+    const queued = this.queuedOperations.get(nodeId);
+    if (queued) {
       coordLog.debug(`Cleared queued operation for ${nodeId.substring(0, 8)} (OCC conflict)`);
       this.queuedOperations.delete(nodeId);
+      queued.reject(new OperationCancelledError('Queued write cancelled: prior write hit an OCC conflict'));
+      const pending = this.pendingOperations.get(nodeId);
+      if (pending && pending.promise === queued.promise) {
+        this.pendingOperations.delete(nodeId);
+      }
     }
   }
 
