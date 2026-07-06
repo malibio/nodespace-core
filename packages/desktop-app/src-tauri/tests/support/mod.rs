@@ -127,6 +127,13 @@ impl TauriTestApp {
     pub fn client_state(&self) -> tauri::State<'_, GrpcClient> {
         self.app.state::<GrpcClient>()
     }
+
+    /// The real `AppHandle` — for commands (e.g. `chat_model_download`,
+    /// `local_agent`'s streaming subscriptions) that take `app: AppHandle`
+    /// to `emit` progress events, and for tests that `listen` on it.
+    pub fn handle(&self) -> tauri::AppHandle<tauri::test::MockRuntime> {
+        self.app.handle().clone()
+    }
 }
 
 /// Sets an env var and restores its prior value on drop — including on a
