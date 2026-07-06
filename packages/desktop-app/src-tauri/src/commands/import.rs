@@ -308,9 +308,21 @@ fn collect_markdown_files_with_exclusions(
             continue;
         }
 
-        if path.is_dir() {
+        // Use symlink_metadata (lstat semantics) rather than path.is_dir()/is_file(),
+        // which follow symlinks: a symlink inside the confined root could otherwise
+        // point outside the allowed base and bypass check_within_allowed_base.
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read metadata for {}: {}", path_str, e))?;
+
+        if metadata.is_symlink() {
+            tracing::debug!("Skipping symlink: {}", path_str);
+            continue;
+        }
+
+        if metadata.is_dir() {
             collect_markdown_files_with_exclusions(&path, files, exclude_patterns)?;
-        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+        } else if metadata.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Some(s) = path.to_str() {
                 files.push(s.to_string());
             }
@@ -348,5 +360,35 @@ mod tests {
     fn rejects_root() {
         let result = check_within_allowed_base(std::path::Path::new("/"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn does_not_follow_symlinked_directories_during_collection() {
+        let tmp =
+            std::env::temp_dir().join(format!("ns-import-symlink-test-{}", std::process::id()));
+        let import_root = tmp.join("import_root");
+        let outside = tmp.join("outside");
+        let outside_file = outside.join("secret.md");
+        let link = import_root.join("escape");
+
+        std::fs::create_dir_all(&import_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(&outside_file, "# secret").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&outside, &link).unwrap();
+
+        let mut files = Vec::new();
+        collect_markdown_files_with_exclusions(&import_root, &mut files, &[]).unwrap();
+
+        assert!(
+            files.is_empty(),
+            "symlinked directory outside the import root should not be traversed, found: {:?}",
+            files
+        );
+
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
