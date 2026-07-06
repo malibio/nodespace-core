@@ -80,6 +80,17 @@ pub(crate) async fn check_and_enqueue(
     // A poisoned lock (some other thread panicked while holding it) still
     // holds a valid `PlaybookLifecycleManager` — recover it instead of
     // propagating the panic, which would permanently kill this polling loop.
+    // `into_inner()` trades a hard failure (permanently dead cron loop) for a
+    // best-effort read of whatever state existed at the panic: `active_playbooks`,
+    // `trigger_index`, and `cron_registry` are plain HashMap/Vec collections with
+    // no unsafe invariants, so the recovered guard can't be a type-invalid or
+    // corrupted value — but `activate_playbook` does update `trigger_index`/
+    // `cron_registry` before `active_playbooks` in a loop over a playbook's rules,
+    // so a panic mid-activation could in principle leave a stale/partial entry
+    // for a playbook that never finished activating. That's an existing risk of
+    // this lock (any `.expect(...)` reader hitting it mid-activation would panic
+    // instead), not something this recovery path introduces — it just avoids
+    // amplifying "one bad activation" into "the cron loop is dead forever."
     let entries: Vec<CronEntry> = {
         let guard = lifecycle
             .read()
