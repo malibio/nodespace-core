@@ -12,7 +12,10 @@
  * server-side enforcement backstop — a push from a machine that never ran
  * `bun install` is not gated.
  *
- * Bypass (intentional WIP pushes only): git push --no-verify
+ * Bypass: git push --no-verify. Reserved for WIP Handoff Commits (see
+ * CLAUDE.md) — multi-session work, approaching context limits, a natural
+ * breakpoint, or before a risky change. Not a general-purpose escape hatch
+ * for "the suite is slow right now."
  */
 
 import { $ } from "bun";
@@ -23,7 +26,8 @@ async function run(label: string, cmd: () => Promise<unknown>) {
     await cmd();
   } catch {
     console.error(`\n✗ ${label} failed — push blocked.`);
-    console.error("  Fix the failure, or bypass intentionally with: git push --no-verify\n");
+    console.error("  Fix the failure, or if this is a WIP Handoff Commit (see CLAUDE.md),");
+    console.error("  bypass with: git push --no-verify\n");
     process.exit(1);
   }
 }
