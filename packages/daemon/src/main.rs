@@ -52,14 +52,17 @@ fn socket_path() -> std::path::PathBuf {
 /// so the socket is created at `0o600` from the instant it appears, then
 /// restore the prior umask — `umask` is process-global, so the narrowed
 /// window must be as short as possible and restored even on error.
+///
+/// Precondition: callers must not invoke this concurrently with another bind
+/// on the same process (`umask` is process-global, not per-thread). Both call
+/// sites in this file are safe because `main` runs exactly one of
+/// `serve_headless` / `serve_grpc` per process, before any other task binds
+/// a socket of its own.
 #[cfg(unix)]
 fn bind_uds_owner_only(sock: &std::path::Path) -> Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt;
 
-    // SAFETY: umask(2) is a plain libc call; no pointers involved. It is
-    // process-global, so this must run before any concurrent thread binds
-    // a socket of its own — true here since this runs at startup before
-    // the tokio runtime spawns other tasks.
+    // SAFETY: umask(2) is a plain libc call; no pointers involved.
     let prev_umask = unsafe { libc::umask(0o177) };
     let result = tokio::net::UnixListener::bind(sock);
     unsafe { libc::umask(prev_umask) };
