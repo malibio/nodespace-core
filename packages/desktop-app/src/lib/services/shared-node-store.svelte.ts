@@ -73,6 +73,10 @@ const coordLog = createLogger('PersistenceCoordinator');
 interface QueuedOperation {
   operation: () => Promise<void>;
   options: { mode: 'immediate' | 'debounce'; dependencies?: Array<string | (() => Promise<void>)> };
+  resolve: () => void;
+  reject: (error: Error) => void;
+  /** The queued write's own completion promise, settled by resolve/reject above. */
+  promise: Promise<void>;
 }
 
 class SimplePersistenceCoordinator {
@@ -113,23 +117,50 @@ class SimplePersistenceCoordinator {
       `hasPending=${hasPending}, isExecuting=${isExecuting}`
     );
 
-    // If an operation is already executing for this node, queue the new operation
-    // This prevents multiple concurrent database operations and OCC conflicts
-    // CRITICAL: We store the NEW operation so DELETE isn't lost when UPDATE is executing
+    // If an operation is already executing for this node, collapse the new
+    // operation into a single latest-wins pending write. It runs immediately
+    // after the in-flight write's version confirmation lands (see the
+    // `finally` block below) — never re-debounced, never re-fired per RPC
+    // round-trip. This makes a conflict-with-self structurally impossible:
+    // the queued closure always re-reads the version only after the prior
+    // write's `localNode.version` write-back has happened.
     if (isExecuting) {
-      // Queue the new operation - it will supersede any previously queued operation
-      this.queuedOperations.set(nodeId, { operation, options });
+      // Queue the new operation - it supersedes any previously queued operation
+      // (single-slot Map so DELETE isn't lost behind a re-run UPDATE, and a
+      // burst of keystrokes collapses to the single latest edit).
+      let queuedResolve: () => void = () => {};
+      let queuedReject: (error: Error) => void = () => {};
+      const queuedPromise = new Promise<void>((res, rej) => {
+        queuedResolve = res;
+        queuedReject = rej;
+      });
+      this.queuedOperations.set(nodeId, {
+        operation,
+        options,
+        resolve: queuedResolve,
+        reject: queuedReject,
+        promise: queuedPromise
+      });
+      // Also register a pendingOperations placeholder so flush/wait helpers
+      // (which only look at pendingOperations) see this node as outstanding
+      // even though its write is collapsed behind an in-flight RPC rather
+      // than sitting on a debounce timer. `operation()` here does NOT force
+      // early execution — it just resolves once the coordinator's own
+      // finally-chain runs the queued write after confirmation lands.
+      // resolve/reject below are dead no-ops: real settlement flows through
+      // `promise` (== queuedPromise), settled via queued.resolve/reject.
+      this.pendingOperations.set(nodeId, {
+        nodeId,
+        operation: () => queuedPromise,
+        resolve: () => {},
+        reject: () => {},
+        promise: queuedPromise,
+        timeoutId: setTimeout(() => {}, 0)
+      });
       coordLog.debug(
-        `[op#${opId}] operation already executing for ${shortNodeId}, queued new operation (mode=${options.mode})`
+        `[op#${opId}] operation already executing for ${shortNodeId}, collapsed into latest-wins pending write (mode=${options.mode})`
       );
-      // Return a promise that resolves when the current operation completes
-      // The queued operation will run automatically after completion
-      const existingPending = this.pendingOperations.get(nodeId);
-      if (existingPending) {
-        return { promise: existingPending.promise };
-      }
-      // Fallback: return immediately resolved promise
-      return { promise: Promise.resolve() };
+      return { promise: queuedPromise };
     }
 
     // Cancel existing pending operation for this node (only if not executing)
@@ -142,15 +173,20 @@ class SimplePersistenceCoordinator {
       reject = rej;
     });
 
-    const executeOperation = async () => {
+    const runOperation = async (
+      op: () => Promise<void>,
+      deps: Array<string | (() => Promise<void>)> | undefined,
+      onDone: () => void,
+      onError: (error: Error) => void
+    ) => {
       // Mark as executing
       this.executingOperations.add(nodeId);
       coordLog.debug(`[op#${opId}] executeOperation() starting for ${shortNodeId}`);
 
       try {
         // Wait for dependencies if any
-        if (options.dependencies) {
-          for (const dep of options.dependencies) {
+        if (deps) {
+          for (const dep of deps) {
             if (typeof dep === 'function') {
               await dep();
             } else {
@@ -163,49 +199,60 @@ class SimplePersistenceCoordinator {
           }
         }
 
-        await operation();
+        await op();
         coordLog.debug(`[op#${opId}] executeOperation() completed for ${shortNodeId}`);
-        resolve();
+        onDone();
       } catch (error) {
-        coordLog.debug(`[op#${opId}] executeOperation() failed for ${shortNodeId}: ${error}`);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        const err = error instanceof Error ? error : new Error(String(error));
+        coordLog.debug(`[op#${opId}] executeOperation() failed for ${shortNodeId}: ${err}`);
+        onError(err);
       } finally {
         this.pendingOperations.delete(nodeId);
 
         // Check for a queued operation BEFORE clearing executingOperations so
         // that hasPending() returns true with no gap. A WatchNodes setNode
-        // arriving between "execution done" and "queued op re-scheduled" would
+        // arriving between "execution done" and "queued op taking over" would
         // otherwise see hasPending=false and clobber the optimistic store.
         const queued = this.queuedOperations.get(nodeId);
         if (queued) {
           this.queuedOperations.delete(nodeId);
           // Re-register in pendingOperations immediately so hasPending() stays
-          // true until persist() takes over when the setTimeout fires.
-          const placeholderPromise = Promise.resolve();
+          // true until the queued write actually starts below. `promise` is
+          // the queued write's OWN completion promise (already registered at
+          // queue time) so waitForPersistence()/flush callers awaiting
+          // `pending.promise` block on the actual queued write, not resolve
+          // prematurely.
+          // resolve/reject below are dead no-ops: real settlement flows
+          // through `promise` (== queued.promise), settled via runOperation's
+          // onDone/onError, which are queued.resolve/reject.
           this.pendingOperations.set(nodeId, {
             nodeId,
-            operation: queued.operation,
+            operation: () => runOperation(queued.operation, queued.options.dependencies, queued.resolve, queued.reject),
             resolve: () => {},
             reject: () => {},
-            promise: placeholderPromise,
+            promise: queued.promise,
             timeoutId: setTimeout(() => {}, 0),
           });
           coordLog.debug(
-            `[op#${opId}] queued operation re-registered as pending for ${shortNodeId} (mode=${queued.options.mode})`
+            `[op#${opId}] queued operation taking over for ${shortNodeId} (mode=${queued.options.mode})`
           );
         }
 
         this.executingOperations.delete(nodeId);
 
         if (queued) {
-          // Execute the queued operation - use setTimeout to avoid stack overflow
-          // CRITICAL: Use the QUEUED operation, not the original one
-          setTimeout(() => {
-            this.persist(nodeId, queued.operation, queued.options);
-          }, 0);
+          // Run the queued write now that this write's version confirmation
+          // has landed — deferred via microtask (not setTimeout/debounce) to
+          // avoid unbounded stack growth while still running as soon as
+          // possible after confirmation, never re-debounced.
+          void Promise.resolve().then(() => {
+            void runOperation(queued.operation, queued.options.dependencies, queued.resolve, queued.reject);
+          });
         }
       }
     };
+
+    const executeOperation = () => runOperation(operation, options.dependencies, resolve, reject);
 
     if (options.mode === 'immediate') {
       coordLog.debug(`[op#${opId}] scheduling IMMEDIATE for ${shortNodeId}`);
@@ -256,11 +303,23 @@ class SimplePersistenceCoordinator {
 
   /**
    * Clear any queued operation for a node (e.g., after OCC conflict to prevent stale retries)
+   *
+   * CRITICAL: Must settle the queued op's promise and drop its pendingOperations
+   * placeholder here. Both were registered at queue time (see `persist()`), and
+   * without this, discarding the queue entry mid-flight leaves that promise
+   * unsettled forever and hasPending(nodeId) stuck `true` — silently blocking
+   * database broadcasts for this node and hanging any flush/wait call on it.
    */
   clearQueued(nodeId: string): void {
-    if (this.queuedOperations.has(nodeId)) {
+    const queued = this.queuedOperations.get(nodeId);
+    if (queued) {
       coordLog.debug(`Cleared queued operation for ${nodeId.substring(0, 8)} (OCC conflict)`);
       this.queuedOperations.delete(nodeId);
+      queued.reject(new OperationCancelledError('Queued write cancelled: prior write hit an OCC conflict'));
+      const pending = this.pendingOperations.get(nodeId);
+      if (pending && pending.promise === queued.promise) {
+        this.pendingOperations.delete(nodeId);
+      }
     }
   }
 
@@ -412,11 +471,21 @@ class SimplePersistenceCoordinator {
    * @returns Set of node IDs that failed to persist
    */
   async flushAll(timeoutMs = 5000): Promise<Set<string>> {
-    const allNodeIds = Array.from(this.pendingOperations.keys());
-    if (allNodeIds.length === 0) {
+    // Include nodes that are mid-RPC (executingOperations) or that have a
+    // collapsed latest-wins write waiting behind one (queuedOperations), not
+    // just nodes with a debounce timer still pending. Otherwise a node whose
+    // write is in flight — with a serial-writer follow-up queued behind it —
+    // is invisible to this snapshot and flushAll() returns before either
+    // write actually lands.
+    const allNodeIds = new Set<string>([
+      ...this.pendingOperations.keys(),
+      ...this.executingOperations,
+      ...this.queuedOperations.keys()
+    ]);
+    if (allNodeIds.size === 0) {
       return new Set();
     }
-    return this.flushAndWaitForNodes(allNodeIds, timeoutMs);
+    return this.flushAndWaitForNodes(Array.from(allNodeIds), timeoutMs);
   }
 }
 
