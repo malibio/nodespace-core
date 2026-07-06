@@ -23,6 +23,7 @@
 //! as unused — `-D warnings` in `rust:lint` would otherwise hard-fail on
 //! that per-binary view.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -52,7 +53,7 @@ impl SpawnedDaemon {
         let binary = resolve_daemon_binary();
         tracing::info!(binary = %binary.display(), "spawning nodespaced for readiness test");
 
-        let child = Command::new(&binary)
+        let mut child = Command::new(&binary)
             .env("NODESPACED_SOCKET", &socket_path)
             .env("NODESPACED_DB_PATH", &db_path)
             .env("NODESPACED_HEADLESS", "1")
@@ -63,12 +64,46 @@ impl SpawnedDaemon {
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", binary.display()));
 
+        // MUST drain both pipes continuously: `Stdio::piped()` gives each a
+        // small OS pipe buffer (~64KB), and llama.cpp's own stderr logging
+        // (Metal kernel compilation alone is dozens of lines per model load,
+        // outside the `tracing`/`RUST_LOG` filter entirely) fills that buffer
+        // during any test that loads a real model. Once full, the daemon
+        // blocks on its next write() call and the whole test hangs forever —
+        // this is not hypothetical, it reproduced directly while writing the
+        // ai-chat integration test. E2E_VERBOSE prints instead of discarding,
+        // matching the TypeScript harness's same-named escape hatch.
+        let verbose = std::env::var_os("E2E_VERBOSE").is_some();
+        if let Some(stdout) = child.stdout.take() {
+            spawn_drain_thread(stdout, "stdout", verbose);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_drain_thread(stderr, "stderr", verbose);
+        }
+
         Self {
             child,
             socket_path,
             _tmp_dir: tmp_dir,
         }
     }
+}
+
+/// Continuously read `pipe` to EOF on a background thread, either discarding
+/// it or echoing it line-by-line to this process's own stderr under
+/// `E2E_VERBOSE`. Must run for the daemon's entire lifetime — dropping the
+/// thread (not reading to EOF) reintroduces the exact deadlock this exists
+/// to prevent.
+fn spawn_drain_thread(pipe: impl Read + Send + 'static, label: &'static str, verbose: bool) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(pipe);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            if verbose {
+                eprintln!("[nodespaced {label}] {line}");
+            }
+        }
+    });
 }
 
 impl Drop for SpawnedDaemon {

@@ -75,7 +75,9 @@ async fn task_tri_state_update_clear_set_no_change_matches_the_http_adapter_cont
     .expect("update_task_node (set) failed");
     assert_eq!(updated["assignee"], json!("alice"));
     assert_eq!(updated["status"], json!("in_progress"));
-    let version_after_set = updated["version"].as_i64().expect("version must be a number");
+    let version_after_set = updated["version"]
+        .as_i64()
+        .expect("version must be a number");
 
     // Clear: assignee -> None must round-trip to "no assignee", not the
     // literal string "null" or an unset-vs-cleared ambiguity — the exact
