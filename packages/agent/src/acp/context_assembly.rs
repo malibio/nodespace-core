@@ -49,9 +49,52 @@ the nodes you (the agent) have been given and the immediate graph context
 around them. Treat the sections below as the authoritative starting point.
 ";
 
-/// Shared tool list included in every agent's activation section.
-const TOOLS_LIST: &str = "Tools available: `nodespace_search_semantic`, `nodespace_get_node`, \
-`nodespace_create_node`, `nodespace_update_node`, `nodespace_get_children`";
+/// A tool exposed to external PTY-spawned agents via the `packages/skill/shims/*`
+/// CLI shims (distinct from the in-process local agent's `Tool` enum in
+/// `local_agent::tools` — external agents call the `nodespace` CLI, not the
+/// local llama.cpp tool executor).
+struct ShimTool {
+    /// Wire name used by every shim (`nodespace-tools.json`, `nodespace-hook.ts`,
+    /// `nodespace-plugin.ts`). Changing this must be mirrored in all four shim files.
+    name: &'static str,
+    description: &'static str,
+}
+
+/// Canonical registry of tools implemented by every shim in `packages/skill/shims/`.
+/// [`tools_list`] and the shim-name assertion test derive from this — keep it in
+/// sync with the shim implementations, not the other way around.
+const SHIM_TOOLS: &[ShimTool] = &[
+    ShimTool {
+        name: "nodespace_search_semantic",
+        description: "Search the NodeSpace knowledge graph using natural language.",
+    },
+    ShimTool {
+        name: "nodespace_get_node",
+        description: "Fetch a single NodeSpace node by its ID.",
+    },
+    ShimTool {
+        name: "nodespace_create_node",
+        description: "Create a new node in the NodeSpace knowledge graph.",
+    },
+    ShimTool {
+        name: "nodespace_update_node",
+        description: "Update the content of an existing NodeSpace node.",
+    },
+    ShimTool {
+        name: "nodespace_get_children",
+        description: "List the direct children of a NodeSpace node.",
+    },
+];
+
+/// Shared tool list included in every agent's activation section, generated
+/// from [`SHIM_TOOLS`].
+fn tools_list() -> String {
+    let mut section = String::from("Tools available:\n");
+    for tool in SHIM_TOOLS {
+        section.push_str(&format!("- `{}`: {}\n", tool.name, tool.description));
+    }
+    section
+}
 
 /// Build the markdown section appended to the context file when NodeSpace tools are registered.
 ///
@@ -73,8 +116,7 @@ fn tools_section(agent_type: AgentType) -> String {
         );
     }
 
-    section.push_str(TOOLS_LIST);
-    section.push('\n');
+    section.push_str(&tools_list());
     section
 }
 
@@ -915,7 +957,7 @@ mod tests {
     // ---- tools section in context file ------------------------------------
 
     #[test]
-    fn tools_section_mentions_all_five_tool_names() {
+    fn tools_section_mentions_every_shim_tool_name() {
         for agent_type in [
             AgentType::ClaudeCode,
             AgentType::Codex,
@@ -924,21 +966,51 @@ mod tests {
             AgentType::OpenCode,
         ] {
             let section = tools_section(agent_type);
-            for tool in [
-                "nodespace_search_semantic",
-                "nodespace_get_node",
-                "nodespace_create_node",
-                "nodespace_update_node",
-                "nodespace_get_children",
-            ] {
+            for tool in SHIM_TOOLS {
                 assert!(
-                    section.contains(tool),
+                    section.contains(tool.name),
                     "tools_section({:?}) missing tool: {}",
                     agent_type,
-                    tool
+                    tool.name
                 );
             }
         }
+    }
+
+    /// Ties `SHIM_TOOLS` to the actual Gemini shim manifest — the one shim format
+    /// that is machine-readable JSON rather than embedded in a `.ts` file. If a
+    /// tool is renamed/added/removed in the shims without updating `SHIM_TOOLS`
+    /// (or vice versa), this test catches the drift.
+    #[test]
+    fn shim_tools_match_gemini_manifest() {
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../skill/shims/gemini/nodespace-tools.json");
+        let manifest_text = std::fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|e| panic!("failed to read {:?}: {}", manifest_path, e));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_text).expect("nodespace-tools.json must be valid JSON");
+
+        let manifest_tools: std::collections::HashMap<&str, &str> = manifest["tools"]
+            .as_array()
+            .expect("nodespace-tools.json must have a top-level \"tools\" array")
+            .iter()
+            .map(|t| {
+                let name = t["name"].as_str().expect("tool entry must have a \"name\"");
+                let description = t["description"]
+                    .as_str()
+                    .expect("tool entry must have a \"description\"");
+                (name, description)
+            })
+            .collect();
+
+        let registry_tools: std::collections::HashMap<&str, &str> =
+            SHIM_TOOLS.iter().map(|t| (t.name, t.description)).collect();
+
+        assert_eq!(
+            manifest_tools, registry_tools,
+            "SHIM_TOOLS in context_assembly.rs has drifted from \
+             packages/skill/shims/gemini/nodespace-tools.json"
+        );
     }
 
     #[test]
