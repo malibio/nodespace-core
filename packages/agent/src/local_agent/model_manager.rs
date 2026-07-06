@@ -45,16 +45,12 @@ struct CatalogEntry {
     size_bytes: u64,
     quantization: &'static str,
     url: &'static str,
-    /// SHA-256 hash for verification, lowercase hex.
-    ///
-    /// **Policy**: an empty string explicitly skips verification, used only
-    /// for catalog entries served from official, tamper-evident HuggingFace
-    /// repos (Mistral AI's `mistralai/...` and the llama.cpp team's
-    /// `ggml-org/...`). Both rely on HF Xet storage, which serves files as
-    /// content-addressed chunks; a tampered upload would change the chunk
-    /// hashes, so an additional file-level SHA-256 check would be redundant.
-    /// For any unofficial or unverified source, populate this with the
-    /// expected hash and `perform_download` will enforce it.
+    /// SHA-256 hash of the file, lowercase hex, as reported by HuggingFace's
+    /// LFS metadata for the pinned commit in `url`. Every catalog entry must
+    /// carry a real hash -- `perform_download` treats an empty string as a
+    /// hard configuration error, not an opt-out. Re-derive with:
+    /// `curl -s "https://huggingface.co/api/models/<org>/<repo>?blobs=true"`
+    /// and read the `lfs.sha256` field for the target file.
     sha256: &'static str,
     context_window: u32,
     default_temperature: f32,
@@ -74,8 +70,8 @@ const MINISTRAL_3B: CatalogEntry = CatalogEntry {
     filename: "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
     size_bytes: 2_147_023_008, // ~2.1 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official Mistral repo, Xet storage
+    url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/eb599d408350ea2bb60452cb86be7c7b2fc28227/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+    sha256: "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: None, // F16 — KV cache is not the bottleneck at 3B
@@ -91,8 +87,8 @@ const MINISTRAL_8B: CatalogEntry = CatalogEntry {
     filename: "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
     size_bytes: 5_198_911_904, // ~5.2 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official Mistral repo, Xet storage
+    url: "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/0102285ad796bd99af90f58de616092e5630e970/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+    sha256: "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: None, // F16 — KV cache is not the bottleneck at 8B
@@ -108,10 +104,10 @@ const MINISTRAL_14B: CatalogEntry = CatalogEntry {
     family: ModelFamily::Ministral,
     name: "Ministral 3 14B Instruct Q4_K_M",
     filename: "Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
-    size_bytes: 8_835_080_032, // ~8.2 GB
+    size_bytes: 8_239_593_024, // ~7.7 GB (verified via HF LFS metadata)
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official Mistral repo, Xet storage
+    url: "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/74fac473c43357d7fb2671713608183cc72496d0/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
+    sha256: "824e0f3373e69b84f2cae46fdcb9bd1ebc6ab3bfc7acc125d818b7b8178cc613",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
@@ -128,8 +124,8 @@ const QWEN3_8B: CatalogEntry = CatalogEntry {
     filename: "Qwen3-8B-Q4_K_M.gguf",
     size_bytes: 5_027_783_872, // ~4.7 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    url: "https://huggingface.co/ggml-org/Qwen3-8B-GGUF/resolve/2473489dc243ccaffb4ce569c55bf1df66b2088f/Qwen3-8B-Q4_K_M.gguf",
+    sha256: "a67d87633b5f5f191a5bd11e6d37cab18b9ce3d4a6af6861561e8a767352080b",
     context_window: 32_768,
     default_temperature: 0.6,
     type_k: None,
@@ -146,8 +142,8 @@ const QWEN35_9B: CatalogEntry = CatalogEntry {
     filename: "Qwen3.5-9B-Q4_K_M.gguf",
     size_bytes: 5_680_522_464, // ~5.3 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
-    sha256: "", // Unsloth repo — policy exception, trial only; populate hash before promoting
+    url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+    sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
     context_window: 32_768,
     default_temperature: 0.6,
     type_k: None,
@@ -188,12 +184,8 @@ const ORNITH_1_9B: CatalogEntry = CatalogEntry {
     // NOTE: org is "deepreinforce-ai" (lowercase, hyphenated) -- NOT "DeepReinforce".
     // The original URL used the wrong casing/org name and 404/401'd; verified this
     // one resolves via `curl -sIL` before committing.
-    url: "https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF/resolve/main/ornith-1.0-9b-Q4_K_M.gguf",
-    // Policy exception: deepreinforce-ai is not an official ggml-org/mistralai repo,
-    // so the empty-string skip-verification policy does not strictly apply.
-    // Acceptable here because this is a trial-only, user-selectable entry (#1465);
-    // populate the SHA-256 from the model card before promoting to a default.
-    sha256: "",
+    url: "https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF/resolve/3296bc7a404871a72ac3f1903f561459c09b5c17/ornith-1.0-9b-Q4_K_M.gguf",
+    sha256: "5720d1f671b4996481274fffe01868c3c36e87c135cc8538471cc7bd6087b106",
     context_window: 32_768,
     default_temperature: 0.6,
     type_k: None, // F16 — recurrent SSM layers keep KV cache small at this size
@@ -211,8 +203,8 @@ const QWEN36_35B_A3B: CatalogEntry = CatalogEntry {
     filename: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
     size_bytes: 22_134_528_992, // ~22.1 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-    sha256: "", // Unsloth repo — policy exception, trial only
+    url: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+    sha256: "ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61",
     context_window: 32_768,
     default_temperature: 0.6,
     type_k: None,
@@ -231,8 +223,8 @@ const MISTRAL_NEMO_12B: CatalogEntry = CatalogEntry {
     filename: "Mistral-Nemo-Instruct-2407.Q4_K_M.gguf",
     size_bytes: 7_477_204_928, // ~7.5 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/MaziyarPanahi/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407.Q4_K_M.gguf",
-    sha256: "", // Third-party repo but widely used; populate before promoting to default
+    url: "https://huggingface.co/MaziyarPanahi/Mistral-Nemo-Instruct-2407-GGUF/resolve/eba4e7492de28b8ab2ff44b0bb819004181b3db4/Mistral-Nemo-Instruct-2407.Q4_K_M.gguf",
+    sha256: "5964f3e6d9c17b99e3d2174022048f3ec58b12ee8fefa987888e0562d070d52e",
     context_window: 128_000,
     default_temperature: 0.3,
     type_k: None, // F16 — 7.5GB leaves plenty of headroom on 16GB
@@ -249,8 +241,8 @@ const MISTRAL_SMALL_3_2: CatalogEntry = CatalogEntry {
     filename: "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
     size_bytes: 14_333_922_848, // ~13.4 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/main/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
-    sha256: "", // Unsloth repo — policy exception; populate before promoting to default
+    url: "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/resolve/b750ec2299225e492f1bd27cab88a0a595fa848f/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf",
+    sha256: "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
@@ -267,8 +259,8 @@ const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
     filename: "gemma-4-E4B-it-Q4_K_M.gguf",
     size_bytes: 5_335_289_824, // ~5.0 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    url: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/2714b5519c6c3516b1000e7c5e1eba998dfe1fe8/gemma-4-E4B-it-Q4_K_M.gguf",
+    sha256: "90ce98129eb3e8cc57e62433d500c97c624b1e3af1fcc85dd3b55ad7e0313e9f",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: None, // F16 — KV cache headroom adequate at E4B weight size
@@ -286,8 +278,8 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     filename: "gemma-4-31B-it-Q4_K_M.gguf",
     size_bytes: 18_687_061_792, // ~18.7 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    url: "https://huggingface.co/ggml-org/gemma-4-31B-it-GGUF/resolve/fb5801c702a472691c6eba168f28af79a076fbe9/gemma-4-31B-it-Q4_K_M.gguf",
+    sha256: "4f369f8fe0e1bedc5caee9abb89316887f548f80f3035398a5d222a737e699e6",
     context_window: 32_768,
     default_temperature: 0.3,
     // Q8_0 cuts the 32K KV cache from ~10GB (F16) to ~5GB, making 31B viable
@@ -308,8 +300,8 @@ const GEMMA_4_12B: CatalogEntry = CatalogEntry {
     filename: "gemma-4-12B-it-Q4_K_M.gguf",
     size_bytes: 7_381_382_048, // ~7.4 GB
     quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12B-it-Q4_K_M.gguf",
-    sha256: "", // Skip verification — official ggml-org repo (llama.cpp team), Xet storage
+    url: "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/44ee90c4b61e888ac5b318a54ec7a94df61e9cd7/gemma-4-12B-it-Q4_K_M.gguf",
+    sha256: "1278394b693672ac2799eadc9a83fd98259a6a88a40acfb1dcaa6c6fc895a606",
     context_window: 32_768,
     default_temperature: 0.3,
     // Q8_0 cuts the 32K KV cache from ~5GB (F16) to ~2.5GB, leaving enough
@@ -321,7 +313,7 @@ const GEMMA_4_12B: CatalogEntry = CatalogEntry {
 
 /// Gemma 4 12B (Unsloth) -- April 11 updated GGUF with corrected chat template.
 /// The ggml-org GGUF has `<turn|>` not marked as EOG, causing generation to
-/// never stop after tool calls. Unsloth's re-upload fixes this. Trial only (#1329).
+/// never stop after tool calls. Unsloth's re-upload fixes this. Trial only.
 const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
     id: "gemma-4-12b-unsloth-q4km",
     family: ModelFamily::Gemma4,
@@ -329,13 +321,8 @@ const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
     filename: "gemma-4-12b-it-unsloth-Q4_K_M.gguf",
     size_bytes: 7_121_860_000,
     quantization: "Q4_K_M",
-    url:
-        "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
-    // Policy exception: Unsloth is not an official ggml-org/mistralai repo so the
-    // empty-string skip-verification policy does not strictly apply. Acceptable here
-    // because this is a trial-only entry (#1329) on a non-default model; populate the
-    // SHA-256 from the Unsloth model card before promoting to a default catalog entry.
-    sha256: "",
+    url: "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/3249fa54d5efa384afc552cc6700ad091efd5c39/gemma-4-12b-it-Q4_K_M.gguf",
+    sha256: "43fec98c5102b1c446b4ddd0a9439f1db3a2e1f2e0b8cd143ce1ea619a9403d6",
     context_window: 32_768,
     default_temperature: 0.3,
     type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
@@ -591,6 +578,17 @@ impl ModelManager for GgufModelManager {
 
     async fn download(&self, model_id: &str) -> Result<(), ModelError> {
         let entry = find_catalog_entry(model_id)?;
+
+        // A missing SHA-256 is a catalog configuration error: every entry
+        // must carry a verifiable hash, so refuse to even start the download
+        // rather than fetching multiple GB and only failing verification at
+        // the end.
+        if entry.sha256.is_empty() {
+            return Err(ModelError::VerificationFailed(format!(
+                "catalog entry for '{}' has no SHA-256 configured",
+                model_id
+            )));
+        }
 
         // Check current status
         {
@@ -1018,21 +1016,27 @@ async fn perform_download(params: DownloadParams) -> Result<(), ModelError> {
         s.insert(model_id.clone(), ModelStatus::Verifying);
     }
 
-    // Stream-verify SHA-256 (skip if hash is empty)
+    // Stream-verify SHA-256. An empty expected hash is a catalog configuration
+    // error, not an opt-out -- `find_catalog_entry` rejects it before a
+    // download is ever started, so reaching this point with an empty hash
+    // means the catalog itself is misconfigured.
     if expected_sha256.is_empty() {
-        tracing::info!("SHA-256 verification skipped for '{}'", model_id);
-    } else {
-        let computed_hash = sha256_file(&partial_path).await?;
-        if computed_hash != expected_sha256 {
-            // Delete corrupted file
-            let _ = tokio::fs::remove_file(&partial_path).await;
-            return Err(ModelError::VerificationFailed(format!(
-                "SHA-256 mismatch for '{}': expected {}, got {}",
-                model_id, expected_sha256, computed_hash
-            )));
-        }
-        tracing::info!("SHA-256 verified for '{}'", model_id);
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(ModelError::VerificationFailed(format!(
+            "catalog entry for '{}' has no SHA-256 configured",
+            model_id
+        )));
     }
+    let computed_hash = sha256_file(&partial_path).await?;
+    if computed_hash != expected_sha256 {
+        // Delete corrupted file
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(ModelError::VerificationFailed(format!(
+            "SHA-256 mismatch for '{}': expected {}, got {}",
+            model_id, expected_sha256, computed_hash
+        )));
+    }
+    tracing::info!("SHA-256 verified for '{}'", model_id);
 
     // Rename partial to final
     tokio::fs::rename(&partial_path, &final_path)
@@ -1208,12 +1212,63 @@ mod tests {
         assert_eq!(m3b.family, ModelFamily::Ministral);
         assert_eq!(m3b.quantization, "Q4_K_M");
         assert!(m3b.url.as_ref().is_some_and(|u| !u.is_empty()));
-        // sha256 may be empty when verification is skipped (official repos)
+        assert!(m3b.sha256.as_ref().is_some_and(|h| h.len() == 64));
         assert!(m3b.size_bytes > 0);
         assert_eq!(m3b.min_memory_gb, 8);
 
         let m8b = models.iter().find(|m| m.id == "ministral-8b-q4km").unwrap();
         assert_eq!(m8b.min_memory_gb, 16);
+    }
+
+    #[tokio::test]
+    async fn every_catalog_entry_has_a_verifiable_sha256() {
+        let (mgr, _tmp) = test_manager();
+        let models = mgr.list().await.unwrap();
+        for m in &models {
+            let hash = m.sha256.as_deref().unwrap_or_default();
+            assert_eq!(
+                hash.len(),
+                64,
+                "model '{}' has an invalid/missing sha256: {:?}",
+                m.id,
+                m.sha256
+            );
+            assert!(
+                hash.chars().all(|c| c.is_ascii_hexdigit()),
+                "model '{}' sha256 is not lowercase hex: {}",
+                m.id,
+                hash
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_catalog_entry_pins_a_commit_not_a_moving_ref() {
+        let (mgr, _tmp) = test_manager();
+        let models = mgr.list().await.unwrap();
+        for m in &models {
+            let url = m.url.as_deref().unwrap_or_default();
+            assert!(
+                !url.contains("/resolve/main/"),
+                "model '{}' url pins a moving ref instead of a commit: {}",
+                m.id,
+                url
+            );
+        }
+    }
+
+    #[test]
+    fn no_catalog_entry_has_an_empty_sha256() {
+        // download() hard-errors on an empty hash before starting the
+        // transfer; this asserts the catalog never actually reaches that
+        // guard in practice.
+        for entry in CATALOG {
+            assert!(
+                !entry.sha256.is_empty(),
+                "catalog entry '{}' must carry a sha256",
+                entry.id
+            );
+        }
     }
 
     #[tokio::test]
