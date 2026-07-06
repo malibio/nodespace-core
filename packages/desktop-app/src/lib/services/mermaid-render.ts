@@ -100,7 +100,10 @@ function getDOMPurify() {
   // DOMPurify treats `style` as a URI-safe attribute and does not parse its CSS content, so
   // it won't strip a javascript: URI hidden inside url(...) in an inline style. Mermaid relies
   // on inline styles for theming, so we can't forbid the attribute outright — scrub dangerous
-  // CSS constructs from it directly instead.
+  // CSS constructs from it directly instead. Known gap: CSS backslash-escapes/whitespace
+  // splicing (e.g. "jav\61script:") can obfuscate past this regex. Accepted for now since the
+  // app's CSP (script-src 'self', object-src 'none') already blocks javascript: URIs from
+  // executing in any modern webview — revisit if that CSP is ever relaxed.
   purify.addHook('uponSanitizeAttribute', (_node, data) => {
     if (data.attrName === 'style') {
       data.attrValue = data.attrValue.replace(/(?:javascript|vbscript):/gi, '').replace(/expression\s*\(/gi, '');
