@@ -44,6 +44,38 @@ fn socket_path() -> std::path::PathBuf {
         .join("daemon.sock")
 }
 
+/// Binds a Unix domain socket with no window where it is exposed at the
+/// ambient umask (ADR-052 §3). `UnixListener::bind` creates the socket file
+/// honoring the process umask, so a plain `bind` then `set_permissions` leaves
+/// the socket briefly group/other-reachable if the umask is permissive. We
+/// narrow the umask to `0o177` (owner rw only) for the duration of the bind
+/// so the socket is created at `0o600` from the instant it appears, then
+/// restore the prior umask — `umask` is process-global, so the narrowed
+/// window must be as short as possible and restored even on error.
+///
+/// Precondition: callers must not invoke this concurrently with another bind
+/// on the same process (`umask` is process-global, not per-thread). Both call
+/// sites in this file are safe because `main` runs exactly one of
+/// `serve_headless` / `serve_grpc` per process, before any other task binds
+/// a socket of its own.
+#[cfg(unix)]
+fn bind_uds_owner_only(sock: &std::path::Path) -> Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: umask(2) is a plain libc call; no pointers involved.
+    let prev_umask = unsafe { libc::umask(0o177) };
+    let result = tokio::net::UnixListener::bind(sock);
+    unsafe { libc::umask(prev_umask) };
+
+    let listener =
+        result.with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
+    // Defense-in-depth: the umask already guarantees 0o600 at creation, but
+    // set it explicitly in case the umask was somehow not honored.
+    std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
+    Ok(listener)
+}
+
 #[cfg(windows)]
 fn pipe_name() -> String {
     if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
@@ -133,8 +165,6 @@ fn edition() -> &'static str {
 /// no tray.
 #[cfg(unix)]
 async fn serve_headless() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
     let sock = socket_path();
@@ -152,10 +182,7 @@ async fn serve_headless() -> Result<()> {
             .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
     }
     let _ = tokio::fs::remove_file(&sock).await;
-    let listener = UnixListener::bind(&sock)
-        .with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
-    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
+    let listener = bind_uds_owner_only(&sock)?;
 
     tracing::info!(sock = %sock.display(), "gRPC server listening");
 
@@ -182,8 +209,6 @@ async fn serve_headless() -> Result<()> {
 /// daemon without going through the menu.
 #[cfg(unix)]
 async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
     let sock = socket_path();
@@ -202,10 +227,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
             .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
     }
     let _ = tokio::fs::remove_file(&sock).await;
-    let listener = UnixListener::bind(&sock)
-        .with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
-    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
+    let listener = bind_uds_owner_only(&sock)?;
 
     let shutdown_controller = controller.clone();
     let combined_shutdown = async move {
@@ -686,4 +708,48 @@ fn install_shutdown_handler() -> Result<impl std::future::Future<Output = ()>> {
             Err(e) => tracing::error!(error = %e, "ctrl_c handler failed; shutting down"),
         }
     })
+}
+
+#[cfg(all(test, unix))]
+mod uds_permission_tests {
+    use super::bind_uds_owner_only;
+
+    /// `umask` is process-global, so both assertions run in one test to avoid
+    /// racing against a second test thread mutating it concurrently.
+    ///
+    /// Covers: even under a permissive ambient umask (which would otherwise
+    /// yield a group/other-reachable socket), the bound socket ends up
+    /// owner-only; and the ambient umask is restored afterward so later code
+    /// in the process does not inherit the narrowed `0o177`.
+    #[tokio::test]
+    async fn bind_uds_owner_only_is_0o600_and_restores_umask() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("race-test.sock");
+
+        // SAFETY: umask(2) is a plain libc call with no pointers. This test
+        // is the sole owner of process umask mutation for its duration —
+        // no other test in this module runs concurrently with it.
+        let ambient_prev = unsafe { libc::umask(0o022) };
+        let listener = bind_uds_owner_only(&sock).expect("bind should succeed");
+        let observed = unsafe { libc::umask(ambient_prev) };
+
+        assert_eq!(
+            observed, 0o022,
+            "umask must be restored after bind, not left narrowed"
+        );
+
+        let mode = std::fs::metadata(&sock)
+            .expect("socket file should exist")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "socket must be owner-only regardless of ambient umask"
+        );
+
+        drop(listener);
+    }
 }
