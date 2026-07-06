@@ -14,6 +14,12 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import {
+  buildTaskNodeUpdatePatch,
+  encodeInsertPosition,
+  HTTP_ROUTE_PATTERNS,
+  type InsertPosition,
+} from '../../desktop-app/src/lib/services/adapter-core.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -330,7 +336,12 @@ async function handleRequest(req: Request): Promise<Response> {
         nodeType: body.nodeType ?? '',
         content: body.content ?? '',
         properties: body.properties ? JSON.stringify(body.properties) : '',
-        id: body.id ?? ''
+        id: body.id ?? '',
+        // encodeInsertPosition matches the `oneof position` in
+        // CreateNodeRequest — the same builder TauriAdapter/HttpAdapter use,
+        // so a browser-mode create-with-position can't silently drift into
+        // always-append like the legacy moveNode route did.
+        ...encodeInsertPosition(body.insertPosition as InsertPosition | null | undefined)
       };
       if (body.parentId && body.parentId !== '') request.parentId = body.parentId;
       if (body.collection && body.collection !== '') request.collection = body.collection;
@@ -346,7 +357,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id
-  const getNodeMatch = pathname.match(/^\/api\/nodes\/([^/]+)$/);
+  const getNodeMatch = pathname.match(HTTP_ROUTE_PATTERNS.getNode);
   if (method === 'GET' && getNodeMatch) {
     const nodeId = decodeURIComponent(getNodeMatch[1]);
     try {
@@ -415,31 +426,35 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // PATCH /api/tasks/:id
-  const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+  const taskMatch = pathname.match(HTTP_ROUTE_PATTERNS.updateTaskNode);
   if (method === 'PATCH' && taskMatch) {
     const nodeId = decodeURIComponent(taskMatch[1]);
     try {
       const body = await req.json() as Record<string, unknown>;
+      // buildTaskNodeUpdatePatch is the single authoritative tri-state
+      // encoder (packages/desktop-app/src/lib/services/adapter-core.ts) —
+      // absent field = no change, null = clear, value = set. Reused here so
+      // this gRPC request can't drift from what the Tauri command layer
+      // encodes for the same logical update.
+      const patch = buildTaskNodeUpdatePatch(body as {
+        status?: string;
+        priority?: string | null;
+        dueDate?: string | null;
+        assignee?: string | null;
+        startedAt?: string | null;
+        completedAt?: string | null;
+        content?: string;
+      });
       const request = {
         nodeId,
         version: body.version ?? 0,
-        status: body.status ?? null,
-        priority: body.priority !== undefined
-          ? { clear: body.priority === null, value: body.priority ?? '' }
-          : null,
-        dueDate: body.dueDate !== undefined
-          ? { clear: body.dueDate === null, value: body.dueDate ?? '' }
-          : null,
-        assignee: body.assignee !== undefined
-          ? { clear: body.assignee === null, value: body.assignee ?? '' }
-          : null,
-        startedAt: body.startedAt !== undefined
-          ? { clear: body.startedAt === null, value: body.startedAt ?? '' }
-          : null,
-        completedAt: body.completedAt !== undefined
-          ? { clear: body.completedAt === null, value: body.completedAt ?? '' }
-          : null,
-        content: body.content ?? null,
+        status: patch.status ?? null,
+        priority: patch.priority ?? null,
+        dueDate: patch.dueDate ?? null,
+        assignee: patch.assignee ?? null,
+        startedAt: patch.startedAt ?? null,
+        completedAt: patch.completedAt ?? null,
+        content: patch.content ?? null,
         properties: body.properties !== undefined ? JSON.stringify(body.properties) : null
       };
       const res = await call<typeof request, { nodeData?: ProtoNodeData }>(
@@ -454,16 +469,22 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // POST /api/nodes/:id/parent  (move node)
-  const parentMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/parent$/);
+  const parentMatch = pathname.match(HTTP_ROUTE_PATTERNS.moveNode);
   if (method === 'POST' && parentMatch) {
     const nodeId = decodeURIComponent(parentMatch[1]);
     try {
       const body = await req.json() as Record<string, unknown>;
+      // `insertAfterNodeId` predates the `oneof position` shape in
+      // MoveNodeRequest (node_service.proto) and no longer exists on the
+      // wire — the field was silently dropped by proto-loader, so a browser
+      // move-with-position always fell back to default "End" placement.
+      // encodeInsertPosition is the same builder TauriAdapter/HttpAdapter
+      // use for CreateNode, so this can't drift from what they send again.
       const request = {
         nodeId,
         version: body.version ?? 0,
         newParentId: body.parentId ?? '',
-        insertAfterNodeId: body.insertAfterNodeId ?? ''
+        ...encodeInsertPosition(body.insertPosition as InsertPosition | null | undefined)
       };
       const res = await call<typeof request, { nodeData?: ProtoNodeData }>(
         (nodeClient as unknown as Record<string, Function>).moveNode,
@@ -477,7 +498,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id/children
-  const childrenMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/children$/);
+  const childrenMatch = pathname.match(HTTP_ROUTE_PATTERNS.getChildren);
   if (method === 'GET' && childrenMatch) {
     const nodeId = decodeURIComponent(childrenMatch[1]);
     try {
@@ -492,7 +513,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id/children-tree
-  const childrenTreeMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/children-tree$/);
+  const childrenTreeMatch = pathname.match(HTTP_ROUTE_PATTERNS.getChildrenTree);
   if (method === 'GET' && childrenTreeMatch) {
     const nodeId = decodeURIComponent(childrenTreeMatch[1]);
     try {
@@ -573,7 +594,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id/mentions/outgoing
-  const outgoingMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/mentions\/outgoing$/);
+  const outgoingMatch = pathname.match(HTTP_ROUTE_PATTERNS.getOutgoingMentions);
   if (method === 'GET' && outgoingMatch) {
     const nodeId = decodeURIComponent(outgoingMatch[1]);
     try {
@@ -588,7 +609,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id/mentions/incoming
-  const incomingMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/mentions\/incoming$/);
+  const incomingMatch = pathname.match(HTTP_ROUTE_PATTERNS.getIncomingMentions);
   if (method === 'GET' && incomingMatch) {
     const nodeId = decodeURIComponent(incomingMatch[1]);
     try {
@@ -603,7 +624,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/nodes/:id/mentions/roots
-  const mentionRootsMatch = pathname.match(/^\/api\/nodes\/([^/]+)\/mentions\/roots$/);
+  const mentionRootsMatch = pathname.match(HTTP_ROUTE_PATTERNS.getMentioningContainers);
   if (method === 'GET' && mentionRootsMatch) {
     const nodeId = decodeURIComponent(mentionRootsMatch[1]);
     try {
@@ -632,7 +653,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // GET /api/schemas/:id
-  const schemaMatch = pathname.match(/^\/api\/schemas\/([^/]+)$/);
+  const schemaMatch = pathname.match(HTTP_ROUTE_PATTERNS.getSchema);
   if (method === 'GET' && schemaMatch) {
     const schemaId = decodeURIComponent(schemaMatch[1]);
     try {
