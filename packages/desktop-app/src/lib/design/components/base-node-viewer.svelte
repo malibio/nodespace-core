@@ -149,12 +149,8 @@
   });
 
   // Track the viewed node reactively for schema form display
-  // Issue #679: Now uses $derived directly since sharedNodeStore.nodes is $state
-  // IMPORTANT: Reference nodeManager._updateTrigger to establish reactivity on Map changes
-  // (Svelte 5 $state(Map) doesn't track Map.get() calls automatically)
+  // sharedNodeStore.nodes is a SvelteMap, so getNode() tracks at per-node granularity.
   const currentViewedNode = $derived.by(() => {
-    // Establish reactive dependency on node changes
-    void nodeManager._updateTrigger;
     return nodeId ? sharedNodeStore.getNode(nodeId) : null;
   });
 
@@ -180,19 +176,14 @@
   let isHeaderBeingEdited = $state(false);
 
   /**
-   * Visible nodes derived from ReactiveStructureTree + ReactiveNodeData (Issue #555)
-   *
-   * Pure reactivity via $derived - NO _updateTrigger hack needed.
-   * Falls back to sharedNodeStore during transition period (Issue #580 tracks removal).
+   * Visible nodes derived from ReactiveStructureTree + SharedNodeStore
    */
   const visibleNodesFromStores = $derived.by(() => {
     if (!nodeId) return [];
     // Reactive dependency on structure tree is automatic with $state.raw()
-    // Svelte will re-run this derived when reactiveStructureTree.children changes
-
-    // Establish reactive dependency on node content/property changes via ReactiveNodeService
-    // The _updateTrigger is incremented by SharedNodeStore.subscribeAll callback
-    void nodeManager._updateTrigger;
+    // Svelte will re-run this derived when reactiveStructureTree.children changes.
+    // Node content/property reads below go through sharedNodeStore's SvelteMap,
+    // which tracks per-node so this also re-runs on relevant node changes.
 
     // Helper function to recursively flatten visible nodes with depth
     function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {

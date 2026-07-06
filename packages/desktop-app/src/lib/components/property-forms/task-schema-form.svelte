@@ -23,7 +23,7 @@
     type EnumValue,
     isSchemaNode
   } from '$lib/types/schema-node';
-  import type { TaskNode, TaskStatus } from '$lib/types/task-node';
+  import type { TaskStatus } from '$lib/types/task-node';
   import { nodeToTaskNode } from '$lib/types/task-node';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
@@ -38,28 +38,11 @@
   let isOpen = $state(false); // Collapsed by default
   let schema = $state<SchemaNode | null>(null);
 
-  // Reactive node data - managed by effect below
-  let node = $state<TaskNode | null>(null);
-
-  // Subscribe to node changes
-  $effect(() => {
-    if (!nodeId) {
-      node = null;
-      return;
-    }
-
-    // Initial load - convert Node to TaskNode (extracts type-specific fields from properties)
+  // Reactive node data - direct read from the store's SvelteMap, converted to TaskNode
+  const node = $derived.by(() => {
+    if (!nodeId) return null;
     const rawNode = sharedNodeStore.getNode(nodeId);
-    node = rawNode?.nodeType === 'task' ? nodeToTaskNode(rawNode) : null;
-
-    // Subscribe to updates
-    const unsubscribe = sharedNodeStore.subscribe(nodeId, (updatedNode) => {
-      node = updatedNode?.nodeType === 'task' ? nodeToTaskNode(updatedNode) : null;
-    });
-
-    return () => {
-      unsubscribe();
-    };
+    return rawNode?.nodeType === 'task' ? nodeToTaskNode(rawNode) : null;
   });
 
   // Load schema for user-defined extensions

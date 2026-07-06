@@ -53,24 +53,7 @@
       }, 150);
     }
   });
-  let node = $state<Node | null>(null);
-
-  $effect(() => {
-    if (!nodeId) {
-      node = null;
-      return;
-    }
-
-    node = sharedNodeStore.getNode(nodeId) ?? null;
-
-    const unsubscribe = sharedNodeStore.subscribe(nodeId, (updatedNode) => {
-      node = updatedNode ?? null;
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  });
+  const node = $derived<Node | null>(nodeId ? (sharedNodeStore.getNode(nodeId) ?? null) : null);
 
   const fieldStats = $derived(() => {
     let filled = 0;

@@ -66,43 +66,28 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   let _rootNodeIds = $state<string[]>([]);
   const _activeNodeId = $state<string | undefined>(undefined);
 
-  // Manual reactivity trigger - incremented when SharedNodeStore updates
-  let _updateTrigger = $state(0);
-
   const contentProcessor = ContentProcessor.getInstance();
 
-  // Subscribe to SharedNodeStore changes for reactive updates
-  // Wildcard subscription - updates _updateTrigger when any node changes
-  // IMPORTANT: Call destroy() when unmounting to prevent subscription memory leak
-  let _subscriptionUnsubscribe: (() => void) | null = sharedNodeStore.subscribeAll((node) => {
-    // CRITICAL: Initialize UI state for new nodes (e.g., promoted placeholders)
-    // If UI state doesn't exist, compute depth and create default state
-    if (!_uiState[node.id]) {
-      // Compute depth using backend hierarchy queries
-      const computeDepth = (nodeId: string, visited = new Set<string>()): number => {
-        if (visited.has(nodeId)) return 0; // Prevent infinite recursion
-        visited.add(nodeId);
+  // Compute a node's depth by walking its parent chain via backend hierarchy queries.
+  function computeDepth(nodeId: string, visited = new Set<string>()): number {
+    if (visited.has(nodeId)) return 0; // Prevent infinite recursion
+    visited.add(nodeId);
 
-        const parents = sharedNodeStore.getParentsForNode(nodeId);
-        if (parents.length === 0) return 0;
-        return 1 + computeDepth(parents[0].id, visited);
-      };
+    const parents = sharedNodeStore.getParentsForNode(nodeId);
+    if (parents.length === 0) return 0;
+    return 1 + computeDepth(parents[0].id, visited);
+  }
 
-      const depth = computeDepth(node.id);
-      _uiState[node.id] = createDefaultUIState(node.id, { depth });
+  // Lazily initialize UI state for nodes not yet seen by this viewer (e.g. promoted
+  // placeholders, or nodes synced in from another window/cloud).
+  function ensureUIState(nodeId: string): NodeUIState {
+    let uiState = _uiState[nodeId];
+    if (!uiState) {
+      uiState = createDefaultUIState(nodeId, { depth: computeDepth(nodeId) });
+      _uiState[nodeId] = uiState;
     }
-
-    _updateTrigger++;
-  });
-
-  // Also recompute the rendered outline when the hierarchy TREE changes — not only
-  // on node changes. A has_child edge synced from another window or the cloud
-  // mutates structureTree but fires no SharedNodeStore node event, so without this
-  // the new nesting (e.g. an indent done elsewhere) never re-rendered here
-  // (nodespace-sync#162).
-  let _structureUnsubscribe: (() => void) | null = structureTree.onChange(() => {
-    _updateTrigger++;
-  });
+    return uiState;
+  }
 
   // NOTE: Backend now returns children pre-sorted via fractional ordering (ORDER BY order ASC)
   // No frontend sorting needed - we trust the backend's ordering
@@ -126,7 +111,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     for (const nodeId of nodeIds) {
       const node = sharedNodeStore.getNode(nodeId);
-      const uiState = _uiState[nodeId];
+      const uiState = node ? ensureUIState(nodeId) : _uiState[nodeId];
       if (node) {
         // Get children from SharedNodeStore (already sorted by backend via fractional ordering)
         const children = sharedNodeStore.getNodesForParent(nodeId).map((n) => n.id);
@@ -167,9 +152,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     inheritHeaderLevel: number;
     isPlaceholder: boolean;
   })[] {
-    void _updateTrigger; // Still track updates for reactivity
-    void _rootNodeIds; // Track root node changes
-
     let viewRoots: string[];
     if (viewParentId !== null) {
       // Get children from SharedNodeStore (already sorted by backend via fractional ordering)
@@ -425,7 +407,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           nodeId,
           ..._rootNodeIds.slice(afterNodeIndex + 1)
         ];
-        _updateTrigger++;
       }
     }
 
@@ -519,7 +500,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       skipPersistence: true
     });
 
-    _updateTrigger++;
   }
 
   function updateNodeProperties(
@@ -536,7 +516,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       viewerSource
     );
 
-    _updateTrigger++;
   }
 
   function scheduleContentProcessing(nodeId: string, content: string): void {
@@ -626,7 +605,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           ..._uiState[previousNodeId],
           expanded: true
         };
-        _updateTrigger++;
       }
     }
 
@@ -782,7 +760,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     events.hierarchyChanged();
-    _updateTrigger++;
   }
 
   // ============================================================================
@@ -838,7 +815,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     structureTree.moveInMemoryRelationship(currentParentId, targetParentId, nodeId);
 
     events.hierarchyChanged();
-    _updateTrigger++;
 
     // Check if node has been persisted to database yet
     const isNodePersisted = sharedNodeStore.isNodePersisted(nodeId);
@@ -931,7 +907,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             structureTree.moveInMemoryRelationship(targetParentId, currentParentId, nodeId);
           }
           events.hierarchyChanged();
-          _updateTrigger++;
 
           log.error('[indentNode] Failed to move node, rolled back:', error);
         }
@@ -1004,7 +979,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         }
 
         events.hierarchyChanged();
-        _updateTrigger++;
 
         // No moveOperation needed - the CREATE will include the correct parent
         return true;
@@ -1025,7 +999,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         }
 
         events.hierarchyChanged();
-        _updateTrigger++;
 
         // The in-flight CREATE will read structureTree.getParent(nodeId) and create with correct parent.
         return true;
@@ -1063,7 +1036,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     }
 
     events.hierarchyChanged();
-    _updateTrigger++;
 
     // Track move operation to prevent race conditions with subsequent indent/outdent
     // CRITICAL: Other hierarchy operations must wait for this move to complete
@@ -1300,7 +1272,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     events.nodeDeleted(nodeId);
     events.hierarchyChanged();
-    _updateTrigger++;
   }
 
   /**
@@ -1334,7 +1305,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         uiState = createDefaultUIState(nodeId, { depth, expanded });
         _uiState[nodeId] = uiState;
-        _updateTrigger++;
         events.hierarchyChanged();
         return true;
       }
@@ -1345,7 +1315,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _uiState[nodeId] = { ...uiState, expanded };
 
       events.hierarchyChanged();
-      _updateTrigger++;
 
       return true;
     } catch (error) {
@@ -1382,7 +1351,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // Only trigger UI update once if anything changed
       if (changedCount > 0) {
         events.hierarchyChanged();
-        _updateTrigger++;
       }
 
       return changedCount;
@@ -1401,7 +1369,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       _uiState[nodeId] = { ...uiState, expanded: newExpandedState };
 
       events.hierarchyChanged();
-      _updateTrigger++;
 
       return true;
     } catch (error) {
@@ -1462,31 +1429,19 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     })[] {
       return getVisibleNodesForParent(parentId);
     },
-    get _updateTrigger() {
-      return _updateTrigger;
-    },
-    // Direct access to UI state for computed properties
+    // Direct access to UI state for computed properties. Lazily initializes state
+    // for nodes not yet seen by this viewer (see ensureUIState).
     getUIState(nodeId: string) {
-      return _uiState[nodeId];
+      return sharedNodeStore.getNode(nodeId) ? ensureUIState(nodeId) : _uiState[nodeId];
     },
 
     // Lifecycle management
     /**
-     * Cleanup method to prevent subscription memory leaks.
-     * MUST be called when the service instance is no longer needed (e.g., on component unmount).
-     * Safe to call multiple times (idempotent).
-     * Failing to call this will result in subscription accumulation and unnecessary processing.
+     * No-op kept for call-site compatibility (components call this on unmount).
+     * Node data reactivity now comes directly from SharedNodeStore's SvelteMap —
+     * there is no subscription to tear down.
      */
-    destroy() {
-      if (_subscriptionUnsubscribe) {
-        _subscriptionUnsubscribe();
-        _subscriptionUnsubscribe = null;
-      }
-      if (_structureUnsubscribe) {
-        _structureUnsubscribe();
-        _structureUnsubscribe = null;
-      }
-    },
+    destroy() {},
 
     // Node operations
     findNode,
@@ -1625,7 +1580,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         _uiState[node.id] = { ..._uiState[node.id], depth };
       }
 
-      _updateTrigger++;
       events.hierarchyChanged();
     }
   };

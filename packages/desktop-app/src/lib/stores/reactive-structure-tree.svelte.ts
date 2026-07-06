@@ -24,34 +24,12 @@ export class ReactiveStructureTree {
   // so we must reassign after every mutation (see notifyChange())
   children = $state.raw(new Map<string, ChildInfo[]>());
 
-  // Explicit change subscribers. The Svelte-reactive `children` reassignment only
-  // re-renders consumers that read `children` inside a tracked scope; some consumers
-  // recompute off their own trigger (e.g. ReactiveNodeService._updateTrigger, bumped
-  // on SharedNodeStore node events — NOT on hierarchy edges). A synced has_child edge
-  // (indent/outdent from another window or the cloud) mutates the tree with no node
-  // event, so those consumers must subscribe here to recompute (nodespace-sync#162).
-  private changeSubscribers = new Set<() => void>();
-
-  /** Subscribe to any hierarchy change. Returns an unsubscribe fn. */
-  onChange(cb: () => void): () => void {
-    this.changeSubscribers.add(cb);
-    return () => this.changeSubscribers.delete(cb);
-  }
-
   /**
-   * Reassign the children map to trigger Svelte reactivity, then notify explicit
-   * subscribers.
+   * Reassign the children map to trigger Svelte reactivity.
    * $state.raw() only tracks reassignment, not in-place Map mutations.
    */
   private notifyChange() {
     this.children = new Map(this.children);
-    for (const cb of this.changeSubscribers) {
-      try {
-        cb();
-      } catch {
-        /* a misbehaving subscriber must not break the tree */
-      }
-    }
   }
 
   /**

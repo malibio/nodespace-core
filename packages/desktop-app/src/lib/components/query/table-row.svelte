@@ -1,12 +1,9 @@
 <!--
   TableRow - Reactive row component for TableView
 
-  Subscribes to per-node changes via sharedNodeStore.subscribe() and uses a
-  local _updateTrigger counter (same pattern as ReactiveNodeService) to force
-  Svelte to re-derive cellValues when the node is updated in another pane.
-
-  Background: Svelte 5 $state(Map) does not track Map.get() calls automatically,
-  so $derived(sharedNodeStore.getNode(id)) alone is not sufficient for reactivity.
+  Reads node data directly from sharedNodeStore, which tracks reads/writes at
+  per-node granularity (SvelteMap), so cellValues/nodeContent/nodeExists
+  re-derive automatically when this row's node changes in another pane.
 -->
 
 <script lang="ts">
@@ -26,17 +23,6 @@
     onRowClick: (_nodeId: string) => void;
   } = $props();
 
-  // Manual reactivity trigger — same pattern as ReactiveNodeService._updateTrigger
-  let _updateTrigger = $state(0);
-
-  // Subscribe to this specific node's changes and increment trigger on each update
-  $effect(() => {
-    const unsubscribe = sharedNodeStore.subscribe(id, () => {
-      _updateTrigger++;
-    });
-    return unsubscribe;
-  });
-
   // Convert snake_case field name to camelCase for wire format lookups.
   // Schema field names are snake_case (e.g. due_date) but the API serializes
   // typed node fields as camelCase (e.g. dueDate) via serde rename_all.
@@ -44,9 +30,8 @@
     return name.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
   }
 
-  // Derive the node and cell values — void _updateTrigger establishes the reactive dependency
+  // Derive the node and cell values
   const cellValues = $derived.by(() => {
-    void _updateTrigger;
     const node = sharedNodeStore.getNode(id);
     const map = new Map<string, string>();
     if (!node) return map;
@@ -102,17 +87,12 @@
 
   // For title_template nodes, prefer the computed title over raw content
   const nodeContent = $derived.by(() => {
-    void _updateTrigger;
     const node = sharedNodeStore.getNode(id);
     return node?.title ?? node?.content ?? '';
   });
 
-  // Reactive existence check — void _updateTrigger ensures the guard re-evaluates
-  // when the node is deleted from the store (same pattern as cellValues/nodeContent).
-  const nodeExists = $derived.by(() => {
-    void _updateTrigger;
-    return !!sharedNodeStore.getNode(id);
-  });
+  // Reactive existence check — re-evaluates when the node is deleted from the store
+  const nodeExists = $derived(!!sharedNodeStore.getNode(id));
 </script>
 
 {#if nodeExists}
