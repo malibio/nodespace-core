@@ -257,6 +257,26 @@ export const collectionsState = createCollectionsStore();
 // ============================================================================
 
 /**
+ * Recursively prune collections that have no member nodes visible to the
+ * current user. A collection is kept if it has its own members OR any of its
+ * descendants does — so a populated collection nested under an empty parent
+ * still surfaces. Returns a new array of the surviving items (children are
+ * pruned in place on the retained items).
+ *
+ * `memberCount` is sourced from the local per-user store, so it already
+ * reflects RBAC visibility: the local DB only holds member edges the signed-in
+ * user can see. This filter therefore hides collections that are empty *for
+ * this user*, not just globally empty ones.
+ */
+function pruneEmptyCollections(items: CollectionItem[]): CollectionItem[] {
+  return items.filter((item) => {
+    const keptChildren = item.children ? pruneEmptyCollections(item.children) : [];
+    item.children = keptChildren;
+    return item.memberCount > 0 || keptChildren.length > 0;
+  });
+}
+
+/**
  * Transform flat collections into tree structure for UI display
  * Uses parentCollectionIds to build proper hierarchy
  */
@@ -308,7 +328,10 @@ export const collectionsTree = derived(collectionsData, ($data): CollectionItem[
     .map((c) => itemMap.get(c.id)!)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return topLevel;
+  // Hide collections with no member nodes visible to the current user. Keep a
+  // collection whenever it — or any descendant — has members, so populated
+  // sub-collections under an empty parent remain reachable.
+  return pruneEmptyCollections(topLevel);
 });
 
 /**
