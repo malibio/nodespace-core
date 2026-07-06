@@ -11,9 +11,17 @@
 //! `tauri::test::mock_app()`'s `App<MockRuntime>` implements — and neither
 //! needs a `WebviewWindow`. So every test uses `mock_app()` + `.manage(client)`
 //! + `.state()` to obtain a real `State<GrpcClient>`, never a hand-built one.
+//!
 //! This also means the same `app` doubles as the real event bus the
 //! optimistic-echo-race test needs (`Emitter`/`Listener`), so there is only
 //! one fixture shape, not two.
+//!
+//! This is its own crate (rather than a `mod support;` duplicated into each
+//! `tests/*.rs` integration test binary) so clippy's dead-code lint sees one
+//! compilation of these helpers used across every test file, instead of
+//! flagging whichever subset any single test binary doesn't happen to call
+//! as unused — `-D warnings` in `rust:lint` would otherwise hard-fail on
+//! that per-binary view.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -70,14 +78,14 @@ impl Drop for SpawnedDaemon {
     }
 }
 
-/// Serializes every test in this binary that connects a `GrpcClient`: the
-/// only way to point `GrpcClient::connect()` at a specific spawned daemon is
-/// the process-global `NODESPACED_SOCKET` env var (`connect()` resolves it
-/// internally; there is no per-call socket argument). Without this mutex,
-/// two `#[tokio::test]`s running concurrently — the default — can interleave
-/// their `EnvGuard::set`/restore, so a client ends up dialing whichever
-/// socket happened to be live at the moment its `connect()` future actually
-/// polled, not the daemon its own test spawned. Held across the `.await` in
+/// Serializes every test that connects a `GrpcClient`: the only way to point
+/// `GrpcClient::connect()` at a specific spawned daemon is the process-global
+/// `NODESPACED_SOCKET` env var (`connect()` resolves it internally; there is
+/// no per-call socket argument). Without this mutex, two `#[tokio::test]`s
+/// running concurrently — the default — can interleave their
+/// `EnvGuard::set`/restore, so a client ends up dialing whichever socket
+/// happened to be live at the moment its `connect()` future actually polled,
+/// not the daemon its own test spawned. Held across the `.await` in
 /// `connect()`, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
 ///
 /// `watcher::run` re-resolves `NODESPACED_SOCKET` itself (independently of
@@ -208,6 +216,7 @@ fn resolve_daemon_binary() -> PathBuf {
         tauri::utils::platform::target_triple().expect("could not determine host target triple");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let sidecar = manifest_dir
+        .join("..")
         .join("binaries")
         .join(format!("nodespaced-{triple}"));
 

@@ -1,0 +1,12 @@
+[package]
+name = "nodespace-app-test-support"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nodespace-app = { path = ".." }
+tauri = { version = "2", features = ["test"] }
+tokio = { workspace = true }
+tempfile = "3"
+tracing = "0.1"

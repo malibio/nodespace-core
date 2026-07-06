@@ -9,15 +9,13 @@
 //! before the prior write's confirmation lands would be caught here, not
 //! just hoped away.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::create_node;
 use nodespace_app_lib::commands::nodes::{update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
 use serde_json::json;
-use support::{SpawnedDaemon, TauriTestApp};
 
 fn text_input(id: &str, content: &str) -> CreateNodeInput {
     CreateNodeInput {

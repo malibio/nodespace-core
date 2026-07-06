@@ -3769,6 +3769,7 @@ dependencies = [
  "futures",
  "hyper-util",
  "libc",
+ "nodespace-app-test-support",
  "nodespace-proto",
  "nodespace-types",
  "prost 0.13.5",
@@ -3791,6 +3792,17 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "nodespace-app-test-support"
+version = "0.1.0"
+dependencies = [
+ "nodespace-app",
+ "tauri",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

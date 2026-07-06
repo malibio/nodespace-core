@@ -21,16 +21,14 @@
 //! so this test can drive the actual production function against
 //! `MockRuntime` — not a reimplementation of its forwarding logic.
 
-mod support;
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{create_node, update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
 use nodespace_app_lib::watcher;
+use nodespace_app_test_support::{hold_connect_mutex_and_socket_env, SpawnedDaemon, TauriTestApp};
 use serde_json::json;
-use support::{hold_connect_mutex_and_socket_env, SpawnedDaemon, TauriTestApp};
 use tauri::Listener;
 use tokio_util::sync::CancellationToken;
 
@@ -57,7 +55,12 @@ async fn wait_for_updates(
 ) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let matched = events.lock().unwrap().iter().filter(|id| *id == node_id).count();
+        let matched = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|id| *id == node_id)
+            .count();
         if matched >= count {
             return;
         }

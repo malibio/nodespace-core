@@ -23,12 +23,10 @@
 //! generates (see the comment on `daemon_status_body` in `lib.rs`). No
 //! Tauri mock runtime is needed to exercise it for real.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::daemon_setup::{check_daemon_socket, wait_for_daemon, DaemonStatus};
-use support::{EnvGuard, SpawnedDaemon};
+use nodespace_app_test_support::{EnvGuard, SpawnedDaemon};
 
 /// Serializes tests in this file that mutate the process-global
 /// `NODESPACED_SOCKET` env var, mirroring the single-threaded discipline

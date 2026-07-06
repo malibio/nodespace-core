@@ -11,15 +11,13 @@
 //! command functions directly, so the OCC conflict (or its absence, once
 //! calls are properly sequenced) is real, not simulated.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{
     create_node, get_children, move_node, reorder_node, CreateNodeInput, InsertPositionInput,
 };
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
 use serde_json::json;
-use support::{SpawnedDaemon, TauriTestApp};
 
 fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeInput {
     CreateNodeInput {
@@ -50,18 +48,12 @@ async fn rapid_indent_then_outdent_survives_against_a_real_daemon() {
     create_node(state.clone(), text_input(&root_id, "root", None))
         .await
         .expect("create root failed");
-    create_node(
-        state.clone(),
-        text_input(&a_id, "A", Some(root_id.clone())),
-    )
-    .await
-    .expect("create A failed");
-    create_node(
-        state.clone(),
-        text_input(&b_id, "B", Some(root_id.clone())),
-    )
-    .await
-    .expect("create B failed");
+    create_node(state.clone(), text_input(&a_id, "A", Some(root_id.clone())))
+        .await
+        .expect("create A failed");
+    create_node(state.clone(), text_input(&b_id, "B", Some(root_id.clone())))
+        .await
+        .expect("create B failed");
 
     // Indent: B becomes a child of A. move_node returns the new node,
     // whose version is the real, authoritative post-indent version.
@@ -74,7 +66,9 @@ async fn rapid_indent_then_outdent_survives_against_a_real_daemon() {
     )
     .await
     .expect("indent (move B under A) failed");
-    let version_after_indent = indented["version"].as_i64().expect("version must be a number");
+    let version_after_indent = indented["version"]
+        .as_i64()
+        .expect("version must be a number");
 
     // Outdent: B moves back under root, using the version move_node just
     // returned — the real sequencing a coordinated frontend must achieve.
@@ -147,7 +141,10 @@ async fn rapid_sibling_creation_preserves_insertion_order() {
         .iter()
         .map(|n| n["id"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(child_ids, ids, "children must preserve rapid-Enter insertion order");
+    assert_eq!(
+        child_ids, ids,
+        "children must preserve rapid-Enter insertion order"
+    );
 }
 
 /// reorder_node under concurrent load: fire off several reorder_node calls

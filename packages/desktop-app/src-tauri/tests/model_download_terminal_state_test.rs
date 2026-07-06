@@ -24,16 +24,14 @@
 //! state contract is the same regardless of how long the `downloading`
 //! phase runs.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::commands::chat_models::{
     chat_model_cancel_download, chat_model_list, chat_model_load, chat_model_unload,
 };
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
 use nodespace_proto::nodespace::DownloadModelRequest;
 use serde_json::json;
-use support::{SpawnedDaemon, TauriTestApp};
 use tokio_stream::StreamExt;
 
 const MODEL_ID: &str = "ministral-3b-q4km";
@@ -93,8 +91,13 @@ async fn chat_model_list_still_succeeds_after_a_download() {
     // list, so it won't itself appear here — that filter is a UI curation
     // concern independent of download/load capability. This only asserts the
     // command layer isn't broken by having downloaded an unexposed model.
-    let models = chat_model_list(state).await.expect("chat_model_list failed");
-    assert!(!models.is_empty(), "curated catalog list must still be non-empty");
+    let models = chat_model_list(state)
+        .await
+        .expect("chat_model_list failed");
+    assert!(
+        !models.is_empty(),
+        "curated catalog list must still be non-empty"
+    );
 }
 
 #[tokio::test]

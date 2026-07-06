@@ -59,3 +59,8 @@ tempfile = "3"
 # Cargo unifies dev-dependency features into the main build for test targets
 # but not for the release binary.
 tauri = { version = "2", features = ["test"] }
+# Shared fixtures for the ADR-048 Tauri-seam integration tests under tests/ —
+# its own crate (not a `mod support;` duplicated per test binary) so clippy's
+# dead-code lint sees one compilation used across every test file, not each
+# binary's own unused subset (see test-support/src/lib.rs's module doc).
+nodespace-app-test-support = { path = "test-support" }

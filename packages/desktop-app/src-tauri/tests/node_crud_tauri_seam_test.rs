@@ -7,15 +7,13 @@
 //! through `HttpAdapter`, but through the adapter that actually ships in the
 //! desktop build.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::CreateNodeInput;
 use nodespace_app_lib::commands::nodes::{create_node, delete_node, get_node, update_node};
 use nodespace_app_lib::types::NodeUpdate;
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
 use serde_json::json;
-use support::{SpawnedDaemon, TauriTestApp};
 
 fn text_input(id: &str, content: &str) -> CreateNodeInput {
     CreateNodeInput {

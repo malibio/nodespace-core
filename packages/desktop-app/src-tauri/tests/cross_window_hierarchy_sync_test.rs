@@ -9,13 +9,11 @@
 //! `TauriTestApp::connect` calls against the same `SpawnedDaemon` model:
 //! two independent command-layer clients, sharing nothing but the daemon.
 
-mod support;
-
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{create_node, get_children, move_node, CreateNodeInput};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
 use serde_json::json;
-use support::{SpawnedDaemon, TauriTestApp};
 
 fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeInput {
     CreateNodeInput {
@@ -66,9 +64,12 @@ async fn a_second_independent_client_observes_hierarchy_changes_made_by_the_firs
 
     // Window B moves the child to a new root; window A must observe it.
     let other_root_id = uuid::Uuid::new_v4().to_string();
-    create_node(b_state.clone(), text_input(&other_root_id, "other root", None))
-        .await
-        .expect("window B: create other root failed");
+    create_node(
+        b_state.clone(),
+        text_input(&other_root_id, "other root", None),
+    )
+    .await
+    .expect("window B: create other root failed");
 
     move_node(
         b_state.clone(),
