@@ -123,6 +123,8 @@
     <!-- Final fallback to BaseNode with key for re-rendering -->
     <!-- Fallback applies syntax stripping for known types (code-block, header, quote-block) -->
     <!-- Custom schema entities also render here (no lazy-loaded node component) -->
+    <!-- Note: on:taskStateChanged below is inert on plain BaseNode (only task-node dispatches
+         it); it fires only via the plugin-component branch above. Kept for branch symmetry. -->
     {@const nodeSlashCmd = pluginRegistry.findSlashCommand(node.nodeType)}
     {@const nodeHasTitleTemplate = !!nodeSlashCmd?.hasTitleTemplate}
     {@const nodeTitleDisplay = nodeHasTitleTemplate
