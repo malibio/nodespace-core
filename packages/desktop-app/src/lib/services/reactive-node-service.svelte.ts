@@ -1432,9 +1432,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     })[] {
       return getVisibleNodesForParent(parentId);
     },
-    // Direct access to UI state for computed properties. Lazily initializes state
-    // for nodes not yet seen by this viewer (see peekUIState). PURE read — safe to call
-    // from $derived/template render paths; returns a computed default without persisting.
+    // Direct pure read of a node's UI state for computed properties — safe to call from
+    // $derived/template render paths. For a node not yet seen by this viewer it returns a
+    // computed default WITHOUT persisting it (see peekUIState); undefined only when the
+    // node isn't in the store.
     getUIState(nodeId: string) {
       return sharedNodeStore.getNode(nodeId) ? peekUIState(nodeId) : _uiState[nodeId];
     },

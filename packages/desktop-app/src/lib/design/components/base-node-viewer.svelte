@@ -1057,6 +1057,9 @@
     } else {
       // Defer the focus + content/type writes to next tick: run synchronously they
       // mutate $state during the keystroke's render flush and throw state_unsafe_mutation.
+      // No explicit hasNode guard needed here (unlike the slash handler): these route
+      // through nodeManager.updateNodeContent/updateNodeType, which internally
+      // `if (!node) return` when node.id was promoted/removed since the event fired.
       tick().then(() => {
         focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
@@ -1202,13 +1205,13 @@
       }
       // Defer the focus + store writes to next tick: run synchronously they mutate
       // $state during the keystroke's render flush and throw state_unsafe_mutation.
-      // Guard updateNode with hasNode — if node.id was promoted/removed since the
-      // event fired, updateNode would log "Cannot update non-existent node".
+      // Guard the whole operation with hasNode — if node.id was promoted/removed since
+      // the event fired, there is nothing left to convert: skip focus, the update
+      // (which would log "Cannot update non-existent node"), and the custom-entity flow.
       tick().then(() => {
+        if (!sharedNodeStore.hasNode(node.id)) return;
         focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-        if (sharedNodeStore.hasNode(node.id)) {
-          sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-        }
+        sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
         if (isCustomSchemaType(newNodeType)) {
           handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
             log.error('Custom entity slash command failed (real-node path):', err)
