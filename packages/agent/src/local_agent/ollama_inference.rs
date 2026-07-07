@@ -2,6 +2,7 @@ use crate::agent_types::{
     ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
     ModelFamily, StreamingChunk,
 };
+use crate::local_agent::ollama_ndjson::NdjsonLineBuffer;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -238,20 +239,15 @@ impl ChatInferenceEngine for OllamaInferenceEngine {
         if use_stream {
             // Streaming path: used when no tools are present.
             let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+            let mut buffer = NdjsonLineBuffer::new();
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| InferenceError::Engine(e.to_string()))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                let lines = buffer
+                    .push(&chunk)
+                    .map_err(|e| InferenceError::Engine(e.to_string()))?;
 
-                while let Some(pos) = buffer.find('\n') {
-                    let line = buffer[..pos].trim().to_string();
-                    buffer = buffer[pos + 1..].to_string();
-
-                    if line.is_empty() {
-                        continue;
-                    }
-
+                for line in lines {
                     match serde_json::from_str::<OllamaChatChunk>(&line) {
                         Ok(chunk_data) => {
                             if let Some(msg) = &chunk_data.message {

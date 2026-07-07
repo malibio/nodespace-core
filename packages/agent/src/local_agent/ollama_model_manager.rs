@@ -18,6 +18,7 @@ use tracing::warn;
 use crate::agent_types::{
     DownloadEvent, ModelBackend, ModelError, ModelFamily, ModelInfo, ModelManager, ModelStatus,
 };
+use crate::local_agent::ollama_ndjson::NdjsonLineBuffer;
 
 // ---------------------------------------------------------------------------
 // Type aliases
@@ -223,22 +224,17 @@ impl ModelManager for OllamaModelManager {
         }
 
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer = NdjsonLineBuffer::new();
 
         while let Some(chunk) = stream.next().await {
             let chunk =
                 chunk.map_err(|e| ModelError::DownloadFailed(format!("stream error: {}", e)))?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            let lines = buffer
+                .push(&chunk)
+                .map_err(|e| ModelError::DownloadFailed(e.to_string()))?;
 
             // Process complete lines
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
-                if line.is_empty() {
-                    continue;
-                }
-
+            for line in lines {
                 if let Ok(progress) = serde_json::from_str::<OllamaPullProgress>(&line) {
                     if progress.status.contains("pulling") && progress.total.is_some() {
                         let total = progress.total.unwrap_or(0);
