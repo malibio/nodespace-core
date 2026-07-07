@@ -4,18 +4,12 @@ const { mockLoadCollections, mockLoadMembers, mockCollectionsState } = vi.hoiste
   const mockLoadCollections = vi.fn().mockResolvedValue(undefined);
   const mockLoadMembers = vi.fn().mockResolvedValue(undefined);
 
-  // Minimal writable-like store
-  let value: { selectedCollectionId: string | null } = { selectedCollectionId: null };
-  const subscribers = new Set<(val: typeof value) => void>();
+  // Minimal rune-store-like mock: exposes a reactive-style `state` field.
+  // `set` is a test helper to configure that field.
   const mockCollectionsState = {
-    subscribe(fn: (val: typeof value) => void) {
-      subscribers.add(fn);
-      fn(value);
-      return () => { subscribers.delete(fn); };
-    },
-    set(newValue: typeof value) {
-      value = newValue;
-      subscribers.forEach(fn => fn(value));
+    state: { selectedCollectionId: null as string | null },
+    set(newValue: { selectedCollectionId: string | null }) {
+      this.state = newValue;
     }
   };
 

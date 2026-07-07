@@ -3,13 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { get } from 'svelte/store';
 import {
   collectionsState,
   collectionsData,
-  collectionsTree,
-  selectedCollection,
-  selectedCollectionMembers,
   findCollectionById,
   type CollectionsState,
   type CollectionItem,
@@ -76,7 +72,7 @@ describe('Collections Store', () => {
 
   describe('Initial State', () => {
     it('has correct initial state', () => {
-      const state = get(collectionsState);
+      const state = collectionsState.state;
 
       expect(state.selectedCollectionId).toBeNull();
       expect(state.subPanelOpen).toBe(false);
@@ -85,12 +81,12 @@ describe('Collections Store', () => {
     });
 
     it('selectedCollection derived store returns undefined initially', () => {
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected).toBeUndefined();
     });
 
     it('selectedCollectionMembers derived store returns empty array initially', () => {
-      const members = get(selectedCollectionMembers);
+      const members = collectionsState.selectedCollectionMembers;
       expect(members).toEqual([]);
     });
   });
@@ -99,7 +95,7 @@ describe('Collections Store', () => {
     it('selects a collection and opens the sub-panel', () => {
       collectionsState.selectCollection('col-1');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBe('col-1');
       expect(state.subPanelOpen).toBe(true);
     });
@@ -110,7 +106,7 @@ describe('Collections Store', () => {
 
       collectionsState.selectCollection('col-1');
 
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected).toBeDefined();
       expect(selected?.id).toBe('col-1');
       expect(selected?.name).toBe('Project Ideas');
@@ -122,7 +118,7 @@ describe('Collections Store', () => {
 
       collectionsState.selectCollection('col-1');
 
-      const members = get(selectedCollectionMembers);
+      const members = collectionsState.selectedCollectionMembers;
       expect(members).toHaveLength(3);
       expect(members[0].name).toBe('AI-Powered Note Taking');
     });
@@ -134,11 +130,11 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.selectCollection('col-2');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBe('col-2');
       expect(state.subPanelOpen).toBe(true);
 
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected?.name).toBe('Meeting Notes');
     });
 
@@ -148,7 +144,7 @@ describe('Collections Store', () => {
 
       collectionsState.selectCollection('col-1-1');
 
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected).toBeDefined();
       expect(selected?.id).toBe('col-1-1');
       expect(selected?.name).toBe('AI Features and Machine Learning Integration');
@@ -160,7 +156,7 @@ describe('Collections Store', () => {
 
       collectionsState.selectCollection('col-1-1-1');
 
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected).toBeDefined();
       expect(selected?.id).toBe('col-1-1-1');
       expect(selected?.name).toBe('Natural Language Processing Research');
@@ -172,7 +168,7 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.closeSubPanel();
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBe('col-1'); // Keeps selection for visual context
       expect(state.subPanelOpen).toBe(false);
     });
@@ -180,7 +176,7 @@ describe('Collections Store', () => {
     it('does nothing when called without prior selection', () => {
       collectionsState.closeSubPanel();
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBeNull();
       expect(state.subPanelOpen).toBe(false);
     });
@@ -191,7 +187,7 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.clearSelection();
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBeNull();
       expect(state.subPanelOpen).toBe(false);
     });
@@ -200,7 +196,7 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.clearSelection();
 
-      const selected = get(selectedCollection);
+      const selected = collectionsState.selectedCollection;
       expect(selected).toBeUndefined();
     });
 
@@ -208,7 +204,7 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.clearSelection();
 
-      const members = get(selectedCollectionMembers);
+      const members = collectionsState.selectedCollectionMembers;
       expect(members).toEqual([]);
     });
   });
@@ -217,7 +213,7 @@ describe('Collections Store', () => {
     it('expands a collection when collapsed', () => {
       collectionsState.toggleCollectionExpanded('col-1');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.expandedCollectionIds.has('col-1')).toBe(true);
     });
 
@@ -225,7 +221,7 @@ describe('Collections Store', () => {
       collectionsState.toggleCollectionExpanded('col-1');
       collectionsState.toggleCollectionExpanded('col-1');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.expandedCollectionIds.has('col-1')).toBe(false);
     });
 
@@ -233,7 +229,7 @@ describe('Collections Store', () => {
       collectionsState.toggleCollectionExpanded('col-1');
       collectionsState.toggleCollectionExpanded('col-2');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.expandedCollectionIds.has('col-1')).toBe(true);
       expect(state.expandedCollectionIds.has('col-2')).toBe(true);
       expect(state.expandedCollectionIds.size).toBe(2);
@@ -243,7 +239,7 @@ describe('Collections Store', () => {
       collectionsState.selectCollection('col-1');
       collectionsState.toggleCollectionExpanded('col-2');
 
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       expect(state.selectedCollectionId).toBe('col-1');
       expect(state.subPanelOpen).toBe(true);
     });
@@ -257,7 +253,7 @@ describe('Collections Store', () => {
       collectionsState.toggleCollectionExpanded('col-3');
 
       // Verify state is modified
-      let state = get(collectionsState);
+      let state = collectionsState.state;
       expect(state.selectedCollectionId).toBe('col-1');
       expect(state.subPanelOpen).toBe(true);
       expect(state.expandedCollectionIds.size).toBe(2);
@@ -266,7 +262,7 @@ describe('Collections Store', () => {
       collectionsState.reset();
 
       // Verify state is initial
-      state = get(collectionsState);
+      state = collectionsState.state;
       expect(state.selectedCollectionId).toBeNull();
       expect(state.subPanelOpen).toBe(false);
       expect(state.expandedCollectionIds.size).toBe(0);
@@ -386,38 +382,38 @@ describe('Collections Store', () => {
       // Set up test data
       collectionsData._setTestData(flattenCollections(mockCollections), createTestMembers());
 
-      expect(get(selectedCollection)).toBeUndefined();
+      expect(collectionsState.selectedCollection).toBeUndefined();
 
       collectionsState.selectCollection('col-1');
-      expect(get(selectedCollection)?.id).toBe('col-1');
+      expect(collectionsState.selectedCollection?.id).toBe('col-1');
 
       collectionsState.selectCollection('col-2');
-      expect(get(selectedCollection)?.id).toBe('col-2');
+      expect(collectionsState.selectedCollection?.id).toBe('col-2');
 
       collectionsState.clearSelection();
-      expect(get(selectedCollection)).toBeUndefined();
+      expect(collectionsState.selectedCollection).toBeUndefined();
     });
 
     it('selectedCollectionMembers updates reactively when selection changes', () => {
       // Set up test data
       collectionsData._setTestData(flattenCollections(mockCollections), createTestMembers());
 
-      expect(get(selectedCollectionMembers)).toEqual([]);
+      expect(collectionsState.selectedCollectionMembers).toEqual([]);
 
       collectionsState.selectCollection('col-1');
-      expect(get(selectedCollectionMembers)).toHaveLength(3);
+      expect(collectionsState.selectedCollectionMembers).toHaveLength(3);
 
       collectionsState.selectCollection('col-3'); // Empty collection
-      expect(get(selectedCollectionMembers)).toEqual([]);
+      expect(collectionsState.selectedCollectionMembers).toEqual([]);
 
       collectionsState.selectCollection('col-4');
-      expect(get(selectedCollectionMembers)).toHaveLength(4);
+      expect(collectionsState.selectedCollectionMembers).toHaveLength(4);
     });
 
     it('selectedCollectionMembers returns empty for invalid selection', () => {
       collectionsState.selectCollection('non-existent');
 
-      const members = get(selectedCollectionMembers);
+      const members = collectionsState.selectedCollectionMembers;
       expect(members).toEqual([]);
     });
   });
@@ -427,7 +423,7 @@ describe('Collections Store', () => {
       // Fixtures include col-3 "Research Papers" with memberCount: 0 (leaf).
       collectionsData._setTestData(flattenCollections(mockCollections), createTestMembers());
 
-      const tree = get(collectionsTree);
+      const tree = collectionsData.collectionsTree;
       const ids = tree.map((c) => c.id);
 
       expect(ids).not.toContain('col-3');
@@ -448,7 +444,7 @@ describe('Collections Store', () => {
       ];
       collectionsData._setTestData(collections, new Map());
 
-      const tree = get(collectionsTree);
+      const tree = collectionsData.collectionsTree;
       expect(tree.map((c) => c.id)).toEqual(['parent']);
       expect(tree[0].children?.map((c) => c.id)).toEqual(['child']);
     });
@@ -470,7 +466,7 @@ describe('Collections Store', () => {
       ];
       collectionsData._setTestData(collections, new Map());
 
-      const tree = get(collectionsTree);
+      const tree = collectionsData.collectionsTree;
       expect(tree).toHaveLength(1);
       expect(tree[0].children?.map((c) => c.id)).toEqual(['full-child']);
     });
@@ -488,7 +484,7 @@ describe('Collections Store', () => {
       ];
       collectionsData._setTestData(collections, new Map());
 
-      expect(get(collectionsTree)).toEqual([]);
+      expect(collectionsData.collectionsTree).toEqual([]);
     });
   });
 

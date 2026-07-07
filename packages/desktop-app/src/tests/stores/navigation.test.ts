@@ -3,9 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { get } from 'svelte/store';
 import {
-  tabState,
+  navigationStore,
   createPane,
   closePane,
   setActivePane,
@@ -39,7 +38,7 @@ describe('Navigation Store - Pane Management', () => {
       expect(newPane).not.toBeNull();
       expect(newPane?.width).toBe(50);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes.length).toBe(2);
       expect(state.panes[0].width).toBe(50); // First pane resized to 50%
       expect(state.panes[1].width).toBe(50); // Second pane at 50%
@@ -54,7 +53,7 @@ describe('Navigation Store - Pane Management', () => {
       const thirdPane = createPane();
       expect(thirdPane).toBeNull();
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes.length).toBe(2);
     });
 
@@ -73,18 +72,18 @@ describe('Navigation Store - Pane Management', () => {
       // Close the second pane
       closePane(newPane!.id);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes.length).toBe(1);
       expect(state.panes[0].width).toBe(100);
     });
 
     it('prevents closing the last pane', () => {
-      const state = get(tabState);
+      const state = navigationStore.state;
       const lastPaneId = state.panes[0].id;
 
       closePane(lastPaneId);
 
-      const newState = get(tabState);
+      const newState = navigationStore.state;
       expect(newState.panes.length).toBe(1);
       expect(newState.panes[0].id).toBe(lastPaneId);
     });
@@ -105,13 +104,13 @@ describe('Navigation Store - Pane Management', () => {
       };
       addTab(newTab);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.tabs.length).toBe(2); // Daily Journal + new tab
 
       // Close the second pane
       closePane(newPane!.id);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.tabs.length).toBe(1);
       expect(stateAfter.tabs[0].id).toBe(DAILY_JOURNAL_TAB_ID);
     });
@@ -124,13 +123,13 @@ describe('Navigation Store - Pane Management', () => {
       // Set second pane as active
       setActivePane(newPane!.id);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.activePaneId).toBe(newPane!.id);
 
       // Close the active pane
       closePane(newPane!.id);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.activePaneId).toBe(DEFAULT_PANE_ID);
     });
   });
@@ -142,17 +141,17 @@ describe('Navigation Store - Pane Management', () => {
 
       setActivePane(newPane!.id);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.activePaneId).toBe(newPane!.id);
     });
 
     it('ignores invalid pane ID', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const previousActivePaneId = stateBefore.activePaneId;
 
       setActivePane('non-existent-pane');
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.activePaneId).toBe(previousActivePaneId);
     });
   });
@@ -166,7 +165,7 @@ describe('Navigation Store - Pane Management', () => {
       // Resize first pane to 60%
       resizePane(DEFAULT_PANE_ID, 60);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes[0].width).toBe(60);
       expect(state.panes[1].width).toBe(40);
     });
@@ -179,7 +178,7 @@ describe('Navigation Store - Pane Management', () => {
       // Try to resize to less than minimum
       resizePane(DEFAULT_PANE_ID, 10);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes[0].width).toBe(20); // Clamped to minimum
       expect(state.panes[1].width).toBe(80);
     });
@@ -192,7 +191,7 @@ describe('Navigation Store - Pane Management', () => {
       // Try to resize to more than maximum
       resizePane(DEFAULT_PANE_ID, 90);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes[0].width).toBe(80); // Clamped to maximum
       expect(state.panes[1].width).toBe(20);
     });
@@ -200,7 +199,7 @@ describe('Navigation Store - Pane Management', () => {
     it('does nothing with single pane', () => {
       resizePane(DEFAULT_PANE_ID, 60);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes[0].width).toBe(100); // Unchanged
     });
   });
@@ -219,7 +218,7 @@ describe('Navigation Store - Tab Management', () => {
 
       setActiveTab(tabId);
 
-      const newState = get(tabState);
+      const newState = navigationStore.state;
       expect(newState.activePaneId).toBe(paneId);
       expect(newState.activeTabIds[paneId]).toBe(tabId);
     });
@@ -242,7 +241,7 @@ describe('Navigation Store - Tab Management', () => {
 
       setActiveTab(newTab.id, newPane!.id);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.activePaneId).toBe(newPane!.id);
       expect(state.activeTabIds[newPane!.id]).toBe(newTab.id);
     });
@@ -250,12 +249,12 @@ describe('Navigation Store - Tab Management', () => {
 
   describe('closeTab', () => {
     it('disables close on last tab in last pane', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.tabs.length).toBe(1);
 
       closeTab(DAILY_JOURNAL_TAB_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.tabs.length).toBe(1);
       expect(stateAfter.tabs[0].id).toBe(DAILY_JOURNAL_TAB_ID);
     });
@@ -276,14 +275,14 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(newTab);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.panes.length).toBe(2);
       expect(stateBefore.tabs.length).toBe(2);
 
       // Close the only tab in second pane
       closeTab(newTab.id);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.panes.length).toBe(1);
       expect(stateAfter.tabs.length).toBe(1);
       expect(stateAfter.panes[0].width).toBe(100);
@@ -317,13 +316,13 @@ describe('Navigation Store - Tab Management', () => {
       // Set tab2 as active
       setActiveTab(tab2.id);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.activeTabIds[newPane!.id]).toBe(tab2.id);
 
       // Close active tab
       closeTab(tab2.id);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.activeTabIds[newPane!.id]).toBe(tab1.id);
     });
 
@@ -352,14 +351,14 @@ describe('Navigation Store - Tab Management', () => {
       addTab(tab1);
       addTab(tab2);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane = stateBefore.panes.find((p) => p.id === newPane!.id);
       expect(pane?.tabIds.length).toBe(2);
 
       // Close one tab
       closeTab(tab1.id);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const updatedPane = stateAfter.panes.find((p) => p.id === newPane!.id);
       expect(updatedPane?.tabIds.length).toBe(1);
       expect(updatedPane?.tabIds[0]).toBe(tab2.id);
@@ -379,7 +378,7 @@ describe('Navigation Store - Tab Management', () => {
 
       addTab(newTab);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.tabs.length).toBe(2);
       expect(state.tabs[1].id).toBe(newTab.id);
     });
@@ -396,7 +395,7 @@ describe('Navigation Store - Tab Management', () => {
 
       addTab(newTab);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const pane = state.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(pane?.tabIds.length).toBe(2);
       expect(pane?.tabIds[1]).toBe(newTab.id);
@@ -414,7 +413,7 @@ describe('Navigation Store - Tab Management', () => {
 
       addTab(newTab);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.activePaneId).toBe(DEFAULT_PANE_ID);
       expect(state.activeTabIds[DEFAULT_PANE_ID]).toBe(newTab.id);
     });
@@ -429,12 +428,12 @@ describe('Navigation Store - Tab Management', () => {
         paneId: 'non-existent-pane'
       };
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const tabCountBefore = stateBefore.tabs.length;
 
       addTab(newTab);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.tabs.length).toBe(tabCountBefore);
     });
   });
@@ -476,38 +475,38 @@ describe('Navigation Store - Tab Management', () => {
       addTab(tab3);
 
       // Verify initial order: Daily Journal, tab1, tab2, tab3
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(pane?.tabIds).toEqual([DAILY_JOURNAL_TAB_ID, tab1.id, tab2.id, tab3.id]);
 
       // Move tab1 from index 1 to index 3 (after tab3)
       reorderTab(tab1.id, 3, DEFAULT_PANE_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const updatedPane = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(updatedPane?.tabIds).toEqual([DAILY_JOURNAL_TAB_ID, tab2.id, tab3.id, tab1.id]);
     });
 
     it('handles invalid pane ID gracefully', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const tabIdsBefor = pane?.tabIds;
 
       reorderTab(DAILY_JOURNAL_TAB_ID, 0, 'non-existent-pane');
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const updatedPane = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(updatedPane?.tabIds).toEqual(tabIdsBefor);
     });
 
     it('handles invalid tab ID gracefully', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const tabIdsBefore = pane?.tabIds;
 
       reorderTab('non-existent-tab', 0, DEFAULT_PANE_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const updatedPane = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(updatedPane?.tabIds).toEqual(tabIdsBefore);
     });
@@ -524,14 +523,14 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(tab1);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const tabIdsBefore = [...pane!.tabIds];
 
       // Move tab1 to its current position (index 1)
       reorderTab(tab1.id, 1, DEFAULT_PANE_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const updatedPane = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(updatedPane?.tabIds).toEqual(tabIdsBefore);
     });
@@ -560,7 +559,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move tab2 to index 0 (first position)
       reorderTab(tab2.id, 0, DEFAULT_PANE_ID);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const pane = state.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(pane?.tabIds).toEqual([tab2.id, DAILY_JOURNAL_TAB_ID, tab1.id]);
     });
@@ -589,7 +588,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move Daily Journal to last position
       reorderTab(DAILY_JOURNAL_TAB_ID, 2, DEFAULT_PANE_ID);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const pane = state.panes.find((p) => p.id === DEFAULT_PANE_ID);
       expect(pane?.tabIds).toEqual([tab1.id, tab2.id, DAILY_JOURNAL_TAB_ID]);
     });
@@ -606,13 +605,13 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(tab1);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const tabBefore = stateBefore.tabs.find((t) => t.id === tab1.id);
 
       // Reorder tab
       reorderTab(tab1.id, 0, DEFAULT_PANE_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const tabAfter = stateAfter.tabs.find((t) => t.id === tab1.id);
 
       // Tab object should remain the same (just order changed)
@@ -654,14 +653,14 @@ describe('Navigation Store - Tab Management', () => {
       addTab(pane1Tab1);
       addTab(pane1Tab2);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane2Before = stateBefore.panes.find((p) => p.id === pane2!.id);
       const pane2TabIdsBefore = [...pane2Before!.tabIds];
 
       // Reorder tab in pane 1
       reorderTab(pane1Tab1.id, 2, DEFAULT_PANE_ID);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const pane2After = stateAfter.panes.find((p) => p.id === pane2!.id);
 
       // Pane 2 should remain unchanged
@@ -690,7 +689,7 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(tab1);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane1Before = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const pane2Before = stateBefore.panes.find((p) => p.id === newPane!.id);
       expect(pane1Before?.tabIds).toContain(tab1.id);
@@ -699,7 +698,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move tab from pane1 to pane2
       moveTabBetweenPanes(tab1.id, DEFAULT_PANE_ID, newPane!.id, 0);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const pane1After = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const pane2After = stateAfter.panes.find((p) => p.id === newPane!.id);
 
@@ -728,13 +727,13 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(tab1);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.panes.length).toBe(2);
 
       // Move the only tab from pane2 to pane1
       moveTabBetweenPanes(tab1.id, newPane!.id, DEFAULT_PANE_ID, 1);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.panes.length).toBe(1);
       expect(stateAfter.panes[0].id).toBe(DEFAULT_PANE_ID);
       expect(stateAfter.panes[0].width).toBe(100);
@@ -768,7 +767,7 @@ describe('Navigation Store - Tab Management', () => {
       // Set tab2 as active in pane1
       setActiveTab(tab2.id, DEFAULT_PANE_ID);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.activeTabIds[DEFAULT_PANE_ID]).toBe(tab2.id);
 
       // Get the first remaining tab ID before moving
@@ -779,7 +778,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move active tab (tab2) from pane1 to pane2
       moveTabBetweenPanes(tab2.id, DEFAULT_PANE_ID, newPane!.id, 0);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       // Source pane should have first remaining tab as active now
       expect(stateAfter.activeTabIds[DEFAULT_PANE_ID]).toBe(firstRemainingTabId);
       // Target pane should have moved tab as active
@@ -816,7 +815,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move tab2 from pane1 to pane2
       moveTabBetweenPanes(tab2.id, DEFAULT_PANE_ID, newPane!.id, 1);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.activePaneId).toBe(newPane!.id);
       expect(state.activeTabIds[newPane!.id]).toBe(tab2.id);
     });
@@ -832,14 +831,14 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(tab1);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const tabsBefore = stateBefore.tabs.length;
       const panesBefore = stateBefore.panes.length;
 
       // Try to move to non-existent pane
       moveTabBetweenPanes(tab1.id, DEFAULT_PANE_ID, 'non-existent-pane', 0);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.tabs.length).toBe(tabsBefore);
       expect(stateAfter.panes.length).toBe(panesBefore);
 
@@ -853,7 +852,7 @@ describe('Navigation Store - Tab Management', () => {
       const newPane = createPane();
       expect(newPane).not.toBeNull();
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const pane1Before = stateBefore.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const pane2Before = stateBefore.panes.find((p) => p.id === newPane!.id);
       const tabIds1Before = [...pane1Before!.tabIds];
@@ -862,7 +861,7 @@ describe('Navigation Store - Tab Management', () => {
       // Try to move non-existent tab
       moveTabBetweenPanes('non-existent-tab', DEFAULT_PANE_ID, newPane!.id, 0);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const pane1After = stateAfter.panes.find((p) => p.id === DEFAULT_PANE_ID);
       const pane2After = stateAfter.panes.find((p) => p.id === newPane!.id);
 
@@ -879,7 +878,7 @@ describe('Navigation Store - Tab Management', () => {
       // Resize panes to 60/40 split
       resizePane(DEFAULT_PANE_ID, 60);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       expect(stateBefore.panes[0].width).toBe(60);
       expect(stateBefore.panes[1].width).toBe(40);
 
@@ -897,7 +896,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move the only tab from pane2 to pane1 (should close pane2)
       moveTabBetweenPanes(tab1.id, newPane!.id, DEFAULT_PANE_ID, 1);
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.panes.length).toBe(1);
       // Remaining pane should be expanded to 100%
       expect(stateAfter.panes[0].width).toBe(100);
@@ -951,7 +950,7 @@ describe('Navigation Store - Tab Management', () => {
       // Move tab4 from pane1 to pane2 at index 1 (between tab1 and tab2)
       moveTabBetweenPanes(tab4.id, DEFAULT_PANE_ID, newPane!.id, 1);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const pane2 = state.panes.find((p) => p.id === newPane!.id);
       expect(pane2?.tabIds).toEqual([tab1.id, tab4.id, tab2.id, tab3.id]);
     });
@@ -959,7 +958,7 @@ describe('Navigation Store - Tab Management', () => {
 
   describe('addTab with makeActive parameter', () => {
     it('does not set tab as active when makeActive is false', () => {
-      const originalActiveTab = get(tabState).activeTabIds[DEFAULT_PANE_ID];
+      const originalActiveTab = navigationStore.state.activeTabIds[DEFAULT_PANE_ID];
 
       const newTab: Tab = {
         id: 'test-tab-1',
@@ -972,7 +971,7 @@ describe('Navigation Store - Tab Management', () => {
 
       addTab(newTab, false);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.tabs.length).toBe(2);
       expect(state.tabs[1].id).toBe(newTab.id);
       // Active tab should remain unchanged
@@ -984,24 +983,24 @@ describe('Navigation Store - Tab Management', () => {
 
   describe('setActiveTab edge cases', () => {
     it('does not change state when tab does not exist', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const previousActiveTab = stateBefore.activeTabIds[DEFAULT_PANE_ID];
 
       setActiveTab('non-existent-tab-id');
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.activeTabIds[DEFAULT_PANE_ID]).toBe(previousActiveTab);
     });
   });
 
   describe('closeTab edge cases', () => {
     it('does not change state when tab does not exist', () => {
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const tabCountBefore = stateBefore.tabs.length;
 
       closeTab('non-existent-tab-id');
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       expect(stateAfter.tabs.length).toBe(tabCountBefore);
     });
 
@@ -1010,10 +1009,10 @@ describe('Navigation Store - Tab Management', () => {
       // But the code checks for this condition on line 376-378
 
       // Manually corrupt state to create orphaned tab
-      tabState.update((state) => ({
-        ...state,
+      navigationStore.state = {
+        ...navigationStore.state,
         tabs: [
-          ...state.tabs,
+          ...navigationStore.state.tabs,
           {
             id: 'orphaned-tab',
             title: 'Orphaned',
@@ -1023,14 +1022,14 @@ describe('Navigation Store - Tab Management', () => {
             paneId: 'non-existent-pane'
           }
         ]
-      }));
+      };
 
-      const stateWithOrphan = get(tabState);
+      const stateWithOrphan = navigationStore.state;
       const tabCountWithOrphan = stateWithOrphan.tabs.length;
 
       closeTab('orphaned-tab');
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       // Should not remove the orphaned tab because pane doesn't exist
       expect(stateAfter.tabs.length).toBe(tabCountWithOrphan);
     });
@@ -1043,7 +1042,7 @@ describe('Navigation Store - Tab Management', () => {
 
       updateTabContent(tabId, newContent);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const updatedTab = state.tabs.find((t) => t.id === tabId);
       expect(updatedTab?.content).toEqual(newContent);
     });
@@ -1054,7 +1053,7 @@ describe('Navigation Store - Tab Management', () => {
 
       updateTabContent(tabId, newContent);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const updatedTab = state.tabs.find((t) => t.id === tabId);
       expect(updatedTab?.content).toEqual(newContent);
     });
@@ -1071,12 +1070,12 @@ describe('Navigation Store - Tab Management', () => {
       };
       addTab(newTab);
 
-      const stateBefore = get(tabState);
+      const stateBefore = navigationStore.state;
       const otherTabContent = stateBefore.tabs.find((t) => t.id === newTab.id)?.content;
 
       updateTabContent(DAILY_JOURNAL_TAB_ID, { nodeId: 'changed-id', nodeType: 'task' });
 
-      const stateAfter = get(tabState);
+      const stateAfter = navigationStore.state;
       const otherTab = stateAfter.tabs.find((t) => t.id === newTab.id);
       expect(otherTab?.content).toEqual(otherTabContent);
     });
@@ -1114,7 +1113,7 @@ describe('Navigation Store - Tab Management', () => {
       addTab(tab2);
       addTab(tab3);
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const orderedTabs = getOrderedTabsForPane(state, DEFAULT_PANE_ID);
 
       expect(orderedTabs.length).toBe(4); // Daily Journal + 3 new tabs
@@ -1125,7 +1124,7 @@ describe('Navigation Store - Tab Management', () => {
     });
 
     it('returns empty array for non-existent pane', () => {
-      const state = get(tabState);
+      const state = navigationStore.state;
       const orderedTabs = getOrderedTabsForPane(state, 'non-existent-pane');
 
       expect(orderedTabs).toEqual([]);
@@ -1133,7 +1132,7 @@ describe('Navigation Store - Tab Management', () => {
 
     it('filters out undefined tabs gracefully', () => {
       // Get current state
-      const state = get(tabState);
+      const state = navigationStore.state;
 
       // Manually create a pane with invalid tab reference (defensive test)
       const testState = {
@@ -1210,7 +1209,7 @@ describe('Navigation Store - Tab Management', () => {
       const result = loadPersistedState();
 
       expect(result).toBe(true);
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.tabs.length).toBe(1);
       expect(state.tabs[0].id).toBe('persisted-tab-1');
       expect(state.panes.length).toBe(1);

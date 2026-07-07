@@ -110,11 +110,11 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
     await Promise.resolve();
     await Promise.resolve();
 
-    const { schemasData, builtInSchemas, customSchemas } = await import('$lib/stores/schemas.svelte');
+    const { schemasData, schemasStore } = await import('$lib/stores/schemas.svelte');
     await schemasData.loadSchemas();
 
     expect(get(daemonStatus).unreachable).toBe(true);
-    expect(get(builtInSchemas).length + get(customSchemas).length).toBe(0);
+    expect(schemasStore.builtInSchemas.length + schemasStore.customSchemas.length).toBe(0);
   });
 
   describe('recovered', () => {
@@ -150,7 +150,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         // onDaemonReconnect(loadSchemas) — a reference to schemas.ts's
         // private loadSchemas, not schemasData.loadSchemas, so it cannot be
         // spied on from here to await its exact settlement).
-        const { builtInSchemas, customSchemas } = await import('$lib/stores/schemas.svelte');
+        const { schemasStore } = await import('$lib/stores/schemas.svelte');
 
         const source = harnessStatusSource(h);
         startDaemonStatusListener(source);
@@ -175,7 +175,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         const deadline = Date.now() + 5_000;
         let total = 0;
         while (Date.now() < deadline) {
-          total = get(builtInSchemas).length + get(customSchemas).length;
+          total = schemasStore.builtInSchemas.length + schemasStore.customSchemas.length;
           if (total > 0) break;
           await new Promise((r) => setTimeout(r, 50));
         }
@@ -190,7 +190,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         // fabricated).
         const schemas = await h.adapter.getAllSchemas();
         const realIds = new Set(schemas.map((s) => s.id));
-        for (const s of [...get(builtInSchemas), ...get(customSchemas)]) {
+        for (const s of [...schemasStore.builtInSchemas, ...schemasStore.customSchemas]) {
           expect(realIds.has(s.id)).toBe(true);
         }
       },
