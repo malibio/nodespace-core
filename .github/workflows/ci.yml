@@ -1,12 +1,17 @@
 name: CI
 
 # Server-side test gate (ADR-047). scripts/test-gate.ts runs the full test
-# pyramid (frontend + skill + Rust, then the headless daemon e2e, then the
-# Tauri-seam integration tests) as a *local* pre-push hook — but that hook only
-# exists on a machine that ran `bun install`, and any push can bypass it with
-# --no-verify. This workflow runs the SAME sequence on every pull_request and
-# on pushes to main, so a regression can no longer merge green. release.yml
-# stays scoped to release/signing only.
+# pyramid as a *local* pre-push hook — but that hook only exists on a machine
+# that ran `bun install`, and any push can bypass it with --no-verify. This
+# workflow runs the same suite on every pull_request and on pushes to main, so a
+# regression can no longer merge green. release.yml stays scoped to
+# release/signing only.
+#
+# Scope: `test:all` (frontend + skill + Rust) and the headless-daemon `test:e2e`.
+# The gate's final step — `cargo test -p nodespace-app` (Tauri-seam, ADR-048) —
+# needs the Tauri externalBin sidecars (binaries/nodespaced-<triple>,
+# binaries/nodespace-<triple>) staged before the app crate's build script runs;
+# wiring that into CI is tracked separately as the ADR-048 Tauri-seam companion.
 #
 # The `unit` and `e2e` jobs are intended to be REQUIRED status checks in branch
 # protection (an admin setting, applied once this workflow is green on its own PR).
@@ -55,7 +60,7 @@ jobs:
         run: bun run test:all
 
   e2e:
-    name: test:e2e + Tauri-seam (headless daemon)
+    name: test:e2e (headless daemon)
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -91,8 +96,3 @@ jobs:
         run: bun run test:e2e
         env:
           NODESPACED_BINARY: ${{ github.workspace }}/target/debug/nodespaced
-
-      - name: Run Tauri-seam integration tests (ADR-048)
-        run: cargo test -p nodespace-app
-        env:
-          NODESPACED_TEST_BIN: ${{ github.workspace }}/target/debug/nodespaced
