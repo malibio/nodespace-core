@@ -286,6 +286,14 @@ export interface PluginDefinition {
    * Set to false for nodes that must maintain specific formatting
    */
   acceptsContentMerge?: boolean;
+
+  /**
+   * Compute this node's tab title. Only needed when the title isn't derivable from the
+   * node's own stored fields (node.title / node.content) — e.g. date nodes, whose display
+   * title ("Today", "Tomorrow", a date string) is computed from parsing the node's id, not
+   * from stored content. Most node types omit this and fall back to node.title || node.content.
+   */
+  getTitle?: (node: Node) => string | undefined;
 }
 
 // Registry statistics for debugging

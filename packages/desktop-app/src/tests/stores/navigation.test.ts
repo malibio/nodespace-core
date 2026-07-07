@@ -17,7 +17,6 @@ import {
   reorderTab,
   moveTabBetweenPanes,
   loadPersistedState,
-  updateTabTitle,
   updateTabContent,
   getOrderedTabsForPane,
   DEFAULT_PANE_ID,
@@ -1037,45 +1036,6 @@ describe('Navigation Store - Tab Management', () => {
     });
   });
 
-  describe('updateTabTitle', () => {
-    it('updates title of existing tab', () => {
-      const tabId = DAILY_JOURNAL_TAB_ID;
-      const newTitle = 'Updated Journal Title';
-
-      const stateBefore = get(tabState);
-      const originalTitle = stateBefore.tabs.find((t) => t.id === tabId)?.title;
-      expect(originalTitle).not.toBe(newTitle);
-
-      updateTabTitle(tabId, newTitle);
-
-      const stateAfter = get(tabState);
-      const updatedTab = stateAfter.tabs.find((t) => t.id === tabId);
-      expect(updatedTab?.title).toBe(newTitle);
-    });
-
-    it('does not affect other tabs', () => {
-      // Add another tab
-      const newTab: Tab = {
-        id: 'test-tab-1',
-        title: 'Test Tab',
-        type: 'node',
-        content: { nodeId: 'test-node-1', nodeType: 'text' },
-        closeable: true,
-        paneId: DEFAULT_PANE_ID
-      };
-      addTab(newTab);
-
-      const stateBefore = get(tabState);
-      const otherTabTitle = stateBefore.tabs.find((t) => t.id === newTab.id)?.title;
-
-      updateTabTitle(DAILY_JOURNAL_TAB_ID, 'New Daily Title');
-
-      const stateAfter = get(tabState);
-      const otherTab = stateAfter.tabs.find((t) => t.id === newTab.id);
-      expect(otherTab?.title).toBe(otherTabTitle);
-    });
-  });
-
   describe('updateTabContent', () => {
     it('updates content of existing tab', () => {
       const tabId = DAILY_JOURNAL_TAB_ID;
@@ -1607,7 +1567,7 @@ describe('Navigation Store - Tab Management', () => {
 
       vi.advanceTimersByTime(200); // Partial delay
 
-      updateTabTitle('test-tab-1', 'Updated Title');
+      updateTabContent('test-tab-1', { nodeId: 'test-node-1-updated', nodeType: 'text' });
 
       // Should not persist yet (debounce timer keeps resetting)
       expect(mockSave).not.toHaveBeenCalled();

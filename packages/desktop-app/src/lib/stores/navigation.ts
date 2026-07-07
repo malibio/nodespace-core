@@ -507,13 +507,6 @@ export function addTab(tab: Tab, makeActive: boolean = true) {
   });
 }
 
-export function updateTabTitle(tabId: string, newTitle: string) {
-  tabState.update((state) => ({
-    ...state,
-    tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, title: newTitle } : tab))
-  }));
-}
-
 export function updateTabContent(tabId: string, content: { nodeId: string; nodeType?: string }) {
   tabState.update((state) => ({
     ...state,

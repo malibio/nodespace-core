@@ -16,19 +16,18 @@
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
 
   // Props using Svelte 5 runes mode
-  // onNodeIdChange and onTitleChange provided for future navigation features
+  // onNodeIdChange provided for future navigation features
   let {
     nodeId
   }: {
     nodeId: string;
     onNodeIdChange?: (_nodeId: string) => void;
-    onTitleChange?: (_title: string) => void;
   } = $props();
 </script>
 
 <div class="task-node-viewer">
   <!-- BaseNodeViewer automatically loads TaskSchemaForm from plugin registry -->
-  <BaseNodeViewer {nodeId} disableTitleUpdates={true} />
+  <BaseNodeViewer {nodeId} />
 </div>
 
 <style>

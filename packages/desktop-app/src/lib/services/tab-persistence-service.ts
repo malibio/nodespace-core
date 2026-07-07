@@ -6,7 +6,6 @@
  */
 
 import type { TabState } from '$lib/stores/navigation';
-import { formatDateTitle, parseDateString } from '$lib/utils/date-formatting';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('TabPersistence');
@@ -240,23 +239,10 @@ export class TabPersistenceService {
    * @returns The migrated state
    */
   private static migrate(state: PersistedTabState): PersistedTabState {
-    // Sanitize state to remove duplicates (applies to all versions)
-    const sanitized = this.sanitize(state);
-
-    // Recompute titles for date nodes (they should never be persisted as static values)
-    // Date titles like "Today/Tomorrow/Yesterday" are dynamic and must be recomputed on load
-    const fixedTabs = sanitized.tabs.map(tab => {
-      // For date nodes, always recompute title from nodeId
-      if (tab.content?.nodeType === 'date' && tab.content?.nodeId) {
-        const date = parseDateString(tab.content.nodeId);
-        if (date) {
-          return { ...tab, title: formatDateTitle(date) };
-        }
-      }
-      return tab;
-    });
-
-    return { ...sanitized, tabs: fixedTabs };
+    // Sanitize state to remove duplicates (applies to all versions).
+    // Node-tab titles are derived at render time (see computeTabTitle) and never read
+    // from persisted state, so no title recomputation is needed here.
+    return this.sanitize(state);
   }
 
   /**

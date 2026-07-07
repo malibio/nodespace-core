@@ -15,6 +15,7 @@ import type {
   NodeReferenceComponent,
   NodeUpdater
 } from '$lib/plugins/types';
+import { createTestNode } from '../helpers/test-helpers';
 
 // Mock Svelte component for testing
 const MockViewerComponent = vi.fn() as unknown as NodeViewerComponent;
@@ -1521,6 +1522,87 @@ describe('PluginRegistry - Core Functionality', () => {
 
       // Should return state as-is when plugin disabled
       expect(result).toBe('original');
+    });
+  });
+
+  describe('getNodeTitle (issue #1564)', () => {
+    it('uses plugin getTitle when defined', () => {
+      const plugin: PluginDefinition = {
+        id: 'date',
+        name: 'Date',
+        description: 'Date plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        getTitle: vi.fn().mockReturnValue('Today')
+      };
+      registry.register(plugin);
+
+      const node = createTestNode({ id: '2026-07-07', nodeType: 'date', content: '2026-07-07' });
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('Today');
+      expect(plugin.getTitle).toHaveBeenCalledWith(node);
+    });
+
+    it('falls back to node.title when plugin has no getTitle', () => {
+      const plugin: PluginDefinition = {
+        id: 'task',
+        name: 'Task',
+        description: 'Task plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      // createTestNode() doesn't copy `title` from options, so set it directly.
+      const node = { ...createTestNode({ nodeType: 'task', content: 'raw content' }), title: 'Interpolated Title' };
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('Interpolated Title');
+    });
+
+    it('falls back to node.content when node.title is absent', () => {
+      const plugin: PluginDefinition = {
+        id: 'text',
+        name: 'Text',
+        description: 'Text plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      const node = createTestNode({ nodeType: 'text', content: 'raw content' });
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('raw content');
+    });
+
+    it('falls back to node.title || node.content for an unregistered nodeType', () => {
+      const node = createTestNode({ nodeType: 'unregistered-type', content: 'some content' });
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('some content');
+    });
+
+    it('ignores getTitle from a disabled plugin', () => {
+      const plugin: PluginDefinition = {
+        id: 'disabled-title',
+        name: 'Disabled Title',
+        description: 'Plugin that will be disabled',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        getTitle: vi.fn().mockReturnValue('Should Not Be Used')
+      };
+      registry.register(plugin);
+      registry.setEnabled('disabled-title', false);
+
+      const node = createTestNode({
+        nodeType: 'disabled-title',
+        content: 'fallback content'
+      });
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('fallback content');
     });
   });
 

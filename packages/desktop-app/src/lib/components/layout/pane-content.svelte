@@ -1,7 +1,7 @@
 <script lang="ts">
   import { setContext, untrack } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
-  import { tabState, updateTabTitle, updateTabContent, closeTab } from '$lib/stores/navigation.js';
+  import { tabState, updateTabContent, closeTab } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import type { Pane } from '$lib/stores/navigation.js';
@@ -68,10 +68,28 @@
     }
   }
 
+  // Tracks the nodeId each pane's hydration effect most recently requested, so that when
+  // an in-flight ensureNode() resolves after a newer navigation has already superseded it,
+  // the stale response is discarded instead of racing its state write against the new one.
+  let latestRequestedNodeId: string | undefined;
+
   async function hydrateNode(nodeId: string, tabId: string) {
     if (hydratedNodeIds.has(nodeId)) return;
 
-    const node = await sharedNodeStore.ensureNode(nodeId);
+    latestRequestedNodeId = nodeId;
+
+    let node;
+    try {
+      node = await sharedNodeStore.ensureNode(nodeId);
+    } catch (error) {
+      log.error(`Failed to hydrate node ${nodeId}:`, error);
+      return;
+    }
+
+    // A newer navigation superseded this request while we were awaiting — discard the
+    // stale result instead of mutating state for a nodeId that's no longer current.
+    if (latestRequestedNodeId !== nodeId) return;
+
     if (!node) {
       log.warn(`Node ${nodeId} not found — closing stale tab`);
       closeTab(tabId);
@@ -154,7 +172,6 @@
       <ViewerComponent
         nodeId={content.nodeId}
         tabId={activeTabId}
-        onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
         onNodeIdChange={(newNodeId: string) => {
           updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType });
         }}

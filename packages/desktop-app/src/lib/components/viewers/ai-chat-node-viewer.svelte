@@ -21,7 +21,7 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, tick, untrack } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import ChatMessage from '$lib/components/chat/chat-message.svelte';
@@ -49,10 +49,8 @@
 
   let {
     nodeId,
-    onTitleChange,
   }: {
     nodeId: string;
-    onTitleChange?: (_title: string) => void;
   } = $props();
 
   // --- State ---
@@ -273,10 +271,6 @@
     log.debug('AiChatNodeViewer mounted', { nodeId });
 
     try {
-      // pane-content guarantees the node is in sharedNodeStore before mounting this viewer.
-      const currentNode = sharedNodeStore.getNode(nodeId);
-      if (currentNode?.content) onTitleChange?.(currentNode.content);
-
       if (isTauri()) {
         if (destroyed) return;
 
@@ -328,11 +322,6 @@
   $effect(() => {
     void displayMessages.length;
     scrollToBottom();
-  });
-
-  // Update title when node content changes.
-  $effect(() => {
-    if (node?.content) untrack(() => onTitleChange?.(node!.content));
   });
 
   // In browser mode (no Tauri streaming events), poll the backend while processing
