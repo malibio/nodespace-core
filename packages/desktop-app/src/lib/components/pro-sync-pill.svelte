@@ -89,6 +89,23 @@
     }
   }
 
+  // Signed in = the daemon surfaced an identity (#199 S6). When set, clicking the
+  // pill opens the account menu ("signed in as <email>" + Sign out) instead of
+  // starting a new sign-in.
+  let signedIn = $derived(proSync.userEmail !== '');
+  let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
+  // While the daemon catches up in the background (state 'syncing'), the app is
+  // fully usable on the local cache — so the tooltip surfaces that progress even
+  // when signed in, rather than only "Signed in as <email>". Never a blocking gate;
+  // the pill is purely a status indicator (#249).
+  let pillTitle = $derived(
+    signedIn
+      ? proSync.state === 'syncing'
+        ? `${labels.syncing} — signed in as ${proSync.userEmail}`
+        : `Signed in as ${proSync.userEmail}`
+      : proSync.detail || labels[proSync.state]
+  );
+
   // The inbox is open when explicitly opened, or auto-opened for a fresh, undismissed
   // first sign-in on a device that hasn't seen onboarding yet.
   const firstRunAutoOpen = $derived(
@@ -106,23 +123,6 @@
     dismissedSignInEpisode = proSync.signedInEpisode;
     markFirstRunSeen();
   }
-
-  // Signed in = the daemon surfaced an identity (#199 S6). When set, clicking the
-  // pill opens the account menu ("signed in as <email>" + Sign out) instead of
-  // starting a new sign-in.
-  let signedIn = $derived(proSync.userEmail !== '');
-  let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
-  // While the daemon catches up in the background (state 'syncing'), the app is
-  // fully usable on the local cache — so the tooltip surfaces that progress even
-  // when signed in, rather than only "Signed in as <email>". Never a blocking gate;
-  // the pill is purely a status indicator (#249).
-  let pillTitle = $derived(
-    signedIn
-      ? proSync.state === 'syncing'
-        ? `${labels.syncing} — signed in as ${proSync.userEmail}`
-        : `Signed in as ${proSync.userEmail}`
-      : proSync.detail || labels[proSync.state]
-  );
 
   // A pill click opens a menu — the account menu when signed in, the
   // sign-in options menu when signed out — so a single click never
