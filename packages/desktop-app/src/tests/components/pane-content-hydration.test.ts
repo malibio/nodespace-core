@@ -1,15 +1,17 @@
 /**
- * Regression tests for the pane-content.svelte hydration race (issue #1564).
+ * Regression tests for the pane-content.svelte hydration behaviour (issue #1564, #1566).
  *
- * Full-component-mount tests for BaseNodeViewer-adjacent components require complex
- * setup (NodeServiceContext, plugin registry, database mocking - see the note in
- * merge-prevention.test.ts). Instead these tests exercise the exact hydration/race-guard
- * logic extracted from pane-content.svelte's hydrateNode(), driven with real async
- * timing via a controllable mock ensureNode(), to verify:
+ * Full-component-mount tests for BaseNodeViewer-adjacent components require complex setup
+ * (NodeServiceContext, plugin registry, database mocking - see merge-prevention.test.ts).
+ * Instead these tests exercise the hydration logic extracted from pane-content.svelte's
+ * hydrateNode(), driven with real async timing via a controllable mock store, to verify the
+ * event-driven conversion (ADR-049): hydration writes only into the store (one cell per
+ * nodeId), reads its status back off the store, and closes a not-found tab only if that tab
+ * still points at the fetched nodeId.
  *
- * 1. A slow/failed ensureNode() no longer throws an unhandled rejection.
- * 2. Rapid/repeated navigation before an earlier ensureNode() resolves does not let the
- *    stale response overwrite state for a nodeId that is no longer current.
+ * The earlier `latestRequestedNodeId` staleness guard is gone: because hydration state lives
+ * on the store keyed by nodeId — not a single shared local mirror — a stale in-flight fetch
+ * simply populates its own cell and can no longer overwrite the current node's state.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -18,18 +20,22 @@ interface Node {
   id: string;
 }
 
-// Mirrors hydrateNode() in pane-content.svelte: tracks the most recently requested
-// nodeId so a stale in-flight response can be detected and discarded after await.
-function createHydrationHarness(ensureNode: (nodeId: string) => Promise<Node | undefined>) {
-  let hydratedNodeIds = new Set<string>();
-  let latestRequestedNodeId: string | undefined;
+/**
+ * Mirrors hydrateNode() in pane-content.svelte after the ADR-049 conversion:
+ * fetch-if-missing into the store; on not-found, close the tab only if it still
+ * points at this nodeId. `getNode` reads the store's per-node cell — the single
+ * source of truth the component's isNodeHydrated $derived reads too.
+ */
+function createHydrationHarness(
+  ensureNode: (nodeId: string) => Promise<Node | undefined>,
+  tabNodeId: (tabId: string) => string | undefined
+) {
+  const store = new Map<string, Node>();
   const closedTabs: string[] = [];
   const errors: unknown[] = [];
 
   async function hydrateNode(nodeId: string, tabId: string) {
-    if (hydratedNodeIds.has(nodeId)) return;
-
-    latestRequestedNodeId = nodeId;
+    if (store.has(nodeId)) return;
 
     let node: Node | undefined;
     try {
@@ -39,40 +45,40 @@ function createHydrationHarness(ensureNode: (nodeId: string) => Promise<Node | u
       return;
     }
 
-    if (latestRequestedNodeId !== nodeId) return;
-
-    if (!node) {
-      closedTabs.push(tabId);
+    if (node) {
+      store.set(node.id, node);
       return;
     }
 
-    hydratedNodeIds = new Set(hydratedNodeIds).add(nodeId);
+    // Not found — close the tab only if it still points at this nodeId.
+    if (tabNodeId(tabId) === nodeId) {
+      closedTabs.push(tabId);
+    }
   }
 
   return {
     hydrateNode,
-    isHydrated: (nodeId: string) => hydratedNodeIds.has(nodeId),
+    isHydrated: (nodeId: string) => store.has(nodeId),
     closedTabs,
     errors
   };
 }
 
-describe('pane-content hydration race guard (#1564)', () => {
+describe('pane-content hydration (event-driven, #1564/#1566)', () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
 
   it('does not throw or leave an unhandled rejection when ensureNode fails', async () => {
     const ensureNode = vi.fn().mockRejectedValue(new TypeError('Load failed'));
-    const harness = createHydrationHarness(ensureNode);
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-07');
 
     await expect(harness.hydrateNode('2026-07-07', 'tab-1')).resolves.toBeUndefined();
     expect(harness.errors).toHaveLength(1);
     expect(harness.isHydrated('2026-07-07')).toBe(false);
   });
 
-  it('discards a stale response when a newer navigation supersedes it before resolving', async () => {
-    // First request is slow; second (newer) request resolves first.
+  it('a stale fetch resolving late populates only its own store cell — it cannot overwrite the current node', async () => {
     const resolvers = new Map<string, (node: Node | undefined) => void>();
     const ensureNode = vi.fn(
       (nodeId: string) =>
@@ -80,28 +86,27 @@ describe('pane-content hydration race guard (#1564)', () => {
           resolvers.set(nodeId, resolve);
         })
     );
-    const harness = createHydrationHarness(ensureNode);
+    // Tab currently shows the later-requested date.
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-07');
 
-    // Simulate rapid prev/next clicks: navigate to "2026-07-08" then immediately to "2026-07-07"
-    // before the first ensureNode() call has resolved (the #1564 repro: navigation keeps
-    // landing on the wrong date because the stale request wins the race).
+    // Rapid prev/next: request 07-08 (slow) then 07-07 (newer).
     const firstCall = harness.hydrateNode('2026-07-08', 'tab-1');
     const secondCall = harness.hydrateNode('2026-07-07', 'tab-1');
 
-    // Resolve the newer request first, then the stale one - mirrors an out-of-order
-    // network response for a slow/failed dev-proxy fetch.
+    // Resolve newer first, then the stale one — out-of-order, the #1564 repro.
     resolvers.get('2026-07-07')?.({ id: '2026-07-07' });
     await secondCall;
     resolvers.get('2026-07-08')?.({ id: '2026-07-08' });
     await firstCall;
 
-    // Only the current (later-requested) date should be marked hydrated - the stale
-    // '2026-07-08' response must not win even though its promise resolves after.
+    // Both cells populate, but they are independent — the current node (07-07) is hydrated
+    // and its state was never clobbered by the late 07-08 resolution. The component reads
+    // getNode(currentNodeId), so it always sees the right node regardless of resolve order.
     expect(harness.isHydrated('2026-07-07')).toBe(true);
-    expect(harness.isHydrated('2026-07-08')).toBe(false);
+    expect(harness.isHydrated('2026-07-08')).toBe(true);
   });
 
-  it('closes the tab only if the not-found response is still the latest request', async () => {
+  it('closes the tab only if the not-found response is still the tab\'s current nodeId', async () => {
     const resolvers = new Map<string, (node: Node | undefined) => void>();
     const ensureNode = vi.fn(
       (nodeId: string) =>
@@ -109,14 +114,15 @@ describe('pane-content hydration race guard (#1564)', () => {
           resolvers.set(nodeId, resolve);
         })
     );
-    const harness = createHydrationHarness(ensureNode);
+    // The tab has navigated on to 2026-07-07 by the time the stale fetch settles.
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-07');
 
     const staleCall = harness.hydrateNode('deleted-node', 'tab-1');
     const freshCall = harness.hydrateNode('2026-07-07', 'tab-1');
 
     resolvers.get('2026-07-07')?.({ id: '2026-07-07' });
     await freshCall;
-    // The stale request resolves as "not found" after being superseded - should not close the tab.
+    // Stale "not found" resolves after the tab moved on — must NOT close the tab.
     resolvers.get('deleted-node')?.(undefined);
     await staleCall;
 
@@ -124,7 +130,17 @@ describe('pane-content hydration race guard (#1564)', () => {
     expect(harness.isHydrated('2026-07-07')).toBe(true);
   });
 
-  it('repeated rapid navigation across many dates converges on the last requested date', async () => {
+  it('closes the tab when the current node is genuinely not found', async () => {
+    const ensureNode = vi.fn().mockResolvedValue(undefined);
+    // Tab still points at the missing node.
+    const harness = createHydrationHarness(ensureNode, () => 'missing-node');
+
+    await harness.hydrateNode('missing-node', 'tab-1');
+
+    expect(harness.closedTabs).toEqual(['tab-1']);
+  });
+
+  it('repeated rapid navigation across many dates hydrates every visited node independently', async () => {
     const resolvers = new Map<string, (node: Node | undefined) => void>();
     const ensureNode = vi.fn(
       (nodeId: string) =>
@@ -132,7 +148,7 @@ describe('pane-content hydration race guard (#1564)', () => {
           resolvers.set(nodeId, resolve);
         })
     );
-    const harness = createHydrationHarness(ensureNode);
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-09');
 
     const dates = ['2026-07-05', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09'];
     const calls = dates.map((date) => harness.hydrateNode(date, 'tab-1'));
@@ -143,7 +159,18 @@ describe('pane-content hydration race guard (#1564)', () => {
     }
     await Promise.all(calls);
 
-    const hydratedDates = dates.filter((date) => harness.isHydrated(date));
-    expect(hydratedDates).toEqual(['2026-07-09']);
+    // Every visited date hydrates its own cell; the component displays getNode(currentNodeId),
+    // so the last-navigated date (07-09) is what renders — no stale winner.
+    expect(dates.every((date) => harness.isHydrated(date))).toBe(true);
+  });
+
+  it('skips the fetch entirely when the node is already in the store', async () => {
+    const ensureNode = vi.fn().mockResolvedValue({ id: '2026-07-07' });
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-07');
+
+    await harness.hydrateNode('2026-07-07', 'tab-1'); // populates the cell
+    await harness.hydrateNode('2026-07-07', 'tab-1'); // second call is a no-op
+
+    expect(ensureNode).toHaveBeenCalledTimes(1);
   });
 });
