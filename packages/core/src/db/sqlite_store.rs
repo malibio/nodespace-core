@@ -3868,6 +3868,28 @@ impl SqliteStore {
         }
     }
 
+    /// Fetch a single relationship edge (with its properties) by endpoints and type.
+    ///
+    /// Complements `get_relationship_id` when the caller needs the edge's stored
+    /// properties (e.g. the `role`/`status` carried on a `has_role` edge), not just
+    /// its id. Returns `None` when no such edge exists.
+    pub async fn get_relationship_record(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+    ) -> Result<Option<RelationshipRecord>> {
+        let mut rows = self.db.query(
+            "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
+            libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
+        ).await.context("Failed to get relationship record")?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(Self::row_to_relationship(&row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn delete_generic_relationship(
         &self,
         source_id: &str,

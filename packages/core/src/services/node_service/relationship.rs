@@ -484,7 +484,10 @@ impl NodeService {
         // The relationship_type field distinguishes between different relationship types
 
         // Built-in type validation
-        let is_builtin = matches!(relationship_name, "member_of" | "has_child" | "mentions");
+        let is_builtin = matches!(
+            relationship_name,
+            "member_of" | "has_child" | "mentions" | "has_role"
+        );
 
         if is_builtin {
             // Built-in type-specific validation
@@ -539,7 +542,7 @@ impl NodeService {
                 .find(|r| r.name == relationship_name)
                 .ok_or_else(|| {
                     NodeServiceError::invalid_update(format!(
-                        "Relationship '{}' not defined in schema '{}'. Built-in relationships (member_of, has_child, mentions) are universal.",
+                        "Relationship '{}' not defined in schema '{}'. Built-in relationships (member_of, has_child, mentions, has_role) are universal.",
                         relationship_name, schema_id
                     ))
                 })?;
