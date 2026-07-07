@@ -25,7 +25,7 @@ const { membershipMock, proSyncMock } = vi.hoisted(() => ({
 		approveRequest: vi.fn(() => Promise.resolve()),
 		rejectRequest: vi.fn(() => Promise.resolve())
 	},
-	proSyncMock: { isPro: true }
+	proSyncMock: { isPro: true, onProConfirmed: vi.fn(() => () => {}) }
 }));
 
 vi.mock('$lib/stores/membership.svelte', () => ({ membership: membershipMock }));
