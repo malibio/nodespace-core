@@ -14,7 +14,7 @@ import {
   type CollectionsState,
   type CollectionItem,
   type CollectionMember
-} from '$lib/stores/collections';
+} from '$lib/stores/collections.svelte';
 import type { CollectionInfo } from '$lib/services/collection-service';
 import type { Node } from '$lib/types';
 import { mockCollections, mockMembers } from '../fixtures/collections-fixtures';

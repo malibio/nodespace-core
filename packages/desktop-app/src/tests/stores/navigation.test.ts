@@ -22,7 +22,7 @@ import {
   DEFAULT_PANE_ID,
   DAILY_JOURNAL_TAB_ID,
   type Tab
-} from '$lib/stores/navigation';
+} from '$lib/stores/navigation.svelte';
 import { TabPersistenceService } from '$lib/services/tab-persistence-service';
 import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
 

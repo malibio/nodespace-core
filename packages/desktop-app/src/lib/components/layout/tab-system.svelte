@@ -33,15 +33,15 @@
 -->
 <script lang="ts">
   import {
-    tabState,
+    navigationStore,
     setActiveTab,
     closeTab,
     reorderTab,
     moveTabBetweenPanes,
     getOrderedTabsForPane
-  } from '$lib/stores/navigation.js';
+  } from '$lib/stores/navigation.svelte';
   import { cn } from '$lib/utils.js';
-  import type { Tab, Pane } from '$lib/stores/navigation.js';
+  import type { Tab, Pane } from '$lib/stores/navigation.svelte';
   import type { Snippet } from 'svelte';
   import { draggable, droppable, type DragDropState } from '@thisux/sveltednd';
   import { createLogger } from '$lib/utils/logger';
@@ -65,18 +65,18 @@
   } = $props();
 
   // Fallback to global state when not pane-specific (backwards compatibility)
-  const currentPaneId = $derived(pane?.id || $tabState.activePaneId);
+  const currentPaneId = $derived(pane?.id || navigationStore.state.activePaneId);
 
   // Get tabs in the correct order based on pane's tabIds array
   // Use the optimized utility function for consistent tab ordering
-  const displayTabs = $derived(tabs || getOrderedTabsForPane($tabState, currentPaneId));
+  const displayTabs = $derived(tabs || getOrderedTabsForPane(navigationStore.state, currentPaneId));
 
   const currentActiveTabId = $derived(
-    activeTabId || $tabState.activeTabIds[$tabState.activePaneId]
+    activeTabId || navigationStore.state.activeTabIds[navigationStore.state.activePaneId]
   );
 
   // Check if close button should be disabled (last tab in last pane)
-  const isCloseDisabled = $derived(displayTabs.length === 1 && $tabState.panes.length === 1);
+  const isCloseDisabled = $derived(displayTabs.length === 1 && navigationStore.state.panes.length === 1);
 
   // Drag-over state for visual feedback
   let dragOverIndex: number | null = $state(null);
@@ -218,8 +218,8 @@
       const tabId = draggedItem.tab.id;
 
       // Validate pane existence
-      const sourcePaneExists = $tabState.panes.some((p) => p.id === sourcePaneId);
-      const targetPaneExists = $tabState.panes.some((p) => p.id === currentPaneId);
+      const sourcePaneExists = navigationStore.state.panes.some((p) => p.id === sourcePaneId);
+      const targetPaneExists = navigationStore.state.panes.some((p) => p.id === currentPaneId);
 
       if (!sourcePaneExists || !targetPaneExists) {
         log.error('Invalid drop operation: pane not found', {
@@ -230,7 +230,7 @@
           draggedTab: draggedItem.tab.title,
           sourceIndex,
           targetIndex,
-          totalPanes: $tabState.panes.length
+          totalPanes: navigationStore.state.panes.length
         });
         dragOverIndex = null;
         return;
@@ -292,7 +292,7 @@
    */
   function canDragTab(_tab: Tab): boolean {
     // Cannot drag last tab in last pane
-    return !(displayTabs.length === 1 && $tabState.panes.length === 1);
+    return !(displayTabs.length === 1 && navigationStore.state.panes.length === 1);
   }
 
   // Get active tab for slot prop

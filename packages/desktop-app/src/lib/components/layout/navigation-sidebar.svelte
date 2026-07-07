@@ -1,49 +1,42 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import {
-    layoutState,
-    navigationItems,
+    layoutStore,
     toggleSidebar,
     setCollectionsExpanded,
     setSchemaTypesExpanded
-  } from '$lib/stores/layout.js';
-  import { tabState, setActiveTab, addTab } from '$lib/stores/navigation.js';
-  import {
-    collectionsState,
-    collectionsData,
-    collectionsTree,
-    selectedCollection,
-    selectedCollectionMembers
-  } from '$lib/stores/collections.js';
+  } from '$lib/stores/layout.svelte';
+  import { navigationStore, setActiveTab, addTab } from '$lib/stores/navigation.svelte';
+  import { collectionsState, collectionsData } from '$lib/stores/collections.svelte';
   import { formatDateISO } from '$lib/utils/date-formatting.js';
   import { v4 as uuidv4 } from 'uuid';
   import CollectionSubPanel from './collection-sub-panel.svelte';
   import { onMount, onDestroy } from 'svelte';
-  import { schemasData, builtInSchemas as builtInSchemasStore, customSchemas as customSchemasStore } from '$lib/stores/schemas';
+  import { schemasStore, schemasData } from '$lib/stores/schemas.svelte';
   import { clearCollectionRefreshTimer, clearSchemaRefreshTimer } from '$lib/utils/collection-refresh';
 
-  // Subscribe to stores using Svelte 5 runes
-  let isCollapsed = $derived($layoutState.sidebarCollapsed);
-  let navItems = $derived($navigationItems);
+  // Read reactive store state directly (ADR-049)
+  let isCollapsed = $derived(layoutStore.state.sidebarCollapsed);
+  let navItems = $derived(layoutStore.navigationItems);
   // Collections expanded state from layout store (persisted)
-  let collectionsExpanded = $derived($layoutState.collectionsExpanded);
+  let collectionsExpanded = $derived(layoutStore.state.collectionsExpanded);
   // Schema Types expanded state from layout store (persisted)
-  let schemaTypesExpanded = $derived($layoutState.schemaTypesExpanded);
+  let schemaTypesExpanded = $derived(layoutStore.state.schemaTypesExpanded);
 
   // Collections state from collections store (UI-only, not persisted)
-  let subPanelOpen = $derived($collectionsState.subPanelOpen);
-  let expandedCollectionIds = $derived($collectionsState.expandedCollectionIds);
+  let subPanelOpen = $derived(collectionsState.state.subPanelOpen);
+  let expandedCollectionIds = $derived(collectionsState.state.expandedCollectionIds);
 
   // Collections data from backend
-  let collections = $derived($collectionsTree);
+  let collections = $derived(collectionsData.collectionsTree);
 
-  // Derived stores for sub-panel
-  let collectionForPanel = $derived($selectedCollection);
-  let collectionMembers = $derived($selectedCollectionMembers);
+  // Computed getters for sub-panel
+  let collectionForPanel = $derived(collectionsState.selectedCollection);
+  let collectionMembers = $derived(collectionsState.selectedCollectionMembers);
 
   // Schema types from global store (reactive — updates when schemas are created/deleted externally)
-  let builtInSchemas = $derived($builtInSchemasStore);
-  let customSchemas = $derived($customSchemasStore);
+  let builtInSchemas = $derived(schemasStore.builtInSchemas);
+  let customSchemas = $derived(schemasStore.customSchemas);
 
   // Load collections and schemas from backend on mount
   onMount(() => {
@@ -110,7 +103,7 @@
     handleCloseSubPanel();
 
     // Check if node is already open in a tab
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
     const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === nodeId);
 
     if (existingTab) {
@@ -144,7 +137,7 @@
    * Uses active pane, or falls back to first available pane
    */
   function getTargetPaneId(): string {
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
     // Use active pane if it exists, otherwise use the first pane
     const paneExists = currentState.panes.some((p) => p.id === currentState.activePaneId);
     if (paneExists) {
@@ -160,7 +153,7 @@
    */
   function findTodayDateTab() {
     const todayId = getTodayDateId();
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
 
     return currentState.tabs.find(
       (tab) => tab.content?.nodeId === todayId && tab.content?.nodeType === 'date'
@@ -201,7 +194,7 @@
   }
 
   function handleSchemaClick(schemaId: string) {
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
     const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === schemaId);
 
     if (existingTab) {
@@ -236,12 +229,7 @@
 
 
     // Update active state in navigation items
-    navigationItems.update((items) =>
-      items.map((item) => ({
-        ...item,
-        active: item.id === itemId
-      }))
-    );
+    layoutStore.setActiveNavItem(itemId);
   }
 </script>
 

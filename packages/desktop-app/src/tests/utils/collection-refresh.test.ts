@@ -22,7 +22,7 @@ const { mockLoadCollections, mockLoadMembers, mockCollectionsState } = vi.hoiste
   return { mockLoadCollections, mockLoadMembers, mockCollectionsState };
 });
 
-vi.mock('$lib/stores/collections', () => ({
+vi.mock('$lib/stores/collections.svelte', () => ({
   collectionsData: {
     loadCollections: (...args: unknown[]) => mockLoadCollections(...args),
     loadMembers: (...args: unknown[]) => mockLoadMembers(...args)

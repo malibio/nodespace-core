@@ -110,7 +110,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
     await Promise.resolve();
     await Promise.resolve();
 
-    const { schemasData, builtInSchemas, customSchemas } = await import('$lib/stores/schemas');
+    const { schemasData, builtInSchemas, customSchemas } = await import('$lib/stores/schemas.svelte');
     await schemasData.loadSchemas();
 
     expect(get(daemonStatus).unreachable).toBe(true);
@@ -150,7 +150,7 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         // onDaemonReconnect(loadSchemas) — a reference to schemas.ts's
         // private loadSchemas, not schemasData.loadSchemas, so it cannot be
         // spied on from here to await its exact settlement).
-        const { builtInSchemas, customSchemas } = await import('$lib/stores/schemas');
+        const { builtInSchemas, customSchemas } = await import('$lib/stores/schemas.svelte');
 
         const source = harnessStatusSource(h);
         startDaemonStatusListener(source);

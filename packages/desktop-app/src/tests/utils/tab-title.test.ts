@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { computeTabTitle } from '$lib/utils/tab-title';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
-import type { Tab } from '$lib/stores/navigation';
+import type { Tab } from '$lib/stores/navigation.svelte';
 import { createTestNode } from '../helpers/test-helpers';
 
 function createTestTab(overrides: Partial<Tab> = {}): Tab {

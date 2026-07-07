@@ -7,7 +7,7 @@
  * component pushes a computed title into the tab store as a side effect of rendering.
  */
 
-import type { Tab } from '$lib/stores/navigation';
+import type { Tab } from '$lib/stores/navigation.svelte';
 import type { Node } from '$lib/types/node';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { formatTabTitle } from '$lib/utils/text-formatting';

@@ -13,7 +13,7 @@ import {
   toggleCollectionsExpanded,
   setSchemaTypesExpanded,
   type NavigationItem
-} from '$lib/stores/layout';
+} from '$lib/stores/layout.svelte';
 import { LayoutPersistenceService } from '$lib/services/layout-persistence-service';
 
 // Mock the LayoutPersistenceService
@@ -405,7 +405,7 @@ describe('Layout Store - Persistence Integration', () => {
     await vi.resetModules();
 
     // Import fresh instances after reset
-    const freshModule = await import('$lib/stores/layout');
+    const freshModule = await import('$lib/stores/layout.svelte');
 
     // Reset to initial state
     freshModule.layoutState.set({
@@ -431,7 +431,7 @@ describe('Layout Store - Persistence Integration', () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
       // Get fresh import
-      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout.svelte');
 
       const result = loadPersistedLayoutState();
 
@@ -446,7 +446,7 @@ describe('Layout Store - Persistence Integration', () => {
     it('returns false when no persisted state exists', async () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(null);
 
-      const { loadPersistedLayoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState } = await import('$lib/stores/layout.svelte');
 
       const result = loadPersistedLayoutState();
 
@@ -461,7 +461,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState } = await import('$lib/stores/layout.svelte');
 
       // First call should load
       const result1 = loadPersistedLayoutState();
@@ -481,7 +481,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout.svelte');
 
       // Load persisted state (initializes)
       loadPersistedLayoutState();
@@ -499,7 +499,7 @@ describe('Layout Store - Persistence Integration', () => {
     });
 
     it('does not persist changes before initialization', async () => {
-      const { toggleSidebar } = await import('$lib/stores/layout');
+      const { toggleSidebar } = await import('$lib/stores/layout.svelte');
 
       // Make changes before initialization
       toggleSidebar();
@@ -514,7 +514,7 @@ describe('Layout Store - Persistence Integration', () => {
     it('persists state after initialization with no saved state', async () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(null);
 
-      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout.svelte');
 
       // Initialize (with no saved state)
       const result = loadPersistedLayoutState();
@@ -540,7 +540,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
 
@@ -551,7 +551,7 @@ describe('Layout Store - Persistence Integration', () => {
     it('keeps sidebarCollapsed false when no state loaded', async () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(null);
 
-      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
 
@@ -568,7 +568,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, toggleSidebar } = await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
       vi.clearAllMocks();
@@ -594,7 +594,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState, setActivePane } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, setActivePane } = await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
       vi.clearAllMocks();
@@ -621,7 +621,7 @@ describe('Layout Store - Persistence Integration', () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
       const { loadPersistedLayoutState, toggleSidebar, setActivePane } =
-        await import('$lib/stores/layout');
+        await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
       vi.clearAllMocks();
@@ -653,7 +653,7 @@ describe('Layout Store - Persistence Integration', () => {
     it('handles undefined persisted state', async () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(null);
 
-      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState, layoutState } = await import('$lib/stores/layout.svelte');
 
       const result = loadPersistedLayoutState();
 
@@ -667,7 +667,7 @@ describe('Layout Store - Persistence Integration', () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(null);
 
       const { loadPersistedLayoutState, toggleSidebar, layoutState } =
-        await import('$lib/stores/layout');
+        await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
       vi.clearAllMocks();
@@ -689,7 +689,7 @@ describe('Layout Store - Persistence Integration', () => {
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
       const { loadPersistedLayoutState, toggleSidebar, setActivePane, layoutState } =
-        await import('$lib/stores/layout');
+        await import('$lib/stores/layout.svelte');
 
       loadPersistedLayoutState();
       vi.clearAllMocks();
@@ -715,7 +715,7 @@ describe('Layout Store - Persistence Integration', () => {
       };
       vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
 
-      const { loadPersistedLayoutState } = await import('$lib/stores/layout');
+      const { loadPersistedLayoutState } = await import('$lib/stores/layout.svelte');
 
       const result1 = loadPersistedLayoutState();
       const result2 = loadPersistedLayoutState();

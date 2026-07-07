@@ -19,7 +19,7 @@
 <script lang="ts">
   import { createEventDispatcher, getContext } from 'svelte';
   import BaseNode from './base-node.svelte';
-  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 
   // Get paneId from context (set by PaneContent)
   const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;

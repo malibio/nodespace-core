@@ -68,7 +68,7 @@ describe('daemon-reconnect retry wiring (#1470)', () => {
   });
 
   it('schemasData retries loadSchemas once the daemon reconnects', async () => {
-    await import('$lib/stores/schemas');
+    await import('$lib/stores/schemas.svelte');
     expect(mockGetAllSchemas).not.toHaveBeenCalled();
 
     await goHealthy();
@@ -77,7 +77,7 @@ describe('daemon-reconnect retry wiring (#1470)', () => {
   });
 
   it('collectionsData retries loadCollections once the daemon reconnects', async () => {
-    await import('$lib/stores/collections');
+    await import('$lib/stores/collections.svelte');
     expect(mockGetAllCollections).not.toHaveBeenCalled();
 
     await goHealthy();

@@ -2,7 +2,7 @@
  * Test fixtures for collections store tests
  */
 
-import type { CollectionItem, CollectionMember } from '$lib/stores/collections';
+import type { CollectionItem, CollectionMember } from '$lib/stores/collections.svelte';
 
 export const mockCollections: CollectionItem[] = [
   {

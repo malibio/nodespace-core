@@ -11,7 +11,7 @@ import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinat
 import { TabPersistenceService } from '$lib/services/tab-persistence-service';
 import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
 import type { Node } from '$lib/types';
-import type { TabState } from '$lib/stores/navigation';
+import type { TabState } from '$lib/stores/navigation.svelte';
 
 describe('Expansion State Persistence Integration', () => {
   beforeEach(() => {

@@ -1,4 +1,3 @@
-import { writable } from 'svelte/store';
 import { formatDateISO } from '$lib/utils/date-formatting';
 import { clearScrollPosition, clearPaneScrollPositions } from './scroll-state';
 import { TabPersistenceService } from '$lib/services/tab-persistence-service';
@@ -42,114 +41,11 @@ function getTodayDateId(): string {
 export const DAILY_JOURNAL_TAB_ID = 'daily-journal';
 export const DEFAULT_PANE_ID = 'pane-1';
 
-// Tab state store
-const initialTabState: TabState = {
-  tabs: [
-    {
-      id: DAILY_JOURNAL_TAB_ID,
-      title: 'Daily Journal',
-      type: 'node',
-      content: {
-        nodeId: getTodayDateId(),
-        nodeType: 'date'
-      },
-      closeable: true,
-      paneId: DEFAULT_PANE_ID
-    }
-  ],
-  panes: [
-    {
-      id: DEFAULT_PANE_ID,
-      width: 100, // Single pane starts at 100%
-      tabIds: [DAILY_JOURNAL_TAB_ID]
-    }
-  ],
-  activePaneId: DEFAULT_PANE_ID,
-  activeTabIds: {
-    [DEFAULT_PANE_ID]: DAILY_JOURNAL_TAB_ID
-  }
-};
-
-export const tabState = writable<TabState>(initialTabState);
-
-// Track initialization state to prevent overwriting loaded state
-let isInitialized = false;
-
-// Debounce timer for persistence
-let persistenceTimer: number | undefined;
 const PERSISTENCE_DEBOUNCE_MS = 500;
 
-// Subscribe to state changes and persist automatically (debounced)
-tabState.subscribe((state) => {
-  // Only persist after initialization to avoid overwriting loaded state
-  if (isInitialized) {
-    // Clear existing timer
-    if (persistenceTimer !== undefined) {
-      clearTimeout(persistenceTimer);
-    }
-
-    // Debounce persistence to avoid rapid-fire saves during interactions
-    persistenceTimer = setTimeout(() => {
-      // Enrich tabs with expansion state before saving
-      const enrichedTabs = state.tabs.map((tab) => ({
-        ...tab,
-        expandedNodeIds: NodeExpansionCoordinator.getExpandedNodeIds(tab.id)
-      }));
-
-      TabPersistenceService.save({
-        ...state,
-        tabs: enrichedTabs
-      });
-    }, PERSISTENCE_DEBOUNCE_MS) as unknown as number;
-  }
-});
-
-/**
- * Load persisted tab state from storage
- * Should be called once on application startup
- * @returns True if state was loaded successfully, false if no saved state exists or loading failed
- */
-export function loadPersistedState(): boolean {
-  const persisted = TabPersistenceService.load();
-
-  if (persisted) {
-    // Restore the state
-    tabState.set({
-      tabs: persisted.tabs,
-      panes: persisted.panes,
-      activePaneId: persisted.activePaneId,
-      activeTabIds: persisted.activeTabIds
-    });
-
-    // Schedule expansion state restoration for each tab
-    // This will be applied when viewers register (deferred restoration pattern)
-    for (const tab of persisted.tabs) {
-      // Validate expandedNodeIds before scheduling restoration
-      if (
-        tab.expandedNodeIds &&
-        Array.isArray(tab.expandedNodeIds) &&
-        tab.expandedNodeIds.length > 0 &&
-        tab.expandedNodeIds.every((id) => typeof id === 'string' && id.length > 0)
-      ) {
-        NodeExpansionCoordinator.scheduleRestoration(tab.id, tab.expandedNodeIds);
-      } else if (tab.expandedNodeIds && !Array.isArray(tab.expandedNodeIds)) {
-        // Log warning for malformed data but don't crash
-        log.warn(
-          `Invalid expandedNodeIds for tab ${tab.id}: expected array, got ${typeof tab.expandedNodeIds}`
-        );
-      }
-    }
-  }
-
-  // Enable persistence after load attempt (whether successful or not)
-  isInitialized = true;
-
-  return !!persisted;
-}
-
-// Test utility to reset store to initial state
-export function resetTabState() {
-  tabState.set({
+// Tab state store — initial state
+function createInitialTabState(): TabState {
+  return {
     tabs: [
       {
         id: DAILY_JOURNAL_TAB_ID,
@@ -157,56 +53,137 @@ export function resetTabState() {
         type: 'node',
         content: {
           nodeId: getTodayDateId(),
-          nodeType: 'date'
+          nodeType: 'date',
         },
         closeable: true,
-        paneId: DEFAULT_PANE_ID
-      }
+        paneId: DEFAULT_PANE_ID,
+      },
     ],
     panes: [
       {
         id: DEFAULT_PANE_ID,
-        width: 100,
-        tabIds: [DAILY_JOURNAL_TAB_ID]
-      }
+        width: 100, // Single pane starts at 100%
+        tabIds: [DAILY_JOURNAL_TAB_ID],
+      },
     ],
     activePaneId: DEFAULT_PANE_ID,
     activeTabIds: {
-      [DEFAULT_PANE_ID]: DAILY_JOURNAL_TAB_ID
+      [DEFAULT_PANE_ID]: DAILY_JOURNAL_TAB_ID,
+    },
+  };
+}
+
+class NavigationStore {
+  state = $state<TabState>(createInitialTabState());
+
+  // Track initialization state to prevent overwriting loaded state
+  #isInitialized = false;
+
+  // Debounce timer for persistence
+  #persistenceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Persist tab state (debounced). Only persists after initialization to avoid
+   * overwriting loaded state during startup. Enriches tabs with expansion state
+   * before saving.
+   */
+  #persist(): void {
+    if (!this.#isInitialized) return;
+
+    if (this.#persistenceTimer !== undefined) {
+      clearTimeout(this.#persistenceTimer);
     }
-  });
-}
 
-/** Clear all tabs and panes (used during database hot-swap) */
-export function clearAllTabs() {
-  tabState.set({
-    tabs: [],
-    panes: [
-      {
-        id: DEFAULT_PANE_ID,
-        width: 100,
-        tabIds: []
+    // Debounce persistence to avoid rapid-fire saves during interactions
+    this.#persistenceTimer = setTimeout(() => {
+      // Enrich tabs with expansion state before saving
+      const enrichedTabs = this.state.tabs.map((tab) => ({
+        ...tab,
+        expandedNodeIds: NodeExpansionCoordinator.getExpandedNodeIds(tab.id),
+      }));
+
+      TabPersistenceService.save({
+        ...this.state,
+        tabs: enrichedTabs,
+      });
+    }, PERSISTENCE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Load persisted tab state from storage.
+   * Should be called once on application startup.
+   * @returns True if state was loaded successfully, false if no saved state exists or loading failed
+   */
+  loadPersistedState(): boolean {
+    const persisted = TabPersistenceService.load();
+
+    if (persisted) {
+      this.state = {
+        tabs: persisted.tabs,
+        panes: persisted.panes,
+        activePaneId: persisted.activePaneId,
+        activeTabIds: persisted.activeTabIds,
+      };
+
+      // Schedule expansion state restoration for each tab
+      // This will be applied when viewers register (deferred restoration pattern)
+      for (const tab of persisted.tabs) {
+        // Validate expandedNodeIds before scheduling restoration
+        if (
+          tab.expandedNodeIds &&
+          Array.isArray(tab.expandedNodeIds) &&
+          tab.expandedNodeIds.length > 0 &&
+          tab.expandedNodeIds.every((id) => typeof id === 'string' && id.length > 0)
+        ) {
+          NodeExpansionCoordinator.scheduleRestoration(tab.id, tab.expandedNodeIds);
+        } else if (tab.expandedNodeIds && !Array.isArray(tab.expandedNodeIds)) {
+          // Log warning for malformed data but don't crash
+          log.warn(
+            `Invalid expandedNodeIds for tab ${tab.id}: expected array, got ${typeof tab.expandedNodeIds}`
+          );
+        }
       }
-    ],
-    activePaneId: DEFAULT_PANE_ID,
-    activeTabIds: {}
-  });
-}
+    }
 
-// Pane Management Functions
+    // Enable persistence after load attempt (whether successful or not)
+    this.#isInitialized = true;
 
-/**
- * Creates a new pane with 50/50 split
- * Maximum 2 panes supported
- * @returns The created pane or null if max panes reached
- */
-export function createPane(): Pane | null {
-  let createdPane: Pane | null = null;
+    return !!persisted;
+  }
 
-  tabState.update((state) => {
+  /** Test utility to reset store to initial state */
+  resetTabState(): void {
+    this.state = createInitialTabState();
+  }
+
+  /** Clear all tabs and panes (used during database hot-swap) */
+  clearAllTabs(): void {
+    this.state = {
+      tabs: [],
+      panes: [
+        {
+          id: DEFAULT_PANE_ID,
+          width: 100,
+          tabIds: [],
+        },
+      ],
+      activePaneId: DEFAULT_PANE_ID,
+      activeTabIds: {},
+    };
+    this.#persist();
+  }
+
+  // Pane Management
+
+  /**
+   * Creates a new pane with 50/50 split. Maximum 2 panes supported.
+   * @returns The created pane or null if max panes reached
+   */
+  createPane(): Pane | null {
+    const state = this.state;
     // Prevent creating more than 2 panes
     if (state.panes.length >= 2) {
-      return state;
+      return null;
     }
 
     // Generate unique pane ID by finding the highest existing pane number and incrementing
@@ -224,49 +201,36 @@ export function createPane(): Pane | null {
     const newPane: Pane = {
       id: newPaneId,
       width: 50,
-      tabIds: []
+      tabIds: [],
     };
 
     // Update existing panes to 50% width
-    const updatedPanes = state.panes.map((pane) => ({
-      ...pane,
-      width: 50
-    }));
+    const updatedPanes = state.panes.map((pane) => ({ ...pane, width: 50 }));
 
-    createdPane = newPane;
+    this.state = { ...state, panes: [...updatedPanes, newPane] };
+    this.#persist();
 
-    return {
-      ...state,
-      panes: [...updatedPanes, newPane]
-    };
-  });
+    return newPane;
+  }
 
-  return createdPane;
-}
+  /**
+   * Closes a pane and expands remaining pane to 100%. Cannot close the last pane.
+   */
+  closePane(paneId: string): void {
+    // Clean up scroll positions for all viewers in this pane
+    clearPaneScrollPositions(paneId);
 
-/**
- * Closes a pane and expands remaining pane to 100%
- * Cannot close the last pane
- * @param paneId - The pane ID to close
- */
-export function closePane(paneId: string) {
-  // Clean up scroll positions for all viewers in this pane
-  clearPaneScrollPositions(paneId);
-
-  tabState.update((state) => {
+    const state = this.state;
     // Cannot close the last pane
     if (state.panes.length <= 1) {
-      return state;
+      return;
     }
 
     // Remove the pane
     const remainingPanes = state.panes.filter((pane) => pane.id !== paneId);
 
     // Expand remaining pane to 100%
-    const updatedPanes = remainingPanes.map((pane) => ({
-      ...pane,
-      width: 100
-    }));
+    const updatedPanes = remainingPanes.map((pane) => ({ ...pane, width: 100 }));
 
     // Remove all tabs belonging to this pane
     const remainingTabs = state.tabs.filter((tab) => tab.paneId !== paneId);
@@ -281,45 +245,35 @@ export function closePane(paneId: string) {
     const newActiveTabIds = { ...state.activeTabIds };
     delete newActiveTabIds[paneId];
 
-    return {
+    this.state = {
       ...state,
       panes: updatedPanes,
       tabs: remainingTabs,
       activePaneId: newActivePaneId,
-      activeTabIds: newActiveTabIds
+      activeTabIds: newActiveTabIds,
     };
-  });
-}
+    this.#persist();
+  }
 
-/**
- * Sets the active pane
- * @param paneId - The pane ID to set as active
- */
-export function setActivePane(paneId: string) {
-  tabState.update((state) => {
+  /** Sets the active pane */
+  setActivePane(paneId: string): void {
+    const state = this.state;
     // Verify pane exists
     const paneExists = state.panes.some((pane) => pane.id === paneId);
     if (!paneExists) {
-      return state;
+      return;
     }
 
-    return {
-      ...state,
-      activePaneId: paneId
-    };
-  });
-}
+    this.state = { ...state, activePaneId: paneId };
+    this.#persist();
+  }
 
-/**
- * Resizes panes maintaining 100% total width
- * @param paneId - The pane ID to resize
- * @param newWidth - New width percentage (0-100)
- */
-export function resizePane(paneId: string, newWidth: number) {
-  tabState.update((state) => {
+  /** Resizes panes maintaining 100% total width */
+  resizePane(paneId: string, newWidth: number): void {
+    const state = this.state;
     // Only works with 2 panes
     if (state.panes.length !== 2) {
-      return state;
+      return;
     }
 
     // Enforce minimum 200px (approximate percentage based on typical viewport)
@@ -335,49 +289,39 @@ export function resizePane(paneId: string, newWidth: number) {
       }
     });
 
-    return {
-      ...state,
-      panes: updatedPanes
-    };
-  });
-}
+    this.state = { ...state, panes: updatedPanes };
+    this.#persist();
+  }
 
-// Tab Management Functions
+  // Tab Management
 
-/**
- * Sets the active tab in the specified pane
- * @param tabId - The tab ID to set as active
- * @param paneId - The pane ID containing the tab
- */
-export function setActiveTab(tabId: string, paneId?: string) {
-  tabState.update((state) => {
+  /** Sets the active tab in the specified pane */
+  setActiveTab(tabId: string, paneId?: string): void {
+    const state = this.state;
     const tab = state.tabs.find((t) => t.id === tabId);
     if (!tab) {
-      return state;
+      return;
     }
 
     const targetPaneId = paneId || tab.paneId;
 
-    return {
+    this.state = {
       ...state,
       activePaneId: targetPaneId,
       activeTabIds: {
         ...state.activeTabIds,
-        [targetPaneId]: tabId
-      }
+        [targetPaneId]: tabId,
+      },
     };
-  });
-}
+    this.#persist();
+  }
 
-/**
- * Closes a tab and auto-closes the pane if it's the last tab
- * @param tabId - The tab ID to close
- */
-export function closeTab(tabId: string) {
-  tabState.update((state) => {
+  /** Closes a tab and auto-closes the pane if it's the last tab */
+  closeTab(tabId: string): void {
+    const state = this.state;
     const tab = state.tabs.find((t) => t.id === tabId);
     if (!tab) {
-      return state;
+      return;
     }
 
     const paneId = tab.paneId;
@@ -390,14 +334,14 @@ export function closeTab(tabId: string) {
     });
     const pane = state.panes.find((p) => p.id === paneId);
     if (!pane) {
-      return state;
+      return;
     }
 
     // Check if this is the last tab in the last pane
     const tabsInPane = state.tabs.filter((t) => t.paneId === paneId);
     if (tabsInPane.length === 1 && state.panes.length === 1) {
       // Cannot close last tab in last pane
-      return state;
+      return;
     }
 
     // Remove the tab
@@ -406,10 +350,7 @@ export function closeTab(tabId: string) {
     // Update pane's tab list
     const updatedPanes = state.panes.map((p) => {
       if (p.id === paneId) {
-        return {
-          ...p,
-          tabIds: p.tabIds.filter((id) => id !== tabId)
-        };
+        return { ...p, tabIds: p.tabIds.filter((id) => id !== tabId) };
       }
       return p;
     });
@@ -421,10 +362,7 @@ export function closeTab(tabId: string) {
       const remainingPanes = updatedPanes.filter((p) => p.id !== paneId);
 
       // Expand remaining pane to 100%
-      const expandedPanes = remainingPanes.map((p) => ({
-        ...p,
-        width: 100
-      }));
+      const expandedPanes = remainingPanes.map((p) => ({ ...p, width: 100 }));
 
       // Update active pane if necessary
       let newActivePaneId = state.activePaneId;
@@ -436,17 +374,19 @@ export function closeTab(tabId: string) {
       const newActiveTabIds = { ...state.activeTabIds };
       delete newActiveTabIds[paneId];
 
-      return {
+      this.state = {
         ...state,
         panes: expandedPanes,
         tabs: newTabs,
         activePaneId: newActivePaneId,
-        activeTabIds: newActiveTabIds
+        activeTabIds: newActiveTabIds,
       };
+      this.#persist();
+      return;
     }
 
     // Update active tab in this pane if we closed the active one
-    let newActiveTabIds = { ...state.activeTabIds };
+    const newActiveTabIds = { ...state.activeTabIds };
     if (tabId === state.activeTabIds[paneId]) {
       const firstRemainingTab = remainingTabsInPane[0];
       if (firstRemainingTab) {
@@ -454,108 +394,76 @@ export function closeTab(tabId: string) {
       }
     }
 
-    return {
+    this.state = {
       ...state,
       panes: updatedPanes,
       tabs: newTabs,
-      activeTabIds: newActiveTabIds
+      activeTabIds: newActiveTabIds,
     };
-  });
-}
+    this.#persist();
+  }
 
-/**
- * Adds a new tab to the specified pane
- * @param tab - The tab to add
- * @param makeActive - Whether to make the new tab active (default: true)
- */
-export function addTab(tab: Tab, makeActive: boolean = true) {
-  tabState.update((state) => {
+  /** Adds a new tab to the specified pane */
+  addTab(tab: Tab, makeActive: boolean = true): void {
+    const state = this.state;
     // Verify pane exists
     const paneExists = state.panes.some((pane) => pane.id === tab.paneId);
     if (!paneExists) {
       log.error(`Pane ${tab.paneId} does not exist`);
-      return state;
+      return;
     }
 
     // Add tab to pane's tab list
     const updatedPanes = state.panes.map((pane) => {
       if (pane.id === tab.paneId) {
-        return {
-          ...pane,
-          tabIds: [...pane.tabIds, tab.id]
-        };
+        return { ...pane, tabIds: [...pane.tabIds, tab.id] };
       }
       return pane;
     });
 
     // Only update active tab/pane if makeActive is true
-    const newState = {
+    const newState: TabState = {
       ...state,
       tabs: [...state.tabs, tab],
-      panes: updatedPanes
+      panes: updatedPanes,
     };
 
     if (makeActive) {
       newState.activePaneId = tab.paneId;
       newState.activeTabIds = {
         ...state.activeTabIds,
-        [tab.paneId]: tab.id
+        [tab.paneId]: tab.id,
       };
     }
 
-    return newState;
-  });
-}
+    this.state = newState;
+    this.#persist();
+  }
 
-export function updateTabContent(tabId: string, content: { nodeId: string; nodeType?: string }) {
-  tabState.update((state) => ({
-    ...state,
-    tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content } : tab))
-  }));
-}
+  updateTabContent(tabId: string, content: { nodeId: string; nodeType?: string }): void {
+    this.state = {
+      ...this.state,
+      tabs: this.state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content } : tab)),
+    };
+    this.#persist();
+  }
 
-/**
- * Get ordered tabs for a specific pane
- * @param state - The current tab state
- * @param paneId - The pane ID to get tabs for
- * @returns Array of tabs in the order specified by the pane's tabIds array
- *
- * @remarks
- * This function is optimized to use a single-pass approach for ordering tabs.
- * It maps through the pane's tabIds array and looks up each tab, filtering out
- * any undefined results (which shouldn't occur in normal operation).
- */
-export function getOrderedTabsForPane(state: TabState, paneId: string): Tab[] {
-  const pane = state.panes.find((p) => p.id === paneId);
-  if (!pane) return [];
-
-  // Single-pass: map tabIds to tabs, filter out undefined
-  return pane.tabIds
-    .map((tabId) => state.tabs.find((t) => t.id === tabId))
-    .filter((t): t is Tab => t !== undefined);
-}
-
-/**
- * Reorder a tab within the same pane
- * @param tabId - The tab ID to reorder
- * @param newIndex - The new position index in the pane's tab list
- * @param paneId - The pane ID containing the tab
- */
-export function reorderTab(tabId: string, newIndex: number, paneId: string): void {
-  tabState.update((state) => {
+  /** Reorder a tab within the same pane */
+  reorderTab(tabId: string, newIndex: number, paneId: string): void {
+    const state = this.state;
     const pane = state.panes.find((p) => p.id === paneId);
     if (!pane) {
-      return state;
+      return;
     }
 
     const currentIndex = pane.tabIds.indexOf(tabId);
     if (currentIndex === -1) {
-      return state;
+      return;
     }
 
     // Don't do anything if moving to same position
     if (currentIndex === newIndex) {
-      return state;
+      return;
     }
 
     // Create new tabIds array with reordered tabs
@@ -571,34 +479,27 @@ export function reorderTab(tabId: string, newIndex: number, paneId: string): voi
       return p;
     });
 
-    return {
-      ...state,
-      panes: updatedPanes
-    };
-  });
-}
+    this.state = { ...state, panes: updatedPanes };
+    this.#persist();
+  }
 
-/**
- * Move a tab from one pane to another
- * If source pane becomes empty, it will be closed automatically
- * @param tabId - The tab ID to move
- * @param sourcePaneId - The source pane ID
- * @param targetPaneId - The target pane ID
- * @param targetIndex - The position index in target pane's tab list
- */
-export function moveTabBetweenPanes(
-  tabId: string,
-  sourcePaneId: string,
-  targetPaneId: string,
-  targetIndex: number
-): void {
-  tabState.update((state) => {
+  /**
+   * Move a tab from one pane to another.
+   * If source pane becomes empty, it will be closed automatically.
+   */
+  moveTabBetweenPanes(
+    tabId: string,
+    sourcePaneId: string,
+    targetPaneId: string,
+    targetIndex: number
+  ): void {
+    const state = this.state;
     const sourcePane = state.panes.find((p) => p.id === sourcePaneId);
     const targetPane = state.panes.find((p) => p.id === targetPaneId);
     const tab = state.tabs.find((t) => t.id === tabId);
 
     if (!sourcePane || !targetPane || !tab) {
-      return state;
+      return;
     }
 
     // Update tab's paneId
@@ -631,10 +532,7 @@ export function moveTabBetweenPanes(
       updatedPanes = updatedPanes.filter((p) => p.id !== sourcePaneId);
 
       // Expand remaining pane to 100%
-      updatedPanes = updatedPanes.map((p) => ({
-        ...p,
-        width: 100
-      }));
+      updatedPanes = updatedPanes.map((p) => ({ ...p, width: 100 }));
 
       // Update active pane if necessary
       let newActivePaneId = state.activePaneId;
@@ -649,17 +547,19 @@ export function moveTabBetweenPanes(
       // Set moved tab as active in target pane
       newActiveTabIds[targetPaneId] = tabId;
 
-      return {
+      this.state = {
         ...state,
         tabs: updatedTabs,
         panes: updatedPanes,
         activePaneId: newActivePaneId,
-        activeTabIds: newActiveTabIds
+        activeTabIds: newActiveTabIds,
       };
+      this.#persist();
+      return;
     }
 
     // Update active tab in source pane if we moved the active tab
-    let newActiveTabIds = { ...state.activeTabIds };
+    const newActiveTabIds = { ...state.activeTabIds };
     if (state.activeTabIds[sourcePaneId] === tabId) {
       // Set first remaining tab as active in source pane
       if (sourceTabIds.length > 0) {
@@ -670,15 +570,64 @@ export function moveTabBetweenPanes(
     // Set moved tab as active in target pane
     newActiveTabIds[targetPaneId] = tabId;
 
-    return {
+    this.state = {
       ...state,
       tabs: updatedTabs,
       panes: updatedPanes,
       activePaneId: targetPaneId,
-      activeTabIds: newActiveTabIds
+      activeTabIds: newActiveTabIds,
     };
-  });
+    this.#persist();
+  }
 }
 
-// Re-export from shared utility for backward compatibility
+export const navigationStore = new NavigationStore();
+
+// ---------------------------------------------------------------------------
+// Thin free-function delegators — keep existing callers working unchanged.
+// ---------------------------------------------------------------------------
+
+export const loadPersistedState = (): boolean => navigationStore.loadPersistedState();
+export const resetTabState = (): void => navigationStore.resetTabState();
+export const clearAllTabs = (): void => navigationStore.clearAllTabs();
+export const createPane = (): Pane | null => navigationStore.createPane();
+export const closePane = (paneId: string): void => navigationStore.closePane(paneId);
+export const setActivePane = (paneId: string): void => navigationStore.setActivePane(paneId);
+export const resizePane = (paneId: string, newWidth: number): void =>
+  navigationStore.resizePane(paneId, newWidth);
+export const setActiveTab = (tabId: string, paneId?: string): void =>
+  navigationStore.setActiveTab(tabId, paneId);
+export const closeTab = (tabId: string): void => navigationStore.closeTab(tabId);
+export const addTab = (tab: Tab, makeActive: boolean = true): void =>
+  navigationStore.addTab(tab, makeActive);
+export const updateTabContent = (
+  tabId: string,
+  content: { nodeId: string; nodeType?: string }
+): void => navigationStore.updateTabContent(tabId, content);
+export const reorderTab = (tabId: string, newIndex: number, paneId: string): void =>
+  navigationStore.reorderTab(tabId, newIndex, paneId);
+export const moveTabBetweenPanes = (
+  tabId: string,
+  sourcePaneId: string,
+  targetPaneId: string,
+  targetIndex: number
+): void => navigationStore.moveTabBetweenPanes(tabId, sourcePaneId, targetPaneId, targetIndex);
+
+/**
+ * Get ordered tabs for a specific pane.
+ * @param state - The current tab state
+ * @param paneId - The pane ID to get tabs for
+ * @returns Array of tabs in the order specified by the pane's tabIds array
+ */
+export function getOrderedTabsForPane(state: TabState, paneId: string): Tab[] {
+  const pane = state.panes.find((p) => p.id === paneId);
+  if (!pane) return [];
+
+  // Single-pass: map tabIds to tabs, filter out undefined
+  return pane.tabIds
+    .map((tabId) => state.tabs.find((t) => t.id === tabId))
+    .filter((t): t is Tab => t !== undefined);
+}
+
+// Re-export from shared utility
 export { formatDateTitle as getDateTabTitle } from '$lib/utils/date-formatting';

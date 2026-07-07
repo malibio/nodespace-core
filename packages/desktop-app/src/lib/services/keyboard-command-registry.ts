@@ -6,7 +6,7 @@
  */
 
 import type { TextareaController } from '$lib/design/components/textarea-controller';
-import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('KeyboardCommandRegistry');

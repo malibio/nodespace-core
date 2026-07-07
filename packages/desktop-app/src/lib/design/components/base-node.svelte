@@ -53,7 +53,7 @@
   import { positionCursor } from '$lib/actions/position-cursor';
   import { createMockElementForView, findCharacterFromClickFast } from './cursor-positioning';
   import { mapViewPositionToEditPosition } from '$lib/utils/view-edit-mapper';
-  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 
   // Logger instance for BaseNode component
   const log = createLogger('BaseNode');

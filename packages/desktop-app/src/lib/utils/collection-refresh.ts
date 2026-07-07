@@ -8,9 +8,8 @@
  * to follow DRY principle.
  */
 
-import { get } from 'svelte/store';
-import { collectionsData, collectionsState } from '$lib/stores/collections';
-import { schemasData } from '$lib/stores/schemas';
+import { collectionsData, collectionsState } from '$lib/stores/collections.svelte';
+import { schemasData } from '$lib/stores/schemas.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('CollectionRefresh');
@@ -41,7 +40,7 @@ export function scheduleCollectionRefresh(affectedCollectionId?: string): void {
 
     // If the affected collection is currently selected, also refresh its members
     if (affectedCollectionId) {
-      const state = get(collectionsState);
+      const state = collectionsState.state;
       if (state.selectedCollectionId === affectedCollectionId) {
         log.debug('Refreshing members for selected collection', affectedCollectionId);
         await collectionsData.loadMembers(affectedCollectionId);

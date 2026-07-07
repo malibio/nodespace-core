@@ -20,7 +20,7 @@ import {
 } from '$lib/services/reactive-node-service.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { Node } from '$lib/types';
-import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { DEFAULT_PANE_ID as _DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { waitForPendingMoveOperations } from '$lib/services/pending-operations';
 import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
 

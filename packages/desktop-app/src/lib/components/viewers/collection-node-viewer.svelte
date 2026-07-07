@@ -17,9 +17,9 @@
   import { onMount } from 'svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
-  import { collectionsData } from '$lib/stores/collections';
+  import { collectionsData } from '$lib/stores/collections.svelte';
   import type { Node, CollectionNode } from '$lib/types';
-  import { tabState, addTab, setActiveTab } from '$lib/stores/navigation';
+  import { navigationStore, addTab, setActiveTab } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import { v4 as uuidv4 } from 'uuid';
   import CollaborationView from '$lib/components/collaboration/collaboration-view.svelte';
@@ -116,7 +116,7 @@
 
   function handleMemberClick(member: Node) {
     // Check if node is already open in a tab
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
     const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === member.id);
 
     if (existingTab) {
@@ -139,7 +139,7 @@
   }
 
   function getTargetPaneId(): string {
-    const currentState = $tabState;
+    const currentState = navigationStore.state;
     const paneExists = currentState.panes.some((p) => p.id === currentState.activePaneId);
     if (paneExists) {
       return currentState.activePaneId;

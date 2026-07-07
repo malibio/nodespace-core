@@ -17,15 +17,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
   addTab,
-  tabState,
+  navigationStore,
   updateTabContent,
   createPane,
   setActivePane
-} from '$lib/stores/navigation';
+} from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
-import { get } from 'svelte/store';
 import type { Node } from '$lib/types';
 import { formatDateTitle } from '$lib/utils/date-formatting';
 import { formatTabTitle } from '$lib/utils/text-formatting';
@@ -269,7 +268,7 @@ export class NavigationService {
 
     const { target, navNodeId, navNodeType, navTitle, isNonRoot } = resolved;
 
-    const currentState = get(tabState);
+    const currentState = navigationStore.state;
 
     if (openInNewTab) {
       // Cmd+Click: Always create new tab in the source pane (or active pane if no source provided)
@@ -339,7 +338,7 @@ export class NavigationService {
 
     const { target, navNodeId, navNodeType, navTitle, isNonRoot } = resolved;
 
-    const currentState = get(tabState);
+    const currentState = navigationStore.state;
     // Use provided source pane, or fall back to active pane
     const currentPaneId = sourcePaneId ?? currentState.activePaneId;
 

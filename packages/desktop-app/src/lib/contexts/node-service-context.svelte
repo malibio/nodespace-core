@@ -42,7 +42,7 @@
   import { createReactiveNodeService } from '$lib/services/reactive-node-service.svelte';
   import { ContentProcessor } from '$lib/services/content-processor';
   import { focusManager } from '$lib/services/focus-manager.svelte';
-  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('NodeServiceContext');

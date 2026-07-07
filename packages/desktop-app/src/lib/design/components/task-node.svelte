@@ -18,7 +18,7 @@
   import BaseNode from './base-node.svelte';
   import type { NodeState } from '$lib/design/icons/registry';
   import { getNavigationService } from '$lib/services/navigation-service';
-  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 
   // Get paneId from context (set by PaneContent) - identifies which pane this node is in
   const sourcePaneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;

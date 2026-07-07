@@ -31,10 +31,9 @@
     type ChatModelEntry,
   } from '$lib/services/tauri-commands';
   import { AGENT_EVENTS } from '$lib/types/agent-types';
-  import { getOpenAiConfigs } from '$lib/stores/settings';
-  import { settingsInitialCategory } from '$lib/stores/settings';
-  import { addTab, tabState, setActiveTab } from '$lib/stores/navigation';
-  import { get } from 'svelte/store';
+  import { getOpenAiConfigs } from '$lib/stores/settings.svelte';
+  import { settingsStore } from '$lib/stores/settings.svelte';
+  import { addTab, navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
 
@@ -166,8 +165,8 @@
 
   /** Open the Settings tab pre-focused on the AI Models section. */
   function openAiModelsSettings(): void {
-    settingsInitialCategory.set('ai-models');
-    const state = get(tabState);
+    settingsStore.initialCategory = 'ai-models';
+    const state = navigationStore.state;
     const existing = state.tabs.find((t) => t.type === 'settings');
     if (existing) {
       setActiveTab(existing.id, existing.paneId);

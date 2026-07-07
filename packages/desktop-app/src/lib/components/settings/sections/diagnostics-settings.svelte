@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { appSettings } from '$lib/stores/settings';
+    import { settingsStore } from '$lib/stores/settings.svelte';
 </script>
 
 <div class="max-w-[600px]">
@@ -13,7 +13,7 @@
 
         <div class="flex flex-col gap-1">
             <span class="text-muted-foreground text-xs font-medium uppercase tracking-widest">Database Path</span>
-            <span class="text-foreground break-all font-mono text-sm">{$appSettings?.activeDatabasePath ?? 'Unknown'}</span>
+            <span class="text-foreground break-all font-mono text-sm">{settingsStore.appSettings?.activeDatabasePath ?? 'Unknown'}</span>
         </div>
     </div>
 </div>

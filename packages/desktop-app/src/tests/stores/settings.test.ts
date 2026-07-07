@@ -15,8 +15,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args)
 }));
 
-import { appSettings, loadSettings, updateDisplaySetting } from '$lib/stores/settings';
-import type { AppSettings } from '$lib/stores/settings';
+import { appSettings, loadSettings, updateDisplaySetting } from '$lib/stores/settings.svelte';
+import type { AppSettings } from '$lib/stores/settings.svelte';
 
 describe('Settings Store', () => {
   const mockSettings: AppSettings = {

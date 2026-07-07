@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { getNavigationService, NavigationService } from '$lib/services/navigation-service';
-import { tabState, resetTabState, DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { tabState, resetTabState, DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
@@ -312,7 +312,7 @@ describe('NavigationService - navigateToNode', () => {
 
   it('creates new tab in specified pane', async () => {
     // Create a second pane first
-    const { createPane } = await import('$lib/stores/navigation');
+    const { createPane } = await import('$lib/stores/navigation.svelte');
     const newPane = createPane();
     expect(newPane).toBeDefined();
 
@@ -493,7 +493,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       const firstPaneId = state.panes[0].id;
 
       // Manually import and use setActivePane
-      const { setActivePane } = await import('$lib/stores/navigation');
+      const { setActivePane } = await import('$lib/stores/navigation.svelte');
       setActivePane(firstPaneId);
 
       // Mock another test node

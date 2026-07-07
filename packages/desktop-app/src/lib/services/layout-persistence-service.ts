@@ -5,7 +5,7 @@
  * Handles loading and saving of layout state across application restarts.
  */
 
-import type { LayoutState } from '$lib/stores/layout';
+import type { LayoutState } from '$lib/stores/layout.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('LayoutPersistence');

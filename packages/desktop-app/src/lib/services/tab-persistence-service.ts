@@ -5,7 +5,7 @@
  * Handles loading, saving, and migration of tab state across application restarts.
  */
 
-import type { TabState } from '$lib/stores/navigation';
+import type { TabState } from '$lib/stores/navigation.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('TabPersistence');
