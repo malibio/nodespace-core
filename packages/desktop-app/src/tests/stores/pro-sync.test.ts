@@ -130,3 +130,80 @@ describe('ProSync store — authRequiredEpisode transition counter', () => {
     expect(proSync.authRequiredEpisode).toBe(before + 1);
   });
 });
+
+
+describe('ProSync store — signedInEpisode transition counter (#1566)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockInvoke.mockResolvedValue('pro');
+    await proSync.start();
+    // Reset to a signed-out baseline so the empty→non-empty edge fires freshly.
+    emit('sync:status', { state: 4, detail: '', user_email: '' });
+    expect(proSync.userEmail).toBe('');
+  });
+
+  it('bumps the episode when userEmail transitions from empty to non-empty', () => {
+    const before = proSync.signedInEpisode;
+
+    emit('sync:status', { state: 6, detail: '', user_email: 'mayank@nodespace.dev' });
+
+    expect(proSync.userEmail).toBe('mayank@nodespace.dev');
+    expect(proSync.signedInEpisode).toBe(before + 1);
+  });
+
+  it('does not bump while already signed in (non-empty → non-empty)', () => {
+    emit('sync:status', { state: 6, detail: '', user_email: 'mayank@nodespace.dev' });
+    const afterSignIn = proSync.signedInEpisode;
+
+    // A subsequent status update for the same signed-in user must not re-bump.
+    emit('sync:status', { state: 5, detail: 'syncing', user_email: 'mayank@nodespace.dev' });
+
+    expect(proSync.signedInEpisode).toBe(afterSignIn);
+  });
+
+  it('bumps again on a fresh sign-in after signing out', () => {
+    emit('sync:status', { state: 6, detail: '', user_email: 'mayank@nodespace.dev' });
+    const firstEpisode = proSync.signedInEpisode;
+
+    emit('sync:status', { state: 4, detail: '', user_email: '' }); // sign out
+    emit('sync:status', { state: 6, detail: '', user_email: 'other@nodespace.dev' }); // sign back in
+
+    expect(proSync.signedInEpisode).toBe(firstEpisode + 1);
+  });
+});
+
+describe('ProSync store — onProConfirmed (#1566)', () => {
+  // proSync is a module-level singleton and proConfirmed is a one-way latch, so once
+  // any prior test has confirmed Pro tier it stays confirmed. These assertions are
+  // therefore written to be order-independent: they exercise the "already pro" path,
+  // which is the steady state after tier detection.
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockInvoke.mockResolvedValue('pro');
+    await proSync.start();
+    emit('pro:tier-detected', { tier: 'pro', initial_status: null });
+  });
+
+  it('fires a callback registered after tier is already pro immediately', () => {
+    const cb = vi.fn();
+    proSync.onProConfirmed(cb);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires each registered callback exactly once, not again on re-confirmation', () => {
+    const cb = vi.fn();
+    proSync.onProConfirmed(cb);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // A subsequent pro re-confirmation must not re-fire it.
+    emit('pro:tier-detected', { tier: 'pro', initial_status: null });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an unregister function', () => {
+    const cb = vi.fn();
+    const unregister = proSync.onProConfirmed(cb);
+    expect(typeof unregister).toBe('function');
+    expect(() => unregister()).not.toThrow();
+  });
+});
