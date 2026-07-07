@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { appSettings, loadSettings } from '$lib/stores/settings';
+    import { settingsStore, loadSettings } from '$lib/stores/settings.svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { createLogger } from '$lib/utils/logger';
     import { Button } from '$lib/components/ui/button';
@@ -15,7 +15,7 @@
     <div class="mb-6">
         <span class="text-muted-foreground mb-2 block text-sm font-medium">Active Database Path</span>
         <div class="text-foreground bg-muted rounded-[var(--radius)] break-all px-3 py-2 font-mono text-sm">
-            {$appSettings?.activeDatabasePath ?? 'Loading...'}
+            {settingsStore.appSettings?.activeDatabasePath ?? 'Loading...'}
         </div>
     </div>
 

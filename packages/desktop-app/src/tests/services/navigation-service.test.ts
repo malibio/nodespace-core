@@ -10,9 +10,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { get } from 'svelte/store';
 import { getNavigationService, NavigationService } from '$lib/services/navigation-service';
-import { tabState, resetTabState, DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { navigationStore, resetTabState, DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
@@ -283,12 +282,12 @@ describe('NavigationService - navigateToNode', () => {
   });
 
   it('navigates to node in current tab (regular click)', async () => {
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const activeTabId = initialState.activeTabIds[initialState.activePaneId];
 
     await navService.navigateToNode('nav-node-1', false);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const activeTab = state.tabs.find((t) => t.id === activeTabId);
 
     expect(activeTab?.content?.nodeId).toBe('nav-node-1');
@@ -296,12 +295,12 @@ describe('NavigationService - navigateToNode', () => {
   });
 
   it('creates new tab when openInNewTab is true (Cmd+Click)', async () => {
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const initialTabCount = initialState.tabs.length;
 
     await navService.navigateToNode('nav-node-1', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     expect(state.tabs.length).toBe(initialTabCount + 1);
 
     const newTab = state.tabs.find((t) => t.content?.nodeId === 'nav-node-1');
@@ -312,17 +311,17 @@ describe('NavigationService - navigateToNode', () => {
 
   it('creates new tab in specified pane', async () => {
     // Create a second pane first
-    const { createPane } = await import('$lib/stores/navigation');
+    const { createPane } = await import('$lib/stores/navigation.svelte');
     const newPane = createPane();
     expect(newPane).toBeDefined();
 
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const initialTabCount = initialState.tabs.length;
 
     // Navigate with sourcePaneId specified
     await navService.navigateToNode('nav-node-1', true, newPane!.id);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     expect(state.tabs.length).toBe(initialTabCount + 1);
 
     const newTab = state.tabs.find((t) => t.content?.nodeId === 'nav-node-1');
@@ -331,12 +330,12 @@ describe('NavigationService - navigateToNode', () => {
   });
 
   it('creates new tab in active pane when sourcePaneId not provided', async () => {
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const activePaneId = initialState.activePaneId;
 
     await navService.navigateToNode('nav-node-1', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === 'nav-node-1');
 
     expect(newTab?.paneId).toBe(activePaneId);
@@ -345,7 +344,7 @@ describe('NavigationService - navigateToNode', () => {
   it('makes new tab active by default', async () => {
     await navService.navigateToNode('nav-node-1', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const activePaneId = state.activePaneId;
     const activeTabId = state.activeTabIds[activePaneId];
 
@@ -354,12 +353,12 @@ describe('NavigationService - navigateToNode', () => {
   });
 
   it('does not make new tab active when makeTabActive is false', async () => {
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const initialActiveTabId = initialState.activeTabIds[initialState.activePaneId];
 
     await navService.navigateToNode('nav-node-1', true, undefined, false);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const currentActiveTabId = state.activeTabIds[state.activePaneId];
 
     // Active tab should not have changed
@@ -371,12 +370,12 @@ describe('NavigationService - navigateToNode', () => {
   });
 
   it('handles non-existent node gracefully', async () => {
-    const initialState = get(tabState);
+    const initialState = navigationStore.state;
     const initialTabCount = initialState.tabs.length;
 
     await navService.navigateToNode('non-existent-node', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     // No new tab should be created
     expect(state.tabs.length).toBe(initialTabCount);
   });
@@ -384,7 +383,7 @@ describe('NavigationService - navigateToNode', () => {
   it('sets correct tab title from node content', async () => {
     await navService.navigateToNode('nav-node-1', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === 'nav-node-1');
 
     expect(newTab?.title).toBe('Navigation Test Node');
@@ -417,7 +416,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
   describe('Single pane behavior', () => {
     it('creates second pane when only 1 exists', async () => {
       // Initially we have 1 pane
-      const initialState = get(tabState);
+      const initialState = navigationStore.state;
       expect(initialState.panes.length).toBe(1);
       expect(initialState.panes[0].id).toBe(DEFAULT_PANE_ID);
 
@@ -425,7 +424,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
       // Should now have 2 panes
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.panes.length).toBe(2);
       expect(state.panes[0].width).toBe(50); // First pane resized
       expect(state.panes[1].width).toBe(50); // Second pane created
@@ -434,7 +433,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     it('opens tab in new pane', async () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const newPane = state.panes[1];
 
       // Check that a tab was added to the new pane
@@ -445,12 +444,12 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     });
 
     it('sets new pane as active', async () => {
-      const initialState = get(tabState);
+      const initialState = navigationStore.state;
       expect(initialState.activePaneId).toBe(DEFAULT_PANE_ID);
 
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       expect(state.activePaneId).not.toBe(DEFAULT_PANE_ID);
       expect(state.activePaneId).toBe(state.panes[1].id);
     });
@@ -470,7 +469,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
 
       await navService.navigateToNodeInOtherPane('2025-12-25');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const newPane = state.panes[1];
       const tabsInNewPane = state.tabs.filter((t) => t.paneId === newPane.id);
 
@@ -489,11 +488,11 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
       // Switch back to first pane
-      const state = get(tabState);
+      const state = navigationStore.state;
       const firstPaneId = state.panes[0].id;
 
       // Manually import and use setActivePane
-      const { setActivePane } = await import('$lib/stores/navigation');
+      const { setActivePane } = await import('$lib/stores/navigation.svelte');
       setActivePane(firstPaneId);
 
       // Mock another test node
@@ -510,7 +509,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     });
 
     it('opens in other pane when 2 panes exist', async () => {
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       expect(beforeState.panes.length).toBe(2);
 
       const firstPaneId = beforeState.panes[0].id;
@@ -522,7 +521,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       // Navigate to second node in other pane
       await navService.navigateToNodeInOtherPane('test-node-2');
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
 
       // Should still have 2 panes (not 3)
       expect(afterState.panes.length).toBe(2);
@@ -536,7 +535,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     });
 
     it('switches focus to other pane', async () => {
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       const firstPaneId = beforeState.panes[0].id;
       const secondPaneId = beforeState.panes[1].id;
 
@@ -546,7 +545,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       // Navigate to node in other pane
       await navService.navigateToNodeInOtherPane('test-node-2');
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
 
       // Active pane should now be second pane
       expect(afterState.activePaneId).toBe(secondPaneId);
@@ -554,39 +553,39 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
 
     it('prevents creating more than 2 panes', async () => {
       // Already have 2 panes from beforeEach
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       expect(beforeState.panes.length).toBe(2);
 
       // Try to navigate again - should NOT create a third pane
       await navService.navigateToNodeInOtherPane('test-node-2');
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
       expect(afterState.panes.length).toBe(2);
     });
   });
 
   describe('Error handling', () => {
     it('handles non-existent node gracefully', async () => {
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       const initialPaneCount = beforeState.panes.length;
 
       // Try to navigate to non-existent node
       await navService.navigateToNodeInOtherPane('non-existent-node-uuid');
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
 
       // Should not create new pane or tabs (navigation fails gracefully)
       expect(afterState.panes.length).toBe(initialPaneCount);
     });
 
     it('handles invalid UUID format gracefully', async () => {
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       const initialPaneCount = beforeState.panes.length;
 
       // Try to navigate to invalid UUID (should fail in resolveNodeTarget)
       await navService.navigateToNodeInOtherPane('invalid-uuid');
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
 
       // Should not create new pane or tabs
       expect(afterState.panes.length).toBe(initialPaneCount);
@@ -598,7 +597,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       // First, create second pane
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const beforeState = get(tabState);
+      const beforeState = navigationStore.state;
       expect(beforeState.panes.length).toBe(2);
 
       const firstPaneId = beforeState.panes[0].id;
@@ -619,7 +618,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
       // Navigate from first pane (explicit source)
       await navService.navigateToNodeInOtherPane('test-node-3', firstPaneId);
 
-      const afterState = get(tabState);
+      const afterState = navigationStore.state;
 
       // Tab should be created in the second pane (the "other" one from first)
       const newTab = afterState.tabs.find((t) => t.content?.nodeId === 'test-node-3');
@@ -632,7 +631,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     it('creates closeable tabs', async () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const newTab = state.tabs.find((t) => t.content?.nodeId === 'test-node-1');
 
       expect(newTab?.closeable).toBe(true);
@@ -641,7 +640,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     it('generates correct tab titles', async () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const newTab = state.tabs.find((t) => t.content?.nodeId === 'test-node-1');
 
       expect(newTab?.title).toBe('Test Node Content');
@@ -650,7 +649,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
     it('sets correct tab type', async () => {
       await navService.navigateToNodeInOtherPane('test-node-1');
 
-      const state = get(tabState);
+      const state = navigationStore.state;
       const newTab = state.tabs.find((t) => t.content?.nodeId === 'test-node-1');
 
       expect(newTab?.type).toBe('node');
@@ -693,7 +692,7 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
     // Navigate to the task node in a new tab
     await navService.navigateToNode('task-under-date', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === 'task-under-date');
 
     // Should open the task node itself, NOT the parent date node
@@ -713,7 +712,7 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
 
     await navService.navigateToNodeInOtherPane('task-other-pane');
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newPane = state.panes[1];
     const tabsInNewPane = state.tabs.filter((t) => t.paneId === newPane.id);
 
@@ -733,7 +732,7 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
 
     await navService.navigateToNode('text-child', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === '2025-06-15');
 
     // Primitive text node should resolve to parent date node
@@ -753,7 +752,7 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
 
     await navService.navigateToNode('2025-07-01', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === '2025-07-01');
 
     expect(newTab).toBeDefined();
@@ -775,7 +774,7 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
 
     await navService.navigateToNode('deep-header', true);
 
-    const state = get(tabState);
+    const state = navigationStore.state;
     const newTab = state.tabs.find((t) => t.content?.nodeId === '2025-06-15');
 
     // Should walk all the way up to the date node (nearest viewer-owning ancestor)

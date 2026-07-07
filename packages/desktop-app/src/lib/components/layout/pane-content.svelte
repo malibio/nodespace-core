@@ -1,10 +1,10 @@
 <script lang="ts">
   import { setContext, untrack } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
-  import { tabState, updateTabContent, closeTab } from '$lib/stores/navigation.js';
+  import { navigationStore, updateTabContent, closeTab } from '$lib/stores/navigation.svelte';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import type { Pane } from '$lib/stores/navigation.js';
+  import type { Pane } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import SettingsPane from '$lib/components/settings/settings-pane.svelte';
 
@@ -21,9 +21,9 @@
   setContext('paneId', paneId);
 
   // Derive tab state using Svelte 5 $derived
-  // KEY FIX: Use pane.id instead of global $tabState.activePaneId
-  const tabs = $derived($tabState.tabs);
-  const activeTabId = $derived($tabState.activeTabIds[pane.id]); // ✅ Use THIS pane's ID
+  // KEY FIX: Use pane.id instead of global navigationStore.state.activePaneId
+  const tabs = $derived(navigationStore.state.tabs);
+  const activeTabId = $derived(navigationStore.state.activeTabIds[pane.id]); // ✅ Use THIS pane's ID
   const activeTab = $derived(tabs.find((t) => t.id === activeTabId));
 
   // Track loaded viewer components by nodeType
@@ -83,7 +83,7 @@
     }
 
     if (!node) {
-      const tab = untrack(() => $tabState.tabs.find((t) => t.id === tabId));
+      const tab = untrack(() => navigationStore.state.tabs.find((t) => t.id === tabId));
       if (tab?.content?.nodeId === nodeId) {
         log.warn(`Node ${nodeId} not found — closing stale tab`);
         closeTab(tabId);

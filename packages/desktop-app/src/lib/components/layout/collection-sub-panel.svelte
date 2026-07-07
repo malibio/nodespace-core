@@ -7,7 +7,7 @@
 
 <script lang="ts">
   import Icon from '$lib/design/icons/icon.svelte';
-  import type { CollectionMember } from '$lib/stores/collections';
+  import type { CollectionMember } from '$lib/stores/collections.svelte';
 
   interface Props {
     open: boolean;

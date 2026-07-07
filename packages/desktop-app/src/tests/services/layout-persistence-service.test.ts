@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LayoutPersistenceService } from '$lib/services/layout-persistence-service';
-import type { LayoutState } from '$lib/stores/layout';
+import type { LayoutState } from '$lib/stores/layout.svelte';
 
 describe('LayoutPersistenceService', () => {
   beforeEach(() => {

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { statusBar } from '$lib/stores/status-bar';
+  import { statusBar } from '$lib/stores/status-bar.svelte';
   import { fade } from 'svelte/transition';
 
-  $: state = $statusBar;
+  const state = $derived(statusBar.state);
 </script>
 
 {#if state.enabled}

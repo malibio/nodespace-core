@@ -8,7 +8,7 @@
     getDefaultModelSelection,
     saveDefaultModelSelection,
     type ModelSelection,
-  } from '$lib/stores/settings';
+  } from '$lib/stores/settings.svelte';
   import { ollamaAvailable, chatModelList } from '$lib/services/tauri-commands';
   import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
   import type { ModelFamily } from '$lib/types/agent-types';

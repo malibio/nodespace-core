@@ -16,7 +16,7 @@ import {
   TextareaController,
   type TextareaControllerEvents
 } from '../../lib/design/components/textarea-controller';
-import { DEFAULT_PANE_ID } from '../../lib/stores/navigation';
+import { DEFAULT_PANE_ID } from '../../lib/stores/navigation.svelte';
 
 // Type for tracking event calls in tests
 interface EventCallRecord {

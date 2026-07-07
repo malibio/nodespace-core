@@ -6,11 +6,11 @@
   import PaneManager from './pane-manager.svelte';
   import StatusBar from '$lib/components/status-bar.svelte';
   import { importService } from '$lib/services/import-service';
-  import { statusBar } from '$lib/stores/status-bar';
+  import { statusBar } from '$lib/stores/status-bar.svelte';
   import ThemeProvider from '$lib/design/components/theme-provider.svelte';
   import NodeServiceContext from '$lib/contexts/node-service-context.svelte';
   import { initializeTheme } from '$lib/design/theme';
-  import { layoutState, toggleSidebar, loadPersistedLayoutState } from '$lib/stores/layout';
+  import { layoutStore, toggleSidebar, loadPersistedLayoutState } from '$lib/stores/layout.svelte';
   import { registerCorePlugins } from '$lib/plugins/core-plugins';
   import { pluginRegistry } from '$lib/plugins/index';
   import { toggleTheme, setTheme } from '$lib/design/theme';
@@ -18,11 +18,10 @@
   import { browserSyncService } from '$lib/services/browser-sync-service';
   import { MCP_EVENTS } from '$lib/constants';
   import type { Node } from '$lib/types';
-  import { collectionsData } from '$lib/stores/collections';
-  import { schemasData } from '$lib/stores/schemas';
-  import { loadPersistedState, addTab, tabState, setActiveTab } from '$lib/stores/navigation';
-  import { get } from 'svelte/store';
-  import { settingsInitialCategory } from '$lib/stores/settings';
+  import { collectionsData } from '$lib/stores/collections.svelte';
+  import { schemasData } from '$lib/stores/schemas.svelte';
+  import { loadPersistedState, addTab, navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
+  import { settingsStore } from '$lib/stores/settings.svelte';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
@@ -425,7 +424,7 @@
 
       // Listen for settings menu — open or focus settings tab
       unlistenSettings = listen('menu-open-settings', () => {
-        const state = get(tabState);
+        const state = navigationStore.state;
         const existingSettingsTab = state.tabs.find((t) => t.type === 'settings');
         if (existingSettingsTab) {
           setActiveTab(existingSettingsTab.id, existingSettingsTab.paneId);
@@ -444,8 +443,8 @@
       // Listen for File → Integrations menu — open settings tab focused on Integrations.
       // Sets settingsInitialCategory before addTab so the pane reads it synchronously on mount.
       unlistenIntegrations = listen('menu-open-integrations', () => {
-        settingsInitialCategory.set('integrations');
-        const state = get(tabState);
+        settingsStore.initialCategory = 'integrations';
+        const state = navigationStore.state;
         const existingSettingsTab = state.tabs.find((t) => t.type === 'settings');
         if (existingSettingsTab) {
           setActiveTab(existingSettingsTab.id, existingSettingsTab.paneId);
@@ -620,7 +619,7 @@
   });
 
   // Subscribe to layout state
-  const isCollapsed = $derived($layoutState.sidebarCollapsed);
+  const isCollapsed = $derived(layoutStore.state.sidebarCollapsed);
 
   // Handle global keyboard shortcuts
   function handleKeydown(event: KeyboardEvent) {

@@ -29,12 +29,12 @@
 -->
 <script lang="ts">
   import {
-    tabState,
+    navigationStore,
     setActivePane,
     resizePane,
     getOrderedTabsForPane,
     type Tab
-  } from '$lib/stores/navigation.js';
+  } from '$lib/stores/navigation.svelte';
   import TabSystem from './tab-system.svelte';
   import PaneContent from './pane-content.svelte';
   import { cn } from '$lib/utils.js';
@@ -58,7 +58,7 @@
     containerWidth = containerElement.clientWidth;
 
     // Get first pane's current width in pixels
-    const firstPane = $tabState.panes[0];
+    const firstPane = navigationStore.state.panes[0];
     if (firstPane) {
       startWidth = (firstPane.width / 100) * containerWidth;
     }
@@ -85,7 +85,7 @@
 
     // Convert to percentage and update first pane
     const newWidthPercent = (newWidth / containerWidth) * 100;
-    const firstPaneId = $tabState.panes[0].id;
+    const firstPaneId = navigationStore.state.panes[0].id;
     resizePane(firstPaneId, newWidthPercent);
   }, 16); // ~60fps throttling for smooth resize
 
@@ -97,18 +97,18 @@
   // Get tabs for a specific pane in the correct order based on pane.tabIds
   // Uses the shared utility function for consistent tab ordering
   function getTabsForPane(paneId: string): Tab[] {
-    return getOrderedTabsForPane($tabState, paneId);
+    return getOrderedTabsForPane(navigationStore.state, paneId);
   }
 
   // Get active tab ID for a specific pane
   function getActiveTabId(paneId: string): string {
-    return $tabState.activeTabIds[paneId] || '';
+    return navigationStore.state.activeTabIds[paneId] || '';
   }
 
   // Handle keyboard resize for accessibility (WCAG 2.1 Level AA)
   function handleResizeKeyboard(event: KeyboardEvent): void {
-    const firstPane = $tabState.panes[0];
-    if (!firstPane || $tabState.panes.length < 2) return;
+    const firstPane = navigationStore.state.panes[0];
+    if (!firstPane || navigationStore.state.panes.length < 2) return;
 
     const step = event.shiftKey ? 10 : 5; // Larger steps with Shift key
 
@@ -128,12 +128,12 @@
 <svelte:window on:mousemove={handleResizeMove} on:mouseup={handleResizeEnd} />
 
 <div class="pane-manager" bind:this={containerElement}>
-  {#each $tabState.panes as pane, index (pane.id)}
+  {#each navigationStore.state.panes as pane, index (pane.id)}
     {@const activeTabId = getActiveTabId(pane.id)}
 
     <!-- Pane wrapper -->
     <div
-      class={cn('pane', pane.id === $tabState.activePaneId && 'pane--active')}
+      class={cn('pane', pane.id === navigationStore.state.activePaneId && 'pane--active')}
       style="width: {pane.width}%"
       data-pane-id={pane.id}
       onclick={() => setActivePane(pane.id)}
@@ -160,7 +160,7 @@
     </div>
 
     <!-- Resize handle between panes -->
-    {#if index < $tabState.panes.length - 1}
+    {#if index < navigationStore.state.panes.length - 1}
       <button
         class={cn('resize-handle', resizing && 'resize-handle--active')}
         aria-label="Resize panes - drag or use arrow keys to adjust width"

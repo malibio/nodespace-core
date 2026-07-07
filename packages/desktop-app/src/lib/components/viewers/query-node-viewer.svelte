@@ -17,8 +17,7 @@
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { tabState, setActiveTab } from '$lib/stores/navigation.js';
-  import { get } from 'svelte/store';
+  import { navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
   import TableView from '$lib/components/query/table-view.svelte';
   import QueryEditor from '$lib/components/query/query-editor.svelte';
   import type { QueryDefinition } from '$lib/types/query';
@@ -194,7 +193,7 @@
 
   function handleRowClick(clickedNodeId: string) {
     // Check if node is already open in any tab — if so, switch to it
-    const state = get(tabState);
+    const state = navigationStore.state;
     const existingTab = state.tabs.find((t) => t.content?.nodeId === clickedNodeId);
     if (existingTab) {
       setActiveTab(existingTab.id, existingTab.paneId);

@@ -26,7 +26,7 @@ import { createLogger } from '$lib/utils/logger';
 import type { Node, NodeUIState } from '$lib/types';
 import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
-import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { waitForPendingMoveOperations, trackMoveOperation } from './pending-operations';
 import { confirmNodeDeletion } from './delete-confirmation.svelte';
 

@@ -26,7 +26,7 @@
   import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
   import type { Node } from '$lib/types';
   import type { Snippet } from 'svelte';
-  import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
+  import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
   import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
   import { onDaemonReconnect } from '$lib/services/daemon-status';
   import { NodeComponentLoader } from '$lib/design/components/node-component-loader.svelte';

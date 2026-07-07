@@ -37,8 +37,7 @@ import { FormatTextCommand } from '$lib/commands/keyboard/format-text.command';
 import { CursorPositioningService } from '$lib/services/cursor-positioning-service';
 import { focusManager } from '$lib/services/focus-manager.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
-import { tabState } from '$lib/stores/navigation';
-import { get } from 'svelte/store';
+import { navigationStore } from '$lib/stores/navigation.svelte';
 import { untrack } from 'svelte';
 import {
   PatternState,
@@ -782,7 +781,7 @@ export class TextareaController {
     }
 
     private buildKeyboardContext(event: KeyboardEvent): Record<string, unknown> {
-      const currentTabState = get(tabState);
+      const currentTabState = navigationStore.state;
       const activePaneId = currentTabState.activePaneId;
 
       return {

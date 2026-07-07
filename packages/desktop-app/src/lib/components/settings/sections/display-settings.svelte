@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { appSettings, updateDisplaySetting } from '$lib/stores/settings';
+    import { settingsStore, updateDisplaySetting } from '$lib/stores/settings.svelte';
     import { setTheme } from '$lib/design/theme';
     import type { Theme } from '$lib/design/tokens';
     import { Label } from '$lib/components/ui/label';
@@ -13,7 +13,7 @@
         <select
             id="theme-select"
             class="border-input bg-background text-foreground rounded-[var(--radius)] min-w-[200px] border px-3 py-2 text-sm"
-            value={$appSettings?.display?.theme ?? 'system'}
+            value={settingsStore.appSettings?.display?.theme ?? 'system'}
             onchange={async (e) => {
                 const value = e.currentTarget.value;
                 await updateDisplaySetting('theme', value);
@@ -30,7 +30,7 @@
         <label class="text-foreground flex cursor-pointer items-center gap-3 text-sm">
             <input
                 type="checkbox"
-                checked={$appSettings?.display?.renderMarkdown ?? false}
+                checked={settingsStore.appSettings?.display?.renderMarkdown ?? false}
                 onchange={async (e) => {
                     await updateDisplaySetting('renderMarkdown', e.currentTarget.checked);
                 }}

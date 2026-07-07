@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { get } from 'svelte/store';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({
@@ -15,8 +14,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args)
 }));
 
-import { appSettings, loadSettings, updateDisplaySetting } from '$lib/stores/settings';
-import type { AppSettings } from '$lib/stores/settings';
+import { settingsStore, loadSettings, updateDisplaySetting } from '$lib/stores/settings.svelte';
+import type { AppSettings } from '$lib/stores/settings.svelte';
 
 describe('Settings Store', () => {
   const mockSettings: AppSettings = {
@@ -31,12 +30,12 @@ describe('Settings Store', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    appSettings.set(null);
+    settingsStore.appSettings = null;
   });
 
   describe('appSettings store', () => {
     it('should start as null', () => {
-      expect(get(appSettings)).toBeNull();
+      expect(settingsStore.appSettings).toBeNull();
     });
   });
 
@@ -53,7 +52,7 @@ describe('Settings Store', () => {
 
       expect(mockInvoke).toHaveBeenCalledWith('get_settings');
       // Store merges backend fields with localStorage defaults.
-      expect(get(appSettings)).toEqual(mockSettings);
+      expect(settingsStore.appSettings).toEqual(mockSettings);
     });
 
     it('should handle errors gracefully', async () => {
@@ -61,13 +60,13 @@ describe('Settings Store', () => {
 
       await loadSettings();
 
-      expect(get(appSettings)).toBeNull();
+      expect(settingsStore.appSettings).toBeNull();
     });
   });
 
   describe('updateDisplaySetting', () => {
     it('should update renderMarkdown setting', async () => {
-      appSettings.set(mockSettings);
+      settingsStore.appSettings = mockSettings;
       mockInvoke.mockResolvedValueOnce(undefined);
 
       await updateDisplaySetting('renderMarkdown', false);
@@ -75,11 +74,11 @@ describe('Settings Store', () => {
       expect(mockInvoke).toHaveBeenCalledWith('update_display_settings', {
         render_markdown: false
       });
-      expect(get(appSettings)?.display.renderMarkdown).toBe(false);
+      expect(settingsStore.appSettings?.display.renderMarkdown).toBe(false);
     });
 
     it('should update theme setting', async () => {
-      appSettings.set(mockSettings);
+      settingsStore.appSettings = mockSettings;
       mockInvoke.mockResolvedValueOnce(undefined);
 
       await updateDisplaySetting('theme', 'dark');
@@ -87,17 +86,17 @@ describe('Settings Store', () => {
       expect(mockInvoke).toHaveBeenCalledWith('update_display_settings', {
         theme: 'dark'
       });
-      expect(get(appSettings)?.display.theme).toBe('dark');
+      expect(settingsStore.appSettings?.display.theme).toBe('dark');
     });
 
     it('should handle errors gracefully', async () => {
-      appSettings.set(mockSettings);
+      settingsStore.appSettings = mockSettings;
       mockInvoke.mockRejectedValueOnce(new Error('update failed'));
 
       await updateDisplaySetting('renderMarkdown', false);
 
       // Optimistic update is after the await, so it's skipped when invoke rejects
-      expect(get(appSettings)?.display.renderMarkdown).toBe(true);
+      expect(settingsStore.appSettings?.display.renderMarkdown).toBe(true);
     });
 
     it('should return null when store is null', async () => {
@@ -106,7 +105,7 @@ describe('Settings Store', () => {
       await updateDisplaySetting('theme', 'dark');
 
       // Optimistic update on null store should keep it null
-      expect(get(appSettings)).toBeNull();
+      expect(settingsStore.appSettings).toBeNull();
     });
   });
 });

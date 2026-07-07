@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TabPersistenceService } from '$lib/services/tab-persistence-service';
-import type { TabState } from '$lib/stores/navigation';
+import type { TabState } from '$lib/stores/navigation.svelte';
 
 describe('TabPersistenceService', () => {
   // Fixed reference date for consistent testing: 2025-11-24 (Monday)

@@ -39,7 +39,7 @@
   } from '$lib/services/tauri-commands';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { browserSyncService } from '$lib/services/browser-sync-service';
-  import { statusBar } from '$lib/stores/status-bar';
+  import { statusBar } from '$lib/stores/status-bar.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('AiChatNodeViewer');
