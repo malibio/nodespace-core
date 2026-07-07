@@ -20,6 +20,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Chromium-only APIs, or behavior that differs between Blink and WebKit). Such a
  * test would pass under Chromium and fail the WebKit smoke tier — or, worse,
  * silently validate the wrong engine for the app users actually run.
+ *
+ * LOCKSTEP TWIN: `vitest.webkit.config.ts` must stay identical to this file
+ * except for `browser.name`. The engine-agnostic contract depends on both
+ * running the same suite the same way — change one (timeouts, setup files,
+ * pool, include glob), change the other.
  */
 export default defineConfig({
   plugins: [sveltekit()],

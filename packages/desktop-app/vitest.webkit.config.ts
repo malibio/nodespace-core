@@ -25,6 +25,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *
  * Run with: bun run test:webkit
  * Requires one-time setup: bunx playwright install webkit
+ *
+ * LOCKSTEP TWIN: this file must stay identical to `vitest.browser.config.ts`
+ * except for `browser.name` (webkit vs chromium). If you change a timeout,
+ * setup file, pool option, or include glob in one, change it in the other —
+ * the engine-agnostic contract depends on both running the same suite the
+ * same way.
  */
 export default defineConfig({
   plugins: [sveltekit()],

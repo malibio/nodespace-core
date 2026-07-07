@@ -44,7 +44,13 @@ jobs:
         run: bun run --cwd packages/desktop-app sync
 
       - name: Install Playwright WebKit browser
-        run: bunx --bun playwright install webkit --with-deps
+        # The WebKit revision is pinned transitively by the lockfile's Playwright
+        # version; log it so a nightly red is easy to triage as an engine-version
+        # delta vs. an app regression. (No --with-deps: that installer is
+        # Linux-only and a no-op on macos-latest.)
+        run: |
+          bunx --bun playwright --version
+          bunx --bun playwright install webkit
         working-directory: packages/desktop-app
 
       - name: Run WebKit smoke suite
