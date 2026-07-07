@@ -6,6 +6,26 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Browser-mode tier (Chromium / Blink via Playwright).
+ *
+ * ENGINE-AGNOSTIC CONTRACT: the tests under `src/tests/browser/**` must exercise
+ * only standard DOM behavior that any modern engine implements the same way —
+ * focus/blur, `document.activeElement`, textarea selection, keyboard events,
+ * non-zero `getBoundingClientRect`, viewport-based positioning math. The exact
+ * same suite is run against WebKit (the shipping WKWebView engine) by
+ * `vitest.webkit.config.ts`, and both must pass.
+ *
+ * Do NOT add engine-specific assertions here (e.g. pixel-exact layout values,
+ * Chromium-only APIs, or behavior that differs between Blink and WebKit). Such a
+ * test would pass under Chromium and fail the WebKit smoke tier — or, worse,
+ * silently validate the wrong engine for the app users actually run.
+ *
+ * LOCKSTEP TWIN: `vitest.webkit.config.ts` must stay identical to this file
+ * except for `browser.name`. The engine-agnostic contract depends on both
+ * running the same suite the same way — change one (timeouts, setup files,
+ * pool, include glob), change the other.
+ */
 export default defineConfig({
   plugins: [sveltekit()],
 
