@@ -10,6 +10,7 @@
 <script lang="ts">
   import type { QueryDefinition } from '$lib/types/query';
   import { DEFAULT_QUERY, QUERY_TEMPLATE_EXAMPLES } from '$lib/types/query';
+  import { untrack } from 'svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('QueryEditor');
@@ -30,7 +31,7 @@
   // Capture the prop value once at component init rather than tracking it reactively,
   // so parent re-derivations don't overwrite in-progress edits. The $state initializer
   // runs once with the initial `query` prop — no $effect syncing prop→state (ADR-049).
-  let jsonText = $state(JSON.stringify(query ?? DEFAULT_QUERY, null, 2));
+  let jsonText = $state(untrack(() => JSON.stringify(query ?? DEFAULT_QUERY, null, 2)));
   let errorMessage = $state<string | null>(null);
   let previewCount = $state<number | null>(null);
   let previewLoading = $state(false);
