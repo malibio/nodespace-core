@@ -30,19 +30,9 @@ import type { Node } from '$lib/types';
 import { formatDateTitle } from '$lib/utils/date-formatting';
 import { formatTabTitle } from '$lib/utils/text-formatting';
 import { createLogger } from '$lib/utils/logger';
+import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
 
 const log = createLogger('NavigationService');
-
-/** Core built-in node types — everything else is a custom schema type */
-const CORE_NODE_TYPES = new Set([
-  'text', 'task', 'date', 'header', 'code-block', 'quote-block',
-  'ordered-list', 'horizontal-line', 'table', 'checkbox', 'collection',
-  'query', 'schema'
-]);
-
-function isCustomSchemaNodeType(nodeType: string): boolean {
-  return !CORE_NODE_TYPES.has(nodeType);
-}
 
 export interface NavigationTarget {
   nodeId: string;
@@ -137,7 +127,7 @@ export class NavigationService {
     }
 
     // For custom schema types, use the plugin display name (e.g. "Customer")
-    if (isCustomSchemaNodeType(node.nodeType)) {
+    if (isCustomSchemaType(node.nodeType)) {
       const plugin = pluginRegistry.getPlugin(node.nodeType);
       if (plugin?.name) return plugin.name;
     }
@@ -169,7 +159,7 @@ export class NavigationService {
 
     // Custom schema entity nodes are root-level entities —
     // always open them directly, not their parent (e.g. date node)
-    if (targetNode && isCustomSchemaNodeType(targetNode.nodeType)) {
+    if (targetNode && isCustomSchemaType(targetNode.nodeType)) {
       return nodeId;
     }
 
