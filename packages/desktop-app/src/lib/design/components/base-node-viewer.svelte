@@ -1,7 +1,7 @@
 <!--
   BaseNodeViewer - Container that manages a collection of nodes
   Handles node creation, deletion, and organization
-  
+
   Now uses NodeServiceContext to provide @ autocomplete functionality
   to all TextNode components automatically via proper inheritance.
 -->
@@ -9,9 +9,9 @@
 <script lang="ts">
   import { onMount, onDestroy, getContext, tick } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
-  import BaseNode from '$lib/design/components/base-node.svelte';
   import BacklinksPanel from '$lib/design/components/backlinks-panel.svelte';
   import GenericSchemaForm from '$lib/components/schema/generic-schema-form.svelte';
+  import NodeRow from '$lib/design/components/node-row.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   // Logger instance for BaseNodeViewer component
@@ -21,9 +21,6 @@
   import type { SchemaFormComponent } from '$lib/plugins/types';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { backendAdapter } from '$lib/services/backend-adapter';
-  import { isSchemaNode } from '$lib/types/schema-node';
-  import type { SchemaNode } from '$lib/types/schema-node';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
   import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -32,6 +29,26 @@
   import { DEFAULT_PANE_ID } from '$lib/stores/navigation';
   import { getViewerId, saveScrollPosition, getScrollPosition } from '$lib/stores/scroll-state';
   import { onDaemonReconnect } from '$lib/services/daemon-status';
+  import { NodeComponentLoader } from '$lib/design/components/node-component-loader.svelte';
+  import { SchemaFormLoader } from '$lib/design/components/schema-form-loader.svelte';
+  import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
+  import { updateSchemaField } from '$lib/design/components/schema-field-update';
+  import { normalizeCodeBlockContent } from '$lib/design/components/fallback-node-render';
+  import {
+    saveCursorPosition,
+    restoreCursorPosition
+  } from '$lib/design/components/viewer-cursor-utils';
+  import type {
+    ViewerRenderNode,
+    ContentChangedDetail,
+    NodeTypeChangedDetail,
+    SlashCommandSelectedDetail,
+    CreateNewNodeDetail,
+    NavigateArrowDetail,
+    TaskStateChangedDetail,
+    CombineWithPreviousDetail,
+    DeleteNodeDetail
+  } from '$lib/design/components/node-row-types';
 
   // Get paneId from context (set by PaneContent)
   const paneId = getContext<string>('paneId') ?? DEFAULT_PANE_ID;
@@ -67,6 +84,10 @@
 
   const nodeManager = services.nodeManager;
 
+  // Lazy component + schema-form loaders (reactive $state lives in these instances)
+  const nodeLoader = new NodeComponentLoader();
+  const schemaFormLoader = new SchemaFormLoader();
+
   // Cancellation flag to prevent database writes after component unmounts
   let isDestroyed = false;
 
@@ -97,17 +118,6 @@
    */
   function resetPlaceholderId(): void {
     cachedPlaceholderId = null;
-  }
-
-  /**
-   * Normalize content for code-block conversion by adding closing fence if missing.
-   * Handles pattern conversion where user types "```\n" before existing content.
-   */
-  function normalizeCodeBlockContent(content: string | undefined): string | undefined {
-    if (content && !content.endsWith('```')) {
-      return content + '\n```';
-    }
-    return content;
   }
 
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
@@ -147,10 +157,6 @@
   // navigating between nodes in the same tab
   const viewerId = (() => getViewerId(nodeId ?? 'default', tabId, paneId))();
 
-  // Track expanded state for nodes (viewer-local UI state)
-  // Use $state for reactive Map mutations
-  let expandedState = $state(new Map<string, boolean>());
-
   // Track auto-focus nodes (viewer-local UI state)
   // Use $state for reactive Set mutations
   let autoFocusNodes = $state(new Set<string>());
@@ -161,7 +167,7 @@
   /**
    * Visible nodes derived from ReactiveStructureTree + SharedNodeStore
    */
-  const visibleNodesFromStores = $derived.by(() => {
+  const visibleNodesFromStores = $derived.by<ViewerRenderNode[]>(() => {
     if (!nodeId) return [];
     // Reactive dependency on structure tree is automatic with $state.raw()
     // Svelte will re-run this derived when reactiveStructureTree.children changes.
@@ -169,7 +175,11 @@
     // which tracks per-node so this also re-runs on relevant node changes.
 
     // Helper function to recursively flatten visible nodes with depth
-    function flattenNodes(parentId: string, depth: number, result: Array<any> = []): Array<any> {
+    function flattenNodes(
+      parentId: string,
+      depth: number,
+      result: ViewerRenderNode[] = []
+    ): ViewerRenderNode[] {
       // TRANSITION PERIOD (Issue #580): Try reactive structure tree first, fall back to sharedNodeStore
       // This supports gradual migration where reactive stores are being populated asynchronously.
       // Once all nodes are in reactive stores, remove fallback and use only reactiveStructureTree.
@@ -177,7 +187,7 @@
       if (childIds.length === 0) {
         const cachedNodes = sharedNodeStore.getNodesForParent(parentId);
         if (cachedNodes && cachedNodes.length > 0) {
-          childIds = cachedNodes.map(n => n.id);
+          childIds = cachedNodes.map((n) => n.id);
         }
       }
 
@@ -192,14 +202,14 @@
         if (children.length === 0) {
           const cachedChildren = sharedNodeStore.getNodesForParent(node.id);
           if (cachedChildren) {
-            children = cachedChildren.map(c => c.id);
+            children = cachedChildren.map((c) => c.id);
           }
         }
 
         // Build node with UI state
         // Get UI state from ReactiveNodeService (has expanded: true by default)
         const uiState = nodeManager.getUIState(node.id);
-        const nodeWithUI = {
+        const nodeWithUI: ViewerRenderNode = {
           ...node,
           depth,
           children,
@@ -233,9 +243,7 @@
 
   onMount(() => {
     // Restore previously loaded node components from the registry's persistent cache.
-    // Uses Object.assign (in-place mutation) to avoid triggering Svelte reactive updates
-    // that would cause state_unsafe_mutation errors during template evaluation.
-    Object.assign(loadedNodes, pluginRegistry.getAllLoadedNodeComponents());
+    nodeLoader.seedFromRegistry();
 
     // Set up scroll position management
     // Restore scroll position when viewer becomes active
@@ -305,8 +313,8 @@
         // This triggers lazy loading of TaskSchemaForm, DateSchemaForm, etc.
         if (node.nodeType) {
           // Issue #965: Reset generic schema when navigating to a different node
-          genericSchema = null;
-          loadSchemaFormComponent(node.nodeType);
+          schemaFormLoader.resetGenericSchema();
+          schemaFormLoader.loadForm(node.nodeType);
         }
 
         // Tab title is derived directly from node data by tab-system.svelte's
@@ -364,95 +372,6 @@
     }
   }
 
-  /**
-   * Extract and transform node properties into component-compatible metadata
-   * Delegates to plugin registry for type-specific transformations (Issue #698)
-   *
-   * @param node - Node with properties from database
-   * @returns Metadata object compatible with node component expectations
-   */
-  function extractNodeMetadata(node: {
-    nodeType: string;
-    properties?: Record<string, unknown>;
-  }): Record<string, unknown> {
-    return pluginRegistry.extractNodeMetadata(node);
-  }
-
-  /**
-   * Update a schema field value for a node (schema-aware property update)
-   *
-   * For task nodes (Issue #709): Routes through type-safe update path that
-   * directly modifies task node properties (status, priority, dueDate, assignee).
-   *
-   * For other nodes: Uses generic update path via properties JSON.
-   *
-   * @param targetNodeId - Node ID to update
-   * @param fieldName - Schema field name (e.g., 'status', 'due_date')
-   * @param value - New value for the field
-   */
-  function updateSchemaField(targetNodeId: string, fieldName: string, value: unknown) {
-    const targetNode = sharedNodeStore.getNode(targetNodeId);
-    if (!targetNode) return;
-
-    // Issue #709: Route task node property updates through type-safe path
-    if (targetNode.nodeType === 'task') {
-      // Map field names to TaskNodeUpdate structure
-      // The task-specific fields are: status, priority, dueDate, assignee
-      const taskFields = ['status', 'priority', 'due_date', 'dueDate', 'assignee'];
-
-      if (taskFields.includes(fieldName)) {
-        // Use type-safe task node update
-        sharedNodeStore.updateTaskNode(
-          targetNodeId,
-          { [fieldName === 'due_date' ? 'dueDate' : fieldName]: value },
-          { type: 'viewer', viewerId: viewerId }
-        );
-        return;
-      }
-    }
-
-    // Fallback: Generic update path via properties JSON
-    // Build nested namespace (properties[nodeType][fieldName])
-    const typeNamespace = targetNode.properties?.[targetNode.nodeType];
-    const isOldFormat = !typeNamespace || typeof typeNamespace !== 'object';
-
-    let updatedNamespace: Record<string, unknown> = {};
-
-    if (isOldFormat) {
-      // Migrate from old flat format - copy ALL existing flat properties into namespace
-      updatedNamespace = { ...targetNode.properties };
-      // Remove internal fields that shouldn't be in namespace
-      delete updatedNamespace._schema_version;
-    } else {
-      // Already in new format - copy namespace
-      updatedNamespace = { ...(typeNamespace as Record<string, unknown>) };
-    }
-
-    // Apply the update
-    updatedNamespace[fieldName] = value;
-
-    // Build final properties with ONLY the nested namespace
-    // CRITICAL: When migrating from old format, ALL flat properties are now in the namespace
-    // So we start fresh with ONLY the nested structure, dropping all flat properties
-    const updatedProperties = isOldFormat
-      ? {
-          // Old format: Start fresh with ONLY nested structure (drops ALL flat properties)
-          [targetNode.nodeType]: updatedNamespace
-        }
-      : {
-          // New format: Preserve existing properties structure
-          ...targetNode.properties,
-          [targetNode.nodeType]: updatedNamespace
-        };
-
-    // Persist via sharedNodeStore
-    sharedNodeStore.updateNode(
-      targetNodeId,
-      { properties: updatedProperties },
-      { type: 'viewer', viewerId: viewerId }
-    );
-  }
-
   // ============================================================================
   // Issue #653: ALL $effect blocks REMOVED from BaseNodeViewer
   // ============================================================================
@@ -491,7 +410,9 @@
     // parentId is derived from structureTree at CREATE time (persistence path calls getParentId).
     // IMPORTANT: Caller MUST call reactiveStructureTree.addChild({ parentId: parentNodeId, ... })
     // BEFORE the setNode persistence debounce fires so getParentId returns the correct parent.
-    log.debug(`[promotePlaceholder] promoting ${placeholder.id.substring(0, 8)} under parent ${parentNodeId.substring(0, 8)}`);
+    log.debug(
+      `[promotePlaceholder] promoting ${placeholder.id.substring(0, 8)} under parent ${parentNodeId.substring(0, 8)}`
+    );
     return {
       id: placeholder.id,
       nodeType: overrides.nodeType ?? placeholder.nodeType,
@@ -530,10 +451,10 @@
       }
 
       // Preload components for any node types not already cached (event-driven, no effects)
-      const uniqueTypes = [...new Set(allNodes.map(n => n.nodeType))];
+      const uniqueTypes = [...new Set(allNodes.map((n) => n.nodeType))];
       for (const nodeType of uniqueTypes) {
-        if (!(nodeType in loadedNodes)) {
-          loadNodeComponent(nodeType);
+        if (!nodeLoader.has(nodeType)) {
+          nodeLoader.load(nodeType);
         }
       }
 
@@ -612,20 +533,7 @@
   }
 
   // Handle creating new nodes when Enter is pressed
-  function handleCreateNewNode(
-    event: CustomEvent<{
-      afterNodeId: string;
-      nodeType: string;
-      currentContent?: string;
-      newContent?: string;
-      originalContent?: string;
-      inheritHeaderLevel?: number;
-      cursorAtBeginning?: boolean;
-      insertAtBeginning?: boolean;
-      focusOriginalNode?: boolean;
-      newNodeCursorPosition?: number;
-    }>
-  ) {
+  function handleCreateNewNode(detail: CreateNewNodeDetail) {
     const {
       afterNodeId,
       nodeType,
@@ -636,7 +544,7 @@
       insertAtBeginning,
       focusOriginalNode,
       newNodeCursorPosition
-    } = event.detail;
+    } = detail;
 
     // Validate node creation parameters
     if (!afterNodeId || !nodeType) {
@@ -762,8 +670,8 @@
   }
 
   // Handle indenting nodes (Tab key)
-  async function handleIndentNode(event: CustomEvent<{ nodeId: string }>) {
-    const { nodeId } = event.detail;
+  async function handleIndentNode(detail: { nodeId: string }) {
+    const { nodeId } = detail;
 
     try {
       // Validate node exists before indenting
@@ -790,81 +698,9 @@
     }
   }
 
-  // Cursor position utilities
-  function saveCursorPosition(nodeId: string): number {
-    const element = document.getElementById(`contenteditable-${nodeId}`);
-    if (!element) return 0;
-
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return 0;
-
-    const range = selection.getRangeAt(0);
-    const preCaretRange = range.cloneRange();
-    preCaretRange.selectNodeContents(element);
-    preCaretRange.setEnd(range.startContainer, range.startOffset);
-
-    return preCaretRange.toString().length;
-  }
-
-  function restoreCursorPosition(nodeId: string, position: number) {
-    const element = document.getElementById(`contenteditable-${nodeId}`);
-    if (!element) return;
-
-    try {
-      const selection = window.getSelection();
-      if (!selection) return;
-
-      const range = document.createRange();
-      const textNodes = getTextNodes(element);
-
-      let currentOffset = 0;
-      for (const textNode of textNodes) {
-        const nodeLength = textNode.textContent?.length || 0;
-        if (currentOffset + nodeLength >= position) {
-          range.setStart(textNode, Math.max(0, position - currentOffset));
-          range.collapse(true);
-          selection.removeAllRanges();
-          selection.addRange(range);
-          // Use preventScroll to avoid browser auto-scrolling when focusing
-          // This preserves scroll state during tab switching and cursor restoration
-          element.focus({ preventScroll: true });
-          return;
-        }
-        currentOffset += nodeLength;
-      }
-
-      // If we couldn\'t find the exact position, place cursor at end
-      if (textNodes.length > 0) {
-        const lastNode = textNodes[textNodes.length - 1];
-        range.setStart(lastNode, lastNode.textContent?.length || 0);
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        // Use preventScroll to avoid browser auto-scrolling when focusing
-        // This preserves scroll state during tab switching and cursor restoration
-        element.focus({ preventScroll: true });
-      }
-    } catch {
-      // Silently handle cursor restoration errors
-    }
-  }
-
-  function getTextNodes(element: Element): Text[] {
-    const textNodes: Text[] = [];
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
-
-    let node = walker.nextNode();
-    while (node) {
-      textNodes.push(node as Text);
-      node = walker.nextNode();
-    }
-
-    return textNodes;
-  }
-
   // Handle outdenting nodes (Shift+Tab key)
-  async function handleOutdentNode(event: CustomEvent<{ nodeId: string }>) {
-    const { nodeId } = event.detail;
+  async function handleOutdentNode(detail: { nodeId: string }) {
+    const { nodeId } = detail;
 
     try {
       // Validate node exists before outdenting
@@ -906,13 +742,7 @@
       cursorPosition = saveCursorPosition(focusedNodeId);
     }
 
-    // Toggle expanded state (viewer-local)
-    const currentState = expandedState.get(toggleNodeId) ?? false;
-    expandedState.set(toggleNodeId, !currentState);
-
-    // TRANSITION PERIOD (Issue #580): Also update nodeManager for backward compatibility
-    // This dual update ensures expansionState syncs during migration from nodeManager to reactive stores.
-    // Once all state is in reactive stores, remove this call and update-only expandedState.
+    // Toggle expanded state via nodeManager
     nodeManager.toggleExpanded(toggleNodeId);
 
     // Restore focus and cursor position after DOM update
@@ -955,14 +785,8 @@
   }
 
   // Handle arrow key navigation between nodes using entry/exit methods
-  function handleArrowNavigation(
-    event: CustomEvent<{
-      nodeId: string;
-      direction: 'up' | 'down';
-      pixelOffset: number;
-    }>
-  ) {
-    const { nodeId: eventNodeId, direction, pixelOffset } = event.detail;
+  function handleArrowNavigation(detail: NavigateArrowDetail) {
+    const { nodeId: eventNodeId, direction, pixelOffset } = detail;
 
     // Get visible nodes from reactive stores
     const currentVisibleNodes = visibleNodesFromStores;
@@ -994,11 +818,9 @@
 
   // Handle combining current node with previous node (Backspace at start of node)
   // CLEAN DELEGATION: All logic handled by NodeManager
-  async function handleCombineWithPrevious(
-    event: CustomEvent<{ nodeId: string; currentContent: string }>
-  ) {
+  async function handleCombineWithPrevious(detail: CombineWithPreviousDetail) {
     try {
-      const { nodeId: eventNodeId } = event.detail;
+      const { nodeId: eventNodeId } = detail;
 
       // Validate node exists before combining
       if (!nodeManager.nodes.has(eventNodeId)) {
@@ -1047,9 +869,9 @@
   }
 
   // Handle deleting empty node (Backspace at start of empty node)
-  async function handleDeleteNode(event: CustomEvent<{ nodeId: string }>) {
+  async function handleDeleteNode(detail: DeleteNodeDetail) {
     try {
-      const { nodeId: eventNodeId } = event.detail;
+      const { nodeId: eventNodeId } = detail;
 
       // Validate node exists before deletion
       if (!nodeManager.nodes.has(eventNodeId)) {
@@ -1089,109 +911,158 @@
   // Handle icon click events
   // Note: Node-specific components handle their own icon behavior (e.g., TaskNode manages task states)
   // This handler is for any viewer-level icon click coordination if needed in the future
-  function handleIconClick(
-    _event: CustomEvent<{ nodeId: string; nodeType: string; currentState?: string }>
-  ) {
+  function handleIconClick() {
     // Currently a no-op - individual node components handle their own icon clicks
     // This makes the system extensible for future node types that need viewer-level coordination
   }
 
-  // Helper functions removed - NodeManager handles all node operations
-
-  // Simple reactive access - let template handle reactivity directly
-
-  // Dynamic component loading - all components loaded via plugin registry
-  // Components are loaded on-demand and cached for subsequent renders
-  // Proper Svelte 5 reactivity: use object instead of Map for reactive tracking
-  let loadedNodes = $state<Record<string, unknown>>({});
+  // Handle task state changes (checkbox toggles) — route through schema field update
+  function handleTaskStateChanged(node: ViewerRenderNode, detail: TaskStateChangedDetail) {
+    const { nodeId: eventNodeId, state } = detail;
+    updateSchemaField(
+      viewerId,
+      eventNodeId,
+      'status',
+      pluginRegistry.mapStateToSchema(node.nodeType, state, 'status')
+    );
+  }
 
   /**
-   * Load a node component from the plugin registry if not already loaded
-   * Components are cached in loadedNodes for subsequent renders
+   * Handle node content changes.
+   * Promotes the viewer-local placeholder to a real persisted node on first content,
+   * deferring store mutations to the next tick (mutating $state during template render
+   * throws state_unsafe_mutation). Otherwise routes through nodeManager.
    */
-  async function loadNodeComponent(nodeType: string): Promise<void> {
-    // Skip if already loaded
-    if (nodeType in loadedNodes) return;
+  function handleContentChanged(node: ViewerRenderNode, detail: ContentChangedDetail) {
+    const content = detail.content;
+    const cursorPosition = detail.cursorPosition ?? content.length;
 
-    try {
-      const component = await pluginRegistry.getNodeComponent(nodeType);
-      if (component) {
-        loadedNodes = { ...loadedNodes, [nodeType]: component };
+    // Capture $derived values immediately to prevent race condition
+    const currentPlaceholder = viewerPlaceholder;
+    const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
+
+    if (
+      currentPlaceholder &&
+      node.id === currentPlaceholder.id &&
+      content.trim() !== '' &&
+      nodeId &&
+      !nodeExistsInStore &&
+      !isPromoting
+    ) {
+      // ATOMIC PROMOTION: Set flag to block new placeholder creation
+      isPromoting = true;
+
+      // Prepare promoted node data synchronously
+      const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, { content });
+
+      // Clear placeholder ID synchronously to prevent re-entry
+      resetPlaceholderId();
+
+      // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+      // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+      // subscription callbacks that mutate $state. If called during template render,
+      // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
+      const promotionParentId = nodeId;
+      tick().then(() => {
+        // Set editing state BEFORE store update
+        focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+
+        // Add to shared store with persistence enabled
+        sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+        // Add parent-child edge to reactiveStructureTree
+        reactiveStructureTree.addChild({
+          parentId: promotionParentId,
+          childId: promotedNode.id,
+          order: Date.now()
+        });
+
+        // Clear promotion flag after state updates complete
+        isPromoting = false;
+      });
+    } else {
+      // Regular node content update (placeholder flag is handled automatically)
+      nodeManager.updateNodeContent(node.id, content);
+    }
+  }
+
+  /**
+   * Handle node type changes (pattern-detected conversions).
+   * When the target is the viewer-local placeholder, promotes it to a real node of the
+   * new type using the same tick-deferred, isPromoting-guarded path as contentChanged /
+   * slashCommandSelected. Otherwise updates the existing node's content + type.
+   */
+  async function handleNodeTypeChanged(node: ViewerRenderNode, detail: NodeTypeChangedDetail) {
+    const newNodeType = detail.nodeType;
+    let cleanedContent = detail.cleanedContent;
+    // Use cursor position from event (captured by TextareaController)
+    const cursorPosition = detail.cursorPosition ?? 0;
+
+    // Load component BEFORE updating node type (only if plugin has one)
+    if (!nodeLoader.has(newNodeType) && pluginRegistry.hasNodeComponent(newNodeType)) {
+      await nodeLoader.load(newNodeType);
+    }
+
+    // CRITICAL: Set editing state BEFORE updating node type
+    // This ensures focus manager state is ready when the new component mounts
+    focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
+
+    // Normalize content for code-block conversion
+    if (newNodeType === 'code-block') {
+      cleanedContent = normalizeCodeBlockContent(cleanedContent);
+    }
+
+    // Handle placeholder nodes - promote them to real nodes with the new type
+    const currentPlaceholder = viewerPlaceholder;
+    const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
+    if (
+      node.isPlaceholder &&
+      nodeId &&
+      currentPlaceholder &&
+      node.id === currentPlaceholder.id &&
+      !nodeExistsInStore &&
+      !isPromoting
+    ) {
+      // ATOMIC PROMOTION: Set flag to block new placeholder creation
+      isPromoting = true;
+
+      // Promote placeholder to real node with the new type
+      const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
+        content: cleanedContent ?? node.content ?? '',
+        nodeType: newNodeType
+      });
+
+      // Clear placeholder ID synchronously to prevent re-entry
+      resetPlaceholderId();
+
+      // CRITICAL FIX (Issue #681): Defer store mutations to next tick to avoid
+      // state_unsafe_mutation during template render (matches contentChanged path).
+      const promotionParentId = nodeId;
+      tick().then(() => {
+        // Add to store and trigger persistence
+        sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+        // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+        // This makes the promoted node visible in visibleNodesFromStores, which causes
+        // shouldShowPlaceholder to become false, switching from placeholder to real child.
+        reactiveStructureTree.addChild({
+          parentId: promotionParentId,
+          childId: promotedNode.id,
+          order: Date.now()
+        });
+
+        // Clear promotion flag after state updates complete
+        isPromoting = false;
+      });
+    } else {
+      // Update content if cleanedContent is provided (e.g., from contentTemplate)
+      if (cleanedContent !== undefined) {
+        nodeManager.updateNodeContent(node.id, cleanedContent);
       }
-    } catch (error) {
-      log.warn(`Failed to load component for ${nodeType}:`, error);
+
+      // Update node type through proper API (triggers component re-render)
+      nodeManager.updateNodeType(node.id, newNodeType);
     }
-  }
-
-  /**
-   * Extract display content for fallback BaseNode rendering (when plugin component hasn't loaded yet)
-   * Strips syntax markers that would normally be stripped by the specialized component
-   *
-   * This addresses the race condition where lazy-loaded components haven't finished loading
-   * but we need to render content without raw syntax markers (like ``` for code-blocks)
-   */
-  function extractFallbackDisplayContent(content: string, nodeType: string): string | undefined {
-    switch (nodeType) {
-      case 'code-block': {
-        // Strip code fence markers for view mode (matches code-block-node.svelte logic)
-        // Replace ```language with empty, keep content, replace closing ``` with newline
-        const result = content.replace(/^```\w*/, '').replace(/```$/, '\n');
-        return result;
-      }
-
-      case 'header':
-        // Strip leading # symbols for header display (matches header node display)
-        return content.replace(/^#+\s*/, '');
-
-      case 'quote-block':
-        // Strip leading > for quote blocks
-        return content.replace(/^>\s*/, '');
-
-      default:
-        // No stripping needed for other types
-        return undefined;
-    }
-  }
-
-  /**
-   * Get fallback metadata for BaseNode when plugin component hasn't loaded yet
-   * Provides essential flags like disableMarkdown for code-blocks
-   */
-  function extractFallbackMetadata(nodeType: string, properties: Record<string, unknown> | undefined): Record<string, unknown> {
-    const base = properties || {};
-
-    switch (nodeType) {
-      case 'code-block':
-        // Code blocks should not process markdown
-        return { ...base, disableMarkdown: true };
-
-      default:
-        return base;
-    }
-  }
-
-  // Issue #709: Type-specific schema forms loaded via plugin registry
-  // null = checked, no form registered (core types like header/text/table)
-  // Component = typed form to render (e.g. TaskSchemaForm)
-  let loadedSchemaForms = $state<Record<string, unknown>>({});
-
-  // Issue #965: Generic schema form for custom schema node types (UUID nodeType)
-  // Loaded when pluginRegistry has no schema form for the node type
-  let genericSchema = $state<SchemaNode | null>(null);
-
-  /** True when the current schema has a title_template — header should be read-only */
-  const hasTitleTemplate = $derived(genericSchema?.titleTemplate != null);
-
-  /** UUID regex — custom schema node types are stored as UUIDs */
-  /** Core built-in node types that ship with NodeSpace — everything else is a custom schema type */
-  const CORE_NODE_TYPES = new Set([
-    'text', 'task', 'date', 'header', 'code-block', 'quote-block',
-    'ordered-list', 'horizontal-line', 'table', 'checkbox', 'collection',
-    'query', 'schema'
-  ]);
-
-  function isCustomSchemaType(nodeType: string): boolean {
-    return !CORE_NODE_TYPES.has(nodeType);
   }
 
   /**
@@ -1213,67 +1084,126 @@
     // so no sibling is needed.
     if (hasTitleTemplate) {
       const rendered = nodesToRender();
-      const nodeIndex = rendered.findIndex(n => n.id === entityNodeId);
+      const nodeIndex = rendered.findIndex((n) => n.id === entityNodeId);
       const isLast = nodeIndex === rendered.length - 1;
       if (isLast) {
-        await handleCreateNewNode(new CustomEvent('createNewNode', {
-          detail: { afterNodeId: entityNodeId, nodeType: 'text', currentContent: '', newContent: '' }
-        }));
+        handleCreateNewNode({
+          afterNodeId: entityNodeId,
+          nodeType: 'text',
+          currentContent: '',
+          newContent: ''
+        });
       }
-    }
-  }
-
-  async function loadGenericSchema(nodeType: string): Promise<void> {
-    try {
-      const schemaNode = await backendAdapter.getSchema(nodeType);
-      if (isSchemaNode(schemaNode)) {
-        genericSchema = schemaNode;
-      }
-    } catch (error) {
-      log.warn(`Failed to load generic schema for ${nodeType}:`, error);
     }
   }
 
   /**
-   * Load a schema form component from the plugin registry if not already loaded
-   * Returns true if type-specific form exists, false if should use generic fallback
-   * Components are cached in loadedSchemaForms for subsequent renders
+   * Handle slash command selection.
+   * Placeholder promotion uses the tick-deferred, isPromoting-guarded path; existing
+   * nodes get contentTemplate + nodeType applied atomically in one store update.
    */
-  async function loadSchemaFormComponent(nodeType: string): Promise<boolean> {
-    // Skip if already loaded (check for both component and explicit null)
-    if (nodeType in loadedSchemaForms) {
-      return loadedSchemaForms[nodeType] !== null;
+  async function handleSlashCommandSelected(
+    node: ViewerRenderNode,
+    detail: SlashCommandSelectedDetail
+  ) {
+    // Use cursor position from event (captured by TextareaController)
+    const cursorPosition = detail.cursorPosition ?? 0;
+    const newNodeType = detail.nodeType;
+
+    // Load component BEFORE updating node type (only if plugin has one)
+    if (!nodeLoader.has(newNodeType) && pluginRegistry.hasNodeComponent(newNodeType)) {
+      await nodeLoader.load(newNodeType);
     }
 
-    // Check if plugin has a schema form registered
-    if (!pluginRegistry.hasSchemaForm(nodeType)) {
-      // Mark as null to indicate we checked and there's no type-specific form
-      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
-      // Issue #965: For custom schema types (UUID nodeType), load generic schema
-      if (isCustomSchemaType(nodeType)) {
-        loadGenericSchema(nodeType);
-      }
-      return false;
-    }
+    // CRITICAL: Set editing state BEFORE updating node type
+    // This ensures focus manager state is ready when the new component mounts
+    focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
-    try {
-      const component = await pluginRegistry.getSchemaForm(nodeType);
-      if (component) {
-        loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: component };
-        return true;
+    log.debug('slashCommandSelected:', {
+      nodeId: node.id,
+      newType: detail.nodeType,
+      isPlaceholder: node.isPlaceholder,
+      hasViewerPlaceholder: !!viewerPlaceholder
+    });
+
+    // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
+    // They must persist to database, not just update locally
+    // Use same batching logic as real nodes to ensure atomic persistence
+    // Also check if node doesn't already exist in store (prevents duplicate promotion)
+    const cmdDef = pluginRegistry.findSlashCommand(detail.command);
+    const currentPlaceholder = viewerPlaceholder;
+    const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
+    if (
+      node.isPlaceholder &&
+      nodeId &&
+      currentPlaceholder &&
+      node.id === currentPlaceholder.id &&
+      !nodeExistsInStore &&
+      !isPromoting
+    ) {
+      // ATOMIC PROMOTION: Set flag to block new placeholder creation
+      isPromoting = true;
+
+      log.debug('Promoting placeholder to real node with type:', detail.nodeType);
+      // Promote placeholder to real node with the new type
+      const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
+        content: node.content || '',
+        nodeType: detail.nodeType
+      });
+
+      // Clear placeholder ID synchronously to prevent re-entry
+      resetPlaceholderId();
+
+      // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+      // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
+      // subscription callbacks that mutate $state. If called during template render,
+      // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
+      const promotionParentId = nodeId;
+      tick().then(() => {
+        // Add to store and trigger persistence
+        // Note: domain events handles parent-child relationship via edge:created events
+        sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
+
+        // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
+        // This makes the promoted node visible in visibleNodesFromStores, which causes
+        // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
+        // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
+        reactiveStructureTree.addChild({
+          parentId: promotionParentId,
+          childId: promotedNode.id,
+          order: Date.now()
+        });
+
+        // Clear promotion flag after state updates complete
+        isPromoting = false;
+
+        // Custom entity nodes: open in other pane + optionally create text node below
+        if (isCustomSchemaType(newNodeType)) {
+          handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
+            log.error('Custom entity slash command failed (placeholder path):', err)
+          );
+        }
+      });
+    } else {
+      log.debug('Updating node type for real node');
+      // Apply contentTemplate + nodeType atomically via a single store update.
+      // Two separate updates would race (the second cancels the first's persist).
+      const contentTemplate = cmdDef?.contentTemplate;
+      const updatePayload: Record<string, unknown> = { nodeType: detail.nodeType };
+      if (contentTemplate !== undefined) {
+        updatePayload.content = contentTemplate;
       }
-      // Mark as null if loading failed
-      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
-      return false;
-    } catch (error) {
-      log.warn(`Failed to load schema form for ${nodeType}:`, error);
-      loadedSchemaForms = { ...loadedSchemaForms, [nodeType]: null };
-      return false;
+      sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
+      if (isCustomSchemaType(newNodeType)) {
+        handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
+          log.error('Custom entity slash command failed (real-node path):', err)
+        );
+      }
     }
   }
 
   // Derive the list of nodes to render - either viewer placeholder or real children
-  const nodesToRender = $derived(() => {
+  const nodesToRender = $derived<() => ViewerRenderNode[]>(() => {
     const realChildren = visibleNodesFromStores;
 
     // If we have real children, render those
@@ -1327,7 +1257,7 @@
 
   // Component loading: All components loaded dynamically via plugin registry
   // Loading is triggered in loadChildrenForParent when node data arrives (event-driven, no effects)
-  // Components are cached in loadedNodes for subsequent renders
+  // Components are cached in nodeLoader for subsequent renders
 
   // Clean up on component unmount and flush pending saves
   onDestroy(() => {
@@ -1362,13 +1292,17 @@
         type="text"
         id="viewer-header-{paneId}-{nodeId ?? 'default'}"
         class="header-input"
-        class:header-input--readonly={hasTitleTemplate}
+        class:header-input--readonly={schemaFormLoader.hasTitleTemplate}
         value={isHeaderBeingEdited ? (currentViewedNode?.content || '') : headerDisplayValue}
-        oninput={(e) => !hasTitleTemplate && handleHeaderInput(e.currentTarget.value)}
-        onfocus={() => { if (!hasTitleTemplate) isHeaderBeingEdited = true; }}
+        oninput={(e) => !schemaFormLoader.hasTitleTemplate && handleHeaderInput(e.currentTarget.value)}
+        onfocus={() => {
+          if (!schemaFormLoader.hasTitleTemplate) isHeaderBeingEdited = true;
+        }}
         onblur={() => (isHeaderBeingEdited = false)}
-        readonly={hasTitleTemplate}
-        placeholder={hasTitleTemplate ? (genericSchema?.titleTemplate ?? 'Untitled') : 'Untitled'}
+        readonly={schemaFormLoader.hasTitleTemplate}
+        placeholder={schemaFormLoader.hasTitleTemplate
+          ? (schemaFormLoader.genericSchema?.titleTemplate ?? 'Untitled')
+          : 'Untitled'}
         aria-label="Page title"
       />
     </div>
@@ -1378,19 +1312,24 @@
   <!-- Issue #709: Type-specific schema forms use plugin registry for smart dispatch -->
   <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
   <!-- Only render when a schema form is known to exist: null means "checked, none registered" -->
-  <!-- loadedSchemaForms[type] is null when no form is registered (core types); only renders typed forms -->
-  {#if currentViewedNode && nodeId && loadedSchemaForms[currentViewedNode.nodeType]}
-    {@const TypedSchemaForm = loadedSchemaForms[currentViewedNode.nodeType] as SchemaFormComponent}
+  {#if currentViewedNode && nodeId && schemaFormLoader.getForm(currentViewedNode.nodeType)}
+    {@const TypedSchemaForm = schemaFormLoader.getForm(
+      currentViewedNode.nodeType
+    ) as SchemaFormComponent}
     <div class="schema-form-container">
       <TypedSchemaForm {nodeId} />
     </div>
-  {:else if currentViewedNode && nodeId && genericSchema && isCustomSchemaType(currentViewedNode.nodeType)}
+  {:else if currentViewedNode && nodeId && schemaFormLoader.genericSchema && isCustomSchemaType(currentViewedNode.nodeType)}
     <!-- Issue #965: Generic schema form for custom schema node types (UUID nodeType) -->
     <!-- autoOpen is captured once at GenericSchemaForm mount time (not reactively synced).
          Safe only because this branch doesn't render until genericSchema is loaded, so
          hasTitleTemplate is already final by the time autoOpen is read. -->
     <div class="schema-form-container">
-      <GenericSchemaForm {nodeId} schema={genericSchema} autoOpen={hasTitleTemplate} />
+      <GenericSchemaForm
+        {nodeId}
+        schema={schemaFormLoader.genericSchema}
+        autoOpen={schemaFormLoader.hasTitleTemplate}
+      />
     </div>
   {/if}
 
@@ -1403,519 +1342,25 @@
         data-has-children={node.children?.length > 0}
         style="margin-left: {relativeDepth * 2.5}rem"
       >
-        <div class="node-content-wrapper">
-          <!-- Chevron for parent nodes using design system approach -->
-          {#if node.children && node.children.length > 0}
-            <button
-              class="chevron-icon"
-              class:expanded={node.expanded}
-              onclick={() => handleToggleExpanded(node.id)}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  handleToggleExpanded(node.id);
-                }
-              }}
-              aria-label={node.expanded ? 'Collapse node' : 'Expand node'}
-              aria-expanded={node.expanded}
-            >
-              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                <path d="M6 3l5 5-5 5-1-1 4-4-4-4 1-1z" />
-              </svg>
-            </button>
-          {/if}
-
-          <!-- Node viewer with stable component references - all nodes use plugin registry -->
-          {#if node.nodeType in loadedNodes}
-            {#key `${node.id}-${node.nodeType}`}
-              {@const NodeComponent = loadedNodes[node.nodeType] as typeof BaseNode}
-              {@const nodeMetadata = extractNodeMetadata(node)}
-              <NodeComponent
-                nodeId={node.id}
-                nodeType={node.nodeType}
-                autoFocus={node.autoFocus}
-                content={node.content}
-                children={node.children}
-                metadata={nodeMetadata}
-                editableConfig={{ allowMultiline: true }}
-                on:createNewNode={handleCreateNewNode}
-                on:indentNode={handleIndentNode}
-                on:outdentNode={handleOutdentNode}
-                on:navigateArrow={handleArrowNavigation}
-                on:contentChanged={(e: CustomEvent<{ content: string; cursorPosition?: number }>) => {
-                  const content = e.detail.content;
-                  const cursorPosition = e.detail.cursorPosition ?? content.length;
-
-                  // CRITICAL: Capture $derived viewerPlaceholder immediately to prevent race condition
-                  const currentPlaceholder = viewerPlaceholder;
-
-                  // Check if this is the viewer-local placeholder getting its first content
-                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
-                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
-                  if (
-                    currentPlaceholder &&
-                    node.id === currentPlaceholder.id &&
-                    content.trim() !== '' &&
-                    nodeId &&
-                    !nodeExistsInStore &&
-                    !isPromoting
-                  ) {
-                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
-                    isPromoting = true;
-
-                    // Prepare promoted node data synchronously
-                    const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
-                      content
-                    });
-
-                    // Clear placeholder ID synchronously to prevent re-entry
-                    resetPlaceholderId();
-
-                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
-                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
-                    // subscription callbacks that mutate $state. If called during template render,
-                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
-                    tick().then(() => {
-                      // Set editing state BEFORE store update
-                      focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
-
-                      // Add to shared store with persistence enabled
-                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                      // Add parent-child edge to reactiveStructureTree
-                      reactiveStructureTree.addChild({
-                        parentId: nodeId,
-                        childId: promotedNode.id,
-                        order: Date.now()
-                      });
-
-                      // Clear promotion flag after state updates complete
-                      isPromoting = false;
-                    });
-                  } else {
-                    // Regular node content update (placeholder flag is handled automatically)
-                    nodeManager.updateNodeContent(node.id, content);
-                  }
-                }}
-                on:nodeTypeChanged={async (
-                  e: CustomEvent<{
-                    nodeType: string;
-                    cleanedContent?: string;
-                    cursorPosition?: number;
-                  }>
-                ) => {
-                  const newNodeType = e.detail.nodeType;
-                  let cleanedContent = e.detail.cleanedContent;
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                  // Load component BEFORE updating node type (only if plugin has one)
-                  if (!(newNodeType in loadedNodes) && pluginRegistry.hasNodeComponent(newNodeType)) {
-                    await loadNodeComponent(newNodeType);
-                  }
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
-                  // Normalize content for code-block conversion
-                  if (newNodeType === 'code-block') {
-                    cleanedContent = normalizeCodeBlockContent(cleanedContent);
-                  }
-
-                  // Update content if cleanedContent is provided (e.g., from contentTemplate)
-                  if (cleanedContent !== undefined) {
-                    nodeManager.updateNodeContent(node.id, cleanedContent);
-                  }
-
-                  // Update node type through proper API (triggers component re-render)
-                  nodeManager.updateNodeType(node.id, newNodeType);
-                }}
-                on:slashCommandSelected={async (
-                  e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-                ) => {
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-                  const newNodeType = e.detail.nodeType;
-
-                  // Load component BEFORE updating node type (only if plugin has one)
-                  if (!(newNodeType in loadedNodes) && pluginRegistry.hasNodeComponent(newNodeType)) {
-                    await loadNodeComponent(newNodeType);
-                  }
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
-                  log.debug('slashCommandSelected:', {
-                    nodeId: node.id,
-                    newType: e.detail.nodeType,
-                    isPlaceholder: node.isPlaceholder,
-                    hasViewerPlaceholder: !!viewerPlaceholder
-                  });
-
-                  // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
-                  // They must persist to database, not just update locally
-                  // Use same batching logic as real nodes to ensure atomic persistence
-                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
-                  const cmdDef = pluginRegistry.findSlashCommand(e.detail.command);
-                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
-                  if (
-                    node.isPlaceholder &&
-                    nodeId &&
-                    viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id &&
-                    !nodeExistsInStore &&
-                    !isPromoting
-                  ) {
-                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
-                    isPromoting = true;
-
-                    log.debug(
-                      'Promoting placeholder to real node with type:',
-                      e.detail.nodeType
-                    );
-                    // Promote placeholder to real node with the new type
-                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
-                      content: node.content || '',
-                      nodeType: e.detail.nodeType
-                    });
-
-                    // Clear placeholder ID synchronously to prevent re-entry
-                    resetPlaceholderId();
-
-                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
-                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
-                    // subscription callbacks that mutate $state. If called during template render,
-                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
-                    tick().then(() => {
-                      // Add to store and trigger persistence
-                      // Note: domain events handles parent-child relationship via edge:created events
-                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                      // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                      // This makes the promoted node visible in visibleNodesFromStores, which causes
-                      // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                      // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
-                      reactiveStructureTree.addChild({
-                        parentId: nodeId,
-                        childId: promotedNode.id,
-                        order: Date.now()
-                      });
-
-                      // Clear promotion flag after state updates complete
-                      isPromoting = false;
-
-                      // Custom entity nodes: open in other pane + optionally create text node below
-                      if (isCustomSchemaType(newNodeType)) {
-                        handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate)
-                          .catch((err) => log.error('Custom entity slash command failed (placeholder path):', err));
-                      }
-                    });
-                  } else {
-                    log.debug('Updating node type for real node');
-                    // Apply contentTemplate + nodeType atomically via a single store update.
-                    // Two separate updates would race (the second cancels the first's persist).
-                    const contentTemplate = cmdDef?.contentTemplate;
-                    const updatePayload: Record<string, unknown> = { nodeType: e.detail.nodeType };
-                    if (contentTemplate !== undefined) {
-                      updatePayload.content = contentTemplate;
-                    }
-                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-                    if (isCustomSchemaType(newNodeType)) {
-                      handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate)
-                        .catch((err) => log.error('Custom entity slash command failed (real-node path):', err));
-                    }
-                  }
-                }}
-                on:iconClick={handleIconClick}
-                on:taskStateChanged={(e) => {
-                  const { nodeId: eventNodeId, state } = e.detail;
-                  updateSchemaField(eventNodeId, 'status', pluginRegistry.mapStateToSchema(node.nodeType, state, 'status'));
-                }}
-                on:combineWithPrevious={handleCombineWithPrevious}
-                on:deleteNode={handleDeleteNode}
-              />
-            {/key}
-          {:else}
-            <!-- Final fallback to BaseNode with key for re-rendering -->
-            <!-- Fallback applies syntax stripping for known types (code-block, header, quote-block) -->
-            <!-- Custom schema entities also render here (no lazy-loaded node component) -->
-            {@const nodeSlashCmd = pluginRegistry.findSlashCommand(node.nodeType)}
-            {@const nodeHasTitleTemplate = !!nodeSlashCmd?.hasTitleTemplate}
-            {@const nodeTitleDisplay = nodeHasTitleTemplate
-              ? (node.title && /\w/.test(node.title)
-                  ? node.title
-                  : (nodeSlashCmd?.titleTemplate ?? ''))
-              : undefined}
-            {#key `${node.id}-${node.nodeType}`}
-              <BaseNode
-                nodeId={node.id}
-                nodeType={node.nodeType}
-                autoFocus={node.autoFocus}
-                content={node.content}
-                readonly={nodeHasTitleTemplate}
-                displayContentIsPlaceholder={nodeHasTitleTemplate && !(node.title && /\w/.test(node.title))}
-                displayContent={nodeTitleDisplay !== undefined
-                  ? nodeTitleDisplay
-                  : extractFallbackDisplayContent(node.content, node.nodeType)}
-                children={node.children}
-                metadata={extractFallbackMetadata(node.nodeType, node.properties)}
-                editableConfig={{ allowMultiline: true }}
-                on:createNewNode={handleCreateNewNode}
-                on:indentNode={handleIndentNode}
-                on:outdentNode={handleOutdentNode}
-                on:navigateArrow={handleArrowNavigation}
-                on:contentChanged={(e: CustomEvent<{ content: string; cursorPosition?: number }>) => {
-                  const content = e.detail.content;
-                  const cursorPosition = e.detail.cursorPosition ?? content.length;
-
-                  // CRITICAL FIX (Issue #681): Fallback handler must also support placeholder promotion
-                  // This branch is used when node plugins haven't loaded yet (e.g., on initial render)
-
-                  // Capture $derived values immediately to prevent race condition
-                  const currentPlaceholder = viewerPlaceholder;
-                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
-
-                  if (
-                    currentPlaceholder &&
-                    node.id === currentPlaceholder.id &&
-                    content.trim() !== '' &&
-                    nodeId &&
-                    !nodeExistsInStore &&
-                    !isPromoting
-                  ) {
-                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
-                    isPromoting = true;
-
-                    // Prepare promoted node data synchronously
-                    const promotedNode = promotePlaceholderToNode(currentPlaceholder, nodeId, {
-                      content
-                    });
-
-                    // Clear placeholder ID synchronously to prevent re-entry
-                    resetPlaceholderId();
-
-                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
-                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
-                    // subscription callbacks that mutate $state. If called during template render,
-                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
-                    tick().then(() => {
-                      // Set editing state BEFORE store update
-                      focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
-
-                      // Add to shared store with persistence enabled
-                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                      // Add parent-child edge to reactiveStructureTree
-                      reactiveStructureTree.addChild({
-                        parentId: nodeId,
-                        childId: promotedNode.id,
-                        order: Date.now()
-                      });
-
-                      // Clear promotion flag after state updates complete
-                      isPromoting = false;
-                    });
-                  } else {
-                    // Regular node content update (placeholder flag is handled automatically)
-                    nodeManager.updateNodeContent(node.id, content);
-                  }
-                }}
-                on:nodeTypeChanged={async (
-                  e: CustomEvent<{
-                    nodeType: string;
-                    cleanedContent?: string;
-                    cursorPosition?: number;
-                  }>
-                ) => {
-                  const newNodeType = e.detail.nodeType;
-                  let cleanedContent = e.detail.cleanedContent;
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-
-                  // Load component BEFORE updating node type (only if plugin has one)
-                  if (!(newNodeType in loadedNodes) && pluginRegistry.hasNodeComponent(newNodeType)) {
-                    await loadNodeComponent(newNodeType);
-                  }
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
-                  // Normalize content for code-block conversion
-                  if (newNodeType === 'code-block') {
-                    cleanedContent = normalizeCodeBlockContent(cleanedContent);
-                  }
-
-                  // Handle placeholder nodes - promote them to real nodes with the new type
-                  if (
-                    node.isPlaceholder &&
-                    nodeId &&
-                    viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id
-                  ) {
-                    // Promote placeholder to real node with the new type
-                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
-                      content: cleanedContent ?? node.content ?? '',
-                      nodeType: newNodeType
-                    });
-
-                    // Add to store and trigger persistence
-                    sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                    // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                    // This makes the promoted node visible in visibleNodesFromStores, which causes
-                    // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                    reactiveStructureTree.addChild({
-                      parentId: nodeId,
-                      childId: promotedNode.id,
-                      order: Date.now()
-                    });
-
-                    // CRITICAL: Clear viewerPlaceholder so template re-renders with promoted node
-                    resetPlaceholderId();
-                  } else {
-                    // Update content if cleanedContent is provided (e.g., from contentTemplate)
-                    if (cleanedContent !== undefined) {
-                      nodeManager.updateNodeContent(node.id, cleanedContent);
-                    }
-
-                    // Update node type through proper API (triggers component re-render)
-                    nodeManager.updateNodeType(node.id, newNodeType);
-                  }
-                }}
-                on:slashCommandSelected={async (
-                  e: CustomEvent<{ command: string; nodeType: string; cursorPosition?: number }>
-                ) => {
-                  // Use cursor position from event (captured by TextareaController)
-                  const cursorPosition = e.detail.cursorPosition ?? 0;
-                  const newNodeType = e.detail.nodeType;
-
-                  // Load component BEFORE updating node type (only if plugin has one)
-                  if (!(newNodeType in loadedNodes) && pluginRegistry.hasNodeComponent(newNodeType)) {
-                    await loadNodeComponent(newNodeType);
-                  }
-
-                  // CRITICAL: Set editing state BEFORE updating node type
-                  // This ensures focus manager state is ready when the new component mounts
-                  focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
-                  log.debug('slashCommandSelected:', {
-                    nodeId: node.id,
-                    newType: e.detail.nodeType,
-                    isPlaceholder: node.isPlaceholder,
-                    hasViewerPlaceholder: !!viewerPlaceholder
-                  });
-
-                  // CRITICAL FIX: Treat slash commands on placeholders as real node type changes
-                  // They must persist to database, not just update locally
-                  // Use same batching logic as real nodes to ensure atomic persistence
-                  // Also check if node doesn't already exist in store (prevents duplicate promotion)
-                  const cmdDef = pluginRegistry.findSlashCommand(e.detail.command);
-                  const nodeExistsInStore = sharedNodeStore.hasNode(node.id);
-                  if (
-                    node.isPlaceholder &&
-                    nodeId &&
-                    viewerPlaceholder &&
-                    node.id === viewerPlaceholder.id &&
-                    !nodeExistsInStore &&
-                    !isPromoting
-                  ) {
-                    // ATOMIC PROMOTION: Set flag to block new placeholder creation
-                    isPromoting = true;
-
-                    log.debug(
-                      'Promoting placeholder to real node with type:',
-                      e.detail.nodeType
-                    );
-                    // Promote placeholder to real node with the new type
-                    const promotedNode = promotePlaceholderToNode(viewerPlaceholder, nodeId, {
-                      content: node.content || '',
-                      nodeType: e.detail.nodeType
-                    });
-
-                    // Clear placeholder ID synchronously to prevent re-entry
-                    resetPlaceholderId();
-
-                    // CRITICAL FIX (Issue #681): Defer store mutations to next tick
-                    // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
-                    // subscription callbacks that mutate $state. If called during template render,
-                    // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
-                    tick().then(() => {
-                      // Add to store and trigger persistence
-                      // Note: domain events handles parent-child relationship via edge:created events
-                      sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
-
-                      // CRITICAL: Add parent-child edge to reactiveStructureTree immediately
-                      // This makes the promoted node visible in visibleNodesFromStores, which causes
-                      // shouldShowPlaceholder to become false, switching the binding from placeholder to real child.
-                      // Backend will also create the edge when persisting, and SSE will confirm (no-op since already added).
-                      reactiveStructureTree.addChild({
-                        parentId: nodeId,
-                        childId: promotedNode.id,
-                        order: Date.now()
-                      });
-
-                      // Clear promotion flag after state updates complete
-                      isPromoting = false;
-
-                      // Custom entity nodes: open in other pane + optionally create text node below
-                      if (isCustomSchemaType(newNodeType)) {
-                        handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate)
-                          .catch((err) => log.error('Custom entity slash command failed (placeholder path):', err));
-                      }
-                    });
-                  } else {
-                    log.debug('Updating node type for real node');
-                    // Apply contentTemplate + nodeType atomically via a single store update.
-                    // Two separate updates would race (the second cancels the first's persist).
-                    const contentTemplate = cmdDef?.contentTemplate;
-                    const updatePayload: Record<string, unknown> = { nodeType: e.detail.nodeType };
-                    if (contentTemplate !== undefined) {
-                      updatePayload.content = contentTemplate;
-                    }
-                    sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-                    if (isCustomSchemaType(newNodeType)) {
-                      handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate)
-                        .catch((err) => log.error('Custom entity slash command failed (real-node path):', err));
-                    }
-                  }
-                }}
-                on:iconClick={handleIconClick}
-                on:taskStateChanged={(e) => {
-                  const { nodeId: eventNodeId, state } = e.detail;
-                  updateSchemaField(eventNodeId, 'status', pluginRegistry.mapStateToSchema(node.nodeType, state, 'status'));
-                }}
-                on:combineWithPrevious={handleCombineWithPrevious}
-                on:deleteNode={handleDeleteNode}
-              />
-            {/key}
-            {#if isCustomSchemaType(node.nodeType)}
-              <button
-                class="custom-entity-open-button"
-                onclick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const { getNavigationService } = await import('$lib/services/navigation-service');
-                  if (e.metaKey || e.ctrlKey) {
-                    getNavigationService().navigateToNode(node.id, true, paneId);
-                  } else {
-                    getNavigationService().navigateToNodeInOtherPane(node.id, paneId);
-                  }
-                }}
-                type="button"
-                aria-label="Open entity in dedicated viewer pane (Cmd+Click for new tab in same pane)"
-                title="Open in viewer"
-              >
-                open
-              </button>
-            {/if}
-          {/if}
-        </div>
+        <NodeRow
+          {node}
+          loadedNodeComponent={nodeLoader.get(node.nodeType)}
+          {paneId}
+          onCreateNewNode={handleCreateNewNode}
+          onIndentNode={handleIndentNode}
+          onOutdentNode={handleOutdentNode}
+          onNavigateArrow={handleArrowNavigation}
+          onContentChanged={handleContentChanged}
+          onNodeTypeChanged={handleNodeTypeChanged}
+          onSlashCommandSelected={handleSlashCommandSelected}
+          onIconClick={handleIconClick}
+          onTaskStateChanged={handleTaskStateChanged}
+          onCombineWithPrevious={handleCombineWithPrevious}
+          onDeleteNode={handleDeleteNode}
+          onToggleExpanded={handleToggleExpanded}
+        />
       </div>
     {/each}
-
   </div>
 
   <!-- Backlinks Panel - outside scroll area, fixed at bottom of viewer -->
@@ -2066,162 +1511,6 @@
     /* Individual node wrapper - no additional spacing */
     /* Allow chevrons to extend outside container bounds */
     overflow: visible;
-  }
-
-  .node-content-wrapper {
-    /* Wrapper for chevron + content */
-    display: flex;
-    align-items: flex-start;
-    gap: 0.25rem; /* 4px gap between chevron/spacer and text content */
-    position: relative; /* Enable absolute positioning for chevrons */
-    width: 100%; /* Ensure wrapper fills parent so flex children can inherit */
-  }
-
-  /* Open button for custom entity nodes (appears on hover like task open button) */
-  .custom-entity-open-button {
-    position: absolute;
-    top: 0.25rem;
-    right: 0.25rem;
-    background: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
-    color: hsl(var(--foreground));
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.25rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    text-transform: lowercase;
-    z-index: 5;
-  }
-
-  .node-content-wrapper:hover .custom-entity-open-button {
-    opacity: 1;
-  }
-
-  .custom-entity-open-button:hover {
-    background: hsl(var(--muted));
-  }
-
-  /* Flex children (node wrappers) should fill available space */
-  /* Use :global() to apply across component boundaries (TaskNode, CodeBlock, etc. have different scopes) */
-  .node-content-wrapper > :global(:not(.chevron-icon):not(.chevron-spacer)) {
-    flex: 1;
-    min-width: 0; /* Allow flex item to shrink below content size if needed */
-  }
-
-  /* 
-    Chevron positioning system - matches circle positioning exactly
-    
-    POSITIONING FORMULA:
-    The chevron must be vertically centered with the circles, which use:
-    top: calc(0.25rem + (var(--font-size) * var(--line-height) / 2))
-    
-    Where:
-    - 0.25rem = container top padding (.node has padding: 0.25rem)
-    - line-height-px = font-size × line-height multiplier
-    - This formula positions at the visual center of the first line of text
-    
-    HORIZONTAL POSITION:
-    - Exactly halfway between parent and child circles
-    - Parent is at current depth, child is at depth + 2.5rem (--node-indent)
-    - Chevron positioned at -1.25rem (half of 2.5rem) from current node
-    
-    INHERITANCE:
-    The --line-height-px variable is inherited from .node-content-wrapper
-    which detects the header level of nested content using :has() selector
-  */
-  .chevron-icon {
-    opacity: 0; /* Hidden by default - shows on hover */
-    background: none;
-    border: none;
-    padding: 0.125rem; /* 2px padding for clickable area */
-    cursor: pointer;
-    border-radius: 0.125rem; /* 2px border radius */
-    transition: opacity 0.15s ease-in-out; /* Smooth fade in/out */
-    pointer-events: auto; /* Ensure chevron always receives pointer events */
-    flex-shrink: 0;
-    width: 1.25rem; /* Fixed 20px to match circle size */
-    height: 1.25rem; /* Fixed 20px to match circle size */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    /* Position chevron exactly halfway between parent and child circles */
-    position: absolute;
-    left: calc(
-      -1 * var(--node-indent) / 2 + var(--circle-offset)
-    ); /* Halfway back to parent + parent circle offset */
-    /* Use shared CSS variable from .node - single source of truth for vertical positioning */
-    top: var(--icon-vertical-position);
-    transform: translate(-50%, -50%); /* Center icon on coordinates, same as circles */
-    z-index: 999; /* Very high z-index to ensure clickability over all other elements */
-  }
-
-  .chevron-icon svg {
-    width: 16px;
-    height: 16px;
-    fill: hsl(var(--node-text) / 0.5);
-    transition: fill 0.15s ease;
-  }
-
-  /* Focus styling removed - Tab key used for indent/outdent, not UI navigation */
-
-  .chevron-icon:hover svg {
-    fill: hsl(var(--node-text) / 0.5);
-  }
-
-  /* Show chevron only when hovering directly over this node's content wrapper (not child nodes) */
-  .node-content-wrapper:hover > .chevron-icon {
-    opacity: 1;
-  }
-
-  /* Expanded state: rotate 90 degrees to point down */
-  .chevron-icon.expanded {
-    transform: translate(-50%, -50%) rotate(90deg);
-  }
-
-  /* CSS-first positioning to match base-node.svelte implementation */
-  .node-content-wrapper {
-    /* Default values for normal text - adjusted for better circle alignment */
-    --line-height: 1.875;
-    --font-size: 1rem;
-  }
-
-  /* Inherit font-size, line-height, and icon positioning from HeaderNode wrapper classes (Issue #311) */
-  .node-content-wrapper:has(:global(.header-h1)) {
-    --font-size: 2rem;
-    --line-height: 1.2;
-    --icon-vertical-position: calc(0.25rem + (2rem * 1.2 / 2));
-  }
-
-  .node-content-wrapper:has(:global(.header-h2)) {
-    --font-size: 1.5rem;
-    --line-height: 1.3;
-    --icon-vertical-position: calc(0.25rem + (1.5rem * 1.3 / 2));
-  }
-
-  .node-content-wrapper:has(:global(.header-h3)) {
-    --font-size: 1.25rem;
-    --line-height: 1.4;
-    --icon-vertical-position: calc(0.25rem + (1.25rem * 1.4 / 2));
-  }
-
-  .node-content-wrapper:has(:global(.header-h4)) {
-    --font-size: 1.125rem;
-    --line-height: 1.4;
-    --icon-vertical-position: calc(0.25rem + (1.125rem * 1.4 / 2));
-  }
-
-  .node-content-wrapper:has(:global(.header-h5)) {
-    --font-size: 1rem;
-    --line-height: 1.4;
-    --icon-vertical-position: calc(0.25rem + (1rem * 1.4 / 2));
-  }
-
-  .node-content-wrapper:has(:global(.header-h6)) {
-    --font-size: 0.875rem;
-    --line-height: 1.4;
-    --icon-vertical-position: calc(0.25rem + (0.875rem * 1.4 / 2));
   }
 
   /* Reset ordered list counter at viewer level */
