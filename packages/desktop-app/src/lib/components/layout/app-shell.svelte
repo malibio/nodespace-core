@@ -46,15 +46,10 @@
   // covers the brief window before the first daemon-status event arrives (or
   // a short grace period elapses); `unreachable` reflects a terminal
   // `not_running` event.
-  let daemonConnecting = $state(true);
-  let daemonUnreachable = $state(false);
-  $effect(() => {
-    const unsubscribe = daemonStatus.subscribe((s) => {
-      daemonConnecting = s.connecting;
-      daemonUnreachable = s.unreachable;
-    });
-    return unsubscribe;
-  });
+  // Read directly from the store via $-auto-subscription — no effect mirroring the
+  // store into local $state (ADR-049).
+  const daemonConnecting = $derived($daemonStatus.connecting);
+  const daemonUnreachable = $derived($daemonStatus.unreachable);
 
   // First-launch onboarding wizard (Issue #1180).
   let showOnboarding = $state(false);
@@ -78,14 +73,11 @@
   // show a one-time snackbar on first open; the inline badge handles per-node
   // review/restore. Guarded one-shot so it loads exactly once per session; fully
   // inert in community (proSync.isPro is false → load() returns empty → no toast).
-  let recoveredLoadStarted = false;
-  let recoveredNotified = false;
-  $effect(() => {
-    if (!proSync.isPro || recoveredLoadStarted) return;
-    recoveredLoadStarted = true;
+  // Fired from proSync.onProConfirmed (the tier state-transition site) rather than a
+  // guarded $effect (ADR-049); fully inert in community since the callback never fires.
+  function loadRecoveredItems(): void {
     recoveredItems.load().then(() => {
-      if (recoveredNotified || recoveredItems.items.length === 0) return;
-      recoveredNotified = true;
+      if (recoveredItems.items.length === 0) return;
       const n = recoveredItems.items.length;
       conflictNotifications.add({
         nodeId: recoveredItems.items[0].node_id,
@@ -93,7 +85,7 @@
         conflictType: 'recovered-items'
       });
     });
-  });
+  }
 
   async function handleReloginSignIn() {
     if (reloginPending) return;
@@ -249,6 +241,7 @@
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
     let cleanupProSync: (() => void) | null = null;
+    let unregisterProConfirmed: (() => void) | null = null;
     let unlistenTier: Promise<() => void> | null = null;
 
     if (
@@ -263,6 +256,10 @@
         .start()
         .then((stop) => (cleanupProSync = stop))
         .catch((e) => log.warn('proSync.start failed', { error: e }));
+
+      // Load the recovered-items log once the daemon confirms Pro tier. Registering
+      // here (a listener, not an effect) keeps the sequencing at the transition site.
+      unregisterProConfirmed = proSync.onProConfirmed(loadRecoveredItems);
 
       // Sync theme from backend preferences (overrides localStorage if different)
       invoke<{ activeDatabasePath: string; display: { renderMarkdown: boolean; theme: string } }>('get_settings')
@@ -607,6 +604,7 @@
         (await unlistenTier)();
       }
       cleanupProSync?.();
+      unregisterProConfirmed?.();
       if (cleanupMCP) {
         await cleanupMCP();
       }

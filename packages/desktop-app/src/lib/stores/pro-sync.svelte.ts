@@ -83,13 +83,58 @@ class ProSyncStore {
    */
   authRequiredEpisode = $state(0);
 
+  /**
+   * Bumped each time `userEmail` transitions from empty to non-empty — i.e. a fresh
+   * sign-in. Lets consumers (the sync pill's first-run onboarding) react to the
+   * transition via a derived comparison instead of an effect that reads and writes
+   * its own "seen" flag. Same pattern as authRequiredEpisode.
+   */
+  signedInEpisode = $state(0);
+
   isPro = $derived(this.tier === 'pro');
+
+  /**
+   * Callbacks fired once when `tier` first resolves to 'pro'. Lets consumers run a
+   * Pro-confirmed one-shot (e.g. loading the recovered-items log) from this state
+   * transition rather than an $effect that guards on isPro (ADR-049). A callback
+   * registered after tier is already 'pro' fires immediately.
+   */
+  private proConfirmedCallbacks = new Set<() => void>();
+  private proConfirmed = false;
+
+  /** Register a one-shot callback for Pro-tier confirmation. Returns an unregister fn. */
+  onProConfirmed(callback: () => void): () => void {
+    if (this.proConfirmed) {
+      callback();
+      return () => {};
+    }
+    this.proConfirmedCallbacks.add(callback);
+    return () => this.proConfirmedCallbacks.delete(callback);
+  }
 
   private setState(next: SyncState) {
     if (next === 'auth-required' && this.state !== 'auth-required') {
       this.authRequiredEpisode++;
     }
     this.state = next;
+  }
+
+  /** Set tier, firing proConfirmed callbacks once on the first transition to 'pro'. */
+  private setTier(next: ProTier) {
+    this.tier = next;
+    if (next === 'pro' && !this.proConfirmed) {
+      this.proConfirmed = true;
+      for (const cb of this.proConfirmedCallbacks) cb();
+      this.proConfirmedCallbacks.clear();
+    }
+  }
+
+  /** Set userEmail, bumping signedInEpisode on an empty→non-empty (fresh sign-in) edge. */
+  private setUserEmail(next: string) {
+    if (next !== '' && this.userEmail === '') {
+      this.signedInEpisode++;
+    }
+    this.userEmail = next;
   }
 
   private unlistenTier: UnlistenFn | null = null;
@@ -112,7 +157,7 @@ class ProSyncStore {
     // fired before we subscribed (Tauri events are not buffered).
     try {
       const t = await invoke<ProTier>('pro_tier');
-      this.tier = t;
+      this.setTier(t);
     } catch (e) {
       log.warn('pro_tier invoke failed', { error: e });
     }
@@ -123,11 +168,11 @@ class ProSyncStore {
     }>('pro:tier-detected', async (event) => {
       const p = event.payload;
       log.info('tier detected', { tier: p.tier });
-      this.tier = p.tier;
+      this.setTier(p.tier);
       if (p.initial_status) {
         this.setState(decodeState(p.initial_status.state));
         this.detail = p.initial_status.detail;
-        this.userEmail = p.initial_status.user_email ?? '';
+        this.setUserEmail(p.initial_status.user_email ?? '');
       }
       // The first pro_subscribe_sync_status invoke below races the
       // backend's async init (Tauri setup spawns the connect on the
@@ -148,7 +193,7 @@ class ProSyncStore {
       (event) => {
         this.setState(decodeState(event.payload.state));
         this.detail = event.payload.detail;
-        this.userEmail = event.payload.user_email ?? '';
+        this.setUserEmail(event.payload.user_email ?? '');
       }
     );
 
@@ -176,7 +221,7 @@ class ProSyncStore {
       log.warn('pro_signout invoke failed', { error: e });
     }
     this.setState('auth-required');
-    this.userEmail = '';
+    this.setUserEmail('');
   }
 
   stop() {
