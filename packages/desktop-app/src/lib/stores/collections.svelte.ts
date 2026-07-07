@@ -289,8 +289,8 @@ export interface SelectedCollectionInfo {
  * Recursively prune collections that have no member nodes visible to the
  * current user. A collection is kept if it has its own members OR any of its
  * descendants does — so a populated collection nested under an empty parent
- * still surfaces. Returns a new array of the surviving items (children are
- * pruned in place on the retained items).
+ * still surfaces. Returns a new array of new items (pure — the input items are
+ * not mutated).
  *
  * `memberCount` is sourced from the local per-user store, so it already
  * reflects RBAC visibility: the local DB only holds member edges the signed-in
@@ -298,11 +298,13 @@ export interface SelectedCollectionInfo {
  * this user*, not just globally empty ones.
  */
 function pruneEmptyCollections(items: CollectionItem[]): CollectionItem[] {
-  return items.filter((item) => {
+  return items.reduce<CollectionItem[]>((kept, item) => {
     const keptChildren = item.children ? pruneEmptyCollections(item.children) : [];
-    item.children = keptChildren;
-    return item.memberCount > 0 || keptChildren.length > 0;
-  });
+    if (item.memberCount > 0 || keptChildren.length > 0) {
+      kept.push({ ...item, children: keptChildren });
+    }
+    return kept;
+  }, []);
 }
 
 /**
