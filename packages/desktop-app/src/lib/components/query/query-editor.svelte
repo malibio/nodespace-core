@@ -27,22 +27,13 @@
     onPreview?: (_query: QueryDefinition) => Promise<number>;
   } = $props();
 
-  // We intentionally capture the prop value once at mount rather than reactively
-  // tracking it, so that parent re-derivations don't overwrite in-progress edits.
-  let initialized = false;
-  let jsonText = $state('');
+  // Capture the prop value once at component init rather than tracking it reactively,
+  // so parent re-derivations don't overwrite in-progress edits. The $state initializer
+  // runs once with the initial `query` prop — no $effect syncing prop→state (ADR-049).
+  let jsonText = $state(JSON.stringify(query ?? DEFAULT_QUERY, null, 2));
   let errorMessage = $state<string | null>(null);
   let previewCount = $state<number | null>(null);
   let previewLoading = $state(false);
-
-  $effect(() => {
-    // Read `query` reactively but only apply it on the first run.
-    const q = query;
-    if (!initialized) {
-      jsonText = JSON.stringify(q ?? DEFAULT_QUERY, null, 2);
-      initialized = true;
-    }
-  });
 
   function validateAndSave(): void {
     errorMessage = null;

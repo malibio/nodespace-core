@@ -27,13 +27,10 @@
   } = $props();
 
   const PAGE_SIZE = 25;
+  // Raw user pagination intent. The effective page is derived and clamped into the
+  // valid range for the current nodeIds, so a shrinking/changing result set corrects an
+  // out-of-range page on read — no $effect syncing state to the nodeIds prop (ADR-049).
   let currentPage = $state(0);
-
-  // Reset to page 0 when nodeIds change
-  $effect(() => {
-    nodeIds;
-    currentPage = 0;
-  });
 
   // Derive columns from schema fields — capitalize name and replace underscores with spaces
   const columns = $derived.by(() => {
@@ -58,9 +55,10 @@
 
   const totalPages = $derived(Math.ceil(nodeIds.length / PAGE_SIZE));
 
-  const pageIds = $derived(
-    nodeIds.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
-  );
+  // Effective page, clamped so it never points past the current result set.
+  const page = $derived(Math.min(currentPage, Math.max(0, totalPages - 1)));
+
+  const pageIds = $derived(nodeIds.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
 
 </script>
 
@@ -84,17 +82,17 @@
     <Button
       variant="outline"
       size="sm"
-      onclick={() => currentPage--}
-      disabled={currentPage === 0}
+      onclick={() => (currentPage = page - 1)}
+      disabled={page === 0}
     >
       ‹
     </Button>
-    <span class="text-muted-foreground text-sm">{currentPage + 1} / {totalPages}</span>
+    <span class="text-muted-foreground text-sm">{page + 1} / {totalPages}</span>
     <Button
       variant="outline"
       size="sm"
-      onclick={() => currentPage++}
-      disabled={currentPage >= totalPages - 1}
+      onclick={() => (currentPage = page + 1)}
+      disabled={page >= totalPages - 1}
     >
       ›
     </Button>
