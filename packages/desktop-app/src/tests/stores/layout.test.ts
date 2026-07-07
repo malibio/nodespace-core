@@ -3,15 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import {
-  layoutStore,
-  toggleSidebar,
-  setActivePane,
-  setCollectionsExpanded,
-  toggleCollectionsExpanded,
-  setSchemaTypesExpanded,
-  type NavigationItem
-} from '$lib/stores/layout.svelte';
+import { layoutStore, toggleSidebar, setActivePane, type NavigationItem } from '$lib/stores/layout.svelte';
 import { LayoutPersistenceService } from '$lib/services/layout-persistence-service';
 
 // Mock the LayoutPersistenceService
