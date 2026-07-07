@@ -59,6 +59,25 @@ impl NodeService {
             // Content is preserved - date nodes can have custom content like "Custom Date Content"
         }
 
+        // DatabaseSettingsNode is a singleton (ADR-037). The fixed reserved ID makes
+        // creation idempotent: if one already exists, treat a second create as a no-op
+        // and return the existing id rather than erroring. Mirrors the collection-name
+        // uniqueness guard in SqliteStore::create_node, but non-fatal.
+        if node.node_type == "database-settings" {
+            if let Some(existing) = self
+                .query_nodes_by_type("database-settings", None)
+                .await?
+                .into_iter()
+                .next()
+            {
+                tracing::debug!(
+                    node_id = %existing.id,
+                    "create_node: database-settings singleton already exists, no-op"
+                );
+                return Ok(existing.id);
+            }
+        }
+
         // Step 1: Core behavior validation (PROTECTED)
         // Validates basic data integrity (non-empty content, correct types, etc.)
         self.behaviors.validate_node(&node)?;

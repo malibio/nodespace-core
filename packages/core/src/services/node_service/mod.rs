@@ -41,6 +41,14 @@ pub(crate) mod query;
 pub(crate) mod relationship;
 pub(crate) mod schema;
 
+/// Reserved ID for the DatabaseSettingsNode singleton instance.
+///
+/// The `database-settings` schema node stores its own id as the slug
+/// `"database-settings"`, so the instance must use a distinct reserved id to
+/// avoid colliding with it. Seeding and the singleton idempotency guard both
+/// key off this constant so the node is deterministic and created at most once.
+pub(crate) const DATABASE_SETTINGS_NODE_ID: &str = "database-settings-singleton";
+
 /// Compute property changes between pre-mutation and post-mutation node properties (Issue #995)
 ///
 /// Diffs the top-level keys within each namespace. For namespaced properties
@@ -919,6 +927,10 @@ impl NodeService {
         // ADR-037 (#133): every install has exactly one local PersonNode (the user).
         service.seed_local_person_if_needed().await?;
 
+        // ADR-037: seed the DatabaseSettingsNode singleton and its owner has_role
+        // edge. Must run AFTER the local person seed — the owner edge attaches to it.
+        service.seed_database_settings_if_needed().await?;
+
         Ok(service)
     }
 
@@ -937,6 +949,64 @@ impl NodeService {
         let person = Node::new("person".to_string(), String::new(), serde_json::json!({}));
         let id = self.create_node(person).await?;
         tracing::info!(node_id = %id, "🌱 Seeded local PersonNode (ADR-037)");
+        Ok(())
+    }
+
+    /// ADR-037: seed the DatabaseSettingsNode singleton — the container for
+    /// database-level configuration (sync state; tenant roles via `has_role`
+    /// edges). Idempotent: skips when a database-settings node already exists, so
+    /// an existing database is backfilled on next open too. Seeds `sync_enabled:
+    /// false`, `auth_status: local`, and one `has_role` owner edge from the local
+    /// PersonNode to this node (role `owner`, status `active`). Must run after the
+    /// local person seed so the owner edge always has a person to attach to.
+    async fn seed_database_settings_if_needed(&self) -> Result<(), NodeServiceError> {
+        if !self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .is_empty()
+        {
+            return Ok(());
+        }
+
+        let settings = Node::new_with_id(
+            DATABASE_SETTINGS_NODE_ID.to_string(),
+            "database-settings".to_string(),
+            String::new(),
+            serde_json::json!({
+                "database-settings": {
+                    "sync_enabled": false,
+                    "auth_status": "local"
+                }
+            }),
+        );
+        let settings_id = self.create_node(settings).await?;
+
+        // Attach the owner role edge from the local PersonNode. Seeding order
+        // guarantees exactly one local person exists at this point.
+        let local_person_id = self
+            .query_nodes_by_type("person", None)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                NodeServiceError::InitializationError(
+                    "cannot seed DatabaseSettingsNode owner edge: no local PersonNode".to_string(),
+                )
+            })?
+            .id;
+        self.create_relationship(
+            &local_person_id,
+            "has_role",
+            &settings_id,
+            serde_json::json!({"role": "owner", "status": "active"}),
+        )
+        .await?;
+
+        tracing::info!(
+            node_id = %settings_id,
+            owner = %local_person_id,
+            "🌱 Seeded DatabaseSettingsNode singleton with owner has_role edge (ADR-037)"
+        );
         Ok(())
     }
 
@@ -3903,6 +3973,123 @@ mod tests {
         assert!(
             rx.try_recv().is_ok(),
             "single create after bulk import must emit immediately"
+        );
+    }
+
+    // --- DatabaseSettingsNode seeding tests (ADR-037) ---
+
+    #[tokio::test]
+    async fn test_seed_database_settings_singleton_with_owner_edge() {
+        let (service, _temp) = create_test_service().await;
+
+        // Exactly one database-settings node, with the reserved id and defaults.
+        let settings = service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            settings.len(),
+            1,
+            "a fresh install must seed exactly one DatabaseSettingsNode"
+        );
+        let node = &settings[0];
+        assert_eq!(node.id, DATABASE_SETTINGS_NODE_ID);
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], false);
+        assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+
+        // Exactly one local person, and exactly one has_role owner edge to the singleton.
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        assert_eq!(people.len(), 1);
+        let person_id = people[0].id.clone();
+
+        let targets = service
+            .get_related_nodes(&person_id, "has_role", "out")
+            .await
+            .unwrap();
+        assert_eq!(targets.len(), 1, "exactly one has_role edge must be seeded");
+        assert_eq!(targets[0].id, DATABASE_SETTINGS_NODE_ID);
+
+        let edge = service
+            .store()
+            .get_relationship_record(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+            .await
+            .unwrap()
+            .expect("owner has_role edge exists");
+        assert_eq!(edge.properties["role"], "owner");
+        assert_eq!(edge.properties["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn test_create_second_database_settings_is_noop() {
+        let (service, _temp) = create_test_service().await;
+
+        // A second database-settings create is idempotent: returns the existing
+        // singleton id and does not create a duplicate.
+        let duplicate = Node::new(
+            "database-settings".to_string(),
+            String::new(),
+            json!({"sync_enabled": true, "auth_status": "connected"}),
+        );
+        let returned_id = service.create_node(duplicate).await.unwrap();
+        assert_eq!(returned_id, DATABASE_SETTINGS_NODE_ID);
+
+        let settings = service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            settings.len(),
+            1,
+            "second database-settings create must be a no-op"
+        );
+        // The original singleton is untouched (still holds seeded defaults).
+        assert_eq!(
+            settings[0].properties["database-settings"]["auth_status"],
+            "local"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reopening_database_does_not_reseed_database_settings() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // First open seeds the singleton + owner edge.
+        {
+            let mut store = Arc::new(SqliteStore::new(db_path.clone()).await.unwrap());
+            let service = NodeService::new(&mut store).await.unwrap();
+            assert_eq!(
+                service
+                    .query_nodes_by_type("database-settings", None)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+
+        // Re-opening the same database must be idempotent — still exactly one.
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let service = NodeService::new(&mut store).await.unwrap();
+        assert_eq!(
+            service
+                .query_nodes_by_type("database-settings", None)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "re-opening an existing database must not seed a second DatabaseSettingsNode"
+        );
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let edges = service
+            .get_related_nodes(&people[0].id, "has_role", "out")
+            .await
+            .unwrap();
+        assert_eq!(
+            edges.len(),
+            1,
+            "owner edge must not be duplicated on reopen"
         );
     }
 }

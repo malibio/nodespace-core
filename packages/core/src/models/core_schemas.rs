@@ -18,6 +18,7 @@
 //! - **horizontal-line** - Horizontal rule / thematic break
 //! - **table** - GFM markdown table
 //! - **person** - Identity primitive (name, email)
+//! - **database-settings** - Singleton container for database-level config (sync state, roles)
 //!
 //! ## Usage
 //!
@@ -938,6 +939,72 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
+        // Database Settings schema — a singleton container for database-level
+        // configuration. `sync_enabled` is user intent; `auth_status` is
+        // system-managed cloud bind state. ADR-037 moved role and auth_status off
+        // PersonNode: role now lives on the has_role edge (person → this node) and
+        // auth_status lives here.
+        SchemaNode {
+            id: "database-settings".to_string(),
+            content: "Database Settings".to_string(),
+            version: 1,
+            created_at: now,
+            modified_at: now,
+            is_core: true,
+            schema_version: 1,
+            fields: vec![
+                SchemaField {
+                    name: "sync_enabled".to_string(),
+                    field_type: "boolean".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: Some(serde_json::json!(false)),
+                    description: Some(
+                        "User intent to sync this database to the cloud. Inert on the \
+                         free/community tier; the Pro sync daemon reads it to gate sync."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "auth_status".to_string(),
+                    field_type: "enum".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: Some(vec![
+                        EnumValue {
+                            value: "local".to_string(),
+                            label: "Local".to_string(),
+                        },
+                        EnumValue {
+                            value: "connected".to_string(),
+                            label: "Connected".to_string(),
+                        },
+                    ]),
+                    user_values: Some(vec![]),
+                    indexed: true,
+                    required: Some(true),
+                    extensible: Some(false),
+                    default: Some(serde_json::json!("local")),
+                    description: Some(
+                        "System-managed cloud bind state. Default local; the Pro sync \
+                         daemon sets connected after a Supabase identity bind."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+            ],
+            relationships: vec![],
+            title_template: None,
+            properties_header_summary_template: None,
+        },
     ]
 }
 
@@ -948,7 +1015,7 @@ mod tests {
     #[test]
     fn test_get_core_schemas_returns_all() {
         let schemas = get_core_schemas();
-        assert_eq!(schemas.len(), 16);
+        assert_eq!(schemas.len(), 17);
     }
 
     #[test]
@@ -1073,6 +1140,41 @@ mod tests {
         let whitelist = skill.get_field("tool_whitelist").unwrap();
         assert_eq!(whitelist.field_type, "array");
         assert_eq!(whitelist.item_type.as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn test_database_settings_schema_has_fields() {
+        // ADR-037: database-settings is a Core singleton carrying sync_enabled
+        // (boolean) and auth_status (Core-protected enum: local/connected).
+        let schemas = get_core_schemas();
+        let settings = schemas
+            .iter()
+            .find(|s| s.id == "database-settings")
+            .unwrap();
+
+        assert_eq!(settings.fields.len(), 2);
+
+        let sync_enabled = settings
+            .get_field("sync_enabled")
+            .expect("database-settings has sync_enabled");
+        assert_eq!(sync_enabled.field_type, "boolean");
+        assert_eq!(sync_enabled.protection, SchemaProtectionLevel::Core);
+        assert_eq!(sync_enabled.default, Some(serde_json::json!(false)));
+
+        let auth_status = settings
+            .get_field("auth_status")
+            .expect("database-settings has auth_status");
+        assert_eq!(auth_status.field_type, "enum");
+        assert_eq!(auth_status.protection, SchemaProtectionLevel::Core);
+        assert_eq!(auth_status.default, Some(serde_json::json!("local")));
+        let values: Vec<&str> = auth_status
+            .core_values
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|ev| ev.value.as_str())
+            .collect();
+        assert_eq!(values, vec!["local", "connected"]);
     }
 
     #[test]
