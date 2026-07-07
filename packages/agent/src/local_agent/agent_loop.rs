@@ -55,6 +55,20 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// Tokens available for conversation history.
 const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
+/// Last-resort user-facing message when a turn produces nothing usable — no
+/// tool executions to summarize and no (non-empty, non-pseudo-code) text from
+/// the model. Guarantees the chat UI always shows an honest failure notice
+/// rather than an empty bubble.
+const EMPTY_RESPONSE_FALLBACK: &str =
+    "⚠️ I wasn't able to produce a response for that. Please try again.";
+
+/// Shared confirmation request used when a guard suppresses a response the model
+/// should not have produced — a fabricated action claim, or a tool call the
+/// model narrated as text instead of invoking. Kept in one place so the two
+/// guards stay in sync.
+const CONFIRMATION_REQUEST: &str =
+    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.";
+
 fn session_prompt_override(session: &AgentSession) -> Option<&str> {
     session.system_prompt_override.as_deref()
 }
@@ -120,6 +134,73 @@ fn contains_action_claim(text: &str) -> bool {
         "has been deleted",
     ];
     ACTION_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// Synthesize a user-facing bullet summary from the tool executions of a turn.
+///
+/// Last-resort fallback for when the model produced no usable final text
+/// (empty, or a leaked tool call). Repeated calls to the same tool collapse to
+/// one bullet with a retry count so the diagnostic signal — the agent looped on
+/// the same operation — survives. Executions that errored are labelled
+/// "failed" rather than "completed" so a turn that only ever failed is never
+/// summarized as a success (e.g. the looping-`execute_query` case).
+fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
+    // (label, total, errored) preserving first-seen order.
+    let mut counts: Vec<(&'static str, usize, usize)> = Vec::new();
+    for t in executions {
+        let label = humanize_tool_name(&t.name);
+        if let Some(entry) = counts.iter_mut().find(|(l, _, _)| *l == label) {
+            entry.1 += 1;
+            if t.is_error {
+                entry.2 += 1;
+            }
+        } else {
+            counts.push((label, 1, usize::from(t.is_error)));
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(label, count, errored)| {
+            // "failed" if every call to this tool errored; otherwise "completed".
+            let verb = if errored == count {
+                "failed"
+            } else {
+                "completed"
+            };
+            if count > 1 {
+                format!("• {label} {verb} ({count}×)")
+            } else {
+                format!("• {label} {verb}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Detect a tool call that the model emitted as plain text instead of invoking.
+///
+/// Some locally-hosted models (e.g. `mistral:7b` via Ollama) don't reliably use
+/// the structured `tool_calls` response field — they instead print the call as
+/// prose, e.g. `execute_query(target_type='task', ...)`. No tool ever executes,
+/// yet the pseudo-code is persisted verbatim as the assistant's answer, so the
+/// user sees a raw code snippet with no indication anything went wrong.
+///
+/// This is deliberately narrow: it only matches a registered tool name
+/// immediately followed by `(` (allowing whitespace between). Matching a general
+/// `snake_case(` shape would false-positive on legitimate prose that references
+/// functions. Tool names are taken from the registry ([`crate::local_agent::tools::Tool::ALL`])
+/// so the detector stays in sync as tools are added or removed.
+fn looks_like_narrated_tool_call(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    crate::local_agent::tools::Tool::ALL.iter().any(|tool| {
+        let name = tool.name();
+        // Find each occurrence of the tool name and check the next
+        // non-whitespace character is an opening paren.
+        lower.match_indices(name).any(|(idx, _)| {
+            let after = &lower[idx + name.len()..];
+            after.trim_start().starts_with('(')
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +554,30 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         response_preview = %normalized.chars().take(120).collect::<String>(),
                         "Anti-fabrication: model claimed action with zero tool calls — converting to confirmation request"
                     );
-                    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.".to_string()
+                    CONFIRMATION_REQUEST.to_string()
+                } else {
+                    normalized
+                };
+
+                // Narrated-tool-call guard: some local models emit a tool call as
+                // plain text (e.g. `execute_query(...)`) instead of using the
+                // structured tool_calls field, so nothing executes and the raw
+                // pseudo-code would be persisted as the answer. Detect that shape
+                // and replace it with a confirmation request rather than leaking
+                // internal call syntax to the user. Fires independently of
+                // any_real_tool_calls: even after a real call earlier in the turn,
+                // a leaked pseudo-call in the final text is still not a valid answer.
+                let normalized = if !normalized.is_empty()
+                    && looks_like_narrated_tool_call(&normalized)
+                {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        "Narrated tool call: model printed a tool call as text instead of invoking it — converting to confirmation request"
+                    );
+                    CONFIRMATION_REQUEST.to_string()
                 } else {
                     normalized
                 };
@@ -758,8 +862,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         }
                         accumulated_reasoning.push_str(final_reasoning.trim());
                     }
-                    if !final_text.is_empty() {
-                        let normalized = normalize_response(&final_text);
+                    // Accept the final text only if it's real content — not empty
+                    // and not a tool call the model printed as text instead of
+                    // invoking. A narrated pseudo-call here falls through to the
+                    // tool-result synthesis below rather than being persisted raw.
+                    let normalized = normalize_response(&final_text);
+                    if !normalized.is_empty() && !looks_like_narrated_tool_call(&normalized) {
                         let reasoning = (!accumulated_reasoning.trim().is_empty())
                             .then(|| accumulated_reasoning.trim().to_string());
                         let mut assistant_msg =
@@ -782,34 +890,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 on_status(LocalAgentStatus::Idle);
                 session.status = LocalAgentStatus::Idle;
 
-                // Both final inference and last iteration returned empty — synthesize
-                // a summary from tool results so the UI always gets a response.
-                // Repeated calls to the same tool collapse to one bullet with a
-                // retry count so the diagnostic signal (the agent looped on the
-                // same operation until it ran out of iterations) survives.
+                // Both final inference and last iteration returned empty —
+                // synthesize a summary from tool results so the UI always gets a
+                // response.
                 let fallback = if !all_tool_executions.is_empty() {
-                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-                    for t in &all_tool_executions {
-                        let label = humanize_tool_name(&t.name);
-                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
-                            entry.1 += 1;
-                        } else {
-                            counts.push((label, 1));
-                        }
-                    }
-                    counts
-                        .into_iter()
-                        .map(|(label, count)| {
-                            if count > 1 {
-                                format!("• {} completed ({}×)", label, count)
-                            } else {
-                                format!("• {} completed", label)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    summarize_executions(&all_tool_executions)
                 } else {
-                    normalize_response(&response_text)
+                    // No tool executions to summarize. Try the last iteration's
+                    // text; if it's empty, pure internal plumbing, or a leaked
+                    // tool call printed as text, fall back to an honest failure
+                    // notice so the UI is never blank and never shows pseudo-code.
+                    let normalized = normalize_response(&response_text);
+                    if normalized.is_empty() || looks_like_narrated_tool_call(&normalized) {
+                        EMPTY_RESPONSE_FALLBACK.to_string()
+                    } else {
+                        normalized
+                    }
                 };
 
                 return Ok(AgentTurnResult {
@@ -869,31 +965,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     accumulated_reasoning.push_str(tail_reasoning.trim());
                 }
                 let normalized_tail = normalize_response(&tail_text);
-                if normalized_tail.is_empty() {
-                    // Model returned nothing, or its entire response was internal
-                    // plumbing (e.g. a leaked <tool_call> block) stripped down to
-                    // nothing — synthesize a summary from the tool results instead
-                    // of persisting a blank assistant bubble.
-                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-                    for t in &all_tool_executions {
-                        let label = humanize_tool_name(&t.name);
-                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
-                            entry.1 += 1;
-                        } else {
-                            counts.push((label, 1));
-                        }
-                    }
-                    counts
-                        .into_iter()
-                        .map(|(label, count)| {
-                            if count > 1 {
-                                format!("• {} completed ({}×)", label, count)
-                            } else {
-                                format!("• {} completed", label)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                if normalized_tail.is_empty() || looks_like_narrated_tool_call(&normalized_tail) {
+                    // Model returned nothing, leaked internal plumbing (e.g. a
+                    // <tool_call> block) that stripped down to nothing, or printed
+                    // a tool call as text instead of invoking it — synthesize a
+                    // summary from the tool results instead of persisting a blank
+                    // bubble or raw pseudo-code.
+                    summarize_executions(&all_tool_executions)
                 } else {
                     normalized_tail
                 }
@@ -906,6 +984,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     String::new()
                 }
             };
+
+        // Final safety net: every branch above can, in principle, produce an
+        // empty string (no tool executions to summarize and no usable model
+        // text). Never persist a blank assistant bubble — surface an honest
+        // failure notice instead.
+        let final_response = if final_response.trim().is_empty() {
+            EMPTY_RESPONSE_FALLBACK.to_string()
+        } else {
+            final_response
+        };
 
         let reasoning = (!accumulated_reasoning.trim().is_empty())
             .then(|| accumulated_reasoning.trim().to_string());
@@ -3136,6 +3224,82 @@ mod tests {
         ));
     }
 
+    // -- looks_like_narrated_tool_call tests ---------------------------------
+
+    #[test]
+    fn narrated_tool_call_detects_registered_tool_invocation() {
+        // The exact shape reproduced with mistral:7b via Ollama.
+        assert!(looks_like_narrated_tool_call(
+            r#"execute_query(target_type='task', filters=[{"property":"status"}])"#
+        ));
+        assert!(looks_like_narrated_tool_call("create_node(title='Foo')"));
+        // Whitespace between name and paren still counts.
+        assert!(looks_like_narrated_tool_call(
+            "update_node ({\"id\": \"x\"})"
+        ));
+        // Embedded in surrounding prose.
+        assert!(looks_like_narrated_tool_call(
+            "Let me run search_nodes(query='invoice') to find it."
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_does_not_fire_on_normal_prose() {
+        assert!(!looks_like_narrated_tool_call(
+            "I can help you query your tasks. What status are you looking for?"
+        ));
+        // Tool name mentioned but not as a call (no following paren).
+        assert!(!looks_like_narrated_tool_call(
+            "You can use execute_query to filter by property."
+        ));
+        // A generic function-call shape that is NOT a registered tool must not
+        // trip the narrow detector.
+        assert!(!looks_like_narrated_tool_call(
+            "The helper foo(x) returns a value."
+        ));
+        assert!(!looks_like_narrated_tool_call(""));
+    }
+
+    // -- summarize_executions tests ------------------------------------------
+
+    fn exec_record(name: &str, is_error: bool) -> ToolExecutionRecord {
+        ToolExecutionRecord {
+            tool_call_id: format!("tc_{name}"),
+            name: name.to_string(),
+            args: json!({}),
+            result: json!({}),
+            is_error,
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn summarize_executions_marks_all_failed_calls_as_failed() {
+        // The looping-execute_query case: every call errored → "failed", never
+        // an optimistic "completed".
+        let summary = summarize_executions(&[
+            exec_record("execute_query", true),
+            exec_record("execute_query", true),
+        ]);
+        assert_eq!(summary, "• property query failed (2×)");
+    }
+
+    #[test]
+    fn summarize_executions_marks_successful_calls_as_completed() {
+        let summary = summarize_executions(&[exec_record("create_node", false)]);
+        assert_eq!(summary, "• node creation completed");
+    }
+
+    #[test]
+    fn summarize_executions_treats_partial_failure_as_completed() {
+        // A tool that succeeded at least once is not reported as outright failed.
+        let summary = summarize_executions(&[
+            exec_record("search_nodes", true),
+            exec_record("search_nodes", false),
+        ]);
+        assert_eq!(summary, "• node search completed (2×)");
+    }
+
     // -- Anti-fabrication guard tests ----------------------------------------
 
     /// Model claims action with zero tool calls → response should be converted
@@ -3323,5 +3487,166 @@ mod tests {
             InferenceError::Engine(msg) => assert!(msg.contains("empty response")),
             other => panic!("Expected Engine error, got {:?}", other),
         }
+    }
+
+    // -- Silent-failure guard regression tests (#1531) -----------------------
+
+    /// Scenario B: the model prints a tool call as plain text instead of using
+    /// the structured tool_calls field. `tool_calls == 0`, so the tool-failure
+    /// and (phrase-based) fabrication guards don't fire — the narrated-call guard
+    /// must catch it so the raw pseudo-code is never persisted as the answer.
+    #[tokio::test]
+    async fn narrated_tool_call_as_text_is_not_persisted_verbatim() {
+        let engine = Arc::new(MockEngine::single_text(
+            r#"execute_query(target_type='task', filters=[{"property":"status", "operator": "equals", "value": "open"}])"#,
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "show my open tasks",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // No tool actually executed.
+        assert!(result.tool_calls_made.is_empty());
+        // The leaked pseudo-code must not reach the user.
+        assert!(
+            !result.response.contains("execute_query("),
+            "narrated tool call should be suppressed, not persisted: {:?}",
+            result.response
+        );
+        // Never empty; should ask the user to confirm instead.
+        assert!(!result.response.trim().is_empty());
+        assert!(
+            result.response.to_lowercase().contains("confirm")
+                || result.response.to_lowercase().contains("would you like"),
+            "should ask for confirmation: {:?}",
+            result.response
+        );
+        // And the persisted assistant message matches the returned response.
+        let last = session.messages.last().unwrap();
+        assert!(!last.content.contains("execute_query("));
+        assert!(!last.content.trim().is_empty());
+    }
+
+    /// Scenario A: a tool fails, the model loops on the identical broken call
+    /// (tripping the duplicate-call breaker), and the forced final inference
+    /// returns empty text. The turn must still surface *something* user-visible
+    /// — never a blank assistant bubble.
+    #[tokio::test]
+    async fn empty_final_inference_after_tool_failure_still_surfaces_response() {
+        // Executor whose tool always errors.
+        struct ErrorToolExecutor;
+
+        #[async_trait]
+        impl AgentToolExecutor for ErrorToolExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "execute_query".into(),
+                    description: "Run a property query".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"error": "Invalid metadata field: status"}),
+                    is_error: true,
+                })
+            }
+        }
+
+        // Round 1: the broken tool call. Round 2: the identical call again (the
+        // duplicate-call breaker fires here, popping the assistant turn and
+        // breaking to the tail final-inference). Round 3 (tail, tools stripped):
+        // empty text — nothing usable from the model.
+        let broken_call = || {
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "execute_query".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"target_type":"task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]
+        };
+        let engine = Arc::new(MockEngine::new(vec![
+            broken_call(),
+            broken_call(),
+            // Tail final inference: empty.
+            vec![StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 5,
+                    completion_tokens: 0,
+                },
+            }],
+        ]));
+        let executor = Arc::new(ErrorToolExecutor);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "show my open tasks",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // The tool ran and failed at least once.
+        assert!(!result.tool_calls_made.is_empty());
+        assert!(result.tool_calls_made.iter().any(|r| r.is_error));
+        // Never a blank bubble: the tool-result synthesis produces a bullet
+        // summary from the (failing) execution.
+        assert!(
+            !result.response.trim().is_empty(),
+            "empty final inference must not yield a blank response"
+        );
+        // And no leaked internal call syntax.
+        assert!(!result.response.contains("execute_query("));
+        // The synthesized summary is honest about the failure — a turn that only
+        // ever failed must not be reported as "completed".
+        assert!(
+            result.response.to_lowercase().contains("failed"),
+            "failed-only executions should be summarized as failed: {:?}",
+            result.response
+        );
+        assert!(!result.response.contains("completed"));
+        let last = session.messages.last().unwrap();
+        assert!(!last.content.trim().is_empty());
+    }
+
+    /// Guard the last-resort constant itself: the defensive nets that fire when
+    /// there is genuinely nothing to synthesize (no tool executions, no usable
+    /// model text) depend on it being a non-empty, honest notice.
+    #[test]
+    fn empty_response_fallback_is_never_blank() {
+        assert!(!EMPTY_RESPONSE_FALLBACK.trim().is_empty());
+        assert!(EMPTY_RESPONSE_FALLBACK.contains("try again"));
     }
 }
