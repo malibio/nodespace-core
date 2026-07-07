@@ -14,7 +14,6 @@
 -->
 
 <script lang="ts">
-  import { untrack } from 'svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
   import { collectionsData } from '$lib/stores/collections';
@@ -31,15 +30,12 @@
 
   const log = createLogger('CollectionNodeViewer');
 
-  // Props using Svelte 5 runes mode - unified NodeViewerProps interface
-  // Note: onNodeIdChange not used (collections don't navigate like dates)
+  // Props using Svelte 5 runes mode - unified NodeViewerProps interface.
+  // The tab title is derived from the node's content by tab-system.svelte — no push here.
   let {
-    nodeId,
-    onTitleChange
+    nodeId
   }: {
     nodeId: string;
-    onNodeIdChange?: (_nodeId: string) => void;
-    onTitleChange?: (_title: string) => void;
   } = $props();
 
   // Local state
@@ -51,13 +47,6 @@
   // Load collection and members when nodeId changes
   $effect(() => {
     loadCollectionData(nodeId);
-  });
-
-  // Set initial tab title when collection is loaded
-  $effect(() => {
-    if (collection) {
-      untrack(() => onTitleChange?.(collection!.content || 'Collection'));
-    }
   });
 
   async function loadCollectionData(collectionId: string) {

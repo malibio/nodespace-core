@@ -17,26 +17,18 @@
 <script lang="ts">
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import Icon from '$lib/design/icons/icon.svelte';
-  import { onMount } from 'svelte';
-  import { parseDateString, formatDateISO, normalizeDate, formatDateTitle } from '$lib/utils/date-formatting';
+  import { parseDateString, formatDateISO, normalizeDate } from '$lib/utils/date-formatting';
 
-  // Props using Svelte 5 runes mode - unified NodeViewerProps interface
-  // onTitleChange called from event handlers (not effects) to update tab title
+  // Props using Svelte 5 runes mode - unified NodeViewerProps interface.
+  // The tab title is never pushed from here — tab-system.svelte derives it directly
+  // from the tab's nodeId via computeTabTitle (see issue #1564).
   let {
     nodeId,
-    onTitleChange,
-    onNavigate
+    onNodeIdChange
   }: {
     nodeId: string;
-    onTitleChange?: (_title: string) => void;
-    onNavigate?: (_nodeId: string, _title: string) => void;
+    onNodeIdChange?: (_nodeId: string) => void;
   } = $props();
-
-  // Set initial tab title on mount - viewer is the source of truth for tab titles
-  onMount(() => {
-    const date = parseDateFromNodeId(nodeId);
-    onTitleChange?.(formatDateTitle(date));
-  });
 
   // Parse date from nodeId prop (format: YYYY-MM-DD)
   function parseDateFromNodeId(dateString: string): Date {
@@ -61,9 +53,8 @@
   const currentDateId = $derived(formatDateISO(currentDate));
 
   /**
-   * Navigate to previous or next day.
-   * Uses onNavigate to update content (nodeId) and tab title in one atomic call, so
-   * subscribers never observe a tab whose title and content refer to different dates.
+   * Navigate to previous or next day. The tab title updates automatically since
+   * tab-system.svelte derives it from the new nodeId — no separate title push needed.
    * Event-driven (not effect-driven) - no $effect anti-pattern.
    */
   function navigateDate(direction: 'prev' | 'next') {
@@ -76,7 +67,7 @@
     const normalizedDate = normalizeDate(newDate);
     const newNodeId = formatDateISO(normalizedDate);
 
-    onNavigate?.(newNodeId, formatDateTitle(normalizedDate));
+    onNodeIdChange?.(newNodeId);
   }
 
   /**
@@ -106,7 +97,7 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="date-node-viewer">
-  <BaseNodeViewer nodeId={currentDateId} disableTitleUpdates={true}>
+  <BaseNodeViewer nodeId={currentDateId}>
     {#snippet header()}
       <!-- Date Navigation Header - inherits base styling from BaseNodeViewer -->
       <div class="date-nav-container">

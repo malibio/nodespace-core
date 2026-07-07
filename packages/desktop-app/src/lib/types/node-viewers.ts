@@ -8,17 +8,16 @@ import type { Component, Snippet } from 'svelte';
  * Unified interface for page-level node viewers
  * Used by: DateNodeViewer, BaseNodeViewer, and future custom viewers
  *
- * Viewers are decoupled from the tab system - they report changes via callbacks
- * and the parent component decides what to do with them.
+ * Viewers are decoupled from the tab system - they report navigation via callbacks
+ * and the parent component decides what to do with it. There is deliberately no
+ * onTitleChange/title-push callback: tab titles are always derived from tab content
+ * (see computeTabTitle in tab-title.ts), never pushed by a viewer as a side effect of
+ * rendering — pushing a computed title during mount/render is what caused a
+ * state_unsafe_mutation bug (issue #1564).
  */
 export interface NodeViewerProps {
   nodeId: string; // The node to display (date string "2025-10-20", UUID, etc.)
-  onTitleChange?: (title: string) => void; // Callback when viewer wants to update its title
   onNodeIdChange?: (nodeId: string) => void; // Callback when viewer navigates to different node
-  // Callback for navigation that changes BOTH nodeId and title together. Prefer this over
-  // separate onNodeIdChange/onTitleChange calls when both change as one logical action —
-  // it updates the tab atomically so subscribers never see a title/content mismatch.
-  onNavigate?: (nodeId: string, title: string) => void;
   header?: Snippet; // Optional custom header snippet
 }
 

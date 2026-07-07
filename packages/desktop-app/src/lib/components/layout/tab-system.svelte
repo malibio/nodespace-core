@@ -45,6 +45,8 @@
   import type { Snippet } from 'svelte';
   import { draggable, droppable, type DragDropState } from '@thisux/sveltednd';
   import { createLogger } from '$lib/utils/logger';
+  import { computeTabTitle } from '$lib/utils/tab-title';
+  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 
   // Logger instance for TabSystem component
   const log = createLogger('TabSystem');
@@ -304,6 +306,7 @@
     {@const isDraggable = canDragTab(tab)}
     {@const showDropIndicator = dragOverIndex === i}
     {@const isDragging = draggingTabId === tab.id}
+    {@const title = computeTabTitle(tab, (nodeId) => sharedNodeStore.getNode(nodeId))}
 
     <div
       class={cn(
@@ -313,7 +316,7 @@
         isDragging && 'tab-item--dragging'
       )}
       role="tab"
-      title={tab.title}
+      {title}
       tabindex={isActive ? 0 : -1}
       aria-selected={isActive}
       aria-controls={`tab-panel-${tab.id}`}
@@ -343,14 +346,14 @@
       }}
     >
       <span class="tab-title">
-        {truncateTitle(tab.title)}
+        {truncateTitle(title)}
       </span>
 
       <!-- Close button - only for closeable tabs, hidden when it's the last tab -->
       {#if tab.closeable && !isCloseDisabled}
         <button
           class="tab-close-btn"
-          aria-label="Close tab: {tab.title}"
+          aria-label="Close tab: {title}"
           title="Close tab"
           onclick={(e) => handleCloseTab(e, tab.id)}
         >

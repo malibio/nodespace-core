@@ -32,12 +32,10 @@
 
   let {
     nodeId,
-    paneId,
-    onTitleChange
+    paneId
   }: {
     nodeId: string;
     paneId?: string;
-    onTitleChange?: (_title: string) => void;
   } = $props();
 
   let schemaNode = $state<SchemaNode | null>(null);
@@ -69,13 +67,6 @@
   $effect(() => {
     const id = nodeId;
     untrack(() => loadAndQuery(id));
-  });
-
-  // Update tab title when schema node is loaded
-  $effect(() => {
-    if (schemaNode) {
-      untrack(() => onTitleChange?.(schemaNode!.content || 'Query'));
-    }
   });
 
   async function loadAndQuery(schemaId: string) {

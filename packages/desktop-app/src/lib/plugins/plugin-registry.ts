@@ -22,6 +22,7 @@ import type {
   SchemaFormComponent,
   NodeUpdater
 } from './types';
+import type { Node } from '$lib/types';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('PluginRegistry');
@@ -452,6 +453,18 @@ export class PluginRegistry {
     }
     // Default: Return properties as-is
     return node.properties || {};
+  }
+
+  /**
+   * Compute a node's tab title via its plugin's getTitle, falling back to
+   * node.title || node.content when the plugin doesn't define one.
+   */
+  getNodeTitle(node: Node): string | undefined {
+    const plugin = this.plugins.get(node.nodeType);
+    if (plugin && this.enabledPlugins.has(node.nodeType) && plugin.getTitle) {
+      return plugin.getTitle(node);
+    }
+    return node.title || node.content || undefined;
   }
 
   /**

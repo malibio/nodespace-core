@@ -7,9 +7,8 @@
 -->
 
 <script lang="ts">
-  import { onMount, onDestroy, getContext, tick, untrack } from 'svelte';
+  import { onMount, onDestroy, getContext, tick } from 'svelte';
   import { htmlToMarkdown } from '$lib/utils/markdown.js';
-  import { formatTabTitle } from '$lib/utils/text-formatting';
   import BaseNode from '$lib/design/components/base-node.svelte';
   import BacklinksPanel from '$lib/design/components/backlinks-panel.svelte';
   import GenericSchemaForm from '$lib/components/schema/generic-schema-form.svelte';
@@ -49,30 +48,13 @@
      * @default 'default'
      */
     tabId = 'default',
-    onTitleChange,
-    onNodeNotFound,
-    /**
-     * Disable automatic title updates from node content.
-     *
-     * When true, this component will NOT call onTitleChange based on node content.
-     * The parent component is responsible for managing the title completely.
-     *
-     * Use Cases:
-     * - DateNodeViewer: Computes title from date ("Today", "Tomorrow", "Yesterday")
-     * - Custom viewers with dynamic titles unrelated to node content
-     *
-     * @default false - BaseNodeViewer manages title from node.content
-     */
-    disableTitleUpdates = false
+    onNodeNotFound
   }: {
     header?: Snippet;
     nodeId?: string | null;
     tabId?: string;
-    onTitleChange?: (_title: string) => void;
     onNodeIdChange?: (_nodeId: string) => void; // In type for interface, not used by BaseNodeViewer
-    onNavigate?: (_nodeId: string, _title: string) => void; // In type for interface, not used by BaseNodeViewer
     onNodeNotFound?: () => void;
-    disableTitleUpdates?: boolean;
   } = $props();
 
   // Get nodeManager from shared context
@@ -297,9 +279,6 @@
 
     async function loadAndSettle(forceRefresh = false) {
       try {
-        // Capture disableTitleUpdates at mount time
-        const shouldDisableTitleUpdates = disableTitleUpdates;
-
         // Load children asynchronously
         // Note: loadChildrenForParent has internal cache checking, so this is efficient
         await loadChildrenForParent(currentNodeId, forceRefresh);
@@ -330,11 +309,8 @@
           loadSchemaFormComponent(node.nodeType);
         }
 
-        // Update tab title after node is loaded
-        // Prefer computed title (from title_template) over raw content when available
-        if (!shouldDisableTitleUpdates) {
-          updateTabTitle(node.title || node.content);
-        }
+        // Tab title is derived directly from node data by tab-system.svelte's
+        // computeTabTitle — no push needed here (see issue #1564).
       } catch (error) {
         loadFailed = true;
         log.error('Failed to load children:', error);
@@ -359,21 +335,6 @@
   });
 
   /**
-   * Update tab title from header content
-   *
-   * Uses shared formatTabTitle utility to ensure consistent tab title formatting
-   * across all viewers and navigation. Multi-line content is automatically
-   * truncated to first line, and long titles are shortened with ellipsis.
-   *
-   * @param content - Full node content (may be multi-line)
-   */
-  function updateTabTitle(content: string) {
-    if (onTitleChange) {
-      onTitleChange(formatTabTitle(content));
-    }
-  }
-
-  /**
    * Compute header display value (view mode - strips markdown syntax)
    * Similar to HeaderNode pattern: show clean title when not editing
    */
@@ -387,15 +348,12 @@
   });
 
   /**
-   * Handle header content changes (for default editable header)
-   * Updates local state, tab title, and persists to database
+   * Handle header content changes (for default editable header).
+   * Persists to database; the tab title updates automatically since tab-system.svelte
+   * derives it from sharedNodeStore, which nodeManager.updateNodeContent writes to
+   * synchronously (see issue #1564 — titles are computed, never pushed).
    */
   function handleHeaderInput(newValue: string) {
-    // Update tab title immediately
-    updateTabTitle(newValue);
-
-    // Update node content in database if nodeId exists
-    // Use the same method as child nodes to ensure consistent behavior
     if (nodeId) {
       try {
         nodeManager.updateNodeContent(nodeId, newValue);
@@ -1223,18 +1181,6 @@
 
   /** True when the current schema has a title_template — header should be read-only */
   const hasTitleTemplate = $derived(genericSchema?.titleTemplate != null);
-
-  /** Effective tab title — falls back to the schema's title_template while headerDisplayValue is empty */
-  const computedTabTitle = $derived(
-    headerDisplayValue || (hasTitleTemplate && genericSchema?.titleTemplate) || ''
-  );
-
-  // Push the computed title out to the parent's tab state. untrack() prevents this
-  // imperative push from re-triggering the effect via reads inside updateTabTitle.
-  $effect(() => {
-    if (disableTitleUpdates || !computedTabTitle) return;
-    untrack(() => updateTabTitle(computedTabTitle));
-  });
 
   /** UUID regex — custom schema node types are stored as UUIDs */
   /** Core built-in node types that ship with NodeSpace — everything else is a custom schema type */

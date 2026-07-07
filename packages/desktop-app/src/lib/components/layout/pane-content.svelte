@@ -1,13 +1,7 @@
 <script lang="ts">
   import { setContext, untrack } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
-  import {
-    tabState,
-    updateTabTitle,
-    updateTabContent,
-    updateTabContentAndTitle,
-    closeTab
-  } from '$lib/stores/navigation.js';
+  import { tabState, updateTabContent, closeTab } from '$lib/stores/navigation.js';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import type { Pane } from '$lib/stores/navigation.js';
@@ -178,16 +172,8 @@
       <ViewerComponent
         nodeId={content.nodeId}
         tabId={activeTabId}
-        onTitleChange={(title: string) => updateTabTitle(activeTabId, title)}
         onNodeIdChange={(newNodeId: string) => {
           updateTabContent(activeTabId, { nodeId: newNodeId, nodeType: content.nodeType });
-        }}
-        onNavigate={(newNodeId: string, title: string) => {
-          updateTabContentAndTitle(
-            activeTabId,
-            { nodeId: newNodeId, nodeType: content.nodeType },
-            title
-          );
         }}
         onNodeNotFound={() => closeTab(activeTabId)}
       />

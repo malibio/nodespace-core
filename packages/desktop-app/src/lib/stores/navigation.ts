@@ -507,32 +507,10 @@ export function addTab(tab: Tab, makeActive: boolean = true) {
   });
 }
 
-export function updateTabTitle(tabId: string, newTitle: string) {
-  tabState.update((state) => ({
-    ...state,
-    tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, title: newTitle } : tab))
-  }));
-}
-
 export function updateTabContent(tabId: string, content: { nodeId: string; nodeType?: string }) {
   tabState.update((state) => ({
     ...state,
     tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content } : tab))
-  }));
-}
-
-/**
- * Update a tab's content and title in a single store write so subscribers never observe
- * a state where the title reflects one node and the content another (issue #1564).
- */
-export function updateTabContentAndTitle(
-  tabId: string,
-  content: { nodeId: string; nodeType?: string },
-  title: string
-) {
-  tabState.update((state) => ({
-    ...state,
-    tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content, title } : tab))
   }));
 }
 

@@ -16,6 +16,7 @@ import type { CoreTaskStatus, TaskNodeUpdate } from '../types/task-node';
 import { PatternRegistry } from '../patterns/registry';
 import { backendAdapter } from '../services/backend-adapter';
 import BaseNodeReference from '../components/base-node-reference.svelte';
+import { parseDateString, formatDateTitle } from '$lib/utils/date-formatting';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('CorePlugins');
@@ -275,6 +276,12 @@ export const dateNodePlugin: PluginDefinition = {
   reference: {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
+  },
+  // Date node ids ARE dates ("2026-07-07") — the display title ("Today", "Tomorrow",
+  // or the raw date string) is computed from the id, not from node.content.
+  getTitle: (node) => {
+    const date = parseDateString(node.id);
+    return date ? formatDateTitle(date) : undefined;
   }
 };
 
