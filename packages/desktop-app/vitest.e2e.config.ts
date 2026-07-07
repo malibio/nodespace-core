@@ -30,6 +30,12 @@ export default defineConfig({
     environment: 'node',
     globals: true,
 
+    // Define Svelte 5 rune globals ($state/$derived/$effect) inside each test
+    // worker so rune-store modules (`*.svelte.ts`) imported by e2e tests don't
+    // throw in the plain `node` environment, which has no Svelte compiler
+    // (ADR-049). Runs in the fork, unlike a Vite config-time plugin.
+    setupFiles: ['src/tests/setup-svelte-mocks.ts'],
+
     // E2e tests start real processes — allow longer timeouts
     testTimeout: 30_000,
     hookTimeout: 20_000,
