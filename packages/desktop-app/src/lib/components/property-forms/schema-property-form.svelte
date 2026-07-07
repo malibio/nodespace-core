@@ -18,6 +18,7 @@
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { Collapsible } from 'bits-ui';
   import * as Select from '$lib/components/ui/select';
   import * as Popover from '$lib/components/ui/popover';
@@ -67,8 +68,9 @@
    */
   const assigneeOptions: Array<{ value: string; label: string }> = [];
 
-  // Load schema when nodeType changes
-  $effect(() => {
+  // Load schema on mount. base-node-viewer wraps this form in {#key node.id-nodeType},
+  // so a nodeType change remounts it — a discrete per-type load, not a reactive watch (ADR-049).
+  onMount(() => {
     async function loadSchema() {
       if (!nodeType) return;
 

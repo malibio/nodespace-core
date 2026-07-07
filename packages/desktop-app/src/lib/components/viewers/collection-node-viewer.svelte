@@ -14,6 +14,7 @@
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
   import { collectionsData } from '$lib/stores/collections';
@@ -44,8 +45,10 @@
   let loading = $state(true);
   let error: string | null = $state(null);
 
-  // Load collection and members when nodeId changes
-  $effect(() => {
+  // Load collection and members on mount. pane-content remounts this viewer via
+  // {#key ...nodeId} when the tab's nodeId changes, so this is a discrete per-node
+  // lifecycle load — not a reactive-state watch (ADR-049).
+  onMount(() => {
     loadCollectionData(nodeId);
   });
 

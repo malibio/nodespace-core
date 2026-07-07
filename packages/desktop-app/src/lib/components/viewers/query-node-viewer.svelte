@@ -13,7 +13,7 @@
 -->
 
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
@@ -63,10 +63,11 @@
 
   const hasResults = $derived(loadedNodeIds.length > 0);
 
-  // Load schema and execute query when nodeId changes
-  $effect(() => {
-    const id = nodeId;
-    untrack(() => loadAndQuery(id));
+  // Load schema and execute the query on mount. pane-content remounts this viewer via
+  // {#key ...nodeId} when the tab's nodeId changes, so this is a discrete per-node
+  // lifecycle load — not a reactive-state watch (ADR-049).
+  onMount(() => {
+    loadAndQuery(nodeId);
   });
 
   async function loadAndQuery(schemaId: string) {
