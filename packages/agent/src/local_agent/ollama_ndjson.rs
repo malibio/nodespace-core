@@ -39,9 +39,10 @@ impl std::fmt::Display for NdjsonError {
 ///
 /// Bytes are buffered until a `\n` is seen; each complete line is decoded with a
 /// strict UTF-8 check (safe because the line is complete, unlike a per-chunk
-/// lossy decode that can straddle a multi-byte boundary). The buffer is bounded
-/// by [`MAX_LINE_BYTES`]: once that many bytes accumulate without a newline,
-/// [`push`](Self::push) returns [`NdjsonError::LineTooLong`].
+/// lossy decode that can straddle a multi-byte boundary). Every line is bounded
+/// by [`MAX_LINE_BYTES`]: a completed line whose length exceeds the cap, or an
+/// unterminated tail that grows past it, makes [`push`](Self::push) return
+/// [`NdjsonError::LineTooLong`] before the oversized line is allocated.
 #[derive(Default)]
 pub struct NdjsonLineBuffer {
     buffer: Vec<u8>,
@@ -62,6 +63,13 @@ impl NdjsonLineBuffer {
 
         let mut lines = Vec::new();
         while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
+            // Reject an oversized completed line before allocating it. `pos` is
+            // the line length excluding the terminating newline.
+            if pos > MAX_LINE_BYTES {
+                return Err(NdjsonError::LineTooLong {
+                    limit: MAX_LINE_BYTES,
+                });
+            }
             let line_bytes: Vec<u8> = self.buffer.drain(..=pos).collect();
             // Exclude the trailing newline before decoding.
             let line = std::str::from_utf8(&line_bytes[..pos])
@@ -72,7 +80,7 @@ impl NdjsonLineBuffer {
             }
         }
 
-        // A newline resets the count, so only an unterminated tail can overflow.
+        // A newline resets the count, so only an unterminated tail remains here.
         if self.buffer.len() > MAX_LINE_BYTES {
             return Err(NdjsonError::LineTooLong {
                 limit: MAX_LINE_BYTES,
@@ -124,6 +132,36 @@ mod tests {
         let huge = vec![b'x'; MAX_LINE_BYTES + 1];
         assert_eq!(
             buf.push(&huge),
+            Err(NdjsonError::LineTooLong {
+                limit: MAX_LINE_BYTES
+            })
+        );
+    }
+
+    #[test]
+    fn errors_when_completed_line_exceeds_cap() {
+        // A newline-terminated line longer than the cap must be rejected before
+        // it is allocated, not just an unterminated tail.
+        let mut buf = NdjsonLineBuffer::new();
+        let mut line = vec![b'x'; MAX_LINE_BYTES + 1];
+        line.push(b'\n');
+        assert_eq!(
+            buf.push(&line),
+            Err(NdjsonError::LineTooLong {
+                limit: MAX_LINE_BYTES
+            })
+        );
+    }
+
+    #[test]
+    fn errors_when_tail_grows_past_cap_across_chunks() {
+        // Overflow must trip even when the oversized tail accumulates over
+        // several push calls rather than arriving in one.
+        let mut buf = NdjsonLineBuffer::new();
+        let half = vec![b'x'; MAX_LINE_BYTES / 2 + 1];
+        assert!(buf.push(&half).unwrap().is_empty());
+        assert_eq!(
+            buf.push(&half),
             Err(NdjsonError::LineTooLong {
                 limit: MAX_LINE_BYTES
             })
