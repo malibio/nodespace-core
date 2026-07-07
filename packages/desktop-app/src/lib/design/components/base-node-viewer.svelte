@@ -1003,10 +1003,6 @@
       await nodeLoader.load(newNodeType);
     }
 
-    // CRITICAL: Set editing state BEFORE updating node type
-    // This ensures focus manager state is ready when the new component mounts
-    focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
     // Normalize content for code-block conversion
     if (newNodeType === 'code-block') {
       cleanedContent = normalizeCodeBlockContent(cleanedContent);
@@ -1039,6 +1035,10 @@
       // state_unsafe_mutation during template render (matches contentChanged path).
       const promotionParentId = nodeId;
       tick().then(() => {
+        // Set editing state so the promoted component sees focus on mount (deferred:
+        // a synchronous focus write runs during the render flush and also throws).
+        focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+
         // Add to store and trigger persistence
         sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
 
@@ -1055,13 +1055,19 @@
         isPromoting = false;
       });
     } else {
-      // Update content if cleanedContent is provided (e.g., from contentTemplate)
-      if (cleanedContent !== undefined) {
-        nodeManager.updateNodeContent(node.id, cleanedContent);
-      }
+      // Defer the focus + content/type writes to next tick: run synchronously they
+      // mutate $state during the keystroke's render flush and throw state_unsafe_mutation.
+      tick().then(() => {
+        focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
 
-      // Update node type through proper API (triggers component re-render)
-      nodeManager.updateNodeType(node.id, newNodeType);
+        // Update content if cleanedContent is provided (e.g., from contentTemplate)
+        if (cleanedContent !== undefined) {
+          nodeManager.updateNodeContent(node.id, cleanedContent);
+        }
+
+        // Update node type through proper API (triggers component re-render)
+        nodeManager.updateNodeType(node.id, newNodeType);
+      });
     }
   }
 
@@ -1115,10 +1121,6 @@
       await nodeLoader.load(newNodeType);
     }
 
-    // CRITICAL: Set editing state BEFORE updating node type
-    // This ensures focus manager state is ready when the new component mounts
-    focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
-
     log.debug('slashCommandSelected:', {
       nodeId: node.id,
       newType: detail.nodeType,
@@ -1160,6 +1162,11 @@
       // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
       const promotionParentId = nodeId;
       tick().then(() => {
+        // Set editing state so the promoted component sees focus on mount.
+        // Deferred with the store writes — a synchronous focus write here runs during
+        // the keystroke's render flush and also throws state_unsafe_mutation.
+        focusManager.focusNodeFromTypeConversion(promotedNode.id, cursorPosition, paneId);
+
         // Add to store and trigger persistence
         // Note: domain events handles parent-child relationship via edge:created events
         sharedNodeStore.setNode(promotedNode, { type: 'viewer', viewerId }, false);
@@ -1193,12 +1200,21 @@
       if (contentTemplate !== undefined) {
         updatePayload.content = contentTemplate;
       }
-      sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-      if (isCustomSchemaType(newNodeType)) {
-        handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
-          log.error('Custom entity slash command failed (real-node path):', err)
-        );
-      }
+      // Defer the focus + store writes to next tick: run synchronously they mutate
+      // $state during the keystroke's render flush and throw state_unsafe_mutation.
+      // Guard updateNode with hasNode — if node.id was promoted/removed since the
+      // event fired, updateNode would log "Cannot update non-existent node".
+      tick().then(() => {
+        focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
+        if (sharedNodeStore.hasNode(node.id)) {
+          sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
+        }
+        if (isCustomSchemaType(newNodeType)) {
+          handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
+            log.error('Custom entity slash command failed (real-node path):', err)
+          );
+        }
+      });
     }
   }
 
