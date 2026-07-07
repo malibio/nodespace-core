@@ -78,15 +78,16 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     return 1 + computeDepth(parents[0].id, visited);
   }
 
-  // Lazily initialize UI state for nodes not yet seen by this viewer (e.g. promoted
-  // placeholders, or nodes synced in from another window/cloud).
-  function ensureUIState(nodeId: string): NodeUIState {
-    let uiState = _uiState[nodeId];
-    if (!uiState) {
-      uiState = createDefaultUIState(nodeId, { depth: computeDepth(nodeId) });
-      _uiState[nodeId] = uiState;
-    }
-    return uiState;
+  // Pure read of a node's UI state for the render/derived path. Returns the persisted
+  // entry if present, otherwise a freshly-computed default WITHOUT writing $state.
+  //
+  // UI state is seeded for real by the genuine mutation/lifecycle paths (node load,
+  // create, expand/collapse, structure changes). A lazy write during a read is an
+  // ADR-049 violation: getVisibleNodes/getUIState run inside the visibleNodesFromStores
+  // $derived (via flattenNodes), so persisting here throws state_unsafe_mutation and
+  // wedges the flush — which stalls slash/type-conversion and Task creation in the UI.
+  function peekUIState(nodeId: string): NodeUIState {
+    return _uiState[nodeId] ?? createDefaultUIState(nodeId, { depth: computeDepth(nodeId) });
   }
 
   // NOTE: Backend now returns children pre-sorted via fractional ordering (ORDER BY order ASC)
@@ -111,7 +112,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     for (const nodeId of nodeIds) {
       const node = sharedNodeStore.getNode(nodeId);
-      const uiState = node ? ensureUIState(nodeId) : _uiState[nodeId];
+      // Pure read: getVisibleNodesRecursive feeds $derived render paths, so it must not
+      // persist UI state (would throw state_unsafe_mutation). See peekUIState.
+      const uiState = node ? peekUIState(nodeId) : _uiState[nodeId];
       if (node) {
         // Get children from SharedNodeStore (already sorted by backend via fractional ordering)
         const children = sharedNodeStore.getNodesForParent(nodeId).map((n) => n.id);
@@ -1430,9 +1433,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       return getVisibleNodesForParent(parentId);
     },
     // Direct access to UI state for computed properties. Lazily initializes state
-    // for nodes not yet seen by this viewer (see ensureUIState).
+    // for nodes not yet seen by this viewer (see peekUIState). PURE read — safe to call
+    // from $derived/template render paths; returns a computed default without persisting.
     getUIState(nodeId: string) {
-      return sharedNodeStore.getNode(nodeId) ? ensureUIState(nodeId) : _uiState[nodeId];
+      return sharedNodeStore.getNode(nodeId) ? peekUIState(nodeId) : _uiState[nodeId];
     },
 
     // Lifecycle management
