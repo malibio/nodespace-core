@@ -19,13 +19,12 @@
 -->
 
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
   import BaseNode from './base-node.svelte';
   import { focusManager } from '$lib/services/focus-manager.svelte';
 
   import ViewModeRenderer from './view-mode-renderer.svelte';
-  import { highlightCode, type HighlightLine } from '$lib/services/syntax-highlight';
-  import { renderMermaid } from '$lib/services/mermaid-render';
+  import { CodeBlockRenderer } from './code-block-renderer.svelte';
   import { currentTheme } from '$lib/design/theme';
 
   // Supported languages for code blocks
@@ -97,107 +96,51 @@
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Syntax highlighting and Mermaid state
-  let highlightedLines = $state<HighlightLine[] | null>(null);
-  let mermaidSvg = $state<string | null>(null);
-  let mermaidError = $state<string | null>(null);
+  // Render results live on the renderer store (ADR-049); the component reads them
+  // directly and pushes them into the DOM via the innerHTML-injection effects below.
+  const renderer = new CodeBlockRenderer();
   let mermaidContainer = $state<HTMLDivElement | null>(null);
 
   // Split-panel live preview state (mermaid edit mode only)
-  let previewSvg = $state<string | null>(null);
-  let previewError = $state<string | null>(null);
   let previewContainer = $state<HTMLDivElement | null>(null);
-  let previewRenderSeq = 0;
-  let previewDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Inject sanitized SVG into the container via DOM — avoids {@html} and its lint warning.
   // sanitizeSvg() strips all scripts and event handlers before this runs.
   $effect(() => {
     if (mermaidContainer) {
-      mermaidContainer.innerHTML = mermaidSvg ?? '';
+      mermaidContainer.innerHTML = renderer.mermaidSvg ?? '';
     }
   });
 
   $effect(() => {
     if (previewContainer) {
-      previewContainer.innerHTML = previewSvg ?? '';
+      previewContainer.innerHTML = renderer.previewSvg ?? '';
     }
   });
-
-  // Monotonic counter to discard stale async results when language/content changes rapidly
-  let renderSeq = 0;
 
   // Track dark mode from the app's theme store (not OS media query)
   // so syntax highlighting matches the actual UI theme, not the OS preference
   let isDark = $derived($currentTheme === 'dark');
 
-  // Re-highlight whenever language, content, or dark mode changes (skip during editing).
-  // Uses a sequence counter to discard stale results from in-flight async renders.
+  // Trigger a re-render whenever language, content, or dark mode changes (skip during
+  // editing). The effect body only pushes into the renderer subsystem — it writes no
+  // reactive state itself; the results land on the renderer store (ADR-049).
   $effect(() => {
     if (isEditing) return;
-    const code = displayContent.trim();
-    const lang = language;
-    const dark = isDark;
-    const seq = ++renderSeq;
-
-    if (lang === 'mermaid') {
-      highlightedLines = null;
-      mermaidError = null; // Reset stale error so it doesn't flash while new render is pending
-      renderMermaid(code, nodeId, dark).then((svg) => {
-        if (seq !== renderSeq) return; // stale — a newer render is already in-flight; preserve existing diagram
-        if (svg !== null) {
-          mermaidSvg = svg;
-        } else {
-          // Definitive failure: render returned null, so there is no diagram to preserve
-          mermaidSvg = null;
-          mermaidError = 'Diagram rendering failed. Check your Mermaid syntax.';
-        }
-      });
-    } else if (lang !== 'plaintext') {
-      mermaidSvg = null;
-      mermaidError = null;
-      highlightCode(code, lang, dark).then((lines) => {
-        if (seq !== renderSeq) return; // stale — discard
-        highlightedLines = lines;
-      });
-    } else {
-      highlightedLines = null;
-      mermaidSvg = null;
-      mermaidError = null;
-    }
+    renderer.render(displayContent.trim(), language, nodeId, isDark);
   });
 
-  // Debounced live preview for mermaid split-panel (fires only when editing a mermaid block)
+  // Debounced live preview for the mermaid split-panel (only while editing a mermaid
+  // block). Pushes into the renderer subsystem; the debounced SVG lands on the store.
   $effect(() => {
     if (!isEditing || language !== 'mermaid') {
-      // Clear preview state when leaving edit mode or switching away from mermaid
-      previewSvg = null;
-      previewError = null;
+      renderer.clearPreview();
       return;
     }
-    const code = displayContent.trim();
-    const dark = isDark;
-
-    if (previewDebounceTimer) clearTimeout(previewDebounceTimer);
-    previewDebounceTimer = setTimeout(async () => {
-      const seq = ++previewRenderSeq;
-      const svg = await renderMermaid(code, `${nodeId}-preview`, dark);
-      if (seq !== previewRenderSeq) return; // stale — discard
-      if (svg !== null) {
-        previewSvg = svg;
-        previewError = null;
-      } else {
-        previewSvg = null;
-        previewError = 'Syntax error — check your Mermaid definition.';
-      }
-    }, 300);
-
-    return () => {
-      if (previewDebounceTimer) {
-        clearTimeout(previewDebounceTimer);
-        previewDebounceTimer = undefined;
-      }
-    };
+    renderer.renderPreview(displayContent.trim(), nodeId, isDark);
   });
+
+  onDestroy(() => renderer.destroy());
 
   function handleTypingStart() {
     isTyping = true;
@@ -388,16 +331,16 @@
 <!-- Custom view content snippet for syntax highlighting and Mermaid diagrams -->
 {#snippet codeViewContent()}
   {#if language === 'mermaid'}
-    {#if mermaidSvg}
+    {#if renderer.mermaidSvg}
       <div class="mermaid-output" bind:this={mermaidContainer}></div>
-    {:else if mermaidError}
-      <div class="mermaid-error">{mermaidError}</div>
+    {:else if renderer.mermaidError}
+      <div class="mermaid-error">{renderer.mermaidError}</div>
     {:else}
       <div class="code-loading">Rendering diagram...</div>
     {/if}
-  {:else if highlightedLines}
+  {:else if renderer.highlightedLines}
     <div class="highlighted-code">
-      {#each highlightedLines as line}
+      {#each renderer.highlightedLines as line}
         <div class="code-line">
           {#each line as token}
             <span
@@ -451,10 +394,10 @@
   <!-- Mermaid split-panel live preview (edit mode only) -->
   {#if isEditing && language === 'mermaid'}
     <div class="mermaid-split-preview">
-      {#if previewSvg}
+      {#if renderer.previewSvg}
         <div class="mermaid-output mermaid-preview-output" bind:this={previewContainer}></div>
-      {:else if previewError}
-        <div class="mermaid-error mermaid-preview-error">{previewError}</div>
+      {:else if renderer.previewError}
+        <div class="mermaid-error mermaid-preview-error">{renderer.previewError}</div>
       {:else}
         <div class="code-loading">Rendering…</div>
       {/if}

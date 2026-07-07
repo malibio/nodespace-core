@@ -31,10 +31,6 @@
   let viewerLoadErrors = $state<Map<string, string>>(new Map());
   let viewerLoading = $state<Set<string>>(new Set());
 
-  // Track node hydration state per nodeId. A node is hydrated once ensureNode()
-  // has confirmed it is present in sharedNodeStore (or closed the tab if not found).
-  let hydratedNodeIds = $state<Set<string>>(new Set());
-
   // Load viewer when needed - moved to function called from onMount to avoid derived context issues
   async function loadViewerForNodeType(nodeType: string) {
     if (viewerComponents.has(nodeType) || viewerLoadErrors.has(nodeType) || viewerLoading.has(nodeType)) {
@@ -68,15 +64,15 @@
     }
   }
 
-  // Tracks the nodeId each pane's hydration effect most recently requested, so that when
-  // an in-flight ensureNode() resolves after a newer navigation has already superseded it,
-  // the stale response is discarded instead of racing its state write against the new one.
-  let latestRequestedNodeId: string | undefined;
-
+  // Ensure the node backing a tab is present in the store. This only pushes a fetch into
+  // sharedNodeStore (a non-reactive external system) — it writes no local reactive state,
+  // so there is nothing to race: hydration status is read back off the store's per-node
+  // cell via isNodeHydrated below. No staleness guard is needed. If the node genuinely
+  // doesn't exist, close the tab — but only if that tab still points at this nodeId, so a
+  // superseded navigation can't close the newly-active tab (checked against live tab state,
+  // the single source of truth, not a tracked "latest requested" variable).
   async function hydrateNode(nodeId: string, tabId: string) {
-    if (hydratedNodeIds.has(nodeId)) return;
-
-    latestRequestedNodeId = nodeId;
+    if (sharedNodeStore.getNode(nodeId)) return;
 
     let node;
     try {
@@ -86,17 +82,13 @@
       return;
     }
 
-    // A newer navigation superseded this request while we were awaiting — discard the
-    // stale result instead of mutating state for a nodeId that's no longer current.
-    if (latestRequestedNodeId !== nodeId) return;
-
     if (!node) {
-      log.warn(`Node ${nodeId} not found — closing stale tab`);
-      closeTab(tabId);
-      return;
+      const tab = untrack(() => $tabState.tabs.find((t) => t.id === tabId));
+      if (tab?.content?.nodeId === nodeId) {
+        log.warn(`Node ${nodeId} not found — closing stale tab`);
+        closeTab(tabId);
+      }
     }
-
-    hydratedNodeIds = new Set(hydratedNodeIds).add(nodeId);
   }
 
   // Derive viewer component for active tab.
@@ -121,14 +113,16 @@
   const isNodeHydrated = $derived.by(() => {
     const nodeId = activeTab?.content?.nodeId;
     if (!nodeId) return true; // settings tabs and placeholder tabs need no hydration
-    return hydratedNodeIds.has(nodeId);
+    // Read the store's per-node cell directly: a node is hydrated once it is present.
+    return sharedNodeStore.getNode(nodeId) != null;
   });
 
-  // Load viewer and hydrate parent node when active tab changes.
-  // Both run in parallel — viewer module load and node fetch are independent.
-  // tabId is captured synchronously before untrack() so that if the user switches
-  // tabs during the async fetch, closeTab targets the tab that triggered the fetch,
-  // not the newly-active one.
+  // When the active tab changes, push the two side effects it requires into their
+  // subsystems: lazy-load the viewer module for the node type, and ensure the node is
+  // present in sharedNodeStore. The effect body writes no reactive state of its own
+  // (ADR-049) — viewer results land in the module cache, hydration lands in the store,
+  // and both are read back via the $derived values above. tabId is captured here so a
+  // not-found close targets the tab that triggered the fetch.
   $effect(() => {
     const nodeType = activeTab?.content?.nodeType;
     const nodeId = activeTab?.content?.nodeId;

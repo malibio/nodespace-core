@@ -10,6 +10,7 @@
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { Collapsible } from 'bits-ui';
   import * as Select from '$lib/components/ui/select';
   import * as Popover from '$lib/components/ui/popover';
@@ -45,8 +46,9 @@
     return rawNode?.nodeType === 'task' ? nodeToTaskNode(rawNode) : null;
   });
 
-  // Load schema for user-defined extensions
-  $effect(() => {
+  // Load the task schema once on mount (constant type — never re-fetches). ADR-049:
+  // a mount-time load, not a reactive-state watch.
+  onMount(() => {
     async function loadSchema() {
       try {
         const schemaNode = await backendAdapter.getSchema('task');

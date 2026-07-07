@@ -7,6 +7,7 @@
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { createLogger } from '$lib/utils/logger';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { backendAdapter } from '$lib/services/backend-adapter';
@@ -28,20 +29,24 @@
   };
 
   let node = $derived(sharedNodeStore.getNode(nodeId));
+  // True once the on-mount fetch has settled; drives the "unknown" fallback below when
+  // the node still isn't present. Written from the fetch callback, never from an effect.
   let fetchAttempted = $state(false);
 
-  // Fetch from backend if not in store
-  $effect(() => {
-    if (!node && !fetchAttempted) {
+  // Fetch from the backend on mount if the node isn't already in the store. Each card is
+  // mounted imperatively with a fixed nodeId, so this is a one-shot per-card load - not a
+  // reactive watch (ADR-049). Once fetched, `node` updates via the store read above.
+  onMount(() => {
+    if (sharedNodeStore.getNode(nodeId)) return;
+    backendAdapter.getNode(nodeId).then((fetched) => {
+      if (fetched) {
+        sharedNodeStore.setNode(fetched, { type: 'database', reason: 'node-card-fetch' }, true);
+      }
+    }).catch((e) => {
+      log.warn(`Failed to fetch node ${nodeId}:`, e);
+    }).finally(() => {
       fetchAttempted = true;
-      backendAdapter.getNode(nodeId).then((fetched) => {
-        if (fetched) {
-          sharedNodeStore.setNode(fetched, { type: 'database', reason: 'node-card-fetch' }, true);
-        }
-      }).catch((e) => {
-        log.warn(`Failed to fetch node ${nodeId}:`, e);
-      });
-    }
+    });
   });
 
   let title = $derived(node?.content?.split('\n')[0]?.slice(0, 120) || displayText || nodeId.slice(0, 8));

@@ -65,7 +65,13 @@
 
   // Invitations inbox (onboarding, #199 S5). Opened from the account menu and,
   // once per device, automatically on the first sign-in.
-  let inboxOpen = $state(false);
+  //
+  // `inboxOpenedManually` tracks explicit opens (account menu). The first-run
+  // auto-open is derived from proSync.signedInEpisode instead of pushed by an effect:
+  // when a fresh sign-in episode arrives on a device that hasn't seen the onboarding,
+  // the inbox shows until dismissed — no $effect reading/writing its own seen flag.
+  let inboxOpenedManually = $state(false);
+  let dismissedSignInEpisode = $state(0);
 
   const FIRST_RUN_KEY = 'ns:invitations-firstrun-seen';
   function firstRunSeen(): boolean {
@@ -100,14 +106,23 @@
       : proSync.detail || labels[proSync.state]
   );
 
-  // First-run onboarding: the first time a user signs in on this device, surface
-  // the Invitations inbox once so they can paste a share code or request access.
-  $effect(() => {
-    if (signedIn && !firstRunSeen()) {
-      markFirstRunSeen();
-      inboxOpen = true;
-    }
-  });
+  // The inbox is open when explicitly opened, or auto-opened for a fresh, undismissed
+  // first sign-in on a device that hasn't seen onboarding yet.
+  const firstRunAutoOpen = $derived(
+    signedIn &&
+      !firstRunSeen() &&
+      proSync.signedInEpisode > 0 &&
+      proSync.signedInEpisode !== dismissedSignInEpisode
+  );
+  const inboxOpen = $derived(inboxOpenedManually || firstRunAutoOpen);
+
+  function closeInbox() {
+    inboxOpenedManually = false;
+    // Dismiss the current first-run episode and remember it device-wide so it
+    // doesn't reopen for this sign-in or on future launches.
+    dismissedSignInEpisode = proSync.signedInEpisode;
+    markFirstRunSeen();
+  }
 
   // A pill click opens a menu — the account menu when signed in, the
   // sign-in options menu when signed out — so a single click never
@@ -202,7 +217,7 @@
             type="button"
             role="menuitem"
             onclick={() => {
-              inboxOpen = true;
+              inboxOpenedManually = true;
               menuOpen = false;
             }}
           >
@@ -241,10 +256,10 @@
 
   <InvitationsInbox
     open={inboxOpen}
-    onClose={() => (inboxOpen = false)}
+    onClose={closeInbox}
     onLogout={async () => {
       await onSignOut();
-      inboxOpen = false;
+      closeInbox();
     }}
   />
 {/if}

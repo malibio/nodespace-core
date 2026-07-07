@@ -16,35 +16,15 @@
   }: WithoutChildrenOrChild<CalendarPrimitive.RootProps> = $props();
 
   /**
-   * Value Binding Workaround Pattern
+   * The primitive binds directly to the `$bindable` `value` prop — bits-ui v1 propagates
+   * bindable changes in both directions, so no intermediate mirror state is needed.
+   * handleValueChange only forwards to the optional onValueChange callback; `bind:value`
+   * already keeps the prop in sync.
    *
-   * PROBLEM: bits-ui CalendarPrimitive.Root doesn't properly propagate bindable value
-   * changes in Svelte 5. Direct bind:value={value} doesn't trigger parent updates.
-   *
-   * SOLUTION: Bridge pattern with intermediate state
-   * - internalValue: Local reactive state that bits-ui can bind to
-   * - $effect: Syncs external value changes to internal (one-way: parent → child)
-   * - handleValueChange: Syncs internal changes to external (one-way: child → parent)
-   *
-   * This pattern ensures proper two-way binding despite the library limitation.
    * The 'as never' casts are necessary due to discriminated union type conflicts
    * between CalendarPrimitive's type parameter and our generic value binding.
-   *
-   * TODO: Revisit when bits-ui has full Svelte 5 support or consider upstream PR
-   * Related: https://github.com/huntabyte/bits-ui/issues (Svelte 5 compatibility)
    */
-  let internalValue = $state<DateValue | DateValue[] | undefined>(value);
-
-  // Sync external value changes to internal
-  $effect(() => {
-    internalValue = value;
-  });
-
-  // Handle internal changes and propagate them
   function handleValueChange(v: DateValue | DateValue[] | undefined) {
-    // Update the bindable prop
-    value = v;
-    // Call the user's callback if provided
     if (onValueChange) {
       onValueChange(v as never);
     }
@@ -56,7 +36,7 @@ Discriminated Unions + Destructing (required for bindable) do not
 get along, so we shut typescript up by casting `value` to `never`.
 -->
 <CalendarPrimitive.Root
-  bind:value={internalValue as never}
+  bind:value={value as never}
   bind:ref
   bind:placeholder
   onValueChange={handleValueChange}

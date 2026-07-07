@@ -29,10 +29,6 @@
     { value: "charlie", label: "@charlie" }
   ];
 
-  $effect(() => {
-    assigneeSearch;
-  });
-
   // Example task node data
   const taskData = {
     title: "Implement Schema-Driven Property UI",

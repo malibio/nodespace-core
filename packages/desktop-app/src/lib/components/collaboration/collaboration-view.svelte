@@ -10,6 +10,7 @@
   onboarding paths) live in the sibling InvitesPanel (S4).
 -->
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { membership } from '$lib/stores/membership.svelte';
 	import type { Permission } from '$lib/services/membership-service';
 	import { proSync } from '$lib/stores/pro-sync.svelte';
@@ -53,10 +54,16 @@
 	let approveRole = $state<Record<string, Permission>>({});
 	let busyRequest = $state<string | null>(null);
 
-	$effect(() => {
-		if (proSync.isPro && collectionId) {
+	// Load the roster on mount if Pro is already confirmed (the host tab is Pro-gated, so
+	// this is the common path). If tier confirms after mount, load then - via the store's
+	// transition hook, not a reactive $effect that watches isPro (ADR-049).
+	onMount(() => {
+		if (!collectionId) return;
+		if (proSync.isPro) {
 			membership.loadCollection(collectionId);
+			return;
 		}
+		return proSync.onProConfirmed(() => membership.loadCollection(collectionId));
 	});
 
 	let view = $derived(membership.get(collectionId));
