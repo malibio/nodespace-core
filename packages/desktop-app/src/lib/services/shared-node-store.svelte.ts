@@ -11,7 +11,7 @@
  * - Singleton pattern ensures single shared store
  * - Multiple ReactiveNodeService instances read from same store
  * - Per-viewer UI state (expand/collapse, focus) stored separately
- * - Database writes coordinated through existing queueDatabaseWrite()
+ * - Database writes serialized per-node by SimplePersistenceCoordinator
  */
 
 import { SvelteMap } from 'svelte/reactivity';
