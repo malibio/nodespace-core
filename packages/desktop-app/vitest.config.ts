@@ -164,7 +164,14 @@ export default defineConfig({
 
   test: {
     include: ['src/tests/**/*.{test,spec}.{js,ts}'],
-    exclude: ['src/tests/browser/**'], // Browser tests run separately with test:browser
+    exclude: [
+      'src/tests/browser/**', // Browser tests run separately with test:browser
+      // Wall-clock performance benchmarks assert hard timing thresholds
+      // (e.g. <25ms), which vary run-to-run on shared CI runners — unsuitable
+      // for a required PR gate. They still run locally via `bun run test` and
+      // deliberately via `bun run test:perf`; the ADR-047 CI gate skips them.
+      ...(process.env.CI ? ['src/tests/performance/**'] : [])
+    ],
     environment: 'happy-dom', // Fast, modern DOM for Bun compatibility
     globals: true,
     setupFiles: ['src/tests/setup-svelte-mocks.ts', 'src/tests/setup.ts'],
