@@ -458,6 +458,11 @@ export class PluginRegistry {
   /**
    * Compute a node's tab title via its plugin's getTitle, falling back to
    * node.title || node.content when the plugin doesn't define one.
+   *
+   * node.title is computed and persisted by the backend (interpolated from the node
+   * type's schema title_template, when one exists — see NodeService::compute_title in
+   * the Rust core) — it's already the right display title for any node type without
+   * type-specific title logic, so no client-side schema lookup is needed here.
    */
   getNodeTitle(node: Node): string | undefined {
     const plugin = this.plugins.get(node.nodeType);
