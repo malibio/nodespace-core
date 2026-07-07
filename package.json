@@ -22,6 +22,7 @@
     "test:coverage": "bun run --cwd packages/desktop-app test:coverage",
     "test:skill": "bun run --cwd packages/skill test",
     "test:e2e": "bun run --cwd packages/desktop-app test:e2e",
+    "test:webkit": "bun run --cwd packages/desktop-app test:webkit",
     "test:all": "bun run test && bun run test:skill && bun run rust:test",
     "test:all:db": "bun run test:db && bun run test:skill && bun run rust:test",
     "check": "bun run --cwd packages/desktop-app check",

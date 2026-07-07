@@ -1,0 +1,51 @@
+name: Nightly WebKit smoke
+
+# Non-blocking, nightly smoke coverage of the shipping WebKit engine.
+#
+# The desktop app renders in WKWebView (WebKit / JavaScriptCore), but the
+# browser-mode test tier (`test:browser`) runs in Chromium (Blink). Anything
+# WebKit-specific can pass in Chromium yet break in the real app. This job runs
+# the SAME engine-agnostic browser suite (src/tests/browser/**) against
+# Playwright's bundled WebKit build — the shipping engine's family — so a
+# WebKit-only regression surfaces here.
+#
+# This workflow is deliberately NOT a required status check and is NOT wired into
+# the blocking `ci.yml` gate: it is a nightly signal, not a merge gate. Chromium
+# stays the fast, blocking browser tier (via `test:integration:full` / local
+# runs); WebKit is the nightly delta check.
+
+on:
+  schedule:
+    # 07:00 UTC ≈ midnight PT — nightly.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-webkit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  webkit:
+    name: test:webkit (Playwright WebKit)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate SvelteKit types
+        run: bun run --cwd packages/desktop-app sync
+
+      - name: Install Playwright WebKit browser
+        run: bunx --bun playwright install webkit --with-deps
+        working-directory: packages/desktop-app
+
+      - name: Run WebKit smoke suite
+        run: bun run test:webkit

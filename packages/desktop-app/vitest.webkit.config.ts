@@ -7,19 +7,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Browser-mode tier (Chromium / Blink via Playwright).
+ * WebKit (JavaScriptCore) smoke tier — the engine family of the shipping
+ * WKWebView desktop app.
  *
- * ENGINE-AGNOSTIC CONTRACT: the tests under `src/tests/browser/**` must exercise
- * only standard DOM behavior that any modern engine implements the same way —
- * focus/blur, `document.activeElement`, textarea selection, keyboard events,
- * non-zero `getBoundingClientRect`, viewport-based positioning math. The exact
- * same suite is run against WebKit (the shipping WKWebView engine) by
- * `vitest.webkit.config.ts`, and both must pass.
+ * This runs the SAME engine-agnostic browser suite (`src/tests/browser/**`) as
+ * `vitest.browser.config.ts`, but against Playwright's bundled WebKit build
+ * instead of Chromium. Chromium (Blink) and WebKit (JavaScriptCore) are
+ * different engines; the desktop app ships WebKit, so a suite that only ever
+ * runs under Chromium can pass here yet break in the real app.
  *
- * Do NOT add engine-specific assertions here (e.g. pixel-exact layout values,
- * Chromium-only APIs, or behavior that differs between Blink and WebKit). Such a
- * test would pass under Chromium and fail the WebKit smoke tier — or, worse,
- * silently validate the wrong engine for the app users actually run.
+ * The value is the delta: any browser test that passes under Chromium but fails
+ * under WebKit is a real, WebKit-specific finding. Passing under both engines is
+ * the proof that the browser tier is genuinely engine-agnostic.
+ *
+ * This tier is NIGHTLY and NON-BLOCKING — it is deliberately kept out of
+ * `test:all` and the pre-push gate (see `.github/workflows/nightly-webkit.yml`).
+ *
+ * Run with: bun run test:webkit
+ * Requires one-time setup: bunx playwright install webkit
  */
 export default defineConfig({
   plugins: [sveltekit()],
@@ -33,17 +38,17 @@ export default defineConfig({
   },
 
   test: {
-    // Enable Vitest Browser Mode
+    // Enable Vitest Browser Mode against WebKit (the shipping WKWebView engine).
     browser: {
       enabled: true,
-      name: 'chromium',
+      name: 'webkit',
       provider: 'playwright',
       headless: true,
       // Enable screenshotting for debugging failures (helps identify issues quickly)
       screenshotFailures: true
     },
 
-    // Only run browser integration tests
+    // Run the same engine-agnostic browser suite as vitest.browser.config.ts.
     include: ['src/tests/browser/**/*.{test,spec}.{js,ts}'],
 
     // Setup files for browser tests
