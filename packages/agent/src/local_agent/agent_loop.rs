@@ -62,6 +62,13 @@ const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 const EMPTY_RESPONSE_FALLBACK: &str =
     "⚠️ I wasn't able to produce a response for that. Please try again.";
 
+/// Shared confirmation request used when a guard suppresses a response the model
+/// should not have produced — a fabricated action claim, or a tool call the
+/// model narrated as text instead of invoking. Kept in one place so the two
+/// guards stay in sync.
+const CONFIRMATION_REQUEST: &str =
+    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.";
+
 fn session_prompt_override(session: &AgentSession) -> Option<&str> {
     session.system_prompt_override.as_deref()
 }
@@ -127,6 +134,47 @@ fn contains_action_claim(text: &str) -> bool {
         "has been deleted",
     ];
     ACTION_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// Synthesize a user-facing bullet summary from the tool executions of a turn.
+///
+/// Last-resort fallback for when the model produced no usable final text
+/// (empty, or a leaked tool call). Repeated calls to the same tool collapse to
+/// one bullet with a retry count so the diagnostic signal — the agent looped on
+/// the same operation — survives. Executions that errored are labelled
+/// "failed" rather than "completed" so a turn that only ever failed is never
+/// summarized as a success (e.g. the looping-`execute_query` case).
+fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
+    // (label, total, errored) preserving first-seen order.
+    let mut counts: Vec<(&'static str, usize, usize)> = Vec::new();
+    for t in executions {
+        let label = humanize_tool_name(&t.name);
+        if let Some(entry) = counts.iter_mut().find(|(l, _, _)| *l == label) {
+            entry.1 += 1;
+            if t.is_error {
+                entry.2 += 1;
+            }
+        } else {
+            counts.push((label, 1, usize::from(t.is_error)));
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(label, count, errored)| {
+            // "failed" if every call to this tool errored; otherwise "completed".
+            let verb = if errored == count {
+                "failed"
+            } else {
+                "completed"
+            };
+            if count > 1 {
+                format!("• {label} {verb} ({count}×)")
+            } else {
+                format!("• {label} {verb}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Detect a tool call that the model emitted as plain text instead of invoking.
@@ -506,7 +554,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         response_preview = %normalized.chars().take(120).collect::<String>(),
                         "Anti-fabrication: model claimed action with zero tool calls — converting to confirmation request"
                     );
-                    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.".to_string()
+                    CONFIRMATION_REQUEST.to_string()
                 } else {
                     normalized
                 };
@@ -529,7 +577,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         response_preview = %normalized.chars().take(120).collect::<String>(),
                         "Narrated tool call: model printed a tool call as text instead of invoking it — converting to confirmation request"
                     );
-                    "I'd like to help with that. Could you confirm what you'd like me to do? I want to make sure I take the right action.".to_string()
+                    CONFIRMATION_REQUEST.to_string()
                 } else {
                     normalized
                 };
@@ -842,38 +890,18 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 on_status(LocalAgentStatus::Idle);
                 session.status = LocalAgentStatus::Idle;
 
-                // Both final inference and last iteration returned empty — synthesize
-                // a summary from tool results so the UI always gets a response.
-                // Repeated calls to the same tool collapse to one bullet with a
-                // retry count so the diagnostic signal (the agent looped on the
-                // same operation until it ran out of iterations) survives.
+                // Both final inference and last iteration returned empty —
+                // synthesize a summary from tool results so the UI always gets a
+                // response.
                 let fallback = if !all_tool_executions.is_empty() {
-                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-                    for t in &all_tool_executions {
-                        let label = humanize_tool_name(&t.name);
-                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
-                            entry.1 += 1;
-                        } else {
-                            counts.push((label, 1));
-                        }
-                    }
-                    counts
-                        .into_iter()
-                        .map(|(label, count)| {
-                            if count > 1 {
-                                format!("• {} completed ({}×)", label, count)
-                            } else {
-                                format!("• {} completed", label)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    summarize_executions(&all_tool_executions)
                 } else {
                     // No tool executions to summarize. Try the last iteration's
-                    // text; if it's empty (or was pure internal plumbing), fall
-                    // back to an honest failure notice so the UI is never blank.
+                    // text; if it's empty, pure internal plumbing, or a leaked
+                    // tool call printed as text, fall back to an honest failure
+                    // notice so the UI is never blank and never shows pseudo-code.
                     let normalized = normalize_response(&response_text);
-                    if normalized.is_empty() {
+                    if normalized.is_empty() || looks_like_narrated_tool_call(&normalized) {
                         EMPTY_RESPONSE_FALLBACK.to_string()
                     } else {
                         normalized
@@ -943,26 +971,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     // a tool call as text instead of invoking it — synthesize a
                     // summary from the tool results instead of persisting a blank
                     // bubble or raw pseudo-code.
-                    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-                    for t in &all_tool_executions {
-                        let label = humanize_tool_name(&t.name);
-                        if let Some(entry) = counts.iter_mut().find(|(l, _)| *l == label) {
-                            entry.1 += 1;
-                        } else {
-                            counts.push((label, 1));
-                        }
-                    }
-                    counts
-                        .into_iter()
-                        .map(|(label, count)| {
-                            if count > 1 {
-                                format!("• {} completed ({}×)", label, count)
-                            } else {
-                                format!("• {} completed", label)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    summarize_executions(&all_tool_executions)
                 } else {
                     normalized_tail
                 }
@@ -3251,6 +3260,46 @@ mod tests {
         assert!(!looks_like_narrated_tool_call(""));
     }
 
+    // -- summarize_executions tests ------------------------------------------
+
+    fn exec_record(name: &str, is_error: bool) -> ToolExecutionRecord {
+        ToolExecutionRecord {
+            tool_call_id: format!("tc_{name}"),
+            name: name.to_string(),
+            args: json!({}),
+            result: json!({}),
+            is_error,
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn summarize_executions_marks_all_failed_calls_as_failed() {
+        // The looping-execute_query case: every call errored → "failed", never
+        // an optimistic "completed".
+        let summary = summarize_executions(&[
+            exec_record("execute_query", true),
+            exec_record("execute_query", true),
+        ]);
+        assert_eq!(summary, "• property query failed (2×)");
+    }
+
+    #[test]
+    fn summarize_executions_marks_successful_calls_as_completed() {
+        let summary = summarize_executions(&[exec_record("create_node", false)]);
+        assert_eq!(summary, "• node creation completed");
+    }
+
+    #[test]
+    fn summarize_executions_treats_partial_failure_as_completed() {
+        // A tool that succeeded at least once is not reported as outright failed.
+        let summary = summarize_executions(&[
+            exec_record("search_nodes", true),
+            exec_record("search_nodes", false),
+        ]);
+        assert_eq!(summary, "• node search completed (2×)");
+    }
+
     // -- Anti-fabrication guard tests ----------------------------------------
 
     /// Model claims action with zero tool calls → response should be converted
@@ -3580,6 +3629,14 @@ mod tests {
         );
         // And no leaked internal call syntax.
         assert!(!result.response.contains("execute_query("));
+        // The synthesized summary is honest about the failure — a turn that only
+        // ever failed must not be reported as "completed".
+        assert!(
+            result.response.to_lowercase().contains("failed"),
+            "failed-only executions should be summarized as failed: {:?}",
+            result.response
+        );
+        assert!(!result.response.contains("completed"));
         let last = session.messages.last().unwrap();
         assert!(!last.content.trim().is_empty());
     }
