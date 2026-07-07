@@ -98,6 +98,13 @@ class ProSyncStore {
    * Pro-confirmed one-shot (e.g. loading the recovered-items log) from this state
    * transition rather than an $effect that guards on isPro (ADR-049). A callback
    * registered after tier is already 'pro' fires immediately.
+   *
+   * `proConfirmed` is a deliberate one-way latch: Pro tier is a per-process capability
+   * probe result, not a session-lifetime flag, so it never resets on sign-out (unlike
+   * `signedInEpisode`, which tracks the per-session sign-in edge and re-bumps). A
+   * consumer needing to re-run on a genuine tier downgrade→upgrade would need a
+   * different, episode-style signal — none exists today because tier does not change
+   * within a running app.
    */
   private proConfirmedCallbacks = new Set<() => void>();
   private proConfirmed = false;
