@@ -100,8 +100,13 @@ fn plist_filename() -> String {
 /// from the bundled sidecar. Called before the gRPC client is managed so the
 /// frontend never connects to a stale daemon.
 ///
-/// This is intentionally synchronous and cheap (two stat calls + maybe lsof).
-/// The async `ensure_daemon_running` handles extraction and restart afterward.
+/// This is intentionally synchronous and cheap (two stat calls + maybe lsof) —
+/// it is a size-only pre-check, not a signature-aware gate. It does not call
+/// `codesign --verify`, so a same-size install with a corrupted signature is
+/// left running here; that self-heal happens moments later in the async
+/// `extract_sidecar_if_changed`, which re-extracts and kills the daemon via
+/// `binary_updated` once verification fails. `ensure_daemon_running` handles
+/// extraction and restart afterward.
 #[cfg(unix)]
 pub fn kill_stale_daemon_sync(app: &tauri::App) {
     let handle = app.handle();
@@ -489,8 +494,13 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
         .await
         .with_context(|| format!("Failed to copy {} to {}", src.display(), tmp_dest.display()))?;
 
-    set_executable(&tmp_dest)?;
-    resign_binary(&tmp_dest)?;
+    // If anything below fails, remove the temp file rather than leaving a stray
+    // `.tmp-<pid>` behind in ~/.nodespace/bin/ — harmless on its own, but it
+    // would otherwise accumulate silently across repeated failures.
+    if let Err(e) = set_executable(&tmp_dest).and_then(|_| resign_binary(&tmp_dest)) {
+        let _ = std::fs::remove_file(&tmp_dest);
+        return Err(e);
+    }
 
     tokio::fs::rename(&tmp_dest, &dest)
         .await
