@@ -50,6 +50,10 @@ service CloudSyncService {
   rpc CreateInvite (CreateInviteRequest) returns (CreateInviteResponse);
   rpc AcceptInvite (AcceptInviteRequest) returns (MembershipAck);
   rpc RequestJoin (RequestJoinRequest) returns (RequestJoinResponse);
+  // Open-collection self-join — the complement to RequestJoin (which is for
+  // restricted collections). The cloud RPC rejects a restricted collection with
+  // 42501, so the open-vs-restricted gate is enforced server-side.
+  rpc JoinCollection (JoinCollectionRequest) returns (MembershipAck);
   rpc ApproveRequest (ApproveRequestRequest) returns (MembershipAck);
 
   // --- Invite / request listings + revocation (S2, #239). These three cloud
@@ -188,6 +192,9 @@ message RequestJoinRequest {
 }
 message RequestJoinResponse {
   string request_id = 1;
+}
+message JoinCollectionRequest {
+  string collection_id = 1;
 }
 message ApproveRequestRequest {
   string request_id = 1;
