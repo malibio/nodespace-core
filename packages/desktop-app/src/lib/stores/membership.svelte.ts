@@ -223,6 +223,16 @@ class MembershipStore {
 		return membershipService.requestJoin(collectionId);
 	}
 
+	/**
+	 * Self-join an OPEN collection (the complement to {@link requestJoin}). The
+	 * open-vs-restricted gate is enforced server-side, so a restricted collection
+	 * rejects here rather than joining silently.
+	 */
+	async joinCollection(collectionId: string): Promise<void> {
+		this.requirePro();
+		await membershipService.joinCollection(collectionId);
+	}
+
 	/** Clear all cached state + identity. Call on sign-out (identity is per-session). */
 	reset(): void {
 		this.byCollection = {};

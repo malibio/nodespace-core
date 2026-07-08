@@ -11,7 +11,8 @@ vi.mock('$lib/utils/logger', () => ({
 const { membershipMock } = vi.hoisted(() => ({
 	membershipMock: {
 		acceptInvite: vi.fn(() => Promise.resolve('collection-x')),
-		requestJoin: vi.fn(() => Promise.resolve('req-1'))
+		requestJoin: vi.fn(() => Promise.resolve('req-1')),
+		joinCollection: vi.fn(() => Promise.resolve())
 	}
 }));
 vi.mock('$lib/stores/membership.svelte', () => ({ membership: membershipMock }));
@@ -67,6 +68,20 @@ describe('InvitationsInbox', () => {
 		await fireEvent.click(getByText('Request'));
 		expect(membershipMock.requestJoin).toHaveBeenCalledWith('col-9');
 		expect(getByText(/Request sent/)).toBeTruthy();
+		cleanup();
+	});
+
+	it('joining an open collection calls joinCollection and confirms', async () => {
+		const { getByPlaceholderText, getByText } = render(InvitationsInbox, {
+			props: { open: true, onClose: vi.fn() }
+		});
+		await fireEvent.input(getByPlaceholderText('collection id'), {
+			target: { value: 'col-open' }
+		});
+		await fireEvent.click(getByText('Join'));
+		expect(membershipMock.joinCollection).toHaveBeenCalledWith('col-open');
+		expect(membershipMock.requestJoin).not.toHaveBeenCalled();
+		expect(getByText(/Joined/)).toBeTruthy();
 		cleanup();
 	});
 

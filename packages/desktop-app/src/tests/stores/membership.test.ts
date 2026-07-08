@@ -19,7 +19,8 @@ const { svc, proSyncMock } = vi.hoisted(() => ({
 		revokeInvite: vi.fn(),
 		approveRequest: vi.fn(),
 		acceptInvite: vi.fn(),
-		requestJoin: vi.fn()
+		requestJoin: vi.fn(),
+		joinCollection: vi.fn()
 	},
 	proSyncMock: { isPro: true }
 }));
@@ -95,8 +96,16 @@ describe('MembershipStore', () => {
 		// service — these are the S5 onboarding entry points, so the guard matters.
 		await expect(membership.acceptInvite('code')).rejects.toThrow(/Pro/);
 		await expect(membership.requestJoin('c1')).rejects.toThrow(/Pro/);
+		await expect(membership.joinCollection('c1')).rejects.toThrow(/Pro/);
 		expect(svc.acceptInvite).not.toHaveBeenCalled();
 		expect(svc.requestJoin).not.toHaveBeenCalled();
+		expect(svc.joinCollection).not.toHaveBeenCalled();
+	});
+
+	it('joinCollection forwards to the service when Pro (open-collection self-join)', async () => {
+		svc.joinCollection.mockResolvedValue(undefined);
+		await membership.joinCollection('c1');
+		expect(svc.joinCollection).toHaveBeenCalledWith('c1');
 	});
 
 	it('currentUserRole is null when the caller identity is unknown', async () => {
