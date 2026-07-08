@@ -459,6 +459,7 @@ pub fn run() {
             commands::pro_sync::pro_create_invite,
             commands::pro_sync::pro_accept_invite,
             commands::pro_sync::pro_request_join,
+            commands::pro_sync::pro_join_collection,
             commands::pro_sync::pro_approve_request,
             commands::pro_sync::pro_list_invites,
             commands::pro_sync::pro_list_requests,

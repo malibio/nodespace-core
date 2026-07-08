@@ -13,9 +13,9 @@ use crate::services::pro_client::pb::cloud_sync_service_client::CloudSyncService
 use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{
     AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, GetIdentityRequest,
-    InitiateOAuthRequest, LeaveCollectionRequest, ListInvitesRequest, ListMembersRequest,
-    ListRequestsRequest, RemoveMemberRequest, RequestJoinRequest, RevokeInviteRequest,
-    SetMemberRequest, SignOutRequest, WatchSyncStatusRequest,
+    InitiateOAuthRequest, JoinCollectionRequest, LeaveCollectionRequest, ListInvitesRequest,
+    ListMembersRequest, ListRequestsRequest, RemoveMemberRequest, RequestJoinRequest,
+    RevokeInviteRequest, SetMemberRequest, SignOutRequest, WatchSyncStatusRequest,
 };
 use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
@@ -367,6 +367,19 @@ pub async fn pro_request_join(app: AppHandle, collection_id: String) -> Result<S
         .map_err(|e| format!("RequestJoin failed: {e}"))?
         .into_inner();
     Ok(resp.request_id)
+}
+
+/// Self-join an OPEN collection (the complement to `pro_request_join`, which is for
+/// restricted collections). The cloud RPC rejects a restricted collection, so the
+/// open-vs-restricted gate is enforced server-side.
+#[tauri::command]
+pub async fn pro_join_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    let mut client = membership_client(&app).await?;
+    client
+        .join_collection(JoinCollectionRequest { collection_id })
+        .await
+        .map_err(|e| format!("JoinCollection failed: {e}"))?;
+    Ok(())
 }
 
 /// Approve a pending join request (admin only). `permission` of `None`/empty
