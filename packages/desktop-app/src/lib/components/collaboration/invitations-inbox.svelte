@@ -48,6 +48,7 @@
 
 	let joinId = $state('');
 	let requesting = $state(false);
+	let joining = $state(false);
 	let requestMsg = $state<string | null>(null);
 	let requestErr = $state<string | null>(null);
 
@@ -90,6 +91,24 @@
 			requesting = false;
 		}
 	}
+
+	async function joinCollection() {
+		const id = joinId.trim();
+		if (!id) return;
+		joining = true;
+		requestMsg = null;
+		requestErr = null;
+		try {
+			await membership.joinCollection(id);
+			requestMsg = 'Joined — it will appear in your sidebar as it syncs.';
+			joinId = '';
+		} catch (e) {
+			log.warn('joinCollection failed', { error: e });
+			requestErr = friendly(e);
+		} finally {
+			joining = false;
+		}
+	}
 </script>
 
 {#if open}
@@ -129,18 +148,28 @@
 			</section>
 
 			<section>
-				<h3>Request to join a collection</h3>
+				<h3>Join a collection</h3>
+				<p class="hint">
+					Open collections you can join directly; restricted ones need an admin's approval.
+				</p>
 				<div class="row">
 					<input
 						class="in"
 						type="text"
 						placeholder="collection id"
 						bind:value={joinId}
-						disabled={requesting}
+						disabled={requesting || joining}
 					/>
 					<button
+						class="btn btn-primary"
+						disabled={requesting || joining || !joinId.trim()}
+						onclick={joinCollection}
+					>
+						{joining ? 'Joining…' : 'Join'}
+					</button>
+					<button
 						class="btn btn-ghost"
-						disabled={requesting || !joinId.trim()}
+						disabled={requesting || joining || !joinId.trim()}
 						onclick={requestJoin}
 					>
 						{requesting ? 'Sending…' : 'Request'}
@@ -204,6 +233,11 @@
 		margin: 0 0 8px;
 		font-size: 0.9rem;
 		font-weight: 600;
+	}
+	.hint {
+		margin: -2px 0 8px;
+		font-size: 0.78rem;
+		color: var(--text-secondary, #6b7280);
 	}
 	.row {
 		display: flex;

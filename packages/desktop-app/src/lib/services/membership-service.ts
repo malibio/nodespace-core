@@ -145,6 +145,17 @@ export class MembershipService {
 	}
 
 	/**
+	 * Self-join an OPEN collection (the complement to {@link requestJoin}, which is
+	 * for restricted collections). The open-vs-restricted gate is enforced
+	 * server-side — the daemon/cloud reject a restricted collection with a permission
+	 * error, so no client-side check is needed.
+	 */
+	async joinCollection(collectionId: string): Promise<void> {
+		log.debug('joinCollection', { collectionId });
+		await invoke<void>('pro_join_collection', { collectionId });
+	}
+
+	/**
 	 * Approve a pending join request (admin only). `permission` of `undefined`
 	 * grants the originally-requested tier.
 	 */
