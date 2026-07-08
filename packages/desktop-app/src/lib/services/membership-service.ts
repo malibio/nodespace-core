@@ -59,6 +59,16 @@ export interface Person {
 	email: string;
 }
 
+/** A collection the caller could join but isn't a member of yet (browse & join). */
+export interface JoinableCollection {
+	/** Collection node id. */
+	id: string;
+	/** Display name (the collection node's content). */
+	name: string;
+	/** `true` => needs a request (admin approval); `false` => open self-join. */
+	restricted: boolean;
+}
+
 // Raw wire shapes (snake_case, as serialized by the Rust command DTOs).
 interface RawMember {
 	person_id: string;
@@ -79,6 +89,11 @@ interface RawRequest {
 interface RawPerson {
 	person_id: string;
 	email: string;
+}
+interface RawJoinableCollection {
+	id: string;
+	name: string;
+	restricted: boolean;
 }
 
 /**
@@ -153,6 +168,18 @@ export class MembershipService {
 	async joinCollection(collectionId: string): Promise<void> {
 		log.debug('joinCollection', { collectionId });
 		await invoke<void>('pro_join_collection', { collectionId });
+	}
+
+	/**
+	 * List the collections the signed-in user could join but isn't a member of yet
+	 * (open + restricted) — collection discovery (browse & join). The daemon forwards
+	 * the caller's JWT, so the cloud RPC filters to what the caller can see and
+	 * excludes their own memberships server-side.
+	 */
+	async listJoinable(): Promise<JoinableCollection[]> {
+		log.debug('listJoinable');
+		const rows = await invoke<RawJoinableCollection[]>('pro_list_joinable_collections');
+		return rows.map((r) => ({ id: r.id, name: r.name, restricted: r.restricted }));
 	}
 
 	/**

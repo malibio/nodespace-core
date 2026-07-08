@@ -14,8 +14,9 @@ use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{
     AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, GetIdentityRequest,
     InitiateOAuthRequest, JoinCollectionRequest, LeaveCollectionRequest, ListInvitesRequest,
-    ListMembersRequest, ListRequestsRequest, RemoveMemberRequest, RequestJoinRequest,
-    RevokeInviteRequest, SetMemberRequest, SignOutRequest, WatchSyncStatusRequest,
+    ListJoinableCollectionsRequest, ListMembersRequest, ListRequestsRequest, RemoveMemberRequest,
+    RequestJoinRequest, RevokeInviteRequest, SetMemberRequest, SignOutRequest,
+    WatchSyncStatusRequest,
 };
 use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
@@ -229,6 +230,18 @@ pub struct RequestDto {
     pub created_at: String,
 }
 
+/// One joinable collection returned by [`pro_list_joinable_collections`] —
+/// collection discovery (browse & join).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct JoinableCollectionDto {
+    /// Collection node id.
+    pub id: String,
+    /// Display name (the collection node's content).
+    pub name: String,
+    /// `true` => needs a request (admin approval); `false` => open self-join.
+    pub restricted: bool,
+}
+
 /// The caller's own identity, returned by [`pro_current_person`] (#238/#239).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PersonDto {
@@ -380,6 +393,31 @@ pub async fn pro_join_collection(app: AppHandle, collection_id: String) -> Resul
         .await
         .map_err(|e| format!("JoinCollection failed: {e}"))?;
     Ok(())
+}
+
+/// List the collections the signed-in user could join but isn't a member of yet
+/// (open + restricted) — collection discovery (browse & join). The daemon
+/// forwards the caller's JWT, so the cloud RPC filters to what the caller can see
+/// and excludes their own memberships server-side.
+#[tauri::command]
+pub async fn pro_list_joinable_collections(
+    app: AppHandle,
+) -> Result<Vec<JoinableCollectionDto>, String> {
+    let mut client = membership_client(&app).await?;
+    let resp = client
+        .list_joinable_collections(ListJoinableCollectionsRequest {})
+        .await
+        .map_err(|e| format!("ListJoinableCollections failed: {e}"))?
+        .into_inner();
+    Ok(resp
+        .collections
+        .into_iter()
+        .map(|c| JoinableCollectionDto {
+            id: c.id,
+            name: c.name,
+            restricted: c.restricted,
+        })
+        .collect())
 }
 
 /// Approve a pending join request (admin only). `permission` of `None`/empty

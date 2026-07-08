@@ -1,13 +1,15 @@
 <!--
   InvitationsInbox — onboarding entry point (epic #237, slice S5 #242). A modal
   opened from the Pro account menu (and once, on first sign-in). Lets a user
-  redeem a share-code invite and ask to join a restricted collection.
+  redeem a share-code invite, browse the collections they can join, and join an
+  open one directly / request a restricted one.
 
   Email-bound invites are auto-redeemed server-side on reconnect
   (`redeem_my_invites`), so they need no action here — the copy just says so.
-  Listing "my pending invites / my request statuses" and discovering joinable
-  collections have no client-facing backend yet (only admins can list a
-  collection's invites/requests); those are deferred to a follow-up.
+  The discovery list comes from `list_joinable_collections` (memberships excluded
+  and visibility filtered server-side). Listing "my pending invites / my request
+  statuses" still has no client-facing backend (only admins can list a
+  collection's invites/requests); that remains deferred to a follow-up.
 -->
 <script lang="ts">
 	import { focusTrap } from '$lib/actions/focus-trap';
@@ -46,11 +48,23 @@
 	let redeemMsg = $state<string | null>(null);
 	let redeemErr = $state<string | null>(null);
 
-	let joinId = $state('');
-	let requesting = $state(false);
-	let joining = $state(false);
-	let requestMsg = $state<string | null>(null);
-	let requestErr = $state<string | null>(null);
+	// Collection discovery (browse & join). The joinable list lives in the store
+	// (loaded server-side, memberships excluded). `actingId` is the collection a
+	// per-row Join/Request is in flight for, so only that row's buttons disable.
+	let actingId = $state<string | null>(null);
+	let browseMsg = $state<string | null>(null);
+	let browseErr = $state<string | null>(null);
+
+	// Load the joinable list the first time the modal is opened (Pro only). Reopening
+	// after a join reflects the store's already-updated list without a refetch; the
+	// explicit Refresh button re-queries on demand.
+	let loadedOnce = false;
+	$effect(() => {
+		if (open && membership.isPro && !loadedOnce) {
+			loadedOnce = true;
+			void membership.loadJoinable();
+		}
+	});
 
 	function friendly(e: unknown): string {
 		return String(e).replace(/^Error:\s*/, '');
@@ -74,39 +88,35 @@
 		}
 	}
 
-	async function requestJoin() {
-		const id = joinId.trim();
-		if (!id) return;
-		requesting = true;
-		requestMsg = null;
-		requestErr = null;
+	async function join(id: string, name: string) {
+		if (actingId) return;
+		actingId = id;
+		browseMsg = null;
+		browseErr = null;
 		try {
-			await membership.requestJoin(id);
-			requestMsg = 'Request sent — an admin will review it.';
-			joinId = '';
+			await membership.joinCollection(id);
+			browseMsg = `Joined ${name} — it will appear in your sidebar as it syncs.`;
 		} catch (e) {
-			log.warn('requestJoin failed', { error: e });
-			requestErr = friendly(e);
+			log.warn('joinCollection failed', { id, error: e });
+			browseErr = friendly(e);
 		} finally {
-			requesting = false;
+			actingId = null;
 		}
 	}
 
-	async function joinCollection() {
-		const id = joinId.trim();
-		if (!id) return;
-		joining = true;
-		requestMsg = null;
-		requestErr = null;
+	async function request(id: string, name: string) {
+		if (actingId) return;
+		actingId = id;
+		browseMsg = null;
+		browseErr = null;
 		try {
-			await membership.joinCollection(id);
-			requestMsg = 'Joined — it will appear in your sidebar as it syncs.';
-			joinId = '';
+			await membership.requestJoin(id);
+			browseMsg = `Request sent for ${name} — an admin will review it.`;
 		} catch (e) {
-			log.warn('joinCollection failed', { error: e });
-			requestErr = friendly(e);
+			log.warn('requestJoin failed', { id, error: e });
+			browseErr = friendly(e);
 		} finally {
-			joining = false;
+			actingId = null;
 		}
 	}
 </script>
@@ -148,37 +158,57 @@
 			</section>
 
 			<section>
-				<h3>Join a collection</h3>
+				<div class="head">
+					<h3>Discover collections</h3>
+					<button
+						class="link"
+						type="button"
+						disabled={membership.joinableLoading || actingId !== null}
+						onclick={() => membership.loadJoinable()}
+					>
+						{membership.joinableLoading ? 'Refreshing…' : 'Refresh'}
+					</button>
+				</div>
 				<p class="hint">
 					Open collections you can join directly; restricted ones need an admin's approval.
 				</p>
-				<div class="row">
-					<input
-						class="in"
-						type="text"
-						placeholder="collection id"
-						bind:value={joinId}
-						disabled={requesting || joining}
-					/>
-					<button
-						class="btn btn-primary"
-						disabled={requesting || joining || !joinId.trim()}
-						onclick={joinCollection}
-					>
-						{joining ? 'Joining…' : 'Join'}
-					</button>
-					<button
-						class="btn btn-ghost"
-						disabled={requesting || joining || !joinId.trim()}
-						onclick={requestJoin}
-					>
-						{requesting ? 'Sending…' : 'Request'}
-					</button>
-				</div>
-				{#if requestMsg}<p class="ok" role="status">{requestMsg}</p>{/if}
-				{#if requestErr}<p class="err" role="alert">{requestErr}</p>{/if}
-				<!-- Discovering joinable collections (search/browse) is Phase 2; for now
-				     the admin shares the collection id out of band. -->
+
+				{#if membership.joinableLoading && membership.joinable.length === 0}
+					<p class="muted">Loading…</p>
+				{:else if membership.joinableError}
+					<p class="err" role="alert">{friendly(membership.joinableError)}</p>
+				{:else if membership.joinable.length === 0}
+					<p class="muted">No collections available to join right now.</p>
+				{:else}
+					<ul class="list">
+						{#each membership.joinable as c (c.id)}
+							<li class="item">
+								<span class="name" title={c.id}>{c.name || c.id}</span>
+								{#if c.restricted}
+									<span class="tag tag-restricted">Restricted</span>
+									<button
+										class="btn btn-ghost"
+										disabled={actingId !== null}
+										onclick={() => request(c.id, c.name || c.id)}
+									>
+										{actingId === c.id ? 'Sending…' : 'Request'}
+									</button>
+								{:else}
+									<span class="tag tag-open">Open</span>
+									<button
+										class="btn btn-primary"
+										disabled={actingId !== null}
+										onclick={() => join(c.id, c.name || c.id)}
+									>
+										{actingId === c.id ? 'Joining…' : 'Join'}
+									</button>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if browseMsg}<p class="ok" role="status">{browseMsg}</p>{/if}
+				{#if browseErr}<p class="err" role="alert">{browseErr}</p>{/if}
 			</section>
 
 			<div class="actions">
@@ -238,6 +268,70 @@
 		margin: -2px 0 8px;
 		font-size: 0.78rem;
 		color: var(--text-secondary, #6b7280);
+	}
+	.head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.link {
+		background: none;
+		border: none;
+		padding: 0;
+		font-size: 0.78rem;
+		font-weight: 600;
+		color: #2563eb;
+		cursor: pointer;
+	}
+	.link:disabled {
+		opacity: 0.6;
+		cursor: default;
+	}
+	.muted {
+		margin: 4px 0 0;
+		font-size: 0.82rem;
+		color: var(--text-secondary, #6b7280);
+	}
+	.list {
+		list-style: none;
+		margin: 4px 0 0;
+		padding: 0;
+		max-height: 220px;
+		overflow-y: auto;
+	}
+	.item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 0;
+		border-bottom: 1px solid var(--border-color, #eceef1);
+	}
+	.item:last-child {
+		border-bottom: none;
+	}
+	.name {
+		flex: 1;
+		min-width: 0;
+		font-size: 0.875rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.tag {
+		flex: none;
+		font-size: 0.7rem;
+		font-weight: 600;
+		padding: 2px 6px;
+		border-radius: 4px;
+	}
+	.tag-restricted {
+		background: #fef3c7;
+		color: #92400e;
+	}
+	.tag-open {
+		background: #dcfce7;
+		color: #166534;
 	}
 	.row {
 		display: flex;

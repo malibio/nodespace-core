@@ -118,4 +118,23 @@ describe('MembershipService', () => {
 		expect(await membershipService.requestJoin('c1')).toBe('req-1');
 		expect(mockInvoke).toHaveBeenCalledWith('pro_request_join', { collectionId: 'c1' });
 	});
+
+	it('joinCollection forwards to pro_join_collection', async () => {
+		mockInvoke.mockResolvedValue(undefined);
+		await membershipService.joinCollection('c1');
+		expect(mockInvoke).toHaveBeenCalledWith('pro_join_collection', { collectionId: 'c1' });
+	});
+
+	it('listJoinable maps rows to JoinableCollection[] (no args)', async () => {
+		mockInvoke.mockResolvedValue([
+			{ id: 'c-open', name: 'Marketing', restricted: false },
+			{ id: 'c-r', name: 'Legal', restricted: true }
+		]);
+		const rows = await membershipService.listJoinable();
+		expect(mockInvoke).toHaveBeenCalledWith('pro_list_joinable_collections');
+		expect(rows).toEqual([
+			{ id: 'c-open', name: 'Marketing', restricted: false },
+			{ id: 'c-r', name: 'Legal', restricted: true }
+		]);
+	});
 });
