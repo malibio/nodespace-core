@@ -443,8 +443,13 @@ pub async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonSt
 }
 
 /// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`,
-/// but only if the destination is missing or has a different file size than
-/// the bundled source. Returns true if the binary was updated.
+/// but only if the destination is missing, has a different file size than
+/// the bundled source, or fails code-signature verification. Returns true
+/// if the binary was (re-)extracted.
+///
+/// Writes to a temp path in the same directory, re-seals the ad-hoc signature
+/// (macOS only), then renames into place — so a concurrently-launched launchd
+/// `KeepAlive` daemon can never `mmap` a partially-written or unsigned image.
 async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<bool> {
     let src = resolve_sidecar_path(app, name)?;
     let dest = bin_dir.join(name);
@@ -455,13 +460,19 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
         .len();
 
     if let Ok(dest_meta) = tokio::fs::metadata(&dest).await {
-        if dest_meta.len() == src_size {
+        if dest_meta.len() == src_size && verify_signature(&dest) {
             tracing::debug!(
-                "{} is up-to-date (size={}), skipping extraction",
+                "{} is up-to-date (size={}) and validly signed, skipping extraction",
                 name,
                 src_size
             );
             return Ok(false);
+        }
+        if dest_meta.len() == src_size {
+            tracing::warn!(
+                "{} matches bundled size but has an invalid code signature — re-extracting",
+                name
+            );
         }
     }
 
@@ -472,12 +483,61 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
         dest.display()
     );
 
-    tokio::fs::copy(&src, &dest)
-        .await
-        .with_context(|| format!("Failed to copy {} to {}", src.display(), dest.display()))?;
+    let tmp_dest = bin_dir.join(format!("{}.tmp-{}", name, std::process::id()));
 
-    set_executable(&dest)?;
+    tokio::fs::copy(&src, &tmp_dest)
+        .await
+        .with_context(|| format!("Failed to copy {} to {}", src.display(), tmp_dest.display()))?;
+
+    set_executable(&tmp_dest)?;
+    resign_binary(&tmp_dest)?;
+
+    tokio::fs::rename(&tmp_dest, &dest)
+        .await
+        .with_context(|| format!("Failed to install {} to {}", name, dest.display()))?;
+
     Ok(true)
+}
+
+/// Re-establish the ad-hoc seal on an extracted binary so its code signature
+/// matches the bundled sidecar's `Signature=adhoc, linker-signed`. Without
+/// this, macOS invalidates the seal on write and SIGKILLs the process the
+/// moment execution faults into a modified page (`CODESIGNING`/`Invalid Page`).
+#[cfg(target_os = "macos")]
+fn resign_binary(path: &Path) -> Result<()> {
+    let status = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(path)
+        .status()
+        .context("Failed to invoke codesign")?;
+    anyhow::ensure!(
+        status.success(),
+        "codesign --force --sign - failed for {}",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resign_binary(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Verify an installed binary's code signature is intact. Always `true` on
+/// non-macOS platforms (no code-signing enforcement to check).
+#[cfg(target_os = "macos")]
+fn verify_signature(path: &Path) -> bool {
+    std::process::Command::new("codesign")
+        .args(["--verify", "--strict"])
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn verify_signature(_path: &Path) -> bool {
+    true
 }
 
 /// Resolve the platform-tagged sidecar path inside the Tauri bundle.
@@ -873,5 +933,55 @@ fn register_autorun_windows(daemon_bin: &Path) {
         Err(e) => {
             tracing::warn!("Failed to run reg.exe for autorun: {}", e);
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_codesign_tests {
+    use super::{resign_binary, verify_signature};
+    use std::path::PathBuf;
+
+    /// Copy a real Mach-O binary into a scratch dir so tampering with its
+    /// signature (via a byte flip) doesn't touch anything on the real system.
+    fn scratch_copy(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ns-codesign-test-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("bin");
+        std::fs::copy("/bin/cat", &dest).unwrap();
+        dest
+    }
+
+    #[test]
+    fn resign_then_verify_succeeds() {
+        let bin = scratch_copy("resign-ok");
+        resign_binary(&bin).expect("codesign --force --sign - should succeed");
+        assert!(
+            verify_signature(&bin),
+            "freshly re-signed binary should pass --verify --strict"
+        );
+    }
+
+    #[test]
+    fn tampering_after_sign_invalidates_signature() {
+        let bin = scratch_copy("tamper");
+        resign_binary(&bin).expect("codesign should succeed");
+        assert!(
+            verify_signature(&bin),
+            "should be valid right after signing"
+        );
+
+        // Flip a byte past the Mach-O header to invalidate the seal without
+        // corrupting it so badly the file won't open at all.
+        let mut bytes = std::fs::read(&bin).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xFF;
+        std::fs::write(&bin, bytes).unwrap();
+
+        assert!(
+            !verify_signature(&bin),
+            "tampered binary must fail --verify --strict — this is exactly the \
+             corruption class that causes the CODESIGNING SIGKILL crash-loop"
+        );
     }
 }
