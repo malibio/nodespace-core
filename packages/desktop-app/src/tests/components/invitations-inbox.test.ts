@@ -10,6 +10,11 @@ vi.mock('$lib/utils/logger', () => ({
 
 const { membershipMock } = vi.hoisted(() => ({
 	membershipMock: {
+		isPro: true,
+		joinable: [] as Array<{ id: string; name: string; restricted: boolean }>,
+		joinableLoading: false,
+		joinableError: null as string | null,
+		loadJoinable: vi.fn(() => Promise.resolve()),
 		acceptInvite: vi.fn(() => Promise.resolve('collection-x')),
 		requestJoin: vi.fn(() => Promise.resolve('req-1')),
 		joinCollection: vi.fn(() => Promise.resolve())
@@ -22,6 +27,10 @@ import InvitationsInbox from '$lib/components/collaboration/invitations-inbox.sv
 describe('InvitationsInbox', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		membershipMock.isPro = true;
+		membershipMock.joinable = [];
+		membershipMock.joinableLoading = false;
+		membershipMock.joinableError = null;
 	});
 
 	it('renders nothing when closed', () => {
@@ -58,30 +67,39 @@ describe('InvitationsInbox', () => {
 		cleanup();
 	});
 
-	it('requesting to join calls requestJoin and confirms', async () => {
-		const { getByPlaceholderText, getByText } = render(InvitationsInbox, {
-			props: { open: true, onClose: vi.fn() }
-		});
-		await fireEvent.input(getByPlaceholderText('collection id'), {
-			target: { value: 'col-9' }
-		});
-		await fireEvent.click(getByText('Request'));
-		expect(membershipMock.requestJoin).toHaveBeenCalledWith('col-9');
-		expect(getByText(/Request sent/)).toBeTruthy();
+	it('loads the discovery list on open (Pro)', () => {
+		render(InvitationsInbox, { props: { open: true, onClose: vi.fn() } });
+		expect(membershipMock.loadJoinable).toHaveBeenCalled();
 		cleanup();
 	});
 
-	it('joining an open collection calls joinCollection and confirms', async () => {
-		const { getByPlaceholderText, getByText } = render(InvitationsInbox, {
-			props: { open: true, onClose: vi.fn() }
-		});
-		await fireEvent.input(getByPlaceholderText('collection id'), {
-			target: { value: 'col-open' }
-		});
+	it('shows an empty state when there is nothing to join', () => {
+		const { getByText } = render(InvitationsInbox, { props: { open: true, onClose: vi.fn() } });
+		expect(getByText(/No collections available to join/)).toBeTruthy();
+		cleanup();
+	});
+
+	it('requesting a restricted collection from the list calls requestJoin and confirms', async () => {
+		membershipMock.joinable = [{ id: 'col-9', name: 'Legal', restricted: true }];
+		const { getByText } = render(InvitationsInbox, { props: { open: true, onClose: vi.fn() } });
+		expect(getByText('Legal')).toBeTruthy();
+		expect(getByText('Restricted')).toBeTruthy();
+		await fireEvent.click(getByText('Request'));
+		expect(membershipMock.requestJoin).toHaveBeenCalledWith('col-9');
+		expect(membershipMock.joinCollection).not.toHaveBeenCalled();
+		expect(getByText(/Request sent for Legal/)).toBeTruthy();
+		cleanup();
+	});
+
+	it('joining an open collection from the list calls joinCollection and confirms', async () => {
+		membershipMock.joinable = [{ id: 'col-open', name: 'Marketing', restricted: false }];
+		const { getByText } = render(InvitationsInbox, { props: { open: true, onClose: vi.fn() } });
+		expect(getByText('Marketing')).toBeTruthy();
+		expect(getByText('Open')).toBeTruthy();
 		await fireEvent.click(getByText('Join'));
 		expect(membershipMock.joinCollection).toHaveBeenCalledWith('col-open');
 		expect(membershipMock.requestJoin).not.toHaveBeenCalled();
-		expect(getByText(/Joined/)).toBeTruthy();
+		expect(getByText(/Joined Marketing/)).toBeTruthy();
 		cleanup();
 	});
 

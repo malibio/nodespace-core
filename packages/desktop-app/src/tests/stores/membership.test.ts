@@ -20,7 +20,8 @@ const { svc, proSyncMock } = vi.hoisted(() => ({
 		approveRequest: vi.fn(),
 		acceptInvite: vi.fn(),
 		requestJoin: vi.fn(),
-		joinCollection: vi.fn()
+		joinCollection: vi.fn(),
+		listJoinable: vi.fn()
 	},
 	proSyncMock: { isPro: true }
 }));
@@ -106,6 +107,50 @@ describe('MembershipStore', () => {
 		svc.joinCollection.mockResolvedValue(undefined);
 		await membership.joinCollection('c1');
 		expect(svc.joinCollection).toHaveBeenCalledWith('c1');
+	});
+
+	it('loadJoinable caches the discovery list (Pro)', async () => {
+		svc.listJoinable.mockResolvedValue([
+			{ id: 'c-open', name: 'Marketing', restricted: false },
+			{ id: 'c-r', name: 'Legal', restricted: true }
+		]);
+		await membership.loadJoinable();
+		expect(membership.joinable).toHaveLength(2);
+		expect(membership.joinableError).toBeNull();
+		expect(membership.joinableLoading).toBe(false);
+	});
+
+	it('loadJoinable records an error and is inert in community mode', async () => {
+		svc.listJoinable.mockRejectedValue(new Error('boom'));
+		await membership.loadJoinable();
+		expect(membership.joinableError).toContain('boom');
+		expect(membership.joinable).toEqual([]);
+
+		proSyncMock.isPro = false;
+		svc.listJoinable.mockClear();
+		await membership.loadJoinable();
+		expect(svc.listJoinable).not.toHaveBeenCalled();
+	});
+
+	it('joining an open collection drops it from a loaded discovery list', async () => {
+		svc.listJoinable.mockResolvedValue([
+			{ id: 'c-open', name: 'Marketing', restricted: false },
+			{ id: 'c-r', name: 'Legal', restricted: true }
+		]);
+		await membership.loadJoinable();
+		svc.joinCollection.mockResolvedValue(undefined);
+
+		await membership.joinCollection('c-open');
+		expect(membership.joinable.map((c) => c.id)).toEqual(['c-r']);
+	});
+
+	it('requesting a restricted collection leaves it in the discovery list', async () => {
+		svc.listJoinable.mockResolvedValue([{ id: 'c-r', name: 'Legal', restricted: true }]);
+		await membership.loadJoinable();
+		svc.requestJoin.mockResolvedValue('req-1');
+
+		await membership.requestJoin('c-r');
+		expect(membership.joinable.map((c) => c.id)).toEqual(['c-r']);
 	});
 
 	it('currentUserRole is null when the caller identity is unknown', async () => {

@@ -18,6 +18,7 @@
 import {
 	membershipService,
 	type Invite,
+	type JoinableCollection,
 	type JoinRequest,
 	type Member,
 	type Permission,
@@ -49,6 +50,17 @@ class MembershipStore {
 
 	/** The caller's own identity, fetched lazily and cached (cleared on {@link reset}). */
 	currentPerson = $state<Person | null>(null);
+
+	/**
+	 * Collection discovery (browse & join): the collections the caller could join
+	 * but isn't a member of yet. Loaded on demand by {@link loadJoinable}; cleared
+	 * on {@link reset}. `joinableLoaded` distinguishes "not fetched" from "fetched,
+	 * empty" so a refresh after a join only fires once discovery has been opened.
+	 */
+	joinable = $state<JoinableCollection[]>([]);
+	joinableLoading = $state(false);
+	joinableError = $state<string | null>(null);
+	private joinableLoaded = false;
 
 	/** Pro-gate — the whole store is inert in community mode. */
 	get isPro(): boolean {
@@ -148,6 +160,26 @@ class MembershipStore {
 		}
 	}
 
+	/**
+	 * Load (or refresh) the joinable-collection list (browse & join). No-op in
+	 * community mode. Server-side the RPC excludes the caller's memberships and
+	 * filters to what they can see, so this is safe to call for any signed-in user.
+	 */
+	async loadJoinable(): Promise<void> {
+		if (!this.isPro) return;
+		this.joinableLoading = true;
+		this.joinableError = null;
+		try {
+			this.joinable = await membershipService.listJoinable();
+			this.joinableLoaded = true;
+		} catch (e) {
+			log.warn('loadJoinable failed', { error: e });
+			this.joinableError = String(e);
+		} finally {
+			this.joinableLoading = false;
+		}
+	}
+
 	// --- Mutations. Each forwards to the service (server-gated) then refreshes the
 	//     affected collection so the cached roster/invites/requests stay in sync. ---
 
@@ -217,7 +249,11 @@ class MembershipStore {
 		return membershipService.acceptInvite(code);
 	}
 
-	/** Ask to join a restricted collection (onboarding, S5). Returns the request id. */
+	/**
+	 * Ask to join a restricted collection (onboarding, S5). Returns the request id.
+	 * A pending request doesn't grant membership, so the collection stays in the
+	 * discovery list — the list isn't refreshed here.
+	 */
 	async requestJoin(collectionId: string): Promise<string> {
 		this.requirePro();
 		return membershipService.requestJoin(collectionId);
@@ -226,17 +262,24 @@ class MembershipStore {
 	/**
 	 * Self-join an OPEN collection (the complement to {@link requestJoin}). The
 	 * open-vs-restricted gate is enforced server-side, so a restricted collection
-	 * rejects here rather than joining silently.
+	 * rejects here rather than joining silently. On success the collection is now a
+	 * membership, so it's dropped from any loaded discovery list.
 	 */
 	async joinCollection(collectionId: string): Promise<void> {
 		this.requirePro();
 		await membershipService.joinCollection(collectionId);
+		if (this.joinableLoaded) {
+			this.joinable = this.joinable.filter((c) => c.id !== collectionId);
+		}
 	}
 
 	/** Clear all cached state + identity. Call on sign-out (identity is per-session). */
 	reset(): void {
 		this.byCollection = {};
 		this.currentPerson = null;
+		this.joinable = [];
+		this.joinableError = null;
+		this.joinableLoaded = false;
 	}
 }
 

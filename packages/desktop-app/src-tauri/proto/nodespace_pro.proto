@@ -65,6 +65,13 @@ service CloudSyncService {
   rpc ListRequests (ListRequestsRequest) returns (ListRequestsResponse);
   rpc RevokeInvite (RevokeInviteRequest) returns (MembershipAck);
 
+  // Collection discovery (browse & join). Lists the collections the signed-in user
+  // could join but isn't a member of yet (open + restricted), so the client can
+  // offer Join / Request without the collection id being shared out of band. Thin
+  // adapter over the cloud `list_joinable_collections` RPC (JWT-forwarded; the RPC
+  // filters to what the caller can see and excludes their memberships server-side).
+  rpc ListJoinableCollections (ListJoinableCollectionsRequest) returns (ListJoinableCollectionsResponse);
+
   // Caller identity (#238/#239). Returns THIS device's bound PersonNode id (+
   // the signed-in email) so the UI can tell which roster row is "me" and gate
   // admin controls on the caller's own per-collection role. A dedicated one-shot
@@ -238,6 +245,18 @@ message ListRequestsResponse {
 }
 message RevokeInviteRequest {
   string invite_id = 1;  // uuid of the pending invite OR join request to cancel
+}
+
+// --- Collection discovery (browse & join) ------------------------
+message ListJoinableCollectionsRequest {}
+// A collection the caller could join but isn't a member of yet.
+message JoinableCollection {
+  string id = 1;          // collection node id
+  string name = 2;        // display name (the collection node's content)
+  bool restricted = 3;    // true => needs a request (admin approval); false => open self-join
+}
+message ListJoinableCollectionsResponse {
+  repeated JoinableCollection collections = 1;
 }
 
 // --- Caller identity (S1/S2, #238/#239) --------------------------
