@@ -11,9 +11,10 @@ use tonic::transport::Server;
 use tower::Layer;
 
 use crate::{
-    AgentSessionHandler, AgentSessionServiceServer, EmbeddingsServiceImpl, EmbeddingsServiceServer,
-    ImportServiceImpl, ImportServiceServer, LocalAgentServiceImpl, LocalAgentServiceServer,
-    NodeServiceImpl, NodeServiceServer, SettingsServiceImpl, SettingsServiceServer,
+    AgentSessionHandler, AgentSessionServiceServer, DatabaseServiceImpl, DatabaseServiceServer,
+    EmbeddingsServiceImpl, EmbeddingsServiceServer, ImportServiceImpl, ImportServiceServer,
+    LocalAgentServiceImpl, LocalAgentServiceServer, NodeServiceImpl, NodeServiceServer,
+    SettingsServiceImpl, SettingsServiceServer,
 };
 
 /// All base service implementations required by a NodeSpace daemon.
@@ -29,6 +30,9 @@ pub struct BaseServices {
     pub local_agent: LocalAgentServiceImpl,
     /// `None` only when no NLP model file exists at daemon startup.
     pub embeddings: Option<EmbeddingsServiceImpl>,
+    /// Registry manager for the daemon's local databases (ADR-053). Process-global
+    /// (not routed): it operates on the registry itself, not a single database.
+    pub database: DatabaseServiceImpl,
 }
 
 /// Build the base tonic router with all community services registered.
@@ -63,7 +67,8 @@ where
         .add_service(AgentSessionServiceServer::new(services.agent_session))
         .add_service(ImportServiceServer::new(services.import))
         .add_service(SettingsServiceServer::new(services.settings))
-        .add_service(LocalAgentServiceServer::new(services.local_agent));
+        .add_service(LocalAgentServiceServer::new(services.local_agent))
+        .add_service(DatabaseServiceServer::new(services.database));
 
     match services.embeddings {
         Some(emb) => router.add_service(EmbeddingsServiceServer::new(emb)),

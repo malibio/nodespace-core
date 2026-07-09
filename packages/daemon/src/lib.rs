@@ -40,18 +40,19 @@ pub use nodespace_proto::nodespace;
 pub use nodespace_proto::{
     AgentAvailability, AgentSessionServiceClient, AgentSessionServiceServer, CaptureContentLevel,
     CaptureSettingsResponse, CheckAvailabilityRequest, CheckAvailabilityResponse,
-    EmbeddingsServiceClient, EmbeddingsServiceServer, GetCaptureSettingsRequest,
-    ImportServiceClient, ImportServiceServer, LaunchSessionRequest, LaunchSessionResponse,
-    ListSessionsRequest, ListSessionsResponse, LocalAgentServiceClient, LocalAgentServiceServer,
-    NodeData, NodeServiceClient, NodeServiceServer, ResizeRequest, ResizeResponse, SessionInfo,
-    SettingsServiceClient, SettingsServiceServer, StreamOutputRequest, TerminateSessionRequest,
-    TerminateSessionResponse, UpdateCaptureSettingsRequest, WriteInputRequest, WriteInputResponse,
+    DatabaseServiceClient, DatabaseServiceServer, EmbeddingsServiceClient, EmbeddingsServiceServer,
+    GetCaptureSettingsRequest, ImportServiceClient, ImportServiceServer, LaunchSessionRequest,
+    LaunchSessionResponse, ListSessionsRequest, ListSessionsResponse, LocalAgentServiceClient,
+    LocalAgentServiceServer, NodeData, NodeServiceClient, NodeServiceServer, ResizeRequest,
+    ResizeResponse, SessionInfo, SettingsServiceClient, SettingsServiceServer, StreamOutputRequest,
+    TerminateSessionRequest, TerminateSessionResponse, UpdateCaptureSettingsRequest,
+    WriteInputRequest, WriteInputResponse,
 };
 
 pub use db_routing::{DbManagerLayer, DATABASE_ID_HEADER};
 pub use router::{build_base_router, BaseServices};
 pub use services::{
     build_database_services, build_shared_services, AgentSessionHandler, DatabaseManager,
-    DatabaseServices, EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl,
-    NodeServiceImpl, SettingsServiceImpl, SharedContext, SharedServices,
+    DatabaseServiceImpl, DatabaseServices, EmbeddingsServiceImpl, ImportServiceImpl,
+    LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl, SharedContext, SharedServices,
 };

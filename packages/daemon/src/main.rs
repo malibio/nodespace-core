@@ -19,7 +19,7 @@ use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     build_base_router, build_shared_services, resolve_db_path, tray, BaseServices, DatabaseManager,
-    DatabaseServices, DbManagerLayer, SharedContext,
+    DatabaseServiceImpl, DatabaseServices, DbManagerLayer, SharedContext,
 };
 use tokio::sync::RwLock;
 use tonic::transport::Server;
@@ -210,6 +210,7 @@ async fn serve_headless() -> Result<()> {
         settings: shared.settings,
         local_agent: bundle.local_agent.clone(),
         embeddings: bundle.embeddings_service_grpc.clone(),
+        database: DatabaseServiceImpl::new(manager.clone()),
     };
     build_base_router(
         Server::builder().layer(DbManagerLayer::new(manager)),
@@ -267,6 +268,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         settings: shared.settings,
         local_agent: bundle.local_agent.clone(),
         embeddings: bundle.embeddings_service_grpc.clone(),
+        database: DatabaseServiceImpl::new(manager.clone()),
     };
     build_base_router(
         Server::builder()
@@ -383,6 +385,7 @@ async fn serve_headless() -> Result<()> {
         settings: shared.settings,
         local_agent: bundle.local_agent.clone(),
         embeddings: bundle.embeddings_service_grpc.clone(),
+        database: DatabaseServiceImpl::new(manager.clone()),
     };
     build_base_router(
         Server::builder().layer(DbManagerLayer::new(manager)),
@@ -457,6 +460,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         settings: shared.settings,
         local_agent: bundle.local_agent.clone(),
         embeddings: bundle.embeddings_service_grpc.clone(),
+        database: DatabaseServiceImpl::new(manager.clone()),
     };
     build_base_router(
         Server::builder()
