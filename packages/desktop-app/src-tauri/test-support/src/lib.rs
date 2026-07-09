@@ -118,19 +118,20 @@ impl Drop for SpawnedDaemon {
 /// `GrpcClient::connect()` (which resolves it internally; there is no
 /// per-call socket argument), `GrpcClient::connect_lazy()`, or a raw
 /// `EnvGuard::set` for a Tauri command that reads it directly (e.g.
-/// `check_daemon_status`, `watcher::run`). Without this mutex, two
+/// `check_daemon_status`). Without this mutex, two
 /// `#[tokio::test]`s running concurrently — the default — can interleave
 /// their env mutations, so one test's client ends up dialing whichever
 /// socket happened to be live at the moment its call actually resolved the
 /// env var, not the daemon its own test spawned. Held across `.await`
 /// points, so this must be a `tokio::sync::Mutex`, not `std::sync::Mutex`.
 ///
-/// `watcher::run` re-resolves `NODESPACED_SOCKET` itself (independently of
-/// `GrpcClient`) the moment its spawned task starts, which can be AFTER
-/// `connected_client`'s own `EnvGuard` has already restored the prior value.
-/// Tests that spawn the watcher must hold a guard from
-/// `hold_connect_mutex_and_socket_env` for the watcher's entire lifetime,
-/// not just through `connect()` — see `optimistic_echo_race_test.rs`.
+/// `watcher::run` no longer resolves `NODESPACED_SOCKET` itself — it rides the
+/// shared `GrpcClient` channel, which is built from the env var once at
+/// `GrpcClient::connect()` time. Tests that spawn the watcher must therefore
+/// hold a guard from `hold_connect_mutex_and_socket_env` across the
+/// `GrpcClient` connection (and, conservatively, for the watcher's lifetime)
+/// so the shared channel dials the daemon the test spawned — see
+/// `optimistic_echo_race_test.rs`.
 ///
 /// `pub` so every `tests/*.rs` file that mutates `NODESPACED_SOCKET` shares
 /// this ONE lock rather than each defining its own same-purpose mutex under
@@ -165,9 +166,10 @@ async fn connected_client(daemon: &SpawnedDaemon, timeout: Duration) -> GrpcClie
 
 /// Holds `CONNECT_MUTEX` AND keeps `NODESPACED_SOCKET` set to `daemon`'s
 /// socket for as long as the returned guard lives — for tests that spawn
-/// `watcher::run`, which re-resolves the env var independently of
-/// `GrpcClient` when its task actually starts running, not at `connect()`
-/// time. Drop the returned guard only after the watcher task has been
+/// `watcher::run`. The watcher rides the shared `GrpcClient` channel (built
+/// from the env var at `connect()` time), so keeping the socket env stable
+/// across the connection guarantees the channel dials the daemon the test
+/// spawned. Drop the returned guard only after the watcher task has been
 /// cancelled and joined.
 pub async fn hold_connect_mutex_and_socket_env(
     daemon: &SpawnedDaemon,

@@ -12,19 +12,97 @@ use std::sync::Arc;
 
 use nodespace_proto::{
     AgentSessionServiceClient, DatabaseServiceClient, EmbeddingsServiceClient, ImportServiceClient,
-    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient,
+    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient, DATABASE_ID_HEADER,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
+use tonic::metadata::{Ascii, MetadataValue};
+use tonic::service::interceptor::InterceptedService;
+use tonic::service::Interceptor;
 use tonic::transport::Channel;
 
+/// Stamps the ADR-053 `x-ns-database-id` routing header on every outgoing
+/// request so the daemon routes it to a specific local database.
+///
+/// Concrete (not a closure) so the intercepted client types stay nameable and
+/// aliasable — see [`NodeClient`] and friends. `database_id: None` stamps
+/// nothing, letting the daemon fall back to its default database; the variant
+/// is applied uniformly so a routed client's type is the same whether or not a
+/// database is currently selected. Mirrors the CLI's interceptor of the same
+/// name.
+#[derive(Clone)]
+pub struct DatabaseIdInterceptor {
+    // Some(id) → stamp header on every request; None → stamp nothing (daemon
+    // uses its default database).
+    database_id: Option<MetadataValue<Ascii>>,
+}
+
+impl DatabaseIdInterceptor {
+    /// No routing header — the daemon serves its default database.
+    pub fn none() -> Self {
+        Self { database_id: None }
+    }
+
+    /// Stamp `x-ns-database-id: <id>` on every request when `id` is `Some`.
+    /// `id` must be an already resolved registry identifier (ULID); the daemon
+    /// resolves the header as an id only, never a name. An id that is not a
+    /// valid gRPC header value falls back to no routing (default database)
+    /// rather than poisoning every subsequent request.
+    pub fn for_id(id: Option<&str>) -> Self {
+        let database_id = id.and_then(|id| match MetadataValue::try_from(id) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                // A resolved ULID is always valid ASCII, so this should be
+                // unreachable — but log it rather than silently serving the
+                // default database, which would be a hard-to-spot wrong-database
+                // fallback.
+                tracing::warn!(
+                    "database id {id:?} is not a valid routing header; \
+                     falling back to the default database"
+                );
+                None
+            }
+        });
+        Self { database_id }
+    }
+}
+
+impl Interceptor for DatabaseIdInterceptor {
+    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Some(id) = &self.database_id {
+            req.metadata_mut().insert(DATABASE_ID_HEADER, id.clone());
+        }
+        Ok(req)
+    }
+}
+
+/// A channel wrapped so every request carries the database routing header.
+pub type Intercepted = InterceptedService<Channel, DatabaseIdInterceptor>;
+/// `NodeService` client bound to the active database (ADR-053).
+pub type NodeClient = NodeServiceClient<Intercepted>;
+/// `ImportService` client bound to the active database.
+pub type ImportClient = ImportServiceClient<Intercepted>;
+/// `EmbeddingsService` client bound to the active database.
+pub type EmbeddingsClient = EmbeddingsServiceClient<Intercepted>;
+/// `AgentSessionService` client bound to the active database.
+pub type AgentSessionClient = AgentSessionServiceClient<Intercepted>;
+
 struct GrpcClientInner {
-    node: NodeServiceClient<Channel>,
-    import: ImportServiceClient<Channel>,
+    // Routed data-plane clients — rebuilt with a fresh interceptor whenever the
+    // active database changes so their requests carry the routing header. The
+    // daemon routes node/import/embeddings/agent_session by `x-ns-database-id`.
+    node: NodeClient,
+    import: ImportClient,
+    embeddings: EmbeddingsClient,
+    agent_session: AgentSessionClient,
+    // Unrouted clients — registry-global (database_service) or daemon-global
+    // (settings, local_agent); they never carry the routing header.
     settings: SettingsServiceClient<Channel>,
-    embeddings: EmbeddingsServiceClient<Channel>,
-    agent_session: AgentSessionServiceClient<Channel>,
     local_agent: LocalAgentServiceClient<Channel>,
     database_service: DatabaseServiceClient<Channel>,
+    /// The desktop-local "which database am I viewing" selection. `None` = the
+    /// daemon's default database. Distinct from the daemon-wide default set via
+    /// `DatabaseService::SetDefault`.
+    active_database_id: Option<String>,
     /// Underlying transport channel — held so Pro-tier services can
     /// ride the same h2 connection via `GrpcClient::channel()`. One
     /// channel, multiple service surfaces. Opening a parallel channel
@@ -41,6 +119,10 @@ struct GrpcClientInner {
 #[derive(Clone)]
 pub struct GrpcClient {
     inner: Arc<RwLock<GrpcClientInner>>,
+    /// Bumped by [`set_active_database`] on every switch so the node-event
+    /// watcher can re-open its `WatchNodes` stream against the newly-active
+    /// database. `watch::Sender` is not `Clone`, hence the `Arc`.
+    db_generation: Arc<watch::Sender<u64>>,
 }
 
 impl GrpcClient {
@@ -78,18 +160,31 @@ impl GrpcClient {
     /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
     /// stays in sync as new services are added. `Channel` is platform-agnostic.
     fn from_channel(channel: Channel) -> Self {
+        // No database selected initially → the routed clients carry an empty
+        // interceptor and requests fall back to the daemon's default database,
+        // exactly as before ADR-053 client routing existed.
+        let interceptor = DatabaseIdInterceptor::none();
         let inner = GrpcClientInner {
-            node: NodeServiceClient::new(channel.clone()),
-            import: ImportServiceClient::new(channel.clone()),
+            node: NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
+            import: ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
+            embeddings: EmbeddingsServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone(),
+            ),
+            agent_session: AgentSessionServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor,
+            ),
             settings: SettingsServiceClient::new(channel.clone()),
-            embeddings: EmbeddingsServiceClient::new(channel.clone()),
-            agent_session: AgentSessionServiceClient::new(channel.clone()),
             local_agent: LocalAgentServiceClient::new(channel.clone()),
             database_service: DatabaseServiceClient::new(channel.clone()),
+            active_database_id: None,
             channel,
         };
+        let (db_generation, _) = watch::channel(0u64);
         Self {
             inner: Arc::new(RwLock::new(inner)),
+            db_generation: Arc::new(db_generation),
         }
     }
 
@@ -117,42 +212,84 @@ impl GrpcClient {
         Self::from_channel(channel)
     }
 
-    /// Borrow a clone of the `NodeServiceClient`.
-    pub async fn client(&self) -> NodeServiceClient<Channel> {
+    /// Borrow a clone of the routed `NodeService` client (carries the active
+    /// database's `x-ns-database-id` header).
+    pub async fn client(&self) -> NodeClient {
         self.inner.read().await.node.clone()
     }
 
-    /// Borrow a clone of the `ImportServiceClient`.
-    pub async fn import_client(&self) -> ImportServiceClient<Channel> {
+    /// Borrow a clone of the routed `ImportService` client.
+    pub async fn import_client(&self) -> ImportClient {
         self.inner.read().await.import.clone()
     }
 
-    /// Borrow a clone of the `SettingsServiceClient`.
+    /// Borrow a clone of the `SettingsServiceClient`. Settings are daemon-global
+    /// and never routed by database.
     pub async fn settings_client(&self) -> SettingsServiceClient<Channel> {
         self.inner.read().await.settings.clone()
     }
 
-    /// Borrow a clone of the `EmbeddingsServiceClient`.
+    /// Borrow a clone of the routed `EmbeddingsService` client.
     ///
     /// Embeddings are always available in the daemon (unlike the old in-process
     /// optional configuration), so this returns the client directly.
-    pub async fn embeddings_client(&self) -> EmbeddingsServiceClient<Channel> {
+    pub async fn embeddings_client(&self) -> EmbeddingsClient {
         self.inner.read().await.embeddings.clone()
     }
 
-    /// Borrow a clone of the `AgentSessionServiceClient`.
-    pub async fn agent_session_client(&self) -> AgentSessionServiceClient<Channel> {
+    /// Borrow a clone of the routed `AgentSessionService` client.
+    pub async fn agent_session_client(&self) -> AgentSessionClient {
         self.inner.read().await.agent_session.clone()
     }
 
-    /// Borrow a clone of the `LocalAgentServiceClient`.
+    /// Borrow a clone of the `LocalAgentServiceClient`. The local inference
+    /// model is a daemon-global resource and is never routed by database.
     pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
         self.inner.read().await.local_agent.clone()
     }
 
-    /// Borrow a clone of the `DatabaseServiceClient`.
+    /// Borrow a clone of the `DatabaseServiceClient`. The registry is global to
+    /// the daemon and is never routed by database.
     pub async fn database_service_client(&self) -> DatabaseServiceClient<Channel> {
         self.inner.read().await.database_service.clone()
+    }
+
+    /// Select which local database the routed data-plane clients target
+    /// (ADR-053). `Some(id)` stamps `x-ns-database-id: <id>` on every
+    /// node/import/embeddings/agent_session request; `None` clears the header
+    /// so requests route to the daemon's default database.
+    ///
+    /// Only the routed clients are rebuilt — over the SAME channel, so no
+    /// reconnection happens. `settings`/`local_agent`/`database_service` stay
+    /// unrouted. Bumps a generation counter so the node-event watcher re-opens
+    /// its `WatchNodes` stream against the newly-active database.
+    pub async fn set_active_database(&self, id: Option<String>) {
+        {
+            let mut inner = self.inner.write().await;
+            if inner.active_database_id == id {
+                return;
+            }
+            let interceptor = DatabaseIdInterceptor::for_id(id.as_deref());
+            let channel = inner.channel.clone();
+            inner.node = NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.import =
+                ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.embeddings =
+                EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.agent_session = AgentSessionServiceClient::with_interceptor(channel, interceptor);
+            inner.active_database_id = id;
+        }
+        // Signal the watcher (outside the lock) to re-subscribe to the new
+        // database's event stream.
+        self.db_generation.send_modify(|g| *g = g.wrapping_add(1));
+    }
+
+    /// Subscribe to active-database switches. The value is an opaque generation
+    /// counter bumped on every [`set_active_database`]; the node-event watcher
+    /// awaits changes to re-open its `WatchNodes` stream against the new
+    /// database.
+    pub fn subscribe_active_database(&self) -> watch::Receiver<u64> {
+        self.db_generation.subscribe()
     }
 
     /// Clone of the underlying `tonic::transport::Channel`. Used by

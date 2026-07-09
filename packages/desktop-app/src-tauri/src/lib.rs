@@ -320,7 +320,9 @@ pub fn run() {
                     use tauri::Manager;
                     let grpc_client = (*app_handle.state::<crate::services::GrpcClient>()).clone();
                     let channel = grpc_client.channel().await;
-                    watcher::spawn(app_handle.clone(), session_token);
+                    // The watcher rides the shared client so its WatchNodes stream
+                    // targets the active database and re-subscribes on switch (ADR-053).
+                    watcher::spawn(app_handle.clone(), grpc_client.clone(), session_token);
                     // Subscribe to token stream for ai-chat node inference events.
                     commands::local_agent::start_token_stream_subscription(
                         app_handle.clone(),
@@ -502,9 +504,16 @@ pub fn run() {
             // Settings commands
             commands::settings::get_settings,
             commands::settings::update_display_settings,
-            commands::settings::restart_app,
             commands::settings::get_capture_settings,
             commands::settings::update_capture_settings,
+            // Local database registry commands (ADR-053)
+            commands::database::list_databases,
+            commands::database::create_database,
+            commands::database::register_database,
+            commands::database::set_default_database,
+            commands::database::rename_database,
+            commands::database::remove_database,
+            commands::database::set_active_database,
             // Local agent commands
             commands::local_agent::local_agent_status,
             commands::local_agent::local_agent_cancel_turn,

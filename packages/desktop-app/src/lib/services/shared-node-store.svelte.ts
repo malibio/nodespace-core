@@ -2181,13 +2181,29 @@ export class SharedNodeStore {
   }
 
   /**
-   * Clear all nodes (for testing)
+   * Evict every cached node and its per-node metadata.
+   *
+   * Used both by tests and by the ADR-053 database hot-swap: switching the
+   * active local database must never leave the previous database's nodes
+   * visible. Clearing the reactive `nodes` map plus notifying subscribers makes
+   * consumers re-derive against the now-empty store and reload from the
+   * newly-active database. Component subscriptions themselves are preserved.
+   *
+   * Hot-swap callers must flush pending saves (`flushAllPendingSaves`) BEFORE
+   * switching the routed clients so in-flight writes land in the database they
+   * were made against, not the one being switched to.
    */
   clearAll(): void {
     this.nodesClear();
     this.versions.clear();
     this.pendingUpdates.clear();
     this.persistedNodeIds.clear();
+    this.serverConfirmedVersions.clear();
+    this.lastPersistedContent.clear();
+    this.batchedNotifications.clear();
+    this.activeBatches.clear();
+    this.pendingTreeLoads.clear();
+    this.resyncingNodes.clear();
     this.notifyAllSubscribers();
   }
 

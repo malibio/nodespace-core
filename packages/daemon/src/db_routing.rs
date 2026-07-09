@@ -22,10 +22,10 @@ use tower::{Layer, Service};
 use crate::services::database_manager::DatabaseManager;
 
 /// The metadata/header key a client sets to target a specific registered
-/// database. Absent → the default database (single-database clients are
-/// unchanged); present but unregistered → the handler rejects the request
-/// rather than silently serving the default (no cross-database leak).
-pub const DATABASE_ID_HEADER: &str = "x-ns-database-id";
+/// database. Re-exported from the wire-contract crate so the daemon and every
+/// client share one canonical key; see [`nodespace_proto::DATABASE_ID_HEADER`]
+/// for the full semantics.
+pub use nodespace_proto::DATABASE_ID_HEADER;
 
 /// `tower::Layer` that inserts the shared [`Arc<DatabaseManager>`] into each
 /// request's extensions. See the module docs for why this is core-only and

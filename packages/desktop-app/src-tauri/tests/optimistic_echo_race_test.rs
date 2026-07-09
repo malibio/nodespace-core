@@ -94,16 +94,19 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     let state = harness.client_state();
     let handle = harness.handle();
 
-    // watcher::run re-resolves NODESPACED_SOCKET itself when its task starts
-    // running, independently of the GrpcClient already connected above — so
-    // this guard must stay held for the watcher's entire lifetime, not just
-    // through connect(). Serializes this test against every other test in
-    // the binary that touches NODESPACED_SOCKET, which is the accepted cost
-    // of a real, unmockable process-global env dependency.
+    // The watcher rides the shared GrpcClient's channel (fixed to whatever
+    // socket NODESPACED_SOCKET resolved to at connect() time). Hold this guard
+    // for the watcher's lifetime anyway to serialize this test against every
+    // other test in the binary that touches the process-global NODESPACED_SOCKET
+    // env var while this test's daemon is the intended target.
     let _socket_guard = hold_connect_mutex_and_socket_env(&daemon).await;
 
     let cancel_token = CancellationToken::new();
-    let watcher_handle = tokio::spawn(watcher::run(handle.clone(), cancel_token.child_token()));
+    let watcher_handle = tokio::spawn(watcher::run(
+        handle.clone(),
+        (*state).clone(),
+        cancel_token.child_token(),
+    ));
     // Give the watcher a moment to open its WatchNodes stream before the
     // first write, so its echo isn't lost to a stream that hasn't opened yet.
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -186,7 +189,11 @@ async fn watcher_delivers_a_real_node_created_event() {
     let _socket_guard = hold_connect_mutex_and_socket_env(&daemon).await;
 
     let cancel_token = CancellationToken::new();
-    let watcher_handle = tokio::spawn(watcher::run(handle.clone(), cancel_token.child_token()));
+    let watcher_handle = tokio::spawn(watcher::run(
+        handle.clone(),
+        (*state).clone(),
+        cancel_token.child_token(),
+    ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let created: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

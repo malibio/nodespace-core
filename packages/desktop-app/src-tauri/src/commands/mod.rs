@@ -5,6 +5,7 @@
 pub mod agent_session;
 pub mod chat_models;
 pub mod collections;
+pub mod database;
 pub mod embeddings;
 pub mod import;
 pub mod local_agent;

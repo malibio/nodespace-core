@@ -27,6 +27,12 @@ export interface NodeEventData {
   id: string;
   /** Node type - included in node:created events for reactive UI updates */
   nodeType?: string;
+  /**
+   * ADR-053: the database this event originated from. Empty/absent when the
+   * daemon serves a single unregistered database. Lets the frontend drop events
+   * from a database it is no longer viewing.
+   */
+  databaseId?: string;
 }
 
 // ============================================================================
@@ -70,6 +76,8 @@ export interface RelationshipEvent {
   relationshipType: string;
   /** Type-specific properties (order for has_child, context for mentions, etc.) */
   properties: Record<string, unknown>;
+  /** ADR-053: the database this event originated from (see NodeEventData). */
+  databaseId?: string;
 }
 
 /**
@@ -82,6 +90,8 @@ export interface RelationshipDeletedPayload {
   fromId: string;
   toId: string;
   relationshipType: string;
+  /** ADR-053: the database this event originated from (see NodeEventData). */
+  databaseId?: string;
 }
 
 // ============================================================================

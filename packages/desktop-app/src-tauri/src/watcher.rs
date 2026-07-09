@@ -12,61 +12,65 @@
 //!
 //! # Behavior
 //!
-//! - Opens a `WatchNodes` stream against the build-variant-scoped socket
-//!   (see `daemon_setup::daemon_socket_relative`), or the path from `NODESPACED_SOCKET`.
-//! - Translates each proto `NodeEvent` to a Tauri event (id + optional node_type).
+//! - Opens a `WatchNodes` stream over the shared [`GrpcClient`], so the stream
+//!   carries the active database's `x-ns-database-id` routing header (ADR-053)
+//!   and rides the same h2 connection as every other data-plane request.
+//! - Translates each proto `NodeEvent` to a Tauri event (id + optional
+//!   node_type + originating `database_id`).
 //! - On stream error or disconnection, reconnects with exponential backoff
 //!   starting at 1 second and capped at 30 seconds.
+//! - Re-opens the stream immediately when the active database is switched, so
+//!   it streams the newly-selected database's events.
 //! - Exits cleanly when the supplied cancellation token is cancelled.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use nodespace_proto::nodespace::{node_event::Event as NodeEventKind, WatchRequest};
-use nodespace_proto::NodeServiceClient;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
+use crate::services::GrpcClient;
+
 /// Exponential backoff bounds for reconnection attempts.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-/// Frontend payload — must stay structurally identical to
-/// `services::domain_event_forwarder::NodeIdPayload` so Svelte stores see no
-/// difference between the in-process and gRPC event paths.
+/// Frontend payload for `node:created` / `node:updated` / `node:deleted`.
+/// `database_id` (ADR-053) lets the frontend drop events from a database it is
+/// no longer viewing — a belt-and-suspenders guard against events from a watch
+/// stream that was open across a database switch.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeIdPayload {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     node_type: Option<String>,
-}
-
-/// Resolve the daemon socket path. Honors `NODESPACED_SOCKET`, then falls back
-/// to the build-variant-scoped default (see daemon_setup::daemon_socket_relative).
-#[cfg(unix)]
-fn socket_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
-        return std::path::PathBuf::from(p);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(crate::daemon_setup::daemon_socket_relative())
+    #[serde(skip_serializing_if = "String::is_empty")]
+    database_id: String,
 }
 
 /// Spawn the watcher as a Tokio task. Returns immediately; the task runs
 /// until `cancel_token` is cancelled or the process exits.
 #[cfg(not(unix))]
-pub fn spawn(_app: AppHandle, _cancel_token: tokio_util::sync::CancellationToken) {
+pub fn spawn(
+    _app: AppHandle,
+    _grpc_client: GrpcClient,
+    _cancel_token: tokio_util::sync::CancellationToken,
+) {
     // No-op on Windows — watcher uses Unix Domain Socket transport.
 }
 
 #[cfg(unix)]
-pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) {
+pub fn spawn(
+    app: AppHandle,
+    grpc_client: GrpcClient,
+    cancel_token: tokio_util::sync::CancellationToken,
+) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run(app, cancel_token).await {
+        if let Err(e) = run(app, grpc_client, cancel_token).await {
             error!("Node watcher exited with error: {e:#}");
         } else {
             info!("Node watcher exited cleanly");
@@ -85,10 +89,13 @@ pub fn spawn(app: AppHandle, cancel_token: tokio_util::sync::CancellationToken) 
 #[cfg(unix)]
 pub async fn run<R: Runtime>(
     app: AppHandle<R>,
+    grpc_client: GrpcClient,
     cancel_token: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let sock = socket_path();
-    info!("Node watcher starting (sock={})", sock.display());
+    info!("Node watcher starting");
+    // Bumped on every active-database switch (ADR-053) — a change interrupts the
+    // current stream so we re-open against the newly-selected database.
+    let mut db_changed = grpc_client.subscribe_active_database();
 
     let mut backoff = BACKOFF_START;
     loop {
@@ -98,7 +105,14 @@ pub async fn run<R: Runtime>(
                 info!("Node watcher received shutdown signal, exiting");
                 return Ok(());
             }
-            outcome = stream_once(&app, &sock) => {
+            _ = db_changed.changed() => {
+                // Active database switched — drop the current stream and re-open
+                // immediately (backoff reset) so the new database streams at once.
+                debug!("Active database switched; re-opening WatchNodes stream");
+                backoff = BACKOFF_START;
+                continue;
+            }
+            outcome = stream_once(&app, &grpc_client) => {
                 match outcome {
                     Ok(()) => {
                         // Server closed the stream cleanly — reconnect immediately
@@ -113,11 +127,15 @@ pub async fn run<R: Runtime>(
             }
         }
 
-        // Wait for backoff or shutdown, whichever comes first.
+        // Wait for backoff, a database switch, or shutdown — whichever is first.
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 info!("Node watcher cancelled during backoff");
                 return Ok(());
+            }
+            _ = db_changed.changed() => {
+                debug!("Active database switched during backoff; reconnecting now");
+                backoff = BACKOFF_START;
             }
             _ = tokio::time::sleep(backoff) => {
                 backoff = (backoff * 2).min(BACKOFF_MAX);
@@ -126,25 +144,13 @@ pub async fn run<R: Runtime>(
     }
 }
 
-/// Open a single WatchNodes stream and forward events until the stream ends
-/// or errors. Returns `Ok(())` on clean stream end, `Err` on transport or
-/// stream error.
+/// Open a single WatchNodes stream over the shared client and forward events
+/// until the stream ends or errors. The client carries the active database's
+/// routing header, so the daemon serves only that database's events. Returns
+/// `Ok(())` on clean stream end, `Err` on transport or stream error.
 #[cfg(unix)]
-async fn stream_once<R: Runtime>(app: &AppHandle<R>, sock: &std::path::Path) -> Result<()> {
-    use hyper_util::rt::TokioIo;
-    use tokio::net::UnixStream;
-    use tonic::transport::{Endpoint, Uri};
-    use tower::service_fn;
-
-    let sock = sock.to_path_buf();
-    let channel = Endpoint::from_static("http://localhost")
-        .connect_with_connector(service_fn(move |_: Uri| {
-            let sock = sock.clone();
-            async move { UnixStream::connect(&sock).await.map(TokioIo::new) }
-        }))
-        .await
-        .with_context(|| "failed to connect to nodespaced")?;
-    let mut client = NodeServiceClient::new(channel);
+async fn stream_once<R: Runtime>(app: &AppHandle<R>, grpc_client: &GrpcClient) -> Result<()> {
+    let mut client = grpc_client.client().await;
 
     let mut stream = client
         .watch_nodes(WatchRequest::default())
@@ -164,6 +170,10 @@ async fn stream_once<R: Runtime>(app: &AppHandle<R>, sock: &std::path::Path) -> 
 
 /// Translate a proto `NodeEvent` into the corresponding Tauri event.
 fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::NodeEvent) {
+    // The database this event originated from (ADR-053). Empty when the daemon
+    // serves a single unregistered database (Pro daemon) — the frontend guard
+    // treats an empty id as "always applies".
+    let database_id = event.database_id;
     let Some(kind) = event.event else {
         debug!("Received NodeEvent with no event variant; ignoring");
         return;
@@ -174,6 +184,7 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
             let payload = NodeIdPayload {
                 id: data.id.clone(),
                 node_type: Some(data.node_type),
+                database_id,
             };
             if let Err(e) = app.emit("node:created", &payload) {
                 error!("Failed to emit node:created for {}: {e}", data.id);
@@ -190,6 +201,7 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
             let payload = NodeIdPayload {
                 id: data.id,
                 node_type: None,
+                database_id,
             };
             if let Err(e) = app.emit("node:updated", &payload) {
                 error!("Failed to emit node:updated for {}: {e}", payload.id);
@@ -202,6 +214,7 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
             let payload = NodeIdPayload {
                 id: d.node_id.clone(),
                 node_type: Some(d.node_type),
+                database_id,
             };
             if let Err(e) = app.emit("node:deleted", &payload) {
                 error!("Failed to emit node:deleted for {}: {e}", d.node_id);
@@ -212,14 +225,19 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
         // `properties` arrives JSON-encoded on the wire (proto schema is
         // stable); re-parse it here before emitting so the frontend gets a
         // real object (the `has_child` listener reads `properties.order`).
-        NodeEventKind::RelationshipCreated(r) => emit_relationship(app, "relationship:created", r),
-        NodeEventKind::RelationshipUpdated(r) => emit_relationship(app, "relationship:updated", r),
+        NodeEventKind::RelationshipCreated(r) => {
+            emit_relationship(app, "relationship:created", r, database_id)
+        }
+        NodeEventKind::RelationshipUpdated(r) => {
+            emit_relationship(app, "relationship:updated", r, database_id)
+        }
         NodeEventKind::RelationshipDeleted(r) => {
             let payload = RelationshipDeletedOut {
                 id: r.id.clone(),
                 from_id: r.from_id,
                 to_id: r.to_id,
                 relationship_type: r.relationship_type,
+                database_id,
             };
             if let Err(e) = app.emit("relationship:deleted", &payload) {
                 error!("Failed to emit relationship:deleted for {}: {e}", r.id);
@@ -238,6 +256,8 @@ struct RelationshipPayloadOut {
     to_id: String,
     relationship_type: String,
     properties: serde_json::Value,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    database_id: String,
 }
 
 /// Frontend payload for `relationship:deleted` (no `properties` field).
@@ -248,12 +268,15 @@ struct RelationshipDeletedOut {
     from_id: String,
     to_id: String,
     relationship_type: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    database_id: String,
 }
 
 fn emit_relationship<R: Runtime>(
     app: &AppHandle<R>,
     name: &str,
     r: nodespace_proto::nodespace::RelationshipPayload,
+    database_id: String,
 ) {
     // `r.properties` arrives JSON-encoded as a string on the wire so
     // the proto schema stays stable across additions to the
@@ -281,6 +304,7 @@ fn emit_relationship<R: Runtime>(
         to_id: r.to_id,
         relationship_type: r.relationship_type,
         properties: props,
+        database_id,
     };
     if let Err(e) = app.emit(name, &payload) {
         error!("Failed to emit {name} for {}: {e}", r.id);
