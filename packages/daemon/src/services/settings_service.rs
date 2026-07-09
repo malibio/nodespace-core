@@ -25,7 +25,6 @@ fn default_socket_path() -> String {
 /// On-disk representation of `~/.nodespace/daemon.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct DaemonConfig {
-    active_database_path: Option<String>,
     grpc_address: Option<String>,
     #[serde(default)]
     capture: CaptureConfig,
@@ -145,7 +144,6 @@ impl SettingsServiceImpl {
 
     fn config_to_response(config: &DaemonConfig) -> DaemonConfigResponse {
         DaemonConfigResponse {
-            active_database_path: config.active_database_path.clone().unwrap_or_default(),
             grpc_address: config
                 .grpc_address
                 .clone()
@@ -181,9 +179,6 @@ impl GrpcSettingsService for SettingsServiceImpl {
 
         let mut config = self.read_config().await?;
 
-        if !req.active_database_path.is_empty() {
-            config.active_database_path = Some(req.active_database_path);
-        }
         if !req.grpc_address.is_empty() {
             config.grpc_address = Some(req.grpc_address);
         }

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use nodespace_proto::{
-    AgentSessionServiceClient, EmbeddingsServiceClient, ImportServiceClient,
+    AgentSessionServiceClient, DatabaseServiceClient, EmbeddingsServiceClient, ImportServiceClient,
     LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient,
 };
 use tokio::sync::RwLock;
@@ -24,6 +24,7 @@ struct GrpcClientInner {
     embeddings: EmbeddingsServiceClient<Channel>,
     agent_session: AgentSessionServiceClient<Channel>,
     local_agent: LocalAgentServiceClient<Channel>,
+    database_service: DatabaseServiceClient<Channel>,
     /// Underlying transport channel — held so Pro-tier services can
     /// ride the same h2 connection via `GrpcClient::channel()`. One
     /// channel, multiple service surfaces. Opening a parallel channel
@@ -84,6 +85,7 @@ impl GrpcClient {
             embeddings: EmbeddingsServiceClient::new(channel.clone()),
             agent_session: AgentSessionServiceClient::new(channel.clone()),
             local_agent: LocalAgentServiceClient::new(channel.clone()),
+            database_service: DatabaseServiceClient::new(channel.clone()),
             channel,
         };
         Self {
@@ -146,6 +148,11 @@ impl GrpcClient {
     /// Borrow a clone of the `LocalAgentServiceClient`.
     pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
         self.inner.read().await.local_agent.clone()
+    }
+
+    /// Borrow a clone of the `DatabaseServiceClient`.
+    pub async fn database_service_client(&self) -> DatabaseServiceClient<Channel> {
+        self.inner.read().await.database_service.clone()
     }
 
     /// Clone of the underlying `tonic::transport::Channel`. Used by

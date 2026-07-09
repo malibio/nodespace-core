@@ -2,9 +2,12 @@ syntax = "proto3";
 
 package nodespace;
 
-// SettingsService exposes daemon-owned configuration (database path, gRPC
-// address, session capture) over gRPC so Tauri and CLI clients can read and
-// update config without direct file access.
+// SettingsService exposes daemon-owned configuration (gRPC address, session
+// capture) over gRPC so Tauri and CLI clients can read and update config
+// without direct file access.
+//
+// The active database path is owned by DatabaseService (ADR-053), not this
+// service — clients read it from the registry, not daemon.toml.
 //
 // Display preferences (theme, render_markdown) stay in Tauri local storage
 // and are NOT part of this service.
@@ -12,8 +15,8 @@ service SettingsService {
   // Read current daemon configuration.
   rpc GetDaemonConfig(GetDaemonConfigRequest) returns (DaemonConfigResponse);
 
-  // Persist updated daemon configuration. Changes take effect on the next
-  // daemon restart (database path) or immediately (gRPC address, next start).
+  // Persist updated daemon configuration. Takes effect on the next daemon
+  // start.
   rpc UpdateDaemonConfig(UpdateDaemonConfigRequest) returns (DaemonConfigResponse);
 
   // Read session capture settings.
@@ -27,15 +30,11 @@ service SettingsService {
 message GetDaemonConfigRequest {}
 
 message UpdateDaemonConfigRequest {
-  // New database path. Empty string means "no change".
-  string active_database_path = 1;
   // New gRPC bind address. Empty string means "no change".
   string grpc_address = 2;
 }
 
 message DaemonConfigResponse {
-  // Absolute path to the SurrealDB / RocksDB database directory.
-  string active_database_path = 1;
   // gRPC bind address the daemon is currently configured to use.
   string grpc_address = 2;
 }

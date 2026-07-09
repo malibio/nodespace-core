@@ -233,7 +233,6 @@
     let unlistenMenu: Promise<() => void> | null = null;
     let unlistenStatusBar: Promise<() => void> | null = null;
     let unlistenImport: Promise<() => void> | null = null;
-    let unlistenDatabase: Promise<() => void> | null = null;
     let unlistenSettings: Promise<() => void> | null = null;
     let unlistenIntegrations: Promise<() => void> | null = null;
     let unlistenSkillCliMissing: Promise<() => void> | null = null;
@@ -404,24 +403,6 @@
         }
       });
 
-      // Listen for database selection from menu — saves new path to daemon config,
-      // restart required for the change to take effect.
-      unlistenDatabase = listen('menu-select-database', async () => {
-        try {
-          const result = await invoke<{ newPath: string; success: boolean; restartRequired: boolean }>(
-            'select_new_database'
-          );
-          if (result.success) {
-            log.info('Database path saved:', result.newPath);
-            statusBar.success(`Database path saved — restart to apply: ${result.newPath}`);
-          }
-        } catch (err) {
-          if (err !== 'No folder selected') {
-            log.error('Database selection failed:', err);
-          }
-        }
-      });
-
       // Listen for settings menu — open or focus settings tab
       unlistenSettings = listen('menu-open-settings', () => {
         const state = navigationStore.state;
@@ -586,9 +567,6 @@
       }
       if (unlistenImport) {
         (await unlistenImport)();
-      }
-      if (unlistenDatabase) {
-        (await unlistenDatabase)();
       }
       if (unlistenSettings) {
         (await unlistenSettings)();
