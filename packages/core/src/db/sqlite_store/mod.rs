@@ -1,0 +1,1354 @@
+use crate::db::fractional_ordering::FractionalOrderCalculator;
+use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
+use anyhow::{Context, Result};
+use chrono::{DateTime, NaiveDate, Utc};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+/// Normalise a stored date string to YYYY-MM-DD on read.
+/// Accepts YYYY-MM-DD (pass-through) or RFC 3339 (extract date portion).
+/// Returns the original string for unrecognised values so callers can surface them.
+fn normalize_date_field(s: &str) -> String {
+    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return s.to_string();
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    s.to_string()
+}
+
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
+/// KNN over-fetch factor: vec0 returns top-k *chunks*, but search results are grouped
+/// by node and many chunks map to one node, so we fetch `limit * this` to cover enough
+/// distinct nodes.
+const EMBEDDING_KNN_OVERFETCH: i64 = 10;
+const BM25_MAX_TOKENS: usize = 4;
+const BM25_STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+    "need", "dare", "ought", "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+    "they", "them", "their", "what", "which", "who", "whom", "this", "that", "these", "those",
+    "to", "of", "in", "on", "at", "by", "for", "with", "about", "as", "how", "when", "where",
+    "why",
+];
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelationshipRecord {
+    pub id: String,
+    #[serde(rename = "in")]
+    pub in_node: String,
+    pub out_node: String,
+    pub relationship_type: String,
+    #[serde(default)]
+    pub properties: Value,
+}
+
+impl RelationshipRecord {
+    pub fn order(&self) -> f64 {
+        self.properties
+            .get("order")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreOperation {
+    Created,
+    Updated,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreChange {
+    pub operation: StoreOperation,
+    pub node: Node,
+    pub source: Option<String>,
+    pub previous_node: Option<Node>,
+    pub playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
+}
+
+pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
+
+/// Register the statically-linked `sqlite-vec` extension as a SQLite auto-extension so
+/// every connection opened afterwards has the `vec0` virtual-table module available.
+/// Runs exactly once per process and must complete before any real store connection is
+/// opened — `SqliteStore::new` awaits it first.
+///
+/// Ordering is critical: libsql lazily calls `sqlite3_config(SQLITE_CONFIG_SERIALIZED)`
+/// on its first `connect()` (via a process-global `Once`), and `sqlite3_config` fails
+/// once SQLite has been initialized. Registering an auto-extension auto-initializes
+/// SQLite, so we open (and drop) a throwaway in-memory libsql connection FIRST to run
+/// libsql's config, THEN register. Doing this in a single async `OnceCell` keeps the two
+/// steps atomic so concurrent `new()` calls can't interleave the warm-up and the
+/// registration.
+async fn ensure_sqlite_vec_registered() {
+    /// The libsql FFI signature for a SQLite extension entry point.
+    type EntryPoint = unsafe extern "C" fn(
+        *mut libsql::ffi::sqlite3,
+        *mut *const std::os::raw::c_char,
+        *const libsql::ffi::sqlite3_api_routines,
+    ) -> std::os::raw::c_int;
+
+    static VEC_INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    VEC_INIT
+        .get_or_init(|| async {
+            // Warm up libsql so its one-time sqlite3_config(SERIALIZED) runs before we
+            // auto-initialize SQLite via sqlite3_auto_extension.
+            if let Ok(db) = libsql::Builder::new_local(":memory:").build().await {
+                let _ = db.connect();
+            }
+            // SAFETY: the `sqlite-vec` crate declares `sqlite3_vec_init` as a zero-arg
+            // `extern "C"` fn, but its real C entry point has the 3-arg SQLite signature
+            // `EntryPoint`. We transmute via `*const ()` to that true signature — the same
+            // pattern the crate's own rusqlite example uses — and hand it to
+            // `sqlite3_auto_extension`, which expects exactly that type.
+            unsafe {
+                let entry: EntryPoint =
+                    std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
+                libsql::ffi::sqlite3_auto_extension(Some(entry));
+            }
+        })
+        .await;
+}
+
+pub struct SqliteStore {
+    db: Arc<libsql::Connection>,
+    event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+    valid_node_types: HashSet<String>,
+    notifier: Option<StoreNotifier>,
+}
+
+impl SqliteStore {
+    pub async fn new(db_path: PathBuf) -> Result<Self> {
+        // Register sqlite-vec (once per process) BEFORE opening our connection, so the
+        // connection picks up the `vec0` module. See `ensure_sqlite_vec_registered`.
+        ensure_sqlite_vec_registered().await;
+
+        let database = libsql::Builder::new_local(&db_path)
+            .build()
+            .await
+            .context("Failed to build libsql database")?;
+        let conn = database
+            .connect()
+            .context("Failed to connect to libsql database")?;
+
+        Self::initialize_schema(&conn).await?;
+
+        let valid_node_types = Self::build_schema_caches(&conn).await?;
+        let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+
+        Ok(Self {
+            db: Arc::new(conn),
+            event_tx,
+            valid_node_types,
+            notifier: None,
+        })
+    }
+
+    async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
+        let schema_sql = include_str!("../schema.sql");
+        for stmt in schema_sql.split(';') {
+            let stmt = stmt.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            // PRAGMAs that return rows (e.g. journal_mode) must be queried, not executed
+            if stmt.to_uppercase().starts_with("PRAGMA") && stmt.contains('=') {
+                conn.query(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)])
+                })?;
+            } else {
+                conn.execute(stmt, ()).await.with_context(|| {
+                    format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)])
+                })?;
+            }
+        }
+
+        // FTS5 virtual table for BM25 full-text search
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(id UNINDEXED, content, content='node', content_rowid='rowid')",
+            ()
+        ).await.context("Failed to create FTS5 table")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_insert AFTER INSERT ON node BEGIN
+                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+            END"#,
+            (),
+        )
+        .await
+        .context("Failed to create FTS5 insert trigger")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_update AFTER UPDATE ON node BEGIN
+                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+            END"#,
+            ()
+        ).await.context("Failed to create FTS5 update trigger")?;
+
+        conn.execute(
+            r#"CREATE TRIGGER IF NOT EXISTS node_fts_delete AFTER DELETE ON node BEGIN
+                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+            END"#,
+            ()
+        ).await.context("Failed to create FTS5 delete trigger")?;
+
+        Self::backfill_fts_if_stale(conn).await?;
+
+        // sqlite-vec virtual table for embedding KNN search. Keyed by `embedding.id`
+        // (the per-chunk UUID); holds ONLY real, non-stale vectors (see upsert/delete/
+        // mark-stale paths). vec0 is a fast brute-force SIMD scan, not an ANN index.
+        conn.execute(
+            &format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(\
+                    embedding_id TEXT PRIMARY KEY, \
+                    vector FLOAT[{}] distance_metric=cosine\
+                )",
+                crate::models::embedding::DEFAULT_EMBEDDING_DIMENSION
+            ),
+            (),
+        )
+        .await
+        .context("Failed to create vec0 embeddings table")?;
+
+        Self::migrate_embedding_origin(conn).await?;
+
+        Ok(())
+    }
+
+    /// Idempotent DDL migration for the embedding `origin` column (#182/#183).
+    ///
+    /// `schema.sql` is applied with `CREATE TABLE/INDEX IF NOT EXISTS`, which
+    /// CANNOT alter a pre-existing `embedding` table — and `packages/core` ships
+    /// in the community desktop app, whose user DBs are never reset (lazy
+    /// node-migration design). On such a DB the new column + reshaped index would
+    /// be silently absent, so every embedding write and the push sweep's
+    /// `WHERE origin = 'local'` would fail with `no such column: origin`. Add the
+    /// column and rebuild the index here when missing. No-op on fresh DBs (the
+    /// column already exists) and on re-runs.
+    async fn migrate_embedding_origin(conn: &libsql::Connection) -> Result<()> {
+        let mut cols = conn
+            .query("PRAGMA table_info(embedding)", ())
+            .await
+            .context("read embedding table_info")?;
+        let mut has_origin = false;
+        while let Some(row) = cols.next().await? {
+            // table_info columns: (cid, name, type, notnull, dflt_value, pk)
+            let name: String = row.get(1)?;
+            if name == "origin" {
+                has_origin = true;
+                break;
+            }
+        }
+        if has_origin {
+            return Ok(());
+        }
+
+        conn.execute(
+            "ALTER TABLE embedding ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
+            (),
+        )
+        .await
+        .context("add embedding.origin column")?;
+        // `idx_emb_modified` already exists under its old (originless) definition,
+        // so CREATE INDEX IF NOT EXISTS in schema.sql was skipped — drop it and
+        // rebuild with `origin` leading so the filtered push sweep stays covered.
+        conn.execute("DROP INDEX IF EXISTS idx_emb_modified", ())
+            .await
+            .context("drop legacy idx_emb_modified")?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (origin, modified_at, node_id, chunk_index)",
+            (),
+        )
+        .await
+        .context("rebuild idx_emb_modified with origin")?;
+        Ok(())
+    }
+
+    /// One-time FTS5 backfill (#1428). The external-content `node_fts` triggers
+    /// only index FUTURE writes, so any node predating the FTS table (user DBs are
+    /// never reset — same reason `migrate_embedding_origin` exists) is absent from
+    /// the index and never returned by `bm25_search_roots`. Rebuild the index from
+    /// `node`, but ONLY when it is out of sync, so a healthy DB does not re-index
+    /// its whole corpus on every startup.
+    ///
+    /// The staleness signal is the count of ACTUALLY-INDEXED documents, read from
+    /// FTS5's `node_fts_docsize` shadow table — NOT `count(*) FROM node_fts`, which
+    /// for an external-content table reads rowids from the content table (`node`)
+    /// and so always equals the node count regardless of index population. When the
+    /// indexed-doc count differs from `node`, rebuild. No-op on a fresh DB (both 0)
+    /// and after the first rebuild.
+    async fn backfill_fts_if_stale(conn: &libsql::Connection) -> Result<()> {
+        let count = |sql: &'static str| async move {
+            let mut r = conn.query(sql, ()).await?;
+            let n: i64 = r
+                .next()
+                .await?
+                .map(|row| row.get(0))
+                .transpose()?
+                .unwrap_or(0);
+            Ok::<i64, anyhow::Error>(n)
+        };
+        let indexed = count("SELECT count(*) FROM node_fts_docsize")
+            .await
+            .context("Failed to count indexed FTS docs")?;
+        let node_count = count("SELECT count(*) FROM node")
+            .await
+            .context("Failed to count node rows")?;
+        if indexed != node_count {
+            conn.execute("INSERT INTO node_fts(node_fts) VALUES('rebuild')", ())
+                .await
+                .context("Failed to backfill FTS5 index")?;
+        }
+        Ok(())
+    }
+
+    async fn build_schema_caches(conn: &libsql::Connection) -> Result<HashSet<String>> {
+        let mut rows = conn
+            .query("SELECT id FROM node WHERE node_type = 'schema'", ())
+            .await
+            .context("Failed to query schema nodes for cache")?;
+
+        let mut types = HashSet::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            types.insert(id);
+        }
+        Ok(types)
+    }
+
+    pub fn set_notifier(&mut self, notifier: StoreNotifier) {
+        self.notifier = Some(notifier);
+    }
+
+    fn notify(&self, change: StoreChange) {
+        if let Some(notifier) = &self.notifier {
+            notifier(change);
+        }
+    }
+
+    pub fn subscribe_to_events(&self) -> broadcast::Receiver<crate::db::events::EventEnvelope> {
+        self.event_tx.subscribe()
+    }
+
+    fn validate_node_type(&self, node_type: &str) -> Result<()> {
+        if node_type.is_empty() {
+            return Err(anyhow::anyhow!("Node type cannot be empty"));
+        }
+        if self.valid_node_types.contains(node_type) {
+            return Ok(());
+        }
+        // Allow schema node type always
+        if node_type == "schema" {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Invalid node type '{}'. Valid types: {:?}",
+            node_type,
+            self.valid_node_types
+        ))
+    }
+
+    pub(crate) fn add_to_schema_cache(&mut self, type_name: String) {
+        self.valid_node_types.insert(type_name);
+    }
+
+    pub fn close(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn row_to_node(row: &libsql::Row) -> Result<Node> {
+        let id: String = row.get(0)?;
+        let node_type: String = row.get(1)?;
+        let content: String = row.get(2)?;
+        let properties_str: String = row.get(3)?;
+        let title: Option<String> = row.get(4)?;
+        let lifecycle_status: String = row.get(5)?;
+        let version: i64 = row.get(6)?;
+        // col 7 = sync_seq (ignored)
+        let created_at_str: String = row.get(8)?;
+        let modified_at_str: String = row.get(9)?;
+
+        let properties: Value =
+            serde_json::from_str(&properties_str).unwrap_or(serde_json::json!({}));
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .with_context(|| format!("Invalid created_at timestamp: {}", created_at_str))?
+            .with_timezone(&Utc);
+        let modified_at = DateTime::parse_from_rfc3339(&modified_at_str)
+            .with_context(|| format!("Invalid modified_at timestamp: {}", modified_at_str))?
+            .with_timezone(&Utc);
+
+        Ok(Node {
+            id,
+            node_type,
+            content,
+            version,
+            created_at,
+            modified_at,
+            properties,
+            mentions: Vec::new(),
+            mentioned_in: Vec::new(),
+            title,
+            lifecycle_status,
+        })
+    }
+
+    fn row_to_relationship(row: &libsql::Row) -> Result<RelationshipRecord> {
+        let id: String = row.get(0)?;
+        let in_node: String = row.get(1)?;
+        let out_node: String = row.get(2)?;
+        let relationship_type: String = row.get(3)?;
+        let props_str: String = row.get(4)?;
+        let properties: Value = serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
+        Ok(RelationshipRecord {
+            id,
+            in_node,
+            out_node,
+            relationship_type,
+            properties,
+        })
+    }
+
+    async fn query_nodes_from_sql(
+        &self,
+        sql: &str,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<Vec<Node>> {
+        let mut rows = self
+            .db
+            .query(sql, params)
+            .await
+            .context("Failed to query nodes")?;
+        let mut nodes = Vec::new();
+        while let Some(row) = rows.next().await? {
+            nodes.push(Self::row_to_node(&row)?);
+        }
+        Ok(nodes)
+    }
+}
+
+// The remaining `impl SqliteStore` methods are split by concern into these
+// child modules; each is an additional `impl SqliteStore` block over the same
+// struct. See ADR-053 groundwork (node CRUD / relationships / embeddings / search).
+mod embeddings;
+mod nodes;
+mod relationships;
+mod search;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn create_test_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        use crate::services::NodeService;
+
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut store_arc = Arc::new(SqliteStore::new(db_path).await?);
+
+        let _ = NodeService::new(&mut store_arc)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize NodeService: {}", e))?;
+
+        Ok((store_arc, temp_dir))
+    }
+
+    #[tokio::test]
+    async fn test_collection_members_recursive_includes_subcollection_members() -> Result<()> {
+        // #1426: members of a SUB-collection must be returned for the parent.
+        // member_of stores in_node = member/child, out_node = collection/parent;
+        // add_to_collection(member, collection) creates that edge.
+        let (store, _t) = create_test_store().await?;
+
+        let parent = Node::new("collection".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let sub = Node::new("collection".to_string(), "Sub".to_string(), json!({}));
+        let sub_id = sub.id.clone();
+        store.create_node(sub, None, None).await?;
+        store.add_to_collection(&sub_id, &parent_id).await?; // Sub member_of Parent
+
+        let direct = Node::new("text".to_string(), "direct member".to_string(), json!({}));
+        let direct_id = direct.id.clone();
+        store.create_node(direct, None, None).await?;
+        store.add_to_collection(&direct_id, &parent_id).await?;
+
+        let nested = Node::new("text".to_string(), "nested member".to_string(), json!({}));
+        let nested_id = nested.id.clone();
+        store.create_node(nested, None, None).await?;
+        store.add_to_collection(&nested_id, &sub_id).await?; // member of the SUB only
+
+        let members = store.get_collection_members_recursive(&parent_id).await?;
+        assert!(
+            members.contains(&nested_id),
+            "a member of a sub-collection must be returned for the parent (was silently dropped); got {members:?}"
+        );
+        assert!(members.contains(&direct_id), "direct member missing");
+        assert!(
+            members.contains(&sub_id),
+            "sub-collection itself is a member of the parent"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_create_mentions_skips_dangling_links() -> Result<()> {
+        // #1462: a `[[link]]` to a node that wasn't imported (or a typo) is an FK
+        // violation (relationship.out_node REFERENCES node(id), foreign_keys ON).
+        // The whole-batch transaction used to roll back on the first dangling link
+        // — losing EVERY mention. Now dangling pairs are skipped and the valid ones
+        // still land.
+        let (store, _t) = create_test_store().await?;
+
+        let a = Node::new("text".to_string(), "doc A".to_string(), json!({}));
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+
+        let b = Node::new("text".to_string(), "doc B".to_string(), json!({}));
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+
+        // One valid mention (A→B) interleaved with two dangling ones (targets that
+        // don't exist). Pre-fix the whole batch failed; now only the valid lands.
+        let created = store
+            .bulk_create_mentions(&[
+                (a_id.clone(), "ghost-1".to_string()),
+                (a_id.clone(), b_id.clone()),
+                (a_id.clone(), "ghost-2".to_string()),
+            ])
+            .await?;
+        assert_eq!(
+            created, 1,
+            "the valid mention must be created despite the dangling ones"
+        );
+
+        let out = store.get_outgoing_mentions(&a_id).await?;
+        assert!(out.contains(&b_id), "A→B mention must exist; got {out:?}");
+        assert!(
+            !out.iter().any(|t| t.starts_with("ghost-")),
+            "dangling mentions must NOT have been created; got {out:?}"
+        );
+
+        // A batch that is ENTIRELY dangling is a no-op (0 created), not an error.
+        let none = store
+            .bulk_create_mentions(&[(a_id.clone(), "ghost-3".to_string())])
+            .await?;
+        assert_eq!(
+            none, 0,
+            "an all-dangling batch creates nothing and does not error"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_member_of_cycle_is_rejected() -> Result<()> {
+        // #1427: collection hierarchy is a DAG. With `B member_of A`, adding
+        // `A member_of B` would close a cycle and must be rejected.
+        let (store, _t) = create_test_store().await?;
+
+        let a = Node::new("collection".to_string(), "A".to_string(), json!({}));
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+        let b = Node::new("collection".to_string(), "B".to_string(), json!({}));
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+
+        store.add_to_collection(&b_id, &a_id).await?; // B member_of A
+
+        // Adding A member_of B closes the cycle → error.
+        let err = store
+            .validate_no_member_of_cycle(&a_id, &b_id)
+            .await
+            .expect_err("A member_of B must be rejected as a cycle");
+        assert!(err.to_string().contains("collection_cycle"));
+
+        // A self-edge is a cycle.
+        assert!(store
+            .validate_no_member_of_cycle(&a_id, &a_id)
+            .await
+            .is_err());
+
+        // A non-cyclic hierarchy edge is allowed (B member_of A already holds; a
+        // fresh unrelated parent is fine).
+        let c = Node::new("collection".to_string(), "C".to_string(), json!({}));
+        let c_id = c.id.clone();
+        store.create_node(c, None, None).await?;
+        assert!(store
+            .validate_no_member_of_cycle(&a_id, &c_id)
+            .await
+            .is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backfill_fts_reindexes_unindexed_nodes() -> Result<()> {
+        // #1428: a node present in `node` but missing from `node_fts` (the pre-FTS
+        // corpus) must be re-indexed by the one-time backfill.
+        let (store, _t) = create_test_store().await?;
+
+        let node = Node::new(
+            "text".to_string(),
+            "alpha uniquetoken9173".to_string(),
+            json!({}),
+        );
+        let nid = node.id.clone();
+        store.create_node(node, None, None).await?;
+
+        // Simulate a pre-FTS node: drop it from the external-content index.
+        let rowid: i64 = {
+            let mut r = store
+                .db
+                .query(
+                    "SELECT rowid FROM node WHERE id = ?1",
+                    libsql::params![nid.clone()],
+                )
+                .await?;
+            r.next().await?.unwrap().get(0)?
+        };
+        store
+            .db
+            .execute(
+                "INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', ?1, ?2, ?3)",
+                libsql::params![rowid, nid.clone(), "alpha uniquetoken9173"],
+            )
+            .await?;
+
+        let matches = |store: Arc<SqliteStore>| async move {
+            let mut r = store
+                .db
+                .query(
+                    "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'uniquetoken9173'",
+                    (),
+                )
+                .await?;
+            Ok::<i64, anyhow::Error>(r.next().await?.unwrap().get(0)?)
+        };
+        assert_eq!(
+            matches(store.clone()).await?,
+            0,
+            "node should be missing from the index"
+        );
+
+        SqliteStore::backfill_fts_if_stale(&store.db).await?;
+
+        assert_eq!(
+            matches(store.clone()).await?,
+            1,
+            "backfill should re-index the node"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_order_uses_negative_sibling_not_default() -> Result<()> {
+        // #1431: appending after a sibling whose order is <= 0 must compute from
+        // that real max, not fall back to the first-item default. A sibling at
+        // -1.0 (a legitimate prepend result) → next order 0.0 (= -1.0 + 1.0), NOT
+        // the buggy 1.0 the `last_order > 0.0` sentinel produced.
+        let (store, _t) = create_test_store().await?;
+
+        let coll = Node::new("collection".to_string(), "C".to_string(), json!({}));
+        let cid = coll.id.clone();
+        store.create_node(coll, None, None).await?;
+        let m = Node::new("text".to_string(), "m".to_string(), json!({}));
+        let mid = m.id.clone();
+        store.create_node(m, None, None).await?;
+        store.add_to_collection(&mid, &cid).await?; // member_of: in_node=member, out_node=collection
+
+        store
+            .db
+            .execute(
+                "UPDATE relationship SET properties = json_set(properties, '$.order', -1.0) \
+                 WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
+                libsql::params![mid.clone(), cid.clone()],
+            )
+            .await?;
+
+        let next = store.get_next_member_order(&cid).await?;
+        assert_eq!(
+            next, 0.0,
+            "append after a sibling at -1.0 should be 0.0, not the 1.0 first-item default"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persisted_version_distinguishes_missing_from_present() -> Result<()> {
+        // #1432: the primitive that disambiguates a no-op version-checked update —
+        // a real row reports Some(version); a missing row (incl. a date-format id
+        // that get_node would virtualize) reports None, NOT a phantom version.
+        let (store, _t) = create_test_store().await?;
+
+        let node = Node::new("text".to_string(), "x".to_string(), json!({}));
+        let nid = node.id.clone();
+        let created = store.create_node(node, None, None).await?;
+        assert_eq!(store.persisted_version(&nid).await?, Some(created.version));
+
+        assert_eq!(store.persisted_version("does-not-exist").await?, None);
+        // A date-format id with no real row must report None (no virtual v1).
+        assert_eq!(store.persisted_version("2026-01-01").await?, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_delete_removes_all_in_one_transaction() -> Result<()> {
+        // #1433: bulk_delete deletes every existing target (all-or-nothing) and
+        // returns the deleted nodes; a missing id is simply skipped.
+        let (store, _t) = create_test_store().await?;
+
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let n = Node::new("text".to_string(), format!("n{i}"), json!({}));
+            ids.push(n.id.clone());
+            store.create_node(n, None, None).await?;
+        }
+        ids.push("never-existed".to_string());
+
+        let deleted = store.bulk_delete(&ids, None).await?;
+        assert_eq!(
+            deleted.len(),
+            3,
+            "only the 3 existing nodes are reported deleted"
+        );
+
+        for id in ids.iter().take(3) {
+            assert!(
+                store.get_node(id).await?.is_none(),
+                "node {id} should be gone"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_node() -> Result<()> {
+        let (store, _temp_dir) = create_test_store().await?;
+
+        let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
+        let created = store.create_node(node.clone(), None, None).await?;
+        assert_eq!(created.id, node.id);
+        assert_eq!(created.content, "Test content");
+
+        let fetched = store.get_node(&node.id).await?;
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().id, node.id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_file_format() -> Result<()> {
+        // Phase 1 acceptance criterion: verify the file is a valid SQLite file
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test_node.db");
+
+        let store = SqliteStore::new(db_path.clone()).await?;
+
+        let node = Node::new("text".to_string(), "Hello SQLite".to_string(), json!({}));
+        store.create_node(node, None, None).await?;
+
+        // Verify file exists and starts with SQLite magic bytes
+        let file_bytes = std::fs::read(&db_path)?;
+        assert!(file_bytes.len() > 16, "DB file too small");
+        assert_eq!(
+            &file_bytes[0..16],
+            b"SQLite format 3\0",
+            "Not a valid SQLite file"
+        );
+
+        Ok(())
+    }
+
+    // ---- sqlite-vec (#1221) ----
+
+    /// One 768-dim embedding whose only nonzero component is `axis` (a unit vector).
+    /// Two such vectors are identical iff they share an axis (cosine sim 1.0) and
+    /// orthogonal otherwise (cosine sim 0.0) — handy for deterministic KNN assertions.
+    fn unit_embedding(node_id: &str, axis: usize) -> crate::models::NewEmbedding {
+        let mut vector = vec![0.0f32; 768];
+        vector[axis] = 1.0;
+        crate::models::NewEmbedding {
+            node_id: node_id.to_string(),
+            vector,
+            model_name: Some("test-model".to_string()),
+            chunk_index: 0,
+            chunk_start: 0,
+            chunk_end: 100,
+            total_chunks: 1,
+            content_hash: format!("hash-{axis}"),
+            token_count: 10,
+        }
+    }
+
+    fn unit_query(axis: usize) -> Vec<f32> {
+        let mut v = vec![0.0f32; 768];
+        v[axis] = 1.0;
+        v
+    }
+
+    async fn vec_row_count(store: &SqliteStore) -> Result<i64> {
+        let mut rows = store
+            .db
+            .query("SELECT COUNT(*) FROM vec_embeddings", ())
+            .await?;
+        Ok(rows.next().await?.unwrap().get(0)?)
+    }
+
+    #[tokio::test]
+    async fn test_migrate_embedding_origin_upgrades_legacy_db() -> Result<()> {
+        // A pre-#182 DB: `embedding` table WITHOUT `origin`, old index shape, with
+        // a row already present (community desktop DBs aren't reset). The migration
+        // must add the column (default 'local' for existing rows) and rebuild the
+        // index, idempotently — otherwise embedding writes / the push sweep would
+        // hit `no such column: origin`.
+        let tmp = TempDir::new().unwrap();
+        let db = libsql::Builder::new_local(tmp.path().join("legacy.db"))
+            .build()
+            .await?;
+        let conn = db.connect()?;
+        conn.execute(
+            "CREATE TABLE embedding (id TEXT PRIMARY KEY, node_id TEXT NOT NULL, vector BLOB NOT NULL, \
+             dimension INTEGER NOT NULL DEFAULT 768, model_name TEXT NOT NULL DEFAULT 'm', \
+             chunk_index INTEGER NOT NULL DEFAULT 0, chunk_start INTEGER NOT NULL DEFAULT 0, \
+             chunk_end INTEGER, total_chunks INTEGER NOT NULL DEFAULT 1, content_hash TEXT, \
+             token_count INTEGER, stale INTEGER NOT NULL DEFAULT 1, error_count INTEGER NOT NULL DEFAULT 0, \
+             last_error TEXT, created_at TEXT NOT NULL, modified_at TEXT NOT NULL)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE INDEX idx_emb_modified ON embedding (modified_at, node_id, chunk_index)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "INSERT INTO embedding (id, node_id, vector, created_at, modified_at) \
+             VALUES ('e1', 'n1', x'00', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            (),
+        )
+        .await?;
+
+        SqliteStore::migrate_embedding_origin(&conn).await?;
+
+        // Column added; the existing row defaulted to 'local'.
+        let mut rows = conn
+            .query("SELECT origin FROM embedding WHERE id = 'e1'", ())
+            .await?;
+        let origin: String = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(origin, "local");
+
+        // Index rebuilt to lead with `origin`.
+        let mut idx = conn
+            .query(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_emb_modified'",
+                (),
+            )
+            .await?;
+        let sql: String = idx.next().await?.unwrap().get(0)?;
+        assert!(
+            sql.contains("origin"),
+            "index must include origin; was: {sql}"
+        );
+
+        // Idempotent: a second run is a no-op.
+        SqliteStore::migrate_embedding_origin(&conn).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_embeddings_roundtrip_and_modified_since() -> Result<()> {
+        // #97 read-API: vectors must round-trip out of the le-f32 blob, both
+        // chunks come back in order, and the modified-since cursor filters.
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        let mut e0 = unit_embedding(&node.id, 0);
+        e0.total_chunks = 2;
+        let mut e1 = unit_embedding(&node.id, 5);
+        e1.chunk_index = 1;
+        e1.total_chunks = 2;
+        store.upsert_embeddings(&node.id, vec![e0, e1]).await?;
+
+        let got = store.get_embeddings(&node.id).await?;
+        assert_eq!(got.len(), 2, "both chunks returned");
+        assert_eq!(got[0].node, node.id);
+        assert_eq!(got[0].chunk_index, 0);
+        assert_eq!(got[0].vector.len(), 768);
+        assert_eq!(got[0].vector[0], 1.0, "axis-0 unit vector round-trips");
+        assert!(!got[0].stale, "freshly upserted vectors are not stale");
+        assert_eq!(got[1].chunk_index, 1);
+        assert_eq!(got[1].vector[5], 1.0, "axis-5 unit vector round-trips");
+
+        // Cursor: epoch returns everything (local-origin), a far-future cursor none.
+        let epoch = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
+        assert_eq!(store.embeddings_modified_since(epoch).await?.len(), 2);
+        let future = Utc::now() + chrono::Duration::days(1);
+        assert!(store.embeddings_modified_since(future).await?.is_empty());
+
+        // Provenance (#182/#183): a node's REMOTE (pulled) embedding must NOT show
+        // up in the push sweep, so a received vector is never re-pushed.
+        let other = store
+            .create_node(
+                Node::new("text".to_string(), "remote node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .apply_remote_embeddings(&other.id, vec![unit_embedding(&other.id, 7)])
+            .await?;
+        // get_embeddings still returns it locally (it IS stored)...
+        assert_eq!(store.get_embeddings(&other.id).await?.len(), 1);
+        // ...but the push sweep only sees the 2 local-origin chunks, not the remote one.
+        assert_eq!(
+            store.embeddings_modified_since(epoch).await?.len(),
+            2,
+            "remote-origin embeddings are excluded from the push sweep"
+        );
+
+        // The recurring sweep must ride idx_emb_modified, not full-scan + filesort
+        // (the #1416 review concern): assert the query plan uses the index and the
+        // ORDER BY is index-covered.
+        let mut plan = store
+            .db
+            .query(
+                "EXPLAIN QUERY PLAN SELECT id FROM embedding WHERE origin = 'local' AND modified_at >= ?1 \
+                 ORDER BY modified_at, node_id, chunk_index",
+                libsql::params!["1970-01-01T00:00:00+00:00".to_string()],
+            )
+            .await?;
+        let mut detail = String::new();
+        while let Some(row) = plan.next().await? {
+            let d: String = row.get(3)?; // EXPLAIN QUERY PLAN: (id, parent, notused, detail)
+            detail.push_str(&d);
+            detail.push(' ');
+        }
+        assert!(
+            detail.contains("idx_emb_modified"),
+            "sweep must use idx_emb_modified; plan was: {detail}"
+        );
+        assert!(
+            !detail.to_uppercase().contains("TEMP B-TREE"),
+            "ORDER BY must be index-covered (no filesort); plan was: {detail}"
+        );
+
+        // A node with no embeddings reads back empty (not an error).
+        let other = store
+            .create_node(
+                Node::new("text".to_string(), "no emb".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        assert!(store.get_embeddings(&other.id).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_embeddings_self_query() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+
+        let results = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+
+        assert!(!results.is_empty(), "self-query should match");
+        assert_eq!(results[0].node_id, node.id);
+        assert!(
+            (results[0].max_similarity - 1.0).abs() < 1e-3,
+            "self-similarity should be ~1.0, got {}",
+            results[0].max_similarity
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_embeddings_clears_vec0() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        assert_eq!(vec_row_count(&store).await?, 1);
+        assert!(!store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?
+            .is_empty());
+
+        store.delete_embeddings(&node.id).await?;
+
+        assert_eq!(vec_row_count(&store).await?, 0, "vec0 should be cleared");
+        assert!(
+            store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "search should return nothing after delete"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reupsert_replaces_vec0() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        // First embed on axis 0, then re-embed on axis 1.
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 1)])
+            .await?;
+
+        assert_eq!(vec_row_count(&store).await?, 1, "no stale duplicate rows");
+
+        // Query by the NEW axis ranks the node highly...
+        let by_new = store
+            .search_embeddings(&unit_query(1), 10, Some(0.5))
+            .await?;
+        assert_eq!(by_new[0].node_id, node.id);
+        assert!((by_new[0].max_similarity - 1.0).abs() < 1e-3);
+
+        // ...and the OLD axis no longer matches (orthogonal → sim 0).
+        let by_old = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+        assert!(
+            by_old.iter().all(|r| r.node_id != node.id),
+            "old vector should no longer match"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_stale_excludes_from_search() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "vec node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        store
+            .upsert_embeddings(&node.id, vec![unit_embedding(&node.id, 0)])
+            .await?;
+        store.mark_root_embedding_stale(&node.id).await?;
+
+        assert_eq!(
+            vec_row_count(&store).await?,
+            0,
+            "stale node removed from vec0"
+        );
+        assert!(
+            store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "stale embeddings must not be searchable"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stale_marker_never_in_knn() -> Result<()> {
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "marker node".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        // A placeholder marker carries a dummy unit [1,0,0,...] vector but stale=1.
+        store.create_stale_embedding_marker(&node.id).await?;
+
+        assert_eq!(
+            vec_row_count(&store).await?,
+            0,
+            "markers not mirrored to vec0"
+        );
+        // Search by the placeholder's own vector must not surface the marker node.
+        let results = store
+            .search_embeddings(&unit_query(0), 10, Some(0.5))
+            .await?;
+        assert!(
+            results.iter().all(|r| r.node_id != node.id),
+            "stale marker must never appear in KNN results"
+        );
+        Ok(())
+    }
+
+    // C3c: store-layer atomicity — exercises the in-transaction version check
+    // that the service-level pre-validation cannot catch (concurrent version bump).
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_rejects_stale_version() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        // Create children and wire parent edges via move_node (store layer).
+        let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+        let child1_id = child1.id.clone();
+        let child1_version = child1.version;
+        store.create_node(child1, None, None).await?;
+        store.move_node(&child1_id, Some(&parent_id), None).await?;
+
+        let child2 = Node::new("text".to_string(), "Child 2".to_string(), json!({}));
+        let child2_id = child2.id.clone();
+        // Use a stale version (0) — this bypasses service-level pre-validation,
+        // so only the in-transaction SELECT changes() check catches the mismatch.
+        let stale_version: i64 = 0;
+        store.create_node(child2, None, None).await?;
+        store.move_node(&child2_id, Some(&parent_id), None).await?;
+
+        let result = store
+            .move_children_to_parent(
+                &new_parent_id,
+                &[
+                    (child1_id.as_str(), child1_version),
+                    (child2_id.as_str(), stale_version),
+                ],
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "stale version should cause store-level failure"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("VERSION_CONFLICT"),
+            "error should contain VERSION_CONFLICT, got: {}",
+            err_msg
+        );
+
+        // ALL-OR-NOTHING: child1 must NOT have moved (transaction was rolled back).
+        let parent_of_child1 = store.get_parent_id(&child1_id).await?;
+        assert_eq!(
+            parent_of_child1.as_deref(),
+            Some(parent_id.as_str()),
+            "child1 should still be under original parent after rollback"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_node_cross_parent_leaves_exactly_one_edge() -> Result<()> {
+        // #1429: the cross-parent move deletes the old has_child edge and inserts
+        // the new one in ONE transaction. After a successful move the node must
+        // have EXACTLY ONE has_child edge, pointing at the new parent — never zero
+        // (orphaned root, the bug when a non-transactional INSERT failed after the
+        // DELETE committed) and never two (old edge left behind).
+        let (store, _temp) = create_test_store().await?;
+
+        let parent_a = Node::new("text".to_string(), "Parent A".to_string(), json!({}));
+        let parent_a_id = parent_a.id.clone();
+        store.create_node(parent_a, None, None).await?;
+
+        let parent_b = Node::new("text".to_string(), "Parent B".to_string(), json!({}));
+        let parent_b_id = parent_b.id.clone();
+        store.create_node(parent_b, None, None).await?;
+
+        let child = Node::new("text".to_string(), "Child".to_string(), json!({}));
+        let child_id = child.id.clone();
+        store.create_node(child, None, None).await?;
+
+        // Wire under A, then move to B — this exercises the cross-parent branch.
+        store.move_node(&child_id, Some(&parent_a_id), None).await?;
+        store.move_node(&child_id, Some(&parent_b_id), None).await?;
+
+        let mut rows = store
+            .db
+            .query(
+                "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![child_id.clone()],
+            )
+            .await?;
+        let mut parents: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            parents.push(row.get(0)?);
+        }
+        assert_eq!(
+            parents,
+            vec![parent_b_id.clone()],
+            "after a cross-parent move the child must have exactly one has_child edge, under the new parent"
+        );
+        assert_eq!(
+            store.get_parent_id(&child_id).await?.as_deref(),
+            Some(parent_b_id.as_str()),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_move_children_to_parent_store_success_and_order() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "Parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+
+        let mut child_ids = Vec::new();
+        let mut child_versions = Vec::new();
+        for i in 0..3 {
+            let child = Node::new("text".to_string(), format!("Child {}", i), json!({}));
+            let cid = child.id.clone();
+            let ver = child.version;
+            store.create_node(child, None, None).await?;
+            store.move_node(&cid, Some(&parent_id), None).await?;
+            child_ids.push(cid);
+            child_versions.push(ver);
+        }
+
+        let pairs: Vec<(&str, i64)> = child_ids
+            .iter()
+            .zip(child_versions.iter())
+            .map(|(id, &ver)| (id.as_str(), ver))
+            .collect();
+
+        let orders = store
+            .move_children_to_parent(&new_parent_id, &pairs)
+            .await?;
+
+        assert_eq!(orders.len(), 3);
+        // Orders must be strictly increasing (sibling order preserved).
+        assert!(orders[0] < orders[1] && orders[1] < orders[2]);
+
+        // All children now live under new_parent.
+        let new_children = store.get_children(&new_parent_id).await?;
+        let new_ids: Vec<&str> = new_children.iter().map(|n| n.id.as_str()).collect();
+        for id in &child_ids {
+            assert!(
+                new_ids.contains(&id.as_str()),
+                "child {} should be under new_parent",
+                id
+            );
+        }
+
+        Ok(())
+    }
+
+    /// #1483: two `SqliteStore`s opened against the same file (simulating a dev +
+    /// production daemon both holding the DB) must not surface SQLITE_BUSY as a
+    /// hard error on the loser of a write race. `busy_timeout` (set in schema.sql,
+    /// applied per-connection in `initialize_schema`) makes the second writer retry
+    /// until the first releases its lock, instead of failing immediately.
+    ///
+    /// Requires a multi-thread runtime: libsql's local connection executes
+    /// synchronously (no `spawn_blocking`), so on a current-thread runtime the
+    /// lock-holder and writer tasks would starve each other instead of running
+    /// concurrently.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_writers_retry_instead_of_erroring_on_busy() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("shared.db");
+
+        let store_a = SqliteStore::new(db_path.clone()).await?;
+        let store_b = SqliteStore::new(db_path.clone()).await?;
+
+        // Hold store_a's write lock open in a background task.
+        let conn_a = store_a.db.clone();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel::<()>();
+        let hold_task = tokio::spawn(async move {
+            conn_a.execute("BEGIN IMMEDIATE", ()).await?;
+            conn_a
+                .execute(
+                    "INSERT INTO node (id, node_type, content, properties, lifecycle_status, version, created_at, modified_at) VALUES ('lock-holder', 'text', '', '{}', 'active', 1, '2026-01-01', '2026-01-01')",
+                    (),
+                )
+                .await?;
+            let _ = locked_tx.send(());
+            // Hold the lock until the test tells us to release it.
+            let _ = release_rx.await;
+            conn_a.execute("COMMIT", ()).await?;
+            anyhow::Ok(())
+        });
+
+        locked_rx
+            .await
+            .context("lock holder failed to acquire write lock")?;
+
+        // store_b attempts a write while store_a holds the lock. Without
+        // busy_timeout this fails immediately with SQLITE_BUSY; with it, the
+        // write blocks until store_a commits (well under the 5s timeout) then
+        // succeeds.
+        let write_task = tokio::spawn(async move {
+            let node = Node::new("text".to_string(), "from store_b".to_string(), json!({}));
+            store_b.create_node(node, None, None).await
+        });
+
+        // Release store_a's lock shortly after store_b's write is issued, so the
+        // retry path is actually exercised rather than racing a lock that's
+        // already free.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = release_tx.send(());
+
+        hold_task.await.context("lock holder task panicked")??;
+        write_task
+            .await
+            .context("writer task panicked")?
+            .context("store_b write should retry and succeed, not error with SQLITE_BUSY")?;
+
+        Ok(())
+    }
+}
