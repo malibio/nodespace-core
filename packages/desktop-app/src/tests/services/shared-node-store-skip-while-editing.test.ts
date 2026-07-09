@@ -397,5 +397,38 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
 
       expect(versionMismatchFor('dup')).toHaveLength(1);
     });
+
+    // Regression for the "conflict toast on effectively every edit" bug: the
+    // own-echo test above pre-seeds lastPersistedContent through the __test_
+    // backdoor, so it never exercised the real cold path. Here a node is
+    // hydrated from the backend (database source) with NO backdoor — the accept
+    // path must prime the own-echo baseline itself, so the daemon's first echo
+    // after the subscription opens is not misread as a foreign write.
+    it('does NOT notify on a load-echo of a backend-hydrated node (real path, no backdoor)', () => {
+      // Node arrives from the backend/daemon; this alone must prime the baseline.
+      store.setNode(makeNode('hydrated', 'hello world', 5), databaseSource);
+      focusManager.focusNode('hydrated', 'default');
+
+      // The daemon streams the node's current state back after WatchNodes opens.
+      // Before this fix, that echo (no lastPersistedContent entry) fired a
+      // spurious version-mismatch toast even though nothing else changed.
+      store.setNode(makeNode('hydrated', 'hello world', 6), databaseSource);
+
+      expect(versionMismatchFor('hydrated')).toHaveLength(0);
+    });
+
+    it('still notifies on a genuine foreign write after real-path priming (no backdoor)', () => {
+      // Same real hydration priming as above — no __test_ backdoor.
+      store.setNode(makeNode('hydrated2', 'hello world', 5), databaseSource);
+      focusManager.focusNode('hydrated2', 'default');
+
+      // A DIFFERENT writer changes the node. The primed baseline ('hello world')
+      // does not match the incoming content, so the conflict is still surfaced.
+      store.setNode(makeNode('hydrated2', 'a foreign edit', 7), databaseSource);
+
+      expect(versionMismatchFor('hydrated2')).toHaveLength(1);
+      // The local content is still protected (the clobber was skipped).
+      expect(store.getNode('hydrated2')?.content).toBe('hello world');
+    });
   });
 });

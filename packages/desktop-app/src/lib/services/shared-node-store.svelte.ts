@@ -618,6 +618,26 @@ export class SharedNodeStore {
   }
 
   /**
+   * Record a node's server-confirmed content as the own-echo baseline that
+   * `isPlausibleOwnEcho` compares against. Called whenever a node is accepted
+   * from the daemon broadcast or hydrated from the backend — i.e. whenever its
+   * content is known to equal the server state.
+   *
+   * Without this baseline, the FIRST broadcast for a node the user then starts
+   * editing has no `lastPersistedContent` entry, so `isPlausibleOwnEcho`
+   * false-classifies that echo (the daemon streaming a node's current state
+   * after the subscription opens) as a foreign write. The skip-while-editing
+   * guard then fires a spurious "Your edit conflicted with a remote change"
+   * notification even though nothing else touched the node. Priming here — not
+   * only after the first local edit — gives that echo a baseline to match. A
+   * genuinely different foreign write still fails the equality check and
+   * correctly surfaces the conflict.
+   */
+  private primeOwnEchoBaseline(node: Node): void {
+    this.lastPersistedContent.set(node.id, node.content ?? '');
+  }
+
+  /**
    * Decide whether the persistence path should clear a CREATE's
    * `InsertPosition.After` hint as "stale" before talking to the backend.
    *
@@ -1582,6 +1602,9 @@ export class SharedNodeStore {
     // Mark as persisted if explicitly requested or loaded from backend
     if (shouldMarkAsPersisted) {
       this.persistedNodeIds.add(node.id);
+      // This content came from the server (daemon broadcast / backend hydration),
+      // so record it as the own-echo baseline for the skip-while-editing guard.
+      this.primeOwnEchoBaseline(node);
     }
 
     // Phase 2.4: Persist to database
@@ -1894,6 +1917,10 @@ export class SharedNodeStore {
 
       if (shouldMarkAsPersisted) {
         this.persistedNodeIds.add(node.id);
+        // Bulk hydration (initial tree load) flows through here — prime the
+        // own-echo baseline so a subsequently-focused node's first daemon echo
+        // isn't misread as a foreign write (mirrors setNode).
+        this.primeOwnEchoBaseline(node);
       }
     }
 
