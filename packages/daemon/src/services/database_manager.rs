@@ -389,7 +389,7 @@ impl DatabaseManager {
         // Assemble the service set (opens SQLite, seeds schema) without holding
         // the `open` lock. The per-database embedding-wiring task is detached,
         // matching the boot path. `last_opened_at` bookkeeping is deferred.
-        let (services, _embed_task) = build_database_services(&path, &self.context)
+        let (services, _embed_task) = build_database_services(&path, &self.context, id.as_str())
             .await
             .with_context(|| format!("opening database {id}"))?;
         let services = Arc::new(services);

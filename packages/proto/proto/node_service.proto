@@ -267,6 +267,11 @@ message NodeEvent {
     RelationshipPayload relationship_updated = 5;
     RelationshipDeletedPayload relationship_deleted = 6;
   }
+  // ADR-053: the registered database this event came from, so a client watching
+  // a specific database can attribute events when the daemon serves several.
+  // Empty when the daemon serves a single unregistered database (Pro daemon) or
+  // in tests that construct the service directly.
+  string database_id = 7;
 }
 
 message NodeDeleted {

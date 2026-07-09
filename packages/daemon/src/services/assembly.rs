@@ -119,6 +119,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
 pub async fn build_database_services(
     db_path: &std::path::Path,
     shared: &SharedContext,
+    database_id: &str,
 ) -> Result<(DatabaseServices, Option<tokio::task::JoinHandle<()>>)> {
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {
@@ -145,7 +146,8 @@ pub async fn build_database_services(
 
     let node_service = Arc::new(node_service);
 
-    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_state.clone());
+    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_state.clone())
+        .with_database_id(database_id.to_string());
 
     // EmbeddingsService is only registered when a model file exists at startup
     // (the shared model). If the model appears later, the endpoint is absent
