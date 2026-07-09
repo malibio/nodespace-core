@@ -285,6 +285,75 @@ impl DatabaseManager {
         registry.save(&self.registry_path).await
     }
 
+    /// Ensure a default database is registered, returning its id.
+    ///
+    /// On first boot the registry is empty; this registers `path` under `name`
+    /// and marks it the default so header-less requests always have a database
+    /// to route to (ADR-053). Idempotent: if a default is already set it is
+    /// returned untouched, and if the registry has entries but no default the
+    /// first entry is adopted rather than registering a duplicate. Never
+    /// re-adds `path` or overrides an existing default.
+    pub async fn ensure_default_registered(
+        &self,
+        name: String,
+        path: PathBuf,
+    ) -> Result<DatabaseId> {
+        // Fast path: a default is already set.
+        if let Some(id) = self.registry.read().await.default_database.clone() {
+            return Ok(id);
+        }
+        // Take the write lock and re-check — a concurrent caller may have
+        // registered the default between the read above and this acquire.
+        let mut registry = self.registry.write().await;
+        if let Some(id) = registry.default_database.clone() {
+            return Ok(id);
+        }
+        // Entries exist but no default → adopt the first as default.
+        if let Some(first) = registry.databases.first() {
+            let id = first.id.clone();
+            registry.default_database = Some(id.clone());
+            registry.save(&self.registry_path).await?;
+            return Ok(id);
+        }
+        // Empty registry → register the default database.
+        let id = DatabaseId::generate();
+        registry.databases.push(DatabaseEntry {
+            id: id.clone(),
+            name,
+            path,
+            created_at: Utc::now(),
+            last_opened_at: None,
+        });
+        registry.default_database = Some(id.clone());
+        registry.save(&self.registry_path).await?;
+        Ok(id)
+    }
+
+    /// Resolve the database a request targets from its `x-ns-database-id`
+    /// routing header (ADR-053).
+    ///
+    /// An explicit header selects a registered database; an absent header
+    /// routes to the default so existing single-database clients keep working
+    /// unchanged. Errors if the header names an unregistered database, or if it
+    /// is absent and no default has been set.
+    pub async fn resolve_database_id(&self, header: Option<&str>) -> Result<DatabaseId> {
+        let registry = self.registry.read().await;
+        match header {
+            Some(raw) => {
+                let id = DatabaseId::from(raw.to_string());
+                if registry.find(&id).is_some() {
+                    Ok(id)
+                } else {
+                    Err(anyhow!("no database registered with id {id}"))
+                }
+            }
+            None => registry
+                .default_database
+                .clone()
+                .ok_or_else(|| anyhow!("no default database is set")),
+        }
+    }
+
     /// Return the per-database service set for `id`, opening it lazily if
     /// needed.
     ///
@@ -327,5 +396,82 @@ impl DatabaseManager {
         }
         registry.save(&self.registry_path).await?;
         Ok(entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn temp_manager() -> (DatabaseManager, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("databases.toml");
+        (DatabaseManager::load(path).await.unwrap(), dir)
+    }
+
+    #[tokio::test]
+    async fn ensure_default_registers_on_empty_and_is_idempotent() {
+        let (mgr, _dir) = temp_manager().await;
+        let id = mgr
+            .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
+            .await
+            .unwrap();
+
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.default_database.as_ref(), Some(&id));
+        assert!(snap.databases[0].is_default);
+
+        // A second call is a no-op: same id, no new entry, name not overridden.
+        let again = mgr
+            .ensure_default_registered("Other".into(), PathBuf::from("/tmp/other.db"))
+            .await
+            .unwrap();
+        assert_eq!(again, id);
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.databases[0].entry.name, "Default");
+    }
+
+    #[tokio::test]
+    async fn resolve_database_id_routes_header_and_default() {
+        let (mgr, _dir) = temp_manager().await;
+        let default = mgr
+            .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
+            .await
+            .unwrap();
+
+        // Absent header routes to the default.
+        assert_eq!(mgr.resolve_database_id(None).await.unwrap(), default);
+        // An explicit registered id routes to that id.
+        assert_eq!(
+            mgr.resolve_database_id(Some(default.as_str()))
+                .await
+                .unwrap(),
+            default
+        );
+
+        // Registering a second database does not change routing of header-less
+        // requests, and the second id routes explicitly.
+        let second = mgr.register(PathBuf::from("/tmp/second.db")).await.unwrap();
+        assert_eq!(
+            mgr.resolve_database_id(Some(second.id.as_str()))
+                .await
+                .unwrap(),
+            second.id
+        );
+        assert_eq!(mgr.resolve_database_id(None).await.unwrap(), default);
+
+        // An unregistered id is an error, not a silent fallback to the default.
+        assert!(mgr
+            .resolve_database_id(Some("ZZZ-NOT-REGISTERED"))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_without_default_errors() {
+        let (mgr, _dir) = temp_manager().await;
+        assert!(mgr.resolve_database_id(None).await.is_err());
     }
 }
