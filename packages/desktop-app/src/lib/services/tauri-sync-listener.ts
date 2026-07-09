@@ -32,6 +32,7 @@ import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schem
 import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
 import { normalizeNodeData } from './node-normalize';
 import { proSync } from '$lib/stores/pro-sync.svelte';
+import { isActiveDatabaseEvent } from '$lib/stores/database.svelte';
 
 const log = createLogger('TauriSync');
 
@@ -202,6 +203,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     // Issue #724: Events now send only node_id, fetch full data if needed
     // Issue #832: node:created includes nodeType for reactive UI updates
     await listen<NodeEventData>('node:created', (event) => {
+      // ADR-053: drop events from a database we are no longer viewing (guards
+      // the race where a watch stream open across a switch delivers stale events).
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       log.debug(`Node created: ${event.payload.id} (type: ${event.payload.nodeType})`);
 
       // Issue #832: If a collection node is created, refresh collections sidebar
@@ -224,12 +228,14 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<NodeEventData>('node:updated', (event) => {
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       const nodeId = event.payload.id;
       log.debug(`node:updated received`, { nodeId });
       queueOrFetchNode(nodeId, 'node:updated');
     });
 
-    await listen<{ id: string }>('node:deleted', (event) => {
+    await listen<NodeEventData>('node:deleted', (event) => {
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       log.debug(`Node deleted: ${event.payload.id}`);
       // Evict any coalesced re-fetch first so a delete racing an upsert in the
       // same window can't be clobbered by the queued fetch re-adding the node.
@@ -249,6 +255,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     // ========================================================================
 
     await listen<RelationshipEvent>('relationship:created', (event) => {
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       const rel = event.payload;
       log.debug(`Relationship created: ${rel.relationshipType} (${rel.fromId} -> ${rel.toId})`);
 
@@ -290,6 +297,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<RelationshipEvent>('relationship:updated', (event) => {
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       const rel = event.payload;
       log.debug(`Relationship updated: ${rel.relationshipType} (${rel.fromId} -> ${rel.toId})`);
       if (rel.relationshipType === 'has_child') {
@@ -302,6 +310,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     await listen<RelationshipDeletedPayload>('relationship:deleted', (event) => {
+      if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       const { id, fromId, toId, relationshipType } = event.payload;
       log.debug(`Relationship deleted: ${relationshipType} (${id}) from ${fromId} to ${toId}`);
 

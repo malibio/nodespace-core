@@ -16,11 +16,9 @@ use nodespace_proto::nodespace::{
     NodeData, NodeResponse, OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
     ReorderNodeRequest, UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
 };
-use nodespace_proto::NodeServiceClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
-use tonic::transport::Channel;
 use tonic::Request;
 
 use crate::services::GrpcClient;
@@ -197,7 +195,7 @@ fn proto_node_response_to_node(resp: NodeResponse) -> Result<Node, CommandError>
 /// Validate that node type has a schema via gRPC GetSchemaDefinition RPC
 async fn validate_node_type(
     node_type: &str,
-    client: &mut NodeServiceClient<Channel>,
+    client: &mut crate::services::NodeClient,
 ) -> Result<(), CommandError> {
     match client
         .get_schema_definition(Request::new(GetSchemaDefinitionRequest {

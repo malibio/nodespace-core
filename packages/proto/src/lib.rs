@@ -7,6 +7,16 @@ pub mod nodespace {
     tonic::include_proto!("nodespace");
 }
 
+/// The gRPC metadata/header key a client sets to route a request at a specific
+/// registered local database (ADR-053: "One Daemon, Multiple Local Databases").
+///
+/// Absent → the daemon serves its default database (single-database clients are
+/// unchanged); present but unregistered → the routed handler rejects the request
+/// rather than silently serving the default (no cross-database leak). Defined
+/// here in the wire-contract crate so every client (CLI, desktop app) and the
+/// daemon reference one canonical key.
+pub const DATABASE_ID_HEADER: &str = "x-ns-database-id";
+
 pub use nodespace::agent_session_service_client::AgentSessionServiceClient;
 pub use nodespace::agent_session_service_server::AgentSessionServiceServer;
 pub use nodespace::database_service_client::DatabaseServiceClient;

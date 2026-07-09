@@ -11,6 +11,7 @@
   import { formatDateISO } from '$lib/utils/date-formatting.js';
   import { v4 as uuidv4 } from 'uuid';
   import CollectionSubPanel from './collection-sub-panel.svelte';
+  import DatabaseSwitcher from './database-switcher.svelte';
   import { onMount, onDestroy } from 'svelte';
   import { schemasStore, schemasData } from '$lib/stores/schemas.svelte';
   import { clearCollectionRefreshTimer, clearSchemaRefreshTimer } from '$lib/utils/collection-refresh';
@@ -261,6 +262,12 @@
 
   <!-- Navigation items -->
   <div class="nav-items">
+    <!-- Database switcher (ADR-053) — sidebar header. Hidden when collapsed
+         since the trigger needs room for the database name. -->
+    {#if !isCollapsed}
+      <DatabaseSwitcher />
+    {/if}
+
     <!-- Daily Journal (first item) -->
     {#each navItems.slice(0, 1) as item}
       <button
