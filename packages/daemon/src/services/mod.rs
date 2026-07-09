@@ -7,6 +7,7 @@ pub mod agent_session_service;
 pub mod assembly;
 pub mod capture_service;
 pub mod database_manager;
+pub mod database_service;
 pub mod embeddings_service;
 pub mod import_service;
 pub mod local_agent_service;
@@ -21,6 +22,7 @@ pub use database_manager::{
     DatabaseEntry, DatabaseId, DatabaseListing, DatabaseManager, DatabaseStatus, Registry,
     RegistrySnapshot,
 };
+pub use database_service::DatabaseServiceImpl;
 pub use embeddings_service::{EmbeddingReady, EmbeddingsServiceImpl};
 pub use import_service::ImportServiceImpl;
 pub use local_agent_service::LocalAgentServiceImpl;
