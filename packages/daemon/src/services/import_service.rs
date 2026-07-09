@@ -19,10 +19,12 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     import_service_server::ImportService as GrpcImportService, FileImportResult,
     ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions, ImportProgressEvent,
 };
+use crate::services::database_manager::DatabaseManager;
 
 const CHANNEL_BUFFER: usize = 64;
 
@@ -34,6 +36,33 @@ pub struct ImportServiceImpl {
 impl ImportServiceImpl {
     pub fn new(node_service: Arc<CoreNodeService>) -> Self {
         Self { node_service }
+    }
+
+    /// Resolve which database this request targets (ADR-053) and return that
+    /// database's import service. See [`crate::services::NodeServiceImpl::route`]
+    /// for the shared routing contract: with no manager injected (Pro daemon,
+    /// unit tests) this returns `self`, so behavior is unchanged; an
+    /// `x-ns-database-id` header selects a registered database (unregistered →
+    /// rejected).
+    async fn route<T>(&self, request: &Request<T>) -> Result<ImportServiceImpl, Status> {
+        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
+            return Ok(self.clone());
+        };
+        let header = request
+            .metadata()
+            .get(DATABASE_ID_HEADER)
+            .map(|v| v.to_str())
+            .transpose()
+            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
+        let id = manager
+            .resolve_database_id(header)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let services = manager
+            .get_or_open(&id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(services.import.clone())
     }
 }
 
@@ -50,9 +79,10 @@ impl GrpcImportService for ImportServiceImpl {
         &self,
         request: Request<ImportMarkdownRequest>,
     ) -> Result<Response<Self::ImportMarkdownStream>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let opts = req.options.unwrap_or_default();
-        let node_service = Arc::clone(&self.node_service);
+        let node_service = Arc::clone(&this.node_service);
 
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER);
 
@@ -67,9 +97,10 @@ impl GrpcImportService for ImportServiceImpl {
         &self,
         request: Request<ImportMarkdownFilesRequest>,
     ) -> Result<Response<Self::ImportMarkdownFilesStream>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let opts = req.options.unwrap_or_default();
-        let node_service = Arc::clone(&self.node_service);
+        let node_service = Arc::clone(&this.node_service);
 
         let (tx, rx) = mpsc::channel(CHANNEL_BUFFER);
 
@@ -997,4 +1028,56 @@ async fn import_markdown_content(
     }
 
     Ok((root_id, nodes_created))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::SharedContext;
+    use nodespace_agent::pty::PtySessionManager;
+    use nodespace_nlp_engine::EmbeddingService;
+    use tokio::sync::watch;
+
+    fn test_context() -> SharedContext {
+        let (_tx, model) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
+        SharedContext {
+            pty_manager: Arc::new(PtySessionManager::new()),
+            model,
+            has_model: false,
+        }
+    }
+
+    /// A request naming an unregistered database is rejected at the routing
+    /// boundary (ADR-053), never silently served from the default.
+    #[tokio::test]
+    async fn import_rejects_unregistered_database_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            DatabaseManager::load(dir.path().join("databases.toml"), test_context())
+                .await
+                .unwrap(),
+        );
+        let default_id = manager
+            .ensure_default_registered("Default".into(), dir.path().join("db.db"))
+            .await
+            .unwrap();
+        let svc = manager
+            .get_or_open(&default_id)
+            .await
+            .unwrap()
+            .import
+            .clone();
+
+        let mut req = Request::new(ImportMarkdownRequest {
+            file_path: "/nonexistent.md".into(),
+            options: None,
+        });
+        req.extensions_mut().insert(manager.clone());
+        req.metadata_mut()
+            .insert(DATABASE_ID_HEADER, "ZZZ-UNREGISTERED".parse().unwrap());
+        assert_eq!(
+            svc.import_markdown(req).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+    }
 }

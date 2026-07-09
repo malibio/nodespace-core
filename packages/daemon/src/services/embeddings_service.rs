@@ -15,6 +15,7 @@ use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeSer
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
+use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     embeddings_service_server::EmbeddingsService as GrpcEmbeddingsService, BatchEmbeddingFailure,
     BatchQueueEmbeddingsRequest, BatchQueueEmbeddingsResponse, EmbeddingStatusResponse,
@@ -23,6 +24,7 @@ use crate::nodespace::{
     SearchSemanticRequest, SearchSemanticResponse, TriggerBatchEmbedRequest,
     TriggerBatchEmbedResponse,
 };
+use crate::services::database_manager::DatabaseManager;
 use crate::services::node_service::node_to_proto;
 
 /// Live embedding state once the model has finished loading.
@@ -50,6 +52,38 @@ impl EmbeddingsServiceImpl {
         Status::unavailable("embedding model loading, please retry")
     }
 
+    /// Resolve which database this request targets (ADR-053) and return that
+    /// database's embeddings service. See
+    /// [`crate::services::NodeServiceImpl::route`] for the shared contract: no
+    /// manager injected (Pro daemon, unit tests) → `self`; an `x-ns-database-id`
+    /// header selects a registered database (unregistered → rejected). If the
+    /// target database has no embeddings service (no model — which, since the
+    /// model is process-global, cannot happen while this service is registered)
+    /// fall back to `self`.
+    async fn route<T>(&self, request: &Request<T>) -> Result<EmbeddingsServiceImpl, Status> {
+        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
+            return Ok(self.clone());
+        };
+        let header = request
+            .metadata()
+            .get(DATABASE_ID_HEADER)
+            .map(|v| v.to_str())
+            .transpose()
+            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
+        let id = manager
+            .resolve_database_id(header)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let services = manager
+            .get_or_open(&id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(services
+            .embeddings_service_grpc
+            .clone()
+            .unwrap_or_else(|| self.clone()))
+    }
+
     /// Shared implementation for stale-count queries used by both
     /// `get_embedding_status` and `get_stale_count` to avoid duplication.
     async fn stale_count_inner(&self) -> Result<i32, Status> {
@@ -67,11 +101,12 @@ impl EmbeddingsServiceImpl {
 impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
     async fn get_embedding_status(
         &self,
-        _request: Request<GetEmbeddingStatusRequest>,
+        request: Request<GetEmbeddingStatusRequest>,
     ) -> Result<Response<EmbeddingStatusResponse>, Status> {
-        let available = self.state.read().await.is_some();
+        let this = self.route(&request).await?;
+        let available = this.state.read().await.is_some();
         let stale_count = if available {
-            self.stale_count_inner().await?
+            this.stale_count_inner().await?
         } else {
             0
         };
@@ -85,13 +120,14 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         request: Request<SearchSemanticRequest>,
     ) -> Result<Response<SearchSemanticResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         if req.query.trim().is_empty() {
             return Err(Status::invalid_argument("query cannot be empty"));
         }
 
-        let guard = self.state.read().await;
+        let guard = this.state.read().await;
         let state = guard.as_ref().ok_or_else(Self::unavailable)?;
 
         let threshold = if req.threshold == 0.0 {
@@ -111,7 +147,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             .generate_embedding(&req.query)
             .map_err(|e| Status::internal(format!("Failed to generate query embedding: {}", e)))?;
 
-        let store = self.node_service.store();
+        let store = this.node_service.store();
         let search_results = store
             .search_embeddings(&query_embedding, limit, threshold)
             .await
@@ -131,12 +167,13 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         request: Request<RegenerateEmbeddingRequest>,
     ) -> Result<Response<RegenerateEmbeddingResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let guard = self.state.read().await;
+        let guard = this.state.read().await;
         let state = guard.as_ref().ok_or_else(Self::unavailable)?;
 
-        let node = self
+        let node = this
             .node_service
             .get_node(&req.node_id)
             .await
@@ -156,12 +193,13 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         request: Request<QueueEmbeddingRequest>,
     ) -> Result<Response<QueueEmbeddingResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let guard = self.state.read().await;
+        let guard = this.state.read().await;
         let state = guard.as_ref().ok_or_else(Self::unavailable)?;
 
-        let node = self
+        let node = this
             .node_service
             .get_node(&req.node_id)
             .await
@@ -179,9 +217,10 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
 
     async fn trigger_batch_embed(
         &self,
-        _request: Request<TriggerBatchEmbedRequest>,
+        request: Request<TriggerBatchEmbedRequest>,
     ) -> Result<Response<TriggerBatchEmbedResponse>, Status> {
-        let guard = self.state.read().await;
+        let this = self.route(&request).await?;
+        let guard = this.state.read().await;
         let state = guard.as_ref().ok_or_else(Self::unavailable)?;
 
         state
@@ -194,10 +233,11 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
 
     async fn get_stale_count(
         &self,
-        _request: Request<GetStaleCountRequest>,
+        request: Request<GetStaleCountRequest>,
     ) -> Result<Response<GetStaleCountResponse>, Status> {
+        let this = self.route(&request).await?;
         // No model required — queries the DB stale-embedding table directly.
-        let count = self.stale_count_inner().await?;
+        let count = this.stale_count_inner().await?;
         Ok(Response::new(GetStaleCountResponse { count }))
     }
 
@@ -205,16 +245,17 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         &self,
         request: Request<BatchQueueEmbeddingsRequest>,
     ) -> Result<Response<BatchQueueEmbeddingsResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let guard = self.state.read().await;
+        let guard = this.state.read().await;
         let state = guard.as_ref().ok_or_else(Self::unavailable)?;
 
         let mut success_count = 0i32;
         let mut failures = Vec::new();
 
         for node_id in req.node_ids {
-            match self.node_service.get_node(&node_id).await {
+            match this.node_service.get_node(&node_id).await {
                 Ok(Some(node)) => {
                     match state.embedding_service.queue_for_embedding(&node.id).await {
                         Ok(_) => success_count += 1,

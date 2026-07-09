@@ -24,6 +24,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     agent_session_service_server::AgentSessionService, AgentAvailability, CheckAvailabilityRequest,
     CheckAvailabilityResponse, LaunchSessionRequest, LaunchSessionResponse, ListSessionsRequest,
@@ -32,6 +33,7 @@ use crate::nodespace::{
     WriteInputResponse,
 };
 use crate::services::capture_service::{finalize_capture, CompletedSession};
+use crate::services::database_manager::DatabaseManager;
 use crate::services::settings_service::{read_capture_settings, CaptureConfig};
 
 /// gRPC adapter that owns shared handles to the PTY engine.
@@ -57,6 +59,39 @@ impl AgentSessionHandler {
             config_path,
         }
     }
+
+    /// Resolve which database this request targets (ADR-053) and return that
+    /// database's handler. See [`crate::services::NodeServiceImpl::route`] for
+    /// the shared contract: no manager injected (Pro daemon, unit tests) →
+    /// `self`; an `x-ns-database-id` header selects a registered database
+    /// (unregistered → rejected).
+    ///
+    /// Only [`launch_session`](Self::launch_session) routes: the `PtySessionManager`
+    /// is process-global (the same `Arc` backs every database), so PTY
+    /// operations (stream/write/resize/terminate/list) act on the shared session
+    /// set regardless of database. Launch is the sole handler that reads the
+    /// per-database context assembler and node service (for context + capture),
+    /// so it follows the targeted database.
+    async fn route<T>(&self, request: &Request<T>) -> Result<AgentSessionHandler, Status> {
+        let Some(db_manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
+            return Ok(self.clone());
+        };
+        let header = request
+            .metadata()
+            .get(DATABASE_ID_HEADER)
+            .map(|v| v.to_str())
+            .transpose()
+            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
+        let id = db_manager
+            .resolve_database_id(header)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let services = db_manager
+            .get_or_open(&id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(services.agent_session.clone())
+    }
 }
 
 #[tonic::async_trait]
@@ -65,6 +100,7 @@ impl AgentSessionService for AgentSessionHandler {
         &self,
         request: Request<LaunchSessionRequest>,
     ) -> Result<Response<LaunchSessionResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let agent_type = parse_agent_type(&req.agent_type).map_err(Status::invalid_argument)?;
@@ -110,9 +146,9 @@ impl AgentSessionService for AgentSessionHandler {
             }
         }
 
-        let id = self
+        let id = this
             .manager
-            .launch(agent_type, req.prompt, &self.assembler)
+            .launch(agent_type, req.prompt, &this.assembler)
             .await
             .map_err(|e| Status::internal(format!("launch session failed: {e}")))?;
 
@@ -123,7 +159,7 @@ impl AgentSessionService for AgentSessionHandler {
         // `unwrap_or` fallback covers the vanishingly unlikely case where the
         // spawned child has already exited and the auto-prune watcher has
         // already removed the entry.
-        let session = self.manager.get(&id).await;
+        let session = this.manager.get(&id).await;
         let created_at = session
             .as_ref()
             .map(|s| s.started_at.timestamp())
@@ -163,10 +199,10 @@ impl AgentSessionService for AgentSessionHandler {
         // Capture config is read once here (at launch time) so finalize_capture
         // doesn't re-hit the filesystem on every session end. Sessions started
         // before the handler initializes are not covered (no manager.get hit).
-        if let Some(ref session) = self.manager.get(&id).await {
+        if let Some(ref session) = this.manager.get(&id).await {
             let session = session.clone();
-            let node_service = self.node_service.clone();
-            let config_path = self.config_path.clone();
+            let node_service = this.node_service.clone();
+            let config_path = this.config_path.clone();
             let started_at = session.started_at;
             let node_id = req.node_id.clone();
 
