@@ -9,18 +9,34 @@
 //! We exercise the handlers directly rather than spawning the compiled
 //! binary so test failures point at the code path under test rather than
 //! at fork/exec or stdout-capture plumbing.
+//!
+//! Two harnesses back the tests:
+//! - [`spawn_test_daemon`] serves a single, plain `NodeService` — enough for the
+//!   node/mention/schema/search flows that don't touch the database registry.
+//! - [`spawn_routing_daemon`] serves the full multi-database stack (ADR-053):
+//!   `DbManagerLayer` + `DatabaseService` + `NodeService` over a `DatabaseManager`
+//!   seeded with one default database, so `database` subcommands and
+//!   `--database` routing can be exercised over the real transport.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nodespace_cli::{commands, connect};
+use nodespace_agent::pty::PtySessionManager;
+use nodespace_cli::{commands, connect, connect_database, DatabaseIdInterceptor};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
-use nodespace_daemon::nodespace::{CreateNodeRequest, GetNodeRequest};
-use nodespace_daemon::{NodeServiceImpl, NodeServiceServer};
+use nodespace_daemon::nodespace::{
+    CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest, ListDatabasesRequest,
+    QueryNodesSimpleRequest,
+};
+use nodespace_daemon::{
+    DatabaseManager, DatabaseServiceImpl, DatabaseServiceServer, DbManagerLayer, NodeServiceImpl,
+    NodeServiceServer, SharedContext,
+};
+use nodespace_nlp_engine::EmbeddingService;
 use tempfile::TempDir;
 use tokio::net::UnixListener;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 use tonic::Code;
@@ -58,7 +74,10 @@ async fn spawn_test_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
     });
 
     for _ in 0..50 {
-        if connect(&sock_path).await.is_ok() {
+        if connect(&sock_path, DatabaseIdInterceptor::none())
+            .await
+            .is_ok()
+        {
             return (sock_path, shutdown_tx, tempdir);
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -69,10 +88,89 @@ async fn spawn_test_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
     );
 }
 
+/// A model-less build context — with `has_model = false` no embedding wiring
+/// runs, so the dropped watch sender is harmless (it is never read).
+fn routing_test_context() -> SharedContext {
+    let (_tx, model) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
+    SharedContext {
+        pty_manager: Arc::new(PtySessionManager::new()),
+        model,
+        has_model: false,
+    }
+}
+
+/// Spawn an in-process daemon over a temp-dir UDS serving the full ADR-053
+/// multi-database stack: the `DbManagerLayer` injects a `DatabaseManager` into
+/// every request, `DatabaseService` manages the registry, and `NodeService`
+/// routes by the `x-ns-database-id` header. The registry is seeded with a single
+/// default database so header-less requests work and a second can be created.
+async fn spawn_routing_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
+    let tempdir = TempDir::new().expect("failed to create tempdir");
+    let sock_path = tempdir.path().join("routing-daemon.sock");
+    let registry_path = tempdir.path().join("databases.toml");
+    let default_db = tempdir.path().join("default.db");
+
+    let manager = Arc::new(
+        DatabaseManager::load(registry_path, routing_test_context())
+            .await
+            .expect("failed to load DatabaseManager"),
+    );
+    let default_id = manager
+        .ensure_default_registered("Default".into(), default_db)
+        .await
+        .expect("failed to register default database");
+    // Open the default through the manager and serve that bundle's NodeService
+    // (exactly as the daemon boot path does) so the manager's cache is the served
+    // handle — no double-open.
+    let default_bundle = manager
+        .get_or_open(&default_id)
+        .await
+        .expect("failed to open default database");
+    let node_default = default_bundle.node_service_grpc.clone();
+
+    let listener = UnixListener::bind(&sock_path).expect("failed to bind routing UDS socket");
+    let incoming = UnixListenerStream::new(listener);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    let mgr = manager.clone();
+    tokio::spawn(async move {
+        Server::builder()
+            .layer(DbManagerLayer::new(mgr.clone()))
+            .add_service(DatabaseServiceServer::new(DatabaseServiceImpl::new(mgr)))
+            .add_service(NodeServiceServer::new(node_default))
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("server crashed");
+    });
+
+    for _ in 0..50 {
+        if connect_database(&sock_path).await.is_ok() {
+            return (sock_path, shutdown_tx, tempdir);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "routing daemon did not start accepting connections on {}",
+        sock_path.display()
+    );
+}
+
+/// Route a fresh `NodeService` client to `id` via the resolved routing header.
+async fn node_client_for(sock: &std::path::Path, id: &str) -> nodespace_cli::NodeClient {
+    let interceptor = DatabaseIdInterceptor::for_id(id).expect("build interceptor");
+    connect(sock, interceptor)
+        .await
+        .expect("connect routed node")
+}
+
 #[tokio::test]
 async fn create_get_update_children_delete_round_trip() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
 
     commands::node::run(
         &mut client,
@@ -86,7 +184,9 @@ async fn create_get_update_children_delete_round_trip() {
     .await
     .expect("create root");
 
-    let mut raw_client = connect(&sock).await.expect("raw client connect");
+    let mut raw_client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw client connect");
 
     let created = raw_client
         .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
@@ -195,7 +295,9 @@ async fn create_get_update_children_delete_round_trip() {
 #[tokio::test]
 async fn get_missing_node_surfaces_not_found() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
 
     let err = commands::node::run(
         &mut client,
@@ -219,7 +321,9 @@ async fn get_missing_node_surfaces_not_found() {
 #[tokio::test]
 async fn search_without_embedding_service_reports_unavailable() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
 
     let err = commands::search::run(
         &mut client,
@@ -244,20 +348,29 @@ async fn search_without_embedding_service_reports_unavailable() {
 
 #[tokio::test]
 async fn diagnostics_collect_reports_counts_and_recency() {
-    let (sock, shutdown, tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
-    let mut raw_client = connect(&sock).await.expect("raw client connect");
+    let (sock, shutdown, _tempdir) = spawn_routing_daemon().await;
+    let mut node = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect node");
+    let mut seed = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect seed");
+    let mut db = connect_database(&sock).await.expect("connect database");
 
-    let db_path = tempdir.path().join("daemon-db");
-    let baseline = commands::diagnostics::collect(&mut client, &db_path).await;
+    let baseline = commands::diagnostics::collect(&mut node, &mut db, None).await;
     assert!(
         baseline.errors.is_empty(),
         "baseline collect must not produce errors: {:?}",
         baseline.errors
     );
+    // The registry has exactly the seeded default, and it is the target when no
+    // database is selected.
+    assert_eq!(baseline.databases.len(), 1, "one registered database");
+    assert!(baseline.databases[0].is_default);
+    assert_eq!(baseline.targeted_database_id, baseline.databases[0].id);
 
-    let root = raw_client
-        .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
+    let root = seed
+        .create_node(CreateNodeRequest {
             node_type: "text".into(),
             content: "root".into(),
             parent_id: None,
@@ -274,8 +387,8 @@ async fn diagnostics_collect_reports_counts_and_recency() {
     let mut last_child_id = String::new();
     for label in ["child-1", "child-2"] {
         tokio::time::sleep(Duration::from_millis(20)).await;
-        last_child_id = raw_client
-            .create_node(nodespace_daemon::nodespace::CreateNodeRequest {
+        last_child_id = seed
+            .create_node(CreateNodeRequest {
                 node_type: "text".into(),
                 content: label.into(),
                 parent_id: Some(root.node_id.clone()),
@@ -291,7 +404,7 @@ async fn diagnostics_collect_reports_counts_and_recency() {
             .node_id;
     }
 
-    let report = commands::diagnostics::collect(&mut client, &db_path).await;
+    let report = commands::diagnostics::collect(&mut node, &mut db, None).await;
     assert_eq!(
         report.total_node_count,
         baseline.total_node_count + 3,
@@ -302,8 +415,10 @@ async fn diagnostics_collect_reports_counts_and_recency() {
         baseline.root_node_count + 1,
         "expected one additional root node vs baseline"
     );
-    assert!(report.database_exists);
-    assert!(report.database_size_bytes.unwrap_or(0) > 0);
+    assert!(
+        report.database_size_bytes.unwrap_or(0) > 0,
+        "targeted database file should have a nonzero size after writes"
+    );
     assert_eq!(report.recent_node_ids[0], last_child_id);
     assert!(
         report.errors.is_empty(),
@@ -316,9 +431,12 @@ async fn diagnostics_collect_reports_counts_and_recency() {
 
 #[tokio::test]
 async fn connect_refused_returns_friendly_error() {
-    let err = connect(std::path::Path::new("/tmp/nodespace-no-such-daemon.sock"))
-        .await
-        .expect_err("expected refusal");
+    let err = connect(
+        std::path::Path::new("/tmp/nodespace-no-such-daemon.sock"),
+        DatabaseIdInterceptor::none(),
+    )
+    .await
+    .expect_err("expected refusal");
 
     let msg = format!("{}", err);
     assert!(
@@ -334,8 +452,12 @@ async fn connect_refused_returns_friendly_error() {
 #[tokio::test]
 async fn node_query_by_type() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
-    let mut raw = connect(&sock).await.expect("raw connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
 
     raw.create_node(CreateNodeRequest {
         node_type: "task".into(),
@@ -385,8 +507,12 @@ async fn node_query_by_type() {
 #[tokio::test]
 async fn node_export_markdown() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
-    let mut raw = connect(&sock).await.expect("raw connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
 
     let root = raw
         .create_node(CreateNodeRequest {
@@ -435,8 +561,12 @@ async fn node_export_markdown() {
 #[tokio::test]
 async fn node_batch_get_and_update() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
-    let mut raw = connect(&sock).await.expect("raw connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
 
     let a = raw
         .create_node(CreateNodeRequest {
@@ -504,8 +634,12 @@ async fn node_batch_get_and_update() {
 #[tokio::test]
 async fn mention_create_query_delete() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
-    let mut raw = connect(&sock).await.expect("raw connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
 
     let source = raw
         .create_node(CreateNodeRequest {
@@ -587,7 +721,9 @@ async fn mention_create_query_delete() {
 #[tokio::test]
 async fn schema_list_and_get() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
-    let mut client = connect(&sock).await.expect("connect");
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
 
     // The test daemon has no custom schemas; list should return an empty result without error.
     commands::schema::run(
@@ -597,6 +733,312 @@ async fn schema_list_and_get() {
     )
     .await
     .expect("schema list");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn database_registry_round_trip() {
+    let (sock, shutdown, tempdir) = spawn_routing_daemon().await;
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    // list: succeeds and reports the seeded default.
+    commands::database::run(&mut db, commands::database::DatabaseAction::List, true)
+        .await
+        .expect("database list");
+    let listed = db
+        .list(ListDatabasesRequest {})
+        .await
+        .expect("raw list")
+        .into_inner();
+    assert_eq!(listed.databases.len(), 1);
+    let default_id = listed.default_database_id.clone();
+    assert!(!default_id.is_empty());
+
+    // create: registers a second database.
+    let second_path = tempdir.path().join("second.db").display().to_string();
+    commands::database::run(
+        &mut db,
+        commands::database::DatabaseAction::Create(commands::database::CreateArgs {
+            name: "Second".into(),
+            path: Some(second_path),
+        }),
+        true,
+    )
+    .await
+    .expect("database create");
+    let listed = db
+        .list(ListDatabasesRequest {})
+        .await
+        .expect("raw list")
+        .into_inner();
+    assert_eq!(listed.databases.len(), 2);
+    let second_id = listed
+        .databases
+        .iter()
+        .find(|d| d.name == "Second")
+        .expect("second registered")
+        .id
+        .clone();
+
+    // Open the second database by routing a write to it, so its file exists on
+    // disk — this lets the remove assertion below prove the file is preserved
+    // rather than merely never created (a freshly created DB is "missing" until
+    // first opened).
+    let mut node_second = node_client_for(&sock, &second_id).await;
+    node_second
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "open the second database".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("open second database");
+
+    // rename: resolves by name and relabels.
+    commands::database::run(
+        &mut db,
+        commands::database::DatabaseAction::Rename(commands::database::RenameArgs {
+            database: "Second".into(),
+            new_name: "Renamed".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("database rename");
+    let listed = db
+        .list(ListDatabasesRequest {})
+        .await
+        .expect("raw list")
+        .into_inner();
+    let renamed = listed
+        .databases
+        .iter()
+        .find(|d| d.id == second_id)
+        .expect("still registered by id");
+    assert_eq!(renamed.name, "Renamed");
+
+    // use: sets the daemon-wide default to the renamed database.
+    commands::database::run(
+        &mut db,
+        commands::database::DatabaseAction::Use(commands::database::UseArgs {
+            database: "Renamed".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("database use");
+    let listed = db
+        .list(ListDatabasesRequest {})
+        .await
+        .expect("raw list")
+        .into_inner();
+    assert_eq!(listed.default_database_id, second_id);
+
+    // Put the default back so removing the (now non-default) original succeeds.
+    commands::database::run(
+        &mut db,
+        commands::database::DatabaseAction::Use(commands::database::UseArgs {
+            database: default_id.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("database use back to default");
+
+    // remove: unregisters by id without deleting the file.
+    let second_file = tempdir.path().join("second.db");
+    commands::database::run(
+        &mut db,
+        commands::database::DatabaseAction::Remove(commands::database::RemoveArgs {
+            database: second_id.clone(),
+        }),
+        true,
+    )
+    .await
+    .expect("database remove");
+    let listed = db
+        .list(ListDatabasesRequest {})
+        .await
+        .expect("raw list")
+        .into_inner();
+    assert_eq!(listed.databases.len(), 1);
+    assert!(
+        listed.databases.iter().all(|d| d.id != second_id),
+        "removed database must be gone from the registry"
+    );
+    assert!(
+        second_file.exists(),
+        "remove must not delete the underlying database file"
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn select_database_by_name_resolves_to_id() {
+    let (sock, shutdown, tempdir) = spawn_routing_daemon().await;
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    let created = db
+        .create(CreateDatabaseRequest {
+            name: "Workspace".into(),
+            path: Some(tempdir.path().join("workspace.db").display().to_string()),
+        })
+        .await
+        .expect("create database")
+        .into_inner();
+
+    // A name resolves to the matching id...
+    let resolved = commands::database::resolve_database_id_by_selection(&mut db, "Workspace")
+        .await
+        .expect("resolve by name");
+    assert_eq!(resolved, created.id);
+
+    // ...and the id resolves to itself.
+    let resolved_by_id = commands::database::resolve_database_id_by_selection(&mut db, &created.id)
+        .await
+        .expect("resolve by id");
+    assert_eq!(resolved_by_id, created.id);
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn unregistered_database_selection_errors() {
+    let (sock, shutdown, _tempdir) = spawn_routing_daemon().await;
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    let err = commands::database::resolve_database_id_by_selection(&mut db, "no-such-database")
+        .await
+        .expect_err("unregistered selection must error");
+    assert!(
+        err.to_string().contains("no database named or with id"),
+        "expected a clear not-registered error, got: {err}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn ambiguous_name_selection_errors_but_id_still_resolves() {
+    // The daemon does not enforce unique names, so two databases can share a
+    // name. Selecting by that name must fail with an ambiguity error; selecting
+    // by id must still resolve (id match wins over any name match).
+    let (sock, shutdown, tempdir) = spawn_routing_daemon().await;
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    let first = db
+        .create(CreateDatabaseRequest {
+            name: "work".into(),
+            path: Some(tempdir.path().join("work-a.db").display().to_string()),
+        })
+        .await
+        .expect("create first work")
+        .into_inner();
+    db.create(CreateDatabaseRequest {
+        name: "work".into(),
+        path: Some(tempdir.path().join("work-b.db").display().to_string()),
+    })
+    .await
+    .expect("create second work");
+
+    let err = commands::database::resolve_database_id_by_selection(&mut db, "work")
+        .await
+        .expect_err("a name shared by two databases must be ambiguous");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ambiguous"),
+        "expected an ambiguity error, got: {msg}"
+    );
+    // Both colliding ids should be listed so the user can disambiguate.
+    assert!(
+        msg.contains(&first.id),
+        "ambiguity error should list the colliding ids, got: {msg}"
+    );
+
+    // Selecting by id sidesteps the ambiguity.
+    let resolved = commands::database::resolve_database_id_by_selection(&mut db, &first.id)
+        .await
+        .expect("id resolves unambiguously even with a duplicate name");
+    assert_eq!(resolved, first.id);
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn database_routing_isolates_writes() {
+    let (sock, shutdown, tempdir) = spawn_routing_daemon().await;
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    // Register a second database.
+    db.create(CreateDatabaseRequest {
+        name: "Second".into(),
+        path: Some(tempdir.path().join("second.db").display().to_string()),
+    })
+    .await
+    .expect("create second")
+    .into_inner();
+
+    // Resolve its id by name and route a NodeService client to it.
+    let second_id = commands::database::resolve_database_id_by_selection(&mut db, "Second")
+        .await
+        .expect("resolve second");
+    let mut node_second = node_client_for(&sock, &second_id).await;
+
+    // Create a node routed to the second database via the node command handler.
+    commands::node::run(
+        &mut node_second,
+        commands::node::NodeAction::Create(commands::node::CreateArgs {
+            node_type: "text".into(),
+            content: "isolated-to-second".into(),
+            parent: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create in second");
+
+    let query = QueryNodesSimpleRequest {
+        id: None,
+        mentioned_by: None,
+        content_contains: Some("isolated-to-second".into()),
+        title_contains: None,
+        node_type: None,
+        limit: 0,
+        offset: 0,
+    };
+
+    // Visible from the second database...
+    let in_second = node_second
+        .query_nodes_simple(query.clone())
+        .await
+        .expect("query second")
+        .into_inner();
+    assert_eq!(
+        in_second.nodes.len(),
+        1,
+        "the write must be visible in the database it was routed to"
+    );
+
+    // ...and invisible from the default (header-less) database — no cross-database bleed.
+    let mut node_default = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect default");
+    let in_default = node_default
+        .query_nodes_simple(query)
+        .await
+        .expect("query default")
+        .into_inner();
+    assert!(
+        in_default.nodes.is_empty(),
+        "the write must not leak into the default database"
+    );
 
     let _ = shutdown.send(());
 }

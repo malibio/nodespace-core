@@ -1,3 +1,4 @@
+pub mod database;
 pub mod diagnostics;
 pub mod import;
 pub mod mention;

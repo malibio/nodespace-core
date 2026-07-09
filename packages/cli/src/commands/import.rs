@@ -5,9 +5,10 @@ use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
     FileImportResult, ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions,
 };
-use nodespace_daemon::ImportServiceClient;
 use tokio_stream::StreamExt;
-use tonic::{transport::Channel, Request};
+use tonic::Request;
+
+use crate::ImportClient;
 
 #[derive(Subcommand, Debug)]
 pub enum ImportAction {
@@ -57,11 +58,7 @@ pub struct ImportDirArgs {
     pub exclude_patterns: Vec<String>,
 }
 
-pub async fn run(
-    client: &mut ImportServiceClient<Channel>,
-    action: ImportAction,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut ImportClient, action: ImportAction, json: bool) -> Result<()> {
     match action {
         ImportAction::File(args) => run_file(client, args, json).await,
         ImportAction::Dir(args) => run_dir(client, args, json).await,
@@ -87,11 +84,7 @@ fn results_to_json(results: &[FileImportResult]) -> serde_json::Value {
     )
 }
 
-async fn run_file(
-    client: &mut ImportServiceClient<Channel>,
-    args: ImportFileArgs,
-    json: bool,
-) -> Result<()> {
+async fn run_file(client: &mut ImportClient, args: ImportFileArgs, json: bool) -> Result<()> {
     let opts = ImportOptions {
         collection: args.collection.unwrap_or_default(),
         use_filename_as_title: args.use_filename_as_title,
@@ -143,11 +136,7 @@ async fn run_file(
     Ok(())
 }
 
-async fn run_dir(
-    client: &mut ImportServiceClient<Channel>,
-    args: ImportDirArgs,
-    json: bool,
-) -> Result<()> {
+async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> Result<()> {
     let file_paths = collect_markdown_files(&args.directory, &args.exclude_patterns)?;
 
     if file_paths.is_empty() {

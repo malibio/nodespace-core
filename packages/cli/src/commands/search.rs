@@ -3,10 +3,9 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use nodespace_daemon::nodespace::SearchRequest;
-use nodespace_daemon::NodeServiceClient;
-use tonic::transport::Channel;
 
 use crate::output;
+use crate::NodeClient;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -21,11 +20,7 @@ pub struct SearchArgs {
     pub limit: i32,
 }
 
-pub async fn run(
-    client: &mut NodeServiceClient<Channel>,
-    args: SearchArgs,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut NodeClient, args: SearchArgs, json: bool) -> Result<()> {
     let response = client
         .search_nodes(SearchRequest {
             query: args.query,

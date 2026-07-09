@@ -3,10 +3,9 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{GetAllSchemasRequest, GetSchemaDefinitionRequest};
-use nodespace_daemon::NodeServiceClient;
-use tonic::transport::Channel;
 
 use crate::output;
+use crate::NodeClient;
 
 #[derive(Subcommand, Debug)]
 pub enum SchemaAction {
@@ -25,22 +24,14 @@ pub struct SchemaGetArgs {
     pub id: String,
 }
 
-pub async fn run(
-    client: &mut NodeServiceClient<Channel>,
-    action: SchemaAction,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut NodeClient, action: SchemaAction, json: bool) -> Result<()> {
     match action {
         SchemaAction::List(args) => list(client, args, json).await,
         SchemaAction::Get(args) => get(client, args, json).await,
     }
 }
 
-async fn list(
-    client: &mut NodeServiceClient<Channel>,
-    _args: SchemaListArgs,
-    json: bool,
-) -> Result<()> {
+async fn list(client: &mut NodeClient, _args: SchemaListArgs, json: bool) -> Result<()> {
     let response = client
         .get_all_schemas(GetAllSchemasRequest {})
         .await
@@ -50,11 +41,7 @@ async fn list(
     output::print_node_list(&response, json)
 }
 
-async fn get(
-    client: &mut NodeServiceClient<Channel>,
-    args: SchemaGetArgs,
-    json: bool,
-) -> Result<()> {
+async fn get(client: &mut NodeClient, args: SchemaGetArgs, json: bool) -> Result<()> {
     let response = client
         .get_schema_definition(GetSchemaDefinitionRequest { schema_id: args.id })
         .await

@@ -5,9 +5,9 @@ use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
     CreateMentionRequest, DeleteMentionRequest, MentionTargetRequest,
 };
-use nodespace_daemon::NodeServiceClient;
 use serde_json::json;
-use tonic::transport::Channel;
+
+use crate::NodeClient;
 
 #[derive(Subcommand, Debug)]
 pub enum MentionAction {
@@ -47,11 +47,7 @@ pub struct MentionQueryArgs {
     pub id: String,
 }
 
-pub async fn run(
-    client: &mut NodeServiceClient<Channel>,
-    action: MentionAction,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut NodeClient, action: MentionAction, json: bool) -> Result<()> {
     match action {
         MentionAction::Create(args) => create(client, args, json).await,
         MentionAction::Delete(args) => delete(client, args, json).await,
@@ -60,11 +56,7 @@ pub async fn run(
     }
 }
 
-async fn create(
-    client: &mut NodeServiceClient<Channel>,
-    args: CreateMentionArgs,
-    json: bool,
-) -> Result<()> {
+async fn create(client: &mut NodeClient, args: CreateMentionArgs, json: bool) -> Result<()> {
     let response = client
         .create_mention(CreateMentionRequest {
             mentioning_node_id: args.from,
@@ -91,11 +83,7 @@ async fn create(
     Ok(())
 }
 
-async fn delete(
-    client: &mut NodeServiceClient<Channel>,
-    args: DeleteMentionArgs,
-    json: bool,
-) -> Result<()> {
+async fn delete(client: &mut NodeClient, args: DeleteMentionArgs, json: bool) -> Result<()> {
     let response = client
         .delete_mention(DeleteMentionRequest {
             mentioning_node_id: args.from,
@@ -122,11 +110,7 @@ async fn delete(
     Ok(())
 }
 
-async fn outgoing(
-    client: &mut NodeServiceClient<Channel>,
-    args: MentionQueryArgs,
-    json: bool,
-) -> Result<()> {
+async fn outgoing(client: &mut NodeClient, args: MentionQueryArgs, json: bool) -> Result<()> {
     let response = client
         .get_outgoing_mentions(MentionTargetRequest {
             node_id: args.id.clone(),
@@ -153,11 +137,7 @@ async fn outgoing(
     Ok(())
 }
 
-async fn incoming(
-    client: &mut NodeServiceClient<Channel>,
-    args: MentionQueryArgs,
-    json: bool,
-) -> Result<()> {
+async fn incoming(client: &mut NodeClient, args: MentionQueryArgs, json: bool) -> Result<()> {
     let response = client
         .get_incoming_mentions(MentionTargetRequest {
             node_id: args.id.clone(),

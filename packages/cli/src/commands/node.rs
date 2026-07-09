@@ -7,11 +7,10 @@ use nodespace_daemon::nodespace::{
     GetNodeRequest, GetNodesBatchRequest, QueryNodesSimpleRequest, UpdateNodeRequest,
     UpdateNodesBatchRequest,
 };
-use nodespace_daemon::NodeServiceClient;
 use serde_json::json;
-use tonic::transport::Channel;
 
 use crate::output;
+use crate::NodeClient;
 
 #[derive(Subcommand, Debug)]
 pub enum NodeAction {
@@ -132,11 +131,7 @@ pub struct BatchUpdateArgs {
     pub updates: String,
 }
 
-pub async fn run(
-    client: &mut NodeServiceClient<Channel>,
-    action: NodeAction,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut NodeClient, action: NodeAction, json: bool) -> Result<()> {
     match action {
         NodeAction::Get(args) => get(client, args, json).await,
         NodeAction::Create(args) => create(client, args, json).await,
@@ -150,7 +145,7 @@ pub async fn run(
     }
 }
 
-async fn get(client: &mut NodeServiceClient<Channel>, args: GetArgs, json: bool) -> Result<()> {
+async fn get(client: &mut NodeClient, args: GetArgs, json: bool) -> Result<()> {
     let response = client
         .get_node(GetNodeRequest { node_id: args.id })
         .await
@@ -161,11 +156,7 @@ async fn get(client: &mut NodeServiceClient<Channel>, args: GetArgs, json: bool)
     output::print_node(&node, json)
 }
 
-async fn create(
-    client: &mut NodeServiceClient<Channel>,
-    args: CreateArgs,
-    json: bool,
-) -> Result<()> {
+async fn create(client: &mut NodeClient, args: CreateArgs, json: bool) -> Result<()> {
     let response = client
         .create_node(CreateNodeRequest {
             node_type: args.node_type,
@@ -185,11 +176,7 @@ async fn create(
     output::print_node(&node, json)
 }
 
-async fn update(
-    client: &mut NodeServiceClient<Channel>,
-    args: UpdateArgs,
-    json: bool,
-) -> Result<()> {
+async fn update(client: &mut NodeClient, args: UpdateArgs, json: bool) -> Result<()> {
     let response = client
         .update_node(UpdateNodeRequest {
             node_id: args.id,
@@ -209,11 +196,7 @@ async fn update(
     output::print_node(&node, json)
 }
 
-async fn delete(
-    client: &mut NodeServiceClient<Channel>,
-    args: DeleteArgs,
-    json: bool,
-) -> Result<()> {
+async fn delete(client: &mut NodeClient, args: DeleteArgs, json: bool) -> Result<()> {
     let response = client
         .delete_node(DeleteNodeRequest {
             node_id: args.id,
@@ -226,11 +209,7 @@ async fn delete(
     output::print_delete(&response, json)
 }
 
-async fn children(
-    client: &mut NodeServiceClient<Channel>,
-    args: ChildrenArgs,
-    json: bool,
-) -> Result<()> {
+async fn children(client: &mut NodeClient, args: ChildrenArgs, json: bool) -> Result<()> {
     let response = client
         .get_children(GetChildrenRequest { node_id: args.id })
         .await
@@ -240,7 +219,7 @@ async fn children(
     output::print_node_list(&response, json)
 }
 
-async fn query(client: &mut NodeServiceClient<Channel>, args: QueryArgs, json: bool) -> Result<()> {
+async fn query(client: &mut NodeClient, args: QueryArgs, json: bool) -> Result<()> {
     let response = client
         .query_nodes_simple(QueryNodesSimpleRequest {
             id: args.id,
@@ -258,11 +237,7 @@ async fn query(client: &mut NodeServiceClient<Channel>, args: QueryArgs, json: b
     output::print_node_list(&response, json)
 }
 
-async fn export(
-    client: &mut NodeServiceClient<Channel>,
-    args: ExportArgs,
-    json: bool,
-) -> Result<()> {
+async fn export(client: &mut NodeClient, args: ExportArgs, json: bool) -> Result<()> {
     let response = client
         .export_markdown(ExportMarkdownRequest {
             node_id: args.id,
@@ -288,11 +263,7 @@ async fn export(
     Ok(())
 }
 
-async fn batch_get(
-    client: &mut NodeServiceClient<Channel>,
-    args: BatchGetArgs,
-    json: bool,
-) -> Result<()> {
+async fn batch_get(client: &mut NodeClient, args: BatchGetArgs, json: bool) -> Result<()> {
     let response = client
         .get_nodes_batch(GetNodesBatchRequest { node_ids: args.ids })
         .await
@@ -329,11 +300,7 @@ async fn batch_get(
     Ok(())
 }
 
-async fn batch_update(
-    client: &mut NodeServiceClient<Channel>,
-    args: BatchUpdateArgs,
-    json: bool,
-) -> Result<()> {
+async fn batch_update(client: &mut NodeClient, args: BatchUpdateArgs, json: bool) -> Result<()> {
     use nodespace_daemon::nodespace::BatchUpdateItem;
 
     let raw: serde_json::Value = serde_json::from_str(&args.updates)
