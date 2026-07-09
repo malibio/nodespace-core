@@ -610,7 +610,6 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
     let socket_path = xml_escape(&format!("{}/{}", home_str, daemon_socket_relative()));
-    let db_path = xml_escape(&format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR));
     let log_out = xml_escape(&format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR));
     let log_err = xml_escape(&format!(
         "{}/{}/nodespaced-error.log",
@@ -663,8 +662,6 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     <dict>
         <key>NODESPACED_SOCKET</key>
         <string>{socket}</string>
-        <key>NODESPACED_DB_PATH</key>
-        <string>{db}</string>
         <key>NODESPACE_UI_BINARY</key>
         <string>{ui_binary}</string>
 {pro_env}    </dict>
@@ -682,7 +679,6 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
         label = label_escaped,
         bin = bin_escaped,
         socket = socket_path,
-        db = db_path,
         ui_binary = ui_binary,
         pro_env = pro_env,
         log_out = log_out,
@@ -798,7 +794,6 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
     let home_str = home.to_string_lossy();
     let bin_str = daemon_bin.to_string_lossy();
     let socket_path = format!("{}/{}", home_str, daemon_socket_relative());
-    let db_path = format!("{}/{}/nodespace.db", home_str, DAEMON_DB_DIR);
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
 
@@ -825,7 +820,6 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
          Type=simple\n\
          ExecStart={bin}\n\
          Environment=NODESPACED_SOCKET='{socket}'\n\
-         Environment=NODESPACED_DB_PATH='{db}'\n\
          Environment=NODESPACE_UI_BINARY='{ui_binary}'\n\
          StandardOutput=append:{log_out}\n\
          StandardError=append:{log_err}\n\
@@ -835,7 +829,6 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
          WantedBy=default.target\n",
         bin = bin_str,
         socket = sq_escape(&socket_path),
-        db = sq_escape(&db_path),
         ui_binary = sq_escape(&ui_binary),
         log_out = log_out,
         log_err = log_err,
