@@ -63,6 +63,7 @@ use crate::nodespace::{
 ///
 /// `embedding_state` is `None` while the model is loading or when the NLP
 /// engine is absent. Semantic search returns `UNAVAILABLE` in both cases.
+#[derive(Clone)]
 pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,
     /// Shared with EmbeddingsServiceImpl; populated by the background load task.

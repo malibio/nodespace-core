@@ -26,6 +26,7 @@ use crate::nodespace::{
 
 const CHANNEL_BUFFER: usize = 64;
 
+#[derive(Clone)]
 pub struct ImportServiceImpl {
     node_service: Arc<CoreNodeService>,
 }

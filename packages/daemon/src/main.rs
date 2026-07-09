@@ -18,11 +18,35 @@ use nodespace_agent::local_agent::otlp_tracer;
 use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    build_base_router, build_database_services, build_shared_services, resolve_db_path, tray,
-    BaseServices,
+    build_base_router, build_shared_services, resolve_db_path, tray, BaseServices, DatabaseManager,
+    DatabaseServices, DbManagerLayer, SharedContext,
 };
 use tokio::sync::RwLock;
 use tonic::transport::Server;
+
+/// ADR-053: construct the [`DatabaseManager`], register + lazily open the
+/// default database, and return the manager together with the default's shared
+/// service set. The serve loops clone the per-database impls out of the returned
+/// set into [`BaseServices`] and install [`DbManagerLayer`] so requests carrying
+/// an `x-ns-database-id` header can reach other registered databases while
+/// header-less requests keep hitting the default.
+///
+/// Opening the default through the manager (rather than building it directly)
+/// means the *same* cached service set backs both header-less requests and
+/// requests that name the default id explicitly — the file is never opened
+/// twice.
+async fn open_default_database(
+    db_path: &std::path::Path,
+    context: SharedContext,
+) -> Result<(Arc<DatabaseManager>, Arc<DatabaseServices>)> {
+    let manager =
+        Arc::new(DatabaseManager::load(DatabaseManager::default_registry_path()?, context).await?);
+    let default_id = manager
+        .ensure_default_registered("Default".to_string(), db_path.to_path_buf())
+        .await?;
+    let bundle = manager.get_or_open(&default_id).await?;
+    Ok((manager, bundle))
+}
 
 #[cfg(unix)]
 fn socket_path() -> std::path::PathBuf {
@@ -164,9 +188,9 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
-    // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
+    let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -180,19 +204,22 @@ async fn serve_headless() -> Result<()> {
 
     let sock_cleanup = sock.clone();
     let base_services = BaseServices {
-        node_service: bundle.node_service_grpc,
-        agent_session: bundle.agent_session,
-        import: bundle.import,
+        node_service: bundle.node_service_grpc.clone(),
+        agent_session: bundle.agent_session.clone(),
+        import: bundle.import.clone(),
         settings: shared.settings,
-        local_agent: bundle.local_agent,
-        embeddings: bundle.embeddings_service_grpc,
+        local_agent: bundle.local_agent.clone(),
+        embeddings: bundle.embeddings_service_grpc.clone(),
     };
-    build_base_router(Server::builder(), base_services)
-        .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
-        .await
-        .context("gRPC server terminated with error")?;
+    build_base_router(
+        Server::builder().layer(DbManagerLayer::new(manager)),
+        base_services,
+    )
+    .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
+    .await
+    .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
-    drain_gpu(bundle.embedding_state).await;
+    drain_gpu(bundle.embedding_state.clone()).await;
     Ok(())
 }
 
@@ -210,9 +237,9 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
-    // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
+    let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -234,22 +261,24 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let sock_cleanup = sock.clone();
     let base_services = BaseServices {
-        node_service: bundle.node_service_grpc,
-        agent_session: bundle.agent_session,
-        import: bundle.import,
+        node_service: bundle.node_service_grpc.clone(),
+        agent_session: bundle.agent_session.clone(),
+        import: bundle.import.clone(),
         settings: shared.settings,
-        local_agent: bundle.local_agent,
-        embeddings: bundle.embeddings_service_grpc,
+        local_agent: bundle.local_agent.clone(),
+        embeddings: bundle.embeddings_service_grpc.clone(),
     };
     build_base_router(
-        Server::builder().layer(TrayMetricsLayer::new(controller)),
+        Server::builder()
+            .layer(TrayMetricsLayer::new(controller))
+            .layer(DbManagerLayer::new(manager)),
         base_services,
     )
     .serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
     .await
     .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
-    drain_gpu(bundle.embedding_state).await;
+    drain_gpu(bundle.embedding_state.clone()).await;
     Ok(())
 }
 
@@ -311,9 +340,9 @@ async fn serve_headless() -> Result<()> {
     tracing::info!(db_path = %db_path.display(), pipe = %name, "Starting nodespaced (headless, Windows)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
-    // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
+    let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
@@ -348,21 +377,24 @@ async fn serve_headless() -> Result<()> {
     };
 
     let base_services = BaseServices {
-        node_service: bundle.node_service_grpc,
-        agent_session: bundle.agent_session,
-        import: bundle.import,
+        node_service: bundle.node_service_grpc.clone(),
+        agent_session: bundle.agent_session.clone(),
+        import: bundle.import.clone(),
         settings: shared.settings,
-        local_agent: bundle.local_agent,
-        embeddings: bundle.embeddings_service_grpc,
+        local_agent: bundle.local_agent.clone(),
+        embeddings: bundle.embeddings_service_grpc.clone(),
     };
-    build_base_router(Server::builder(), base_services)
-        .serve_with_incoming_shutdown(incoming, async move {
-            shutdown.await;
-            cancel.cancel();
-        })
-        .await
-        .context("gRPC server terminated with error")?;
-    drain_gpu(bundle.embedding_state).await;
+    build_base_router(
+        Server::builder().layer(DbManagerLayer::new(manager)),
+        base_services,
+    )
+    .serve_with_incoming_shutdown(incoming, async move {
+        shutdown.await;
+        cancel.cancel();
+    })
+    .await
+    .context("gRPC server terminated with error")?;
+    drain_gpu(bundle.embedding_state.clone()).await;
     Ok(())
 }
 
@@ -379,9 +411,9 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
-    // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
+    // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
+    let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
 
     let shutdown_controller = controller.clone();
     let combined_shutdown = async move {
@@ -419,15 +451,17 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     };
 
     let base_services = BaseServices {
-        node_service: bundle.node_service_grpc,
-        agent_session: bundle.agent_session,
-        import: bundle.import,
+        node_service: bundle.node_service_grpc.clone(),
+        agent_session: bundle.agent_session.clone(),
+        import: bundle.import.clone(),
         settings: shared.settings,
-        local_agent: bundle.local_agent,
-        embeddings: bundle.embeddings_service_grpc,
+        local_agent: bundle.local_agent.clone(),
+        embeddings: bundle.embeddings_service_grpc.clone(),
     };
     build_base_router(
-        Server::builder().layer(TrayMetricsLayer::new(controller)),
+        Server::builder()
+            .layer(TrayMetricsLayer::new(controller))
+            .layer(DbManagerLayer::new(manager)),
         base_services,
     )
     .serve_with_incoming_shutdown(incoming, async move {
@@ -436,7 +470,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     })
     .await
     .context("gRPC server terminated with error")?;
-    drain_gpu(bundle.embedding_state).await;
+    drain_gpu(bundle.embedding_state.clone()).await;
     Ok(())
 }
 
