@@ -2,9 +2,8 @@ syntax = "proto3";
 
 package nodespace;
 
-// SettingsService exposes daemon-owned configuration (gRPC address, session
-// capture) over gRPC so Tauri and CLI clients can read and update config
-// without direct file access.
+// SettingsService exposes daemon-owned session capture settings over gRPC so
+// Tauri and CLI clients can read and update them without direct file access.
 //
 // The active database path is owned by DatabaseService (ADR-053), not this
 // service — clients read it from the registry, not daemon.toml.
@@ -12,31 +11,12 @@ package nodespace;
 // Display preferences (theme, render_markdown) stay in Tauri local storage
 // and are NOT part of this service.
 service SettingsService {
-  // Read current daemon configuration.
-  rpc GetDaemonConfig(GetDaemonConfigRequest) returns (DaemonConfigResponse);
-
-  // Persist updated daemon configuration. Takes effect on the next daemon
-  // start.
-  rpc UpdateDaemonConfig(UpdateDaemonConfigRequest) returns (DaemonConfigResponse);
-
   // Read session capture settings.
   rpc GetCaptureSettings(GetCaptureSettingsRequest) returns (CaptureSettingsResponse);
 
   // Persist session capture settings. Changes take effect immediately for
   // sessions launched after this call.
   rpc UpdateCaptureSettings(UpdateCaptureSettingsRequest) returns (CaptureSettingsResponse);
-}
-
-message GetDaemonConfigRequest {}
-
-message UpdateDaemonConfigRequest {
-  // New gRPC bind address. Empty string means "no change".
-  string grpc_address = 2;
-}
-
-message DaemonConfigResponse {
-  // gRPC bind address the daemon is currently configured to use.
-  string grpc_address = 2;
 }
 
 // ---------------------------------------------------------------------------
