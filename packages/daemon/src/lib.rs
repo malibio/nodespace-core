@@ -49,6 +49,7 @@ pub use nodespace_proto::{
 
 pub use router::{build_base_router, BaseServices};
 pub use services::{
-    AgentSessionHandler, EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl,
-    NodeServiceImpl, SettingsServiceImpl,
+    build_database_services, build_shared_services, AgentSessionHandler, DatabaseServices,
+    EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl, NodeServiceImpl,
+    SettingsServiceImpl, SharedServices,
 };

@@ -4,6 +4,7 @@
 //! logic and adapts it to the tonic-generated service trait.
 
 pub mod agent_session_service;
+pub mod assembly;
 pub mod capture_service;
 pub mod database_manager;
 pub mod embeddings_service;
@@ -13,6 +14,9 @@ pub mod node_service;
 pub mod settings_service;
 
 pub use agent_session_service::AgentSessionHandler;
+pub use assembly::{
+    build_database_services, build_shared_services, DatabaseServices, SharedServices,
+};
 pub use database_manager::{
     DatabaseEntry, DatabaseId, DatabaseListing, DatabaseManager, DatabaseStatus, Registry,
     RegistrySnapshot,
