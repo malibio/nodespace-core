@@ -13,19 +13,12 @@ use tonic::{Request, Response, Status};
 
 use crate::nodespace::{
     settings_service_server::SettingsService as GrpcSettingsService, CaptureContentLevel,
-    CaptureSettingsResponse, DaemonConfigResponse, GetCaptureSettingsRequest,
-    GetDaemonConfigRequest, UpdateCaptureSettingsRequest, UpdateDaemonConfigRequest,
+    CaptureSettingsResponse, GetCaptureSettingsRequest, UpdateCaptureSettingsRequest,
 };
-
-fn default_socket_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    format!("{home}/.nodespace/daemon.sock")
-}
 
 /// On-disk representation of `~/.nodespace/daemon.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct DaemonConfig {
-    grpc_address: Option<String>,
     #[serde(default)]
     capture: CaptureConfig,
 }
@@ -96,8 +89,8 @@ pub async fn read_capture_settings(config_path: &std::path::Path) -> anyhow::Res
 
 pub struct SettingsServiceImpl {
     config_path: PathBuf,
-    /// Serializes concurrent UpdateDaemonConfig / UpdateCaptureSettings RPCs
-    /// so read-modify-write operations on daemon.toml are not interleaved.
+    /// Serializes concurrent UpdateCaptureSettings RPCs so read-modify-write
+    /// operations on daemon.toml are not interleaved.
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -142,15 +135,6 @@ impl SettingsServiceImpl {
             .map_err(|e| Status::internal(format!("Failed to write daemon config: {}", e)))
     }
 
-    fn config_to_response(config: &DaemonConfig) -> DaemonConfigResponse {
-        DaemonConfigResponse {
-            grpc_address: config
-                .grpc_address
-                .clone()
-                .unwrap_or_else(default_socket_path),
-        }
-    }
-
     fn capture_to_response(capture: &CaptureConfig) -> CaptureSettingsResponse {
         CaptureSettingsResponse {
             enabled: capture.enabled,
@@ -162,31 +146,6 @@ impl SettingsServiceImpl {
 
 #[tonic::async_trait]
 impl GrpcSettingsService for SettingsServiceImpl {
-    async fn get_daemon_config(
-        &self,
-        _request: Request<GetDaemonConfigRequest>,
-    ) -> Result<Response<DaemonConfigResponse>, Status> {
-        let config = self.read_config().await?;
-        Ok(Response::new(Self::config_to_response(&config)))
-    }
-
-    async fn update_daemon_config(
-        &self,
-        request: Request<UpdateDaemonConfigRequest>,
-    ) -> Result<Response<DaemonConfigResponse>, Status> {
-        let req = request.into_inner();
-        let _guard = self.write_lock.lock().await;
-
-        let mut config = self.read_config().await?;
-
-        if !req.grpc_address.is_empty() {
-            config.grpc_address = Some(req.grpc_address);
-        }
-
-        self.write_config(&config).await?;
-        Ok(Response::new(Self::config_to_response(&config)))
-    }
-
     async fn get_capture_settings(
         &self,
         _request: Request<GetCaptureSettingsRequest>,
