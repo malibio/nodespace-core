@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package nodespace;
+
+// DatabaseService manages the daemon's registry of local databases (ADR-053:
+// "One Daemon, Multiple Local Databases"). A single daemon process serves N
+// registered databases behind its one socket; this service lets clients list,
+// create, register, remove, rename, and choose the default database.
+//
+// Requests to the data-plane services (nodes, agents, import, ...) that omit
+// the per-request routing metadata fall back to the default database chosen
+// via SetDefault, so existing single-database clients keep working unchanged.
+//
+// Remove never deletes the underlying database file — it only detaches the
+// registry entry. Registered-but-missing files are surfaced as a status, never
+// silently pruned.
+service DatabaseService {
+  // List every registered database with its current open/closed/missing status
+  // and identify which one is the default.
+  rpc List(ListDatabasesRequest) returns (ListDatabasesResponse);
+
+  // Create a brand-new database and register it. When `path` is omitted the
+  // daemon places the database file under its managed database directory.
+  rpc Create(CreateDatabaseRequest) returns (DatabaseInfo);
+
+  // Register an existing database file already present on disk.
+  rpc Register(RegisterDatabaseRequest) returns (DatabaseInfo);
+
+  // Unregister a database from the registry. This never deletes the underlying
+  // database file — it only removes the registry entry.
+  rpc Remove(RemoveDatabaseRequest) returns (RemoveDatabaseResponse);
+
+  // Choose which registered database serves requests that omit routing
+  // metadata.
+  rpc SetDefault(SetDefaultDatabaseRequest) returns (DatabaseInfo);
+
+  // Rename the human-facing label of a registered database. Does not move or
+  // rename the underlying file.
+  rpc Rename(RenameDatabaseRequest) returns (DatabaseInfo);
+}
+
+// Runtime status of a registered database.
+enum DatabaseStatus {
+  // The database file exists on disk but is not currently open in the daemon.
+  // This is the resting state for a registered, idle database.
+  DATABASE_STATUS_CLOSED = 0;
+  // The database is open and serving requests.
+  DATABASE_STATUS_OPEN = 1;
+  // The registry entry points at a path with no database file present.
+  DATABASE_STATUS_MISSING = 2;
+}
+
+// A registered database and its current runtime status.
+message DatabaseInfo {
+  // Stable registry identifier (ULID string).
+  string id = 1;
+  // Human-facing label; renamable without touching the file.
+  string name = 2;
+  // Absolute path to the database file.
+  string path = 3;
+  // RFC 3339 timestamp of when the entry was registered.
+  string created_at = 4;
+  // RFC 3339 timestamp of the last time the database was opened, if ever.
+  optional string last_opened_at = 5;
+  // Whether this is the daemon's default (routing-header-less) database.
+  bool is_default = 6;
+  // Current open/closed/missing status.
+  DatabaseStatus status = 7;
+}
+
+message ListDatabasesRequest {}
+
+message ListDatabasesResponse {
+  repeated DatabaseInfo databases = 1;
+  // Identifier of the default database; empty when none is set.
+  string default_database_id = 2;
+}
+
+message CreateDatabaseRequest {
+  // Human-facing label for the new database.
+  string name = 1;
+  // Optional explicit path for the new database file. When omitted the daemon
+  // chooses a path under its managed database directory.
+  optional string path = 2;
+}
+
+message RegisterDatabaseRequest {
+  // Absolute path to an existing database file to register.
+  string path = 1;
+}
+
+message RemoveDatabaseRequest {
+  // Identifier of the database to unregister.
+  string id = 1;
+}
+
+message RemoveDatabaseResponse {
+  // Identifier of the database that was unregistered.
+  string id = 1;
+}
+
+message SetDefaultDatabaseRequest {
+  // Identifier of the database to mark as default.
+  string id = 1;
+}
+
+message RenameDatabaseRequest {
+  // Identifier of the database to rename.
+  string id = 1;
+  // New human-facing label.
+  string name = 2;
+}
