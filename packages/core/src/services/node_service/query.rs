@@ -321,3 +321,17 @@ impl NodeService {
         Ok(migrated_nodes)
     }
 }
+
+impl NodeService {
+    /// Search nodes for mention autocomplete with proper filtering
+    pub async fn mention_autocomplete(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<Node>, NodeServiceError> {
+        self.store
+            .mention_autocomplete(query, limit.map(|l| l as i64))
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+    }
+}
