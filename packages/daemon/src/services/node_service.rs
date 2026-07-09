@@ -35,6 +35,8 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::db_routing::DATABASE_ID_HEADER;
+use crate::services::database_manager::DatabaseManager;
 use crate::services::embeddings_service::EmbeddingReady;
 use tonic::{Request, Response, Status};
 
@@ -63,6 +65,7 @@ use crate::nodespace::{
 ///
 /// `embedding_state` is `None` while the model is loading or when the NLP
 /// engine is absent. Semantic search returns `UNAVAILABLE` in both cases.
+#[derive(Clone)]
 pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,
     /// Shared with EmbeddingsServiceImpl; populated by the background load task.
@@ -79,6 +82,38 @@ impl NodeServiceImpl {
             embedding_state,
         }
     }
+
+    /// Resolve which database a request targets (ADR-053) and return that
+    /// database's node service.
+    ///
+    /// When the routing middleware ([`crate::db_routing::DbManagerLayer`])
+    /// injected a [`DatabaseManager`], resolve the `x-ns-database-id` header
+    /// (absent → the default database) and hand back that database's cached
+    /// [`NodeServiceImpl`]; a header naming an unregistered database is
+    /// rejected rather than silently served from the default. When no manager
+    /// is present — the Pro daemon does not install the layer, and unit tests
+    /// construct the impl directly — fall back to `self` so behavior is
+    /// unchanged.
+    async fn route<T>(&self, request: &Request<T>) -> Result<NodeServiceImpl, Status> {
+        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
+            return Ok(self.clone());
+        };
+        let header = request
+            .metadata()
+            .get(DATABASE_ID_HEADER)
+            .map(|v| v.to_str())
+            .transpose()
+            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
+        let id = manager
+            .resolve_database_id(header)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        let services = manager
+            .get_or_open(&id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(services.node_service_grpc.clone())
+    }
 }
 
 #[tonic::async_trait]
@@ -87,6 +122,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<CreateNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let properties = parse_properties(&req.properties).map_err(properties_error)?;
@@ -110,11 +146,11 @@ impl GrpcNodeService for NodeServiceImpl {
             lifecycle_status: req.lifecycle_status,
         };
 
-        let output = node_ops::create_node(&self.node_service, input)
+        let output = node_ops::create_node(&this.node_service, input)
             .await
             .map_err(ops_error_to_status)?;
 
-        let node = fetch_node(&self.node_service, &output.node_id).await?;
+        let node = fetch_node(&this.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
 
         Ok(Response::new(NodeResponse {
@@ -128,9 +164,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let node = fetch_node(&self.node_service, &req.node_id).await?;
+        let node = fetch_node(&this.node_service, &req.node_id).await?;
         let node_type = node.node_type.clone();
 
         Ok(Response::new(NodeResponse {
@@ -144,6 +181,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<UpdateNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let properties = match req.properties.as_deref() {
@@ -162,11 +200,11 @@ impl GrpcNodeService for NodeServiceImpl {
             lifecycle_status: req.lifecycle_status,
         };
 
-        let output = node_ops::update_node(&self.node_service, input)
+        let output = node_ops::update_node(&this.node_service, input)
             .await
             .map_err(ops_error_to_status)?;
 
-        let node = fetch_node(&self.node_service, &output.node_id).await?;
+        let node = fetch_node(&this.node_service, &output.node_id).await?;
         let node_type = node.node_type.clone();
 
         Ok(Response::new(NodeResponse {
@@ -180,6 +218,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<DeleteNodeRequest>,
     ) -> Result<Response<DeleteNodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let input = node_ops::DeleteNodeInput {
@@ -188,7 +227,7 @@ impl GrpcNodeService for NodeServiceImpl {
         };
 
         // node_ops::delete_node handles auto-fetch; map NotFound to existed=false.
-        let output = match node_ops::delete_node(&self.node_service, input).await {
+        let output = match node_ops::delete_node(&this.node_service, input).await {
             Ok(o) => o,
             Err(OpsError::NotFound { id }) => {
                 return Ok(Response::new(DeleteNodeResponse {
@@ -211,9 +250,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetChildrenRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let children = self
+        let children = this
             .node_service
             .get_children(&req.node_id)
             .await
@@ -234,8 +274,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetChildrenTreeRequest>,
     ) -> Result<Response<NodeTreeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        let tree = self
+        let tree = this
             .node_service
             .get_children_tree(&req.node_id)
             .await
@@ -250,6 +291,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetRootsRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let limit = if req.limit == 0 {
             None
@@ -262,7 +304,7 @@ impl GrpcNodeService for NodeServiceImpl {
             Some(req.offset as usize)
         };
 
-        let roots = self
+        let roots = this
             .node_service
             .get_roots(limit, offset)
             .await
@@ -282,9 +324,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<SearchRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let guard = self.embedding_state.read().await;
+        let guard = this.embedding_state.read().await;
         let embedding_service = guard
             .as_ref()
             .map(|r| &r.embedding_service)
@@ -339,7 +382,7 @@ impl GrpcNodeService for NodeServiceImpl {
             graph_boost: None,
         };
 
-        let output = search_ops::search_semantic(&self.node_service, embedding_service, input)
+        let output = search_ops::search_semantic(&this.node_service, embedding_service, input)
             .await
             .map_err(ops_error_to_status)?;
 
@@ -348,7 +391,7 @@ impl GrpcNodeService for NodeServiceImpl {
             let Some(id) = value.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            match self.node_service.get_node(id).await {
+            match this.node_service.get_node(id).await {
                 Ok(Some(node)) => nodes.push(node_to_proto(node)),
                 Ok(None) => tracing::warn!(node_id = %id, "search result missing on re-fetch"),
                 Err(e) => {
@@ -369,6 +412,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<QueryNodesSimpleRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let query = NodeQuery {
@@ -390,7 +434,7 @@ impl GrpcNodeService for NodeServiceImpl {
             },
         };
 
-        let nodes = self
+        let nodes = this
             .node_service
             .query_nodes_simple(query)
             .await
@@ -410,6 +454,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MentionAutocompleteRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let limit = if req.limit == 0 {
@@ -418,7 +463,7 @@ impl GrpcNodeService for NodeServiceImpl {
             Some(req.limit as usize)
         };
 
-        let nodes = self
+        let nodes = this
             .node_service
             .mention_autocomplete(&req.query, limit)
             .await
@@ -438,9 +483,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<UpsertNodeWithParentRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        self.node_service
+        this.node_service
             .upsert_node_with_parent(
                 &req.node_id,
                 &req.content,
@@ -452,7 +498,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(service_error_to_status)?;
 
-        let node = fetch_node(&self.node_service, &req.node_id).await?;
+        let node = fetch_node(&this.node_service, &req.node_id).await?;
         let node_type = node.node_type.clone();
         Ok(Response::new(NodeResponse {
             node_id: req.node_id,
@@ -465,6 +511,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MoveNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         // Normalize "" to None: both unset and empty-string mean "move to root".
@@ -478,7 +525,7 @@ impl GrpcNodeService for NodeServiceImpl {
             None => InsertPosition::End,
         };
 
-        let node = self
+        let node = this
             .node_service
             .move_node(&req.node_id, req.version, new_parent.as_deref(), position)
             .await
@@ -496,6 +543,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<ReorderNodeRequest>,
     ) -> Result<Response<ReorderNodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         use crate::nodespace::reorder_node_request::Position as ReorderPos;
@@ -506,7 +554,7 @@ impl GrpcNodeService for NodeServiceImpl {
             None => InsertPosition::End,
         };
 
-        self.node_service
+        this.node_service
             .reorder_node(&req.node_id, req.version, position)
             .await
             .map_err(service_error_to_status)?;
@@ -518,6 +566,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MoveChildrenToParentRequest>,
     ) -> Result<Response<MoveChildrenToParentResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let children: Vec<(String, i64)> = req
@@ -526,7 +575,7 @@ impl GrpcNodeService for NodeServiceImpl {
             .map(|c| (c.node_id, c.version))
             .collect();
 
-        let updated = self
+        let updated = this
             .node_service
             .move_children_to_parent(&req.new_parent_id, &children)
             .await
@@ -543,8 +592,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<CreateMentionRequest>,
     ) -> Result<Response<MentionResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        self.node_service
+        this.node_service
             .create_mention(&req.mentioning_node_id, &req.mentioned_node_id)
             .await
             .map_err(service_error_to_status)?;
@@ -558,8 +608,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<DeleteMentionRequest>,
     ) -> Result<Response<MentionResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        self.node_service
+        this.node_service
             .remove_mention(&req.mentioning_node_id, &req.mentioned_node_id)
             .await
             .map_err(service_error_to_status)?;
@@ -573,8 +624,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MentionTargetRequest>,
     ) -> Result<Response<MentionIdsResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        let ids = self
+        let ids = this
             .node_service
             .get_mentions(&req.node_id)
             .await
@@ -586,8 +638,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MentionTargetRequest>,
     ) -> Result<Response<MentionIdsResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        let ids = self
+        let ids = this
             .node_service
             .get_mentioned_by(&req.node_id)
             .await
@@ -599,8 +652,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<MentionTargetRequest>,
     ) -> Result<Response<NodeReferenceListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        let refs = self
+        let refs = this
             .node_service
             .get_mentioning_containers(&req.node_id)
             .await
@@ -622,6 +676,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<UpdateTaskNodeRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         let update = build_task_node_update(
@@ -635,7 +690,7 @@ impl GrpcNodeService for NodeServiceImpl {
         )
         .map_err(Status::invalid_argument)?;
 
-        let task = match self
+        let task = match this
             .node_service
             .update_task_node(&req.node_id, req.version, update)
             .await
@@ -649,7 +704,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 // Fetch the authoritative current state so the client can
                 // hydrate without a second round-trip (mirrors the pattern
                 // used by node_ops::update_node for regular-node conflicts).
-                let current_node = self
+                let current_node = this
                     .node_service
                     .get_node(&node_id)
                     .await
@@ -685,6 +740,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<ExportMarkdownRequest>,
     ) -> Result<Response<ExportMarkdownResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         use serde_json::json;
@@ -696,7 +752,7 @@ impl GrpcNodeService for NodeServiceImpl {
         });
 
         let result =
-            nodespace_core::markdown::handle_get_markdown_from_node_id(&self.node_service, params)
+            nodespace_core::markdown::handle_get_markdown_from_node_id(&this.node_service, params)
                 .await
                 .map_err(|e| match e {
                     nodespace_core::markdown::MarkdownError::NotFound(m) => Status::not_found(m),
@@ -730,6 +786,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetNodesBatchRequest>,
     ) -> Result<Response<GetNodesBatchResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         if req.node_ids.is_empty() {
@@ -743,7 +800,7 @@ impl GrpcNodeService for NodeServiceImpl {
         }
 
         let id_refs: Vec<&str> = req.node_ids.iter().map(String::as_str).collect();
-        let fetched = self
+        let fetched = this
             .node_service
             .get_nodes(&id_refs)
             .await
@@ -772,6 +829,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<UpdateNodesBatchRequest>,
     ) -> Result<Response<UpdateNodesBatchResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
 
         if req.updates.is_empty() {
@@ -795,7 +853,7 @@ impl GrpcNodeService for NodeServiceImpl {
                         node_id = %item.node_id,
                         "OCC bypassed: version not provided for batch update (race condition possible)"
                     );
-                    match self.node_service.get_node(&item.node_id).await {
+                    match this.node_service.get_node(&item.node_id).await {
                         Ok(Some(node)) => node.version,
                         Ok(None) => {
                             failed.push(BatchUpdateFailure {
@@ -837,7 +895,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 lifecycle_status: None,
             };
 
-            match self
+            match this
                 .node_service
                 .update_node(&item.node_id, version, node_update)
                 .await
@@ -864,13 +922,14 @@ impl GrpcNodeService for NodeServiceImpl {
 
     async fn get_all_schemas(
         &self,
-        _request: Request<GetAllSchemasRequest>,
+        request: Request<GetAllSchemasRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let query = NodeQuery {
             node_type: Some("schema".to_string()),
             ..Default::default()
         };
-        let nodes = self
+        let nodes = this
             .node_service
             .query_nodes_simple(query)
             .await
@@ -890,8 +949,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetSchemaDefinitionRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        let node = fetch_node(&self.node_service, &req.schema_id).await?;
+        let node = fetch_node(&this.node_service, &req.schema_id).await?;
         if node.node_type != "schema" {
             return Err(Status::failed_precondition(format!(
                 "Node '{}' is not a schema (type={})",
@@ -910,10 +970,11 @@ impl GrpcNodeService for NodeServiceImpl {
 
     async fn get_all_collections(
         &self,
-        _request: Request<GetAllCollectionsRequest>,
+        request: Request<GetAllCollectionsRequest>,
     ) -> Result<Response<CollectionListResponse>, Status> {
+        let this = self.route(&request).await?;
         let output =
-            collection_ops::get_all_collections(&self.node_service, GetAllCollectionsInput)
+            collection_ops::get_all_collections(&this.node_service, GetAllCollectionsInput)
                 .await
                 .map_err(ops_error_to_status)?;
 
@@ -934,9 +995,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<CollectionMembersRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::get_collection_members(
-            &self.node_service,
+            &this.node_service,
             GetCollectionMembersInput {
                 collection_id: req.collection_id,
             },
@@ -958,9 +1020,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<CollectionMembersRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::get_collection_members_recursive(
-            &self.node_service,
+            &this.node_service,
             GetCollectionMembersRecursiveInput {
                 collection_id: req.collection_id,
             },
@@ -982,9 +1045,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<NodeCollectionsRequest>,
     ) -> Result<Response<CollectionIdsResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::get_node_collections(
-            &self.node_service,
+            &this.node_service,
             GetNodeCollectionsInput {
                 node_id: req.node_id,
             },
@@ -1000,9 +1064,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<AddNodeToCollectionRequest>,
     ) -> Result<Response<Empty>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         collection_ops::add_node_to_collection(
-            &self.node_service,
+            &this.node_service,
             AddNodeToCollectionInput {
                 node_id: req.node_id,
                 collection_id: req.collection_id,
@@ -1017,9 +1082,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<AddNodeToCollectionByPathRequest>,
     ) -> Result<Response<CollectionIdResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::add_node_to_collection_by_path(
-            &self.node_service,
+            &this.node_service,
             AddNodeToCollectionByPathInput {
                 node_id: req.node_id,
                 collection_path: req.collection_path,
@@ -1036,9 +1102,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<RemoveNodeFromCollectionRequest>,
     ) -> Result<Response<Empty>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         collection_ops::remove_node_from_collection(
-            &self.node_service,
+            &this.node_service,
             RemoveNodeFromCollectionInput {
                 node_id: req.node_id,
                 collection_id: req.collection_id,
@@ -1053,9 +1120,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<FindCollectionByPathRequest>,
     ) -> Result<Response<OptionalNodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::find_collection_by_path(
-            &self.node_service,
+            &this.node_service,
             FindCollectionByPathInput {
                 collection_path: req.collection_path,
             },
@@ -1081,9 +1149,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<GetCollectionByNameRequest>,
     ) -> Result<Response<OptionalNodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::get_collection_by_name(
-            &self.node_service,
+            &this.node_service,
             GetCollectionByNameInput { name: req.name },
         )
         .await
@@ -1107,9 +1176,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<CreateCollectionRequest>,
     ) -> Result<Response<CollectionIdResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::create_collection(
-            &self.node_service,
+            &this.node_service,
             CreateCollectionInput {
                 name: req.name,
                 description: req.description,
@@ -1127,9 +1197,10 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<RenameCollectionRequest>,
     ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         let output = collection_ops::rename_collection(
-            &self.node_service,
+            &this.node_service,
             RenameCollectionInput {
                 collection_id: req.collection_id,
                 new_name: req.new_name,
@@ -1153,8 +1224,9 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<DeleteCollectionRequest>,
     ) -> Result<Response<Empty>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
-        self.node_service
+        this.node_service
             .delete_node(&req.collection_id, req.version)
             .await
             .map_err(service_error_to_status)?;
@@ -1170,6 +1242,7 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<WatchRequest>,
     ) -> Result<Response<Self::WatchNodesStream>, Status> {
+        let this = self.route(&request).await?;
         let req = request.into_inner();
         if !req.node_type.is_empty() || !req.root_id.is_empty() {
             // Filtering is intentionally out of scope for the initial implementation
@@ -1182,11 +1255,11 @@ impl GrpcNodeService for NodeServiceImpl {
             );
         }
 
-        let mut rx = self.node_service.subscribe_to_events();
+        let mut rx = this.node_service.subscribe_to_events();
         // Clone the Arc so the stream owns its own handle — the stream future
         // outlives `&self` (it is returned to tonic and polled independently),
         // so it cannot borrow from the handler scope.
-        let node_service = self.node_service.clone();
+        let node_service = this.node_service.clone();
 
         let stream = async_stream::stream! {
             loop {
@@ -1483,11 +1556,15 @@ fn normalize_date_for_storage(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::SharedContext;
+    use nodespace_agent::pty::PtySessionManager;
     use nodespace_core::db::SqliteStore;
     use nodespace_core::ops::node_ops;
     use nodespace_core::services::{CollectionService, NodeService as CoreNodeService};
+    use nodespace_nlp_engine::EmbeddingService;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tokio::sync::watch;
 
     async fn make_service() -> (Arc<NodeServiceImpl>, TempDir) {
         let tmp = TempDir::new().unwrap();
@@ -1499,6 +1576,96 @@ mod tests {
             Arc::new(tokio::sync::RwLock::new(None)),
         ));
         (svc, tmp)
+    }
+
+    /// A model-less shared build context for constructing a `DatabaseManager`
+    /// in tests (`has_model = false` skips all embedding wiring).
+    fn test_context() -> SharedContext {
+        let (_tx, model) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
+        SharedContext {
+            pty_manager: Arc::new(PtySessionManager::new()),
+            model,
+            has_model: false,
+        }
+    }
+
+    /// A request carrying an `x-ns-database-id` header is served by that
+    /// database (ADR-053): a node created against a second database lands there
+    /// and is invisible to the default, an absent header routes to the default,
+    /// and an unregistered id is rejected rather than served from the default.
+    #[tokio::test]
+    async fn routes_requests_by_database_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            DatabaseManager::load(dir.path().join("databases.toml"), test_context())
+                .await
+                .unwrap(),
+        );
+        let default_id = manager
+            .ensure_default_registered("Default".into(), dir.path().join("db1.db"))
+            .await
+            .unwrap();
+        let db2 = manager
+            .create("DB2".into(), Some(dir.path().join("db2.db")))
+            .await
+            .unwrap();
+
+        // The registered service impl is the default database's, as the serve
+        // loops wire it into `BaseServices`.
+        let svc = manager
+            .get_or_open(&default_id)
+            .await
+            .unwrap()
+            .node_service_grpc
+            .clone();
+
+        // Create a node while targeting DB2 by header.
+        let mut create = Request::new(crate::nodespace::CreateNodeRequest {
+            id: None,
+            node_type: "text".into(),
+            content: "in-db2".into(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: "{}".into(),
+            position: None,
+        });
+        create.extensions_mut().insert(manager.clone());
+        create
+            .metadata_mut()
+            .insert(DATABASE_ID_HEADER, db2.id.as_str().parse().unwrap());
+        let node_id = svc.create_node(create).await.unwrap().into_inner().node_id;
+
+        // Visible when the same DB2 header is supplied.
+        let mut get_db2 = Request::new(crate::nodespace::GetNodeRequest {
+            node_id: node_id.clone(),
+        });
+        get_db2.extensions_mut().insert(manager.clone());
+        get_db2
+            .metadata_mut()
+            .insert(DATABASE_ID_HEADER, db2.id.as_str().parse().unwrap());
+        assert!(svc.get_node(get_db2).await.is_ok());
+
+        // Invisible to the default database (no header) — routing isolates DBs.
+        let mut get_default = Request::new(crate::nodespace::GetNodeRequest {
+            node_id: node_id.clone(),
+        });
+        get_default.extensions_mut().insert(manager.clone());
+        assert_eq!(
+            svc.get_node(get_default).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+
+        // An unregistered database id is rejected, not silently served.
+        let mut get_bad = Request::new(crate::nodespace::GetNodeRequest { node_id });
+        get_bad.extensions_mut().insert(manager.clone());
+        get_bad
+            .metadata_mut()
+            .insert(DATABASE_ID_HEADER, "ZZZ-UNREGISTERED".parse().unwrap());
+        assert_eq!(
+            svc.get_node(get_bad).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
     }
 
     /// Creating a node via the gRPC handler (with collection + lifecycle_status) must

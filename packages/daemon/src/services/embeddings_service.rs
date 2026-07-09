@@ -31,6 +31,7 @@ pub struct EmbeddingReady {
     pub processor: Arc<EmbeddingProcessor>,
 }
 
+#[derive(Clone)]
 pub struct EmbeddingsServiceImpl {
     node_service: Arc<NodeService>,
     /// `None` while the model is still loading; populated by the background task.

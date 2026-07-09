@@ -35,6 +35,7 @@ use crate::services::capture_service::{finalize_capture, CompletedSession};
 use crate::services::settings_service::{read_capture_settings, CaptureConfig};
 
 /// gRPC adapter that owns shared handles to the PTY engine.
+#[derive(Clone)]
 pub struct AgentSessionHandler {
     manager: Arc<PtySessionManager>,
     assembler: Arc<GraphContextAssembler>,
