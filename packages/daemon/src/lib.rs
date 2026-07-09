@@ -51,5 +51,5 @@ pub use router::{build_base_router, BaseServices};
 pub use services::{
     build_database_services, build_shared_services, AgentSessionHandler, DatabaseServices,
     EmbeddingsServiceImpl, ImportServiceImpl, LocalAgentServiceImpl, NodeServiceImpl,
-    SettingsServiceImpl, SharedServices,
+    SettingsServiceImpl, SharedContext, SharedServices,
 };

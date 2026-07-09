@@ -24,15 +24,15 @@ use super::{
     LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl,
 };
 
-/// Process-global services shared across every database the daemon serves
-/// (ADR-053: one daemon, multiple local databases). Built once by
-/// [`build_shared_services`]; each per-database service set borrows what it
-/// needs from here rather than constructing its own copy.
-pub struct SharedServices {
+/// The process-global build context every per-database service set needs
+/// (ADR-053: one daemon, multiple local databases): the shared PTY manager and
+/// the single embedding model. Cloneable and cheap to hold, so the
+/// [`crate::services::database_manager::DatabaseManager`] keeps a copy and
+/// builds databases on demand via [`build_database_services`].
+#[derive(Clone)]
+pub struct SharedContext {
     /// PTY sessions are process-global — one manager backs all databases.
     pub pty_manager: Arc<PtySessionManager>,
-    /// Daemon-wide settings (`daemon.toml`); registered once on the router.
-    pub settings: SettingsServiceImpl,
     /// The embedding model, loaded once for the whole process and published over
     /// a watch channel so each database's embedding wiring can await it. Holds
     /// `None` until the background load completes; a closed channel means the
@@ -41,6 +41,18 @@ pub struct SharedServices {
     /// Whether an NLP model file was found at startup. Gates both the
     /// per-database embedding wiring and the `EmbeddingsService` registration.
     pub has_model: bool,
+}
+
+/// Process-global services shared across every database the daemon serves
+/// (ADR-053: one daemon, multiple local databases). Built once by
+/// [`build_shared_services`]. `settings` is registered directly on the router;
+/// `context` is what each per-database service set is built from and what the
+/// [`crate::services::database_manager::DatabaseManager`] caches.
+pub struct SharedServices {
+    /// Daemon-wide settings (`daemon.toml`); registered once on the router.
+    pub settings: SettingsServiceImpl,
+    /// The build context handed to every per-database service set.
+    pub context: SharedContext,
 }
 
 /// The service set backing a single database. One of these is assembled per
@@ -85,10 +97,12 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
 
     Ok((
         SharedServices {
-            pty_manager,
             settings,
-            model: model_rx,
-            has_model,
+            context: SharedContext {
+                pty_manager,
+                model: model_rx,
+                has_model,
+            },
         },
         model_task,
     ))
@@ -104,7 +118,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
 /// ready.
 pub async fn build_database_services(
     db_path: &std::path::Path,
-    shared: &SharedServices,
+    shared: &SharedContext,
 ) -> Result<(DatabaseServices, Option<tokio::task::JoinHandle<()>>)> {
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {

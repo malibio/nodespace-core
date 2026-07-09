@@ -15,7 +15,7 @@ pub mod settings_service;
 
 pub use agent_session_service::AgentSessionHandler;
 pub use assembly::{
-    build_database_services, build_shared_services, DatabaseServices, SharedServices,
+    build_database_services, build_shared_services, DatabaseServices, SharedContext, SharedServices,
 };
 pub use database_manager::{
     DatabaseEntry, DatabaseId, DatabaseListing, DatabaseManager, DatabaseStatus, Registry,

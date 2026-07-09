@@ -166,7 +166,7 @@ async fn serve_headless() -> Result<()> {
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared).await?;
+    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -212,7 +212,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared).await?;
+    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -313,7 +313,7 @@ async fn serve_headless() -> Result<()> {
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared).await?;
+    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
@@ -381,7 +381,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task / _embed_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
-    let (bundle, _embed_task) = build_database_services(&db_path, &shared).await?;
+    let (bundle, _embed_task) = build_database_services(&db_path, &shared.context).await?;
 
     let shutdown_controller = controller.clone();
     let combined_shutdown = async move {

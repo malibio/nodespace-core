@@ -4,10 +4,9 @@
 //! One daemon process serves N registered databases behind its single socket.
 //! This module owns the persistent registry — the list of known databases plus
 //! which one is the default — and the in-memory map of currently-open
-//! databases. It is deliberately decoupled from the per-database service set
-//! (`SqliteStore`, `NodeService`, ...): assembling and lazily opening those
-//! services is a follow-on stage, so [`DatabaseManager::get_or_open`] returns a
-//! clear "not yet wired" error rather than fabricating a handle.
+//! databases. Each open database's per-database service set ([`DatabaseServices`])
+//! is built on demand by [`DatabaseManager::get_or_open`] from the shared
+//! [`SharedContext`] and cached here.
 //!
 //! The registry persists to a dedicated `~/.nodespace/databases.toml`, kept
 //! separate from the `SettingsService`-owned `daemon.toml` so the two writers
@@ -15,12 +14,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use ulid::Ulid;
+
+use super::assembly::{build_database_services, DatabaseServices, SharedContext};
 
 /// Stable identifier for a registered database.
 ///
@@ -145,30 +147,35 @@ impl Registry {
 
 /// Owns the database registry and the set of currently-open databases.
 ///
-/// Method stubs mutate and persist the registry where that is trivial
-/// (create/register/remove/set_default/rename). Lazily opening a database and
-/// returning its service set ([`DatabaseManager::get_or_open`]) depends on the
-/// per-database service split, which is a follow-on stage; until then it
-/// returns a "not yet wired" error rather than panicking.
+/// Mutates and persists the registry (create/register/remove/set_default/
+/// rename/ensure_default). [`DatabaseManager::get_or_open`] lazily assembles a
+/// database's [`DatabaseServices`] from the shared [`SharedContext`] and caches
+/// the resulting handle so subsequent requests reuse the same open database.
 pub struct DatabaseManager {
     /// Path to `~/.nodespace/databases.toml`.
     registry_path: PathBuf,
     /// The persistent registry, guarded for concurrent mutation.
     registry: RwLock<Registry>,
-    /// Databases currently open in this process. The unit value is a
-    /// placeholder for the per-database service set that a follow-on stage
-    /// will store here.
-    open: RwLock<HashMap<DatabaseId, ()>>,
+    /// Databases currently open in this process, keyed by id. Populated lazily
+    /// by [`DatabaseManager::get_or_open`]; the shared `Arc` is what request
+    /// routing hands to the gRPC handlers.
+    open: RwLock<HashMap<DatabaseId, Arc<DatabaseServices>>>,
+    /// Process-global build context (PTY manager + embedding model) every
+    /// per-database service set is assembled from.
+    context: SharedContext,
 }
 
 impl DatabaseManager {
     /// Load the manager, reading any existing registry from `registry_path`.
-    pub async fn load(registry_path: PathBuf) -> Result<Self> {
+    /// `context` is the process-global build context used to assemble each
+    /// database's service set on first open.
+    pub async fn load(registry_path: PathBuf, context: SharedContext) -> Result<Self> {
         let registry = Registry::load(&registry_path).await?;
         Ok(Self {
             registry_path,
             registry: RwLock::new(registry),
             open: RwLock::new(HashMap::new()),
+            context,
         })
     }
 
@@ -354,24 +361,47 @@ impl DatabaseManager {
         }
     }
 
-    /// Return the per-database service set for `id`, opening it lazily if
-    /// needed.
+    /// Return the per-database service set for `id`, assembling (opening) it
+    /// lazily on first request and caching it for reuse.
     ///
-    /// The per-database service split is a follow-on stage, so there is nothing
-    /// to hand back yet: this validates that the database is registered and
-    /// then returns a "not yet wired" error rather than panicking.
-    pub async fn get_or_open(&self, id: &DatabaseId) -> Result<()> {
-        if self.open.read().await.contains_key(id) {
-            return Err(anyhow!(
-                "database {id} is marked open but per-database service assembly is not yet wired"
-            ));
+    /// A cached handle is returned immediately; otherwise the registry entry's
+    /// path is resolved and its [`DatabaseServices`] are built from the shared
+    /// [`SharedContext`], cached, and returned. Errors if `id` is not
+    /// registered. Concurrent first-opens of the same id converge on a single
+    /// cached handle: the assembly runs outside the `open` lock (so opens of
+    /// distinct databases don't serialize), then a re-check under the write
+    /// lock keeps whichever handle landed first.
+    pub async fn get_or_open(&self, id: &DatabaseId) -> Result<Arc<DatabaseServices>> {
+        // Fast path: already open.
+        if let Some(services) = self.open.read().await.get(id).cloned() {
+            return Ok(services);
         }
-        if self.registry.read().await.find(id).is_none() {
-            return Err(anyhow!("no database registered with id {id}"));
+
+        // Resolve the registry entry's on-disk path before the (slow) build.
+        let path = {
+            let registry = self.registry.read().await;
+            registry
+                .find(id)
+                .map(|entry| entry.path.clone())
+                .ok_or_else(|| anyhow!("no database registered with id {id}"))?
+        };
+
+        // Assemble the service set (opens SQLite, seeds schema) without holding
+        // the `open` lock. The per-database embedding-wiring task is detached,
+        // matching the boot path. `last_opened_at` bookkeeping is deferred.
+        let (services, _embed_task) = build_database_services(&path, &self.context)
+            .await
+            .with_context(|| format!("opening database {id}"))?;
+        let services = Arc::new(services);
+
+        // Cache under the write lock; if a concurrent caller opened it first,
+        // drop ours and reuse theirs so every request shares one open handle.
+        let mut open = self.open.write().await;
+        if let Some(existing) = open.get(id).cloned() {
+            return Ok(existing);
         }
-        Err(anyhow!(
-            "lazy-opening database {id} is not yet wired: per-database service assembly lands in a later stage"
-        ))
+        open.insert(id.clone(), services.clone());
+        Ok(services)
     }
 
     /// Push a new entry into the registry and persist it. The first registered
@@ -402,11 +432,29 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nodespace_agent::pty::PtySessionManager;
+    use nodespace_nlp_engine::EmbeddingService;
+    use tokio::sync::watch;
+
+    /// A model-less build context: `has_model = false` makes
+    /// [`build_database_services`] skip all embedding wiring, so the watch
+    /// channel is never consumed and dropping the sender is harmless.
+    fn test_context() -> SharedContext {
+        let (_tx, model) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
+        SharedContext {
+            pty_manager: Arc::new(PtySessionManager::new()),
+            model,
+            has_model: false,
+        }
+    }
 
     async fn temp_manager() -> (DatabaseManager, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("databases.toml");
-        (DatabaseManager::load(path).await.unwrap(), dir)
+        (
+            DatabaseManager::load(path, test_context()).await.unwrap(),
+            dir,
+        )
     }
 
     #[tokio::test]
@@ -473,5 +521,32 @@ mod tests {
     async fn resolve_without_default_errors() {
         let (mgr, _dir) = temp_manager().await;
         assert!(mgr.resolve_database_id(None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_or_open_builds_and_caches_the_service_set() {
+        let (mgr, dir) = temp_manager().await;
+        let db_path = dir.path().join("default.db");
+        let id = mgr
+            .ensure_default_registered("Default".into(), db_path)
+            .await
+            .unwrap();
+
+        // First open assembles the service set; the database now reports Open.
+        let first = mgr.get_or_open(&id).await.unwrap();
+        assert!(matches!(
+            mgr.list().await.databases[0].status,
+            DatabaseStatus::Open
+        ));
+
+        // A second open returns the very same cached handle, not a rebuild.
+        let second = mgr.get_or_open(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // An unregistered id is an error, not a silent fallback to the default.
+        assert!(mgr
+            .get_or_open(&DatabaseId::from("ZZZ-NOT-REGISTERED".to_string()))
+            .await
+            .is_err());
     }
 }
