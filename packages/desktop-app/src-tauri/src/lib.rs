@@ -168,14 +168,6 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+Shift+I")
                 .build(app)?;
 
-            let new_database = MenuItemBuilder::new("New Database...")
-                .id("new_database")
-                .build(app)?;
-
-            let open_database = MenuItemBuilder::new("Open Database...")
-                .id("open_database")
-                .build(app)?;
-
             let open_settings = MenuItemBuilder::new("Settings...")
                 .id("open_settings")
                 .accelerator("CmdOrCtrl+,")
@@ -185,7 +177,6 @@ pub fn run() {
                 .id("open_integrations")
                 .build(app)?;
 
-            let db_separator = PredefinedMenuItem::separator(app)?;
             let settings_separator = PredefinedMenuItem::separator(app)?;
             let integrations_separator = PredefinedMenuItem::separator(app)?;
 
@@ -210,9 +201,6 @@ pub fn run() {
 
             let file_menu = SubmenuBuilder::new(app, "File")
                 .items(&[
-                    &new_database,
-                    &open_database,
-                    &db_separator,
                     &import_submenu,
                     &settings_separator,
                     &open_settings,
@@ -399,8 +387,6 @@ pub fn run() {
             let toggle_status_bar_id = MenuId::new("toggle_status_bar");
             let quit_id = MenuId::new("quit");
             let import_folder_id = MenuId::new("import_folder");
-            let new_database_id = MenuId::new("new_database");
-            let open_database_id = MenuId::new("open_database");
             let open_settings_id = MenuId::new("open_settings");
             let open_integrations_id = MenuId::new("open_integrations");
 
@@ -421,10 +407,6 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.emit("menu-import-folder", ());
                     println!("Import folder requested from menu");
-                }
-            } else if *event.id() == new_database_id || *event.id() == open_database_id {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-select-database", ());
                 }
             } else if *event.id() == open_settings_id {
                 if let Some(window) = app.get_webview_window("main") {
@@ -520,9 +502,7 @@ pub fn run() {
             // Settings commands
             commands::settings::get_settings,
             commands::settings::update_display_settings,
-            commands::settings::select_new_database,
             commands::settings::restart_app,
-            commands::settings::reset_database_to_default,
             commands::settings::get_capture_settings,
             commands::settings::update_capture_settings,
             // Local agent commands
