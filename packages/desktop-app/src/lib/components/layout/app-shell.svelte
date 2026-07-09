@@ -130,8 +130,12 @@
       async (event) => {
         log.debug('[MCP] Node updated:', event.payload.node_id);
         try {
+          // ADR-053: capture the database generation so a switch mid-fetch drops
+          // this write instead of writing the previous database's node into the
+          // now-active store.
+          const epoch = sharedNodeStore.currentEpoch();
           const node = await invoke<Node>('get_node', { id: event.payload.node_id });
-          if (node) {
+          if (node && sharedNodeStore.currentEpoch() === epoch) {
             sharedNodeStore.setNode(node, { type: 'mcp-server' }, false);
 
             // Invalidate collection member caches since node title may have changed

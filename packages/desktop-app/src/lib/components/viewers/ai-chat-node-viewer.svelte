@@ -340,8 +340,12 @@
       if (cancelled || attempts >= MAX_ATTEMPTS) return;
       attempts++;
       try {
+        // ADR-053: drop this poll's write if the active database switches while
+        // the fetch is in flight, so the previous database's node isn't written
+        // into the now-active store.
+        const epoch = sharedNodeStore.currentEpoch();
         const fetched = await backendAdapter.getNode(nodeId);
-        if (fetched && !cancelled) {
+        if (fetched && !cancelled && sharedNodeStore.currentEpoch() === epoch) {
           sharedNodeStore.setNode(fetched, { type: 'database', reason: 'poll' }, true);
           // If SSE is down, nudge it to reconnect.
           if (!browserSyncService.isConnected()) {

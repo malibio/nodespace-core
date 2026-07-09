@@ -116,13 +116,13 @@ class DatabaseStore {
       if (seq !== this.switchSeq) return;
       this.activeDatabaseId = id;
 
-      // Evict the previous database's cached data. NOTE: a read (e.g.
-      // loadChildren) dispatched against the previous database *before* this
-      // switch whose response resolves after this clear can still setNode its
-      // rows into the now-active store; such orphans are unreferenced by the
-      // new database's tree but may surface via global search until the next
-      // reload. Fully closing this needs per-request database tagging — tracked
-      // as follow-on hardening.
+      // Evict the previous database's cached data. `clearAll()` also bumps the
+      // store's database epoch, which closes the in-flight-read window: a read
+      // (e.g. loadChildren/getNode) dispatched against the previous database
+      // *before* this switch whose response resolves after this clear captured
+      // the old epoch and is dropped instead of writing the previous
+      // database's rows into the now-active store (see
+      // `sharedNodeStore.currentEpoch()`).
       sharedNodeStore.clearAll();
       structureTree.clear();
 

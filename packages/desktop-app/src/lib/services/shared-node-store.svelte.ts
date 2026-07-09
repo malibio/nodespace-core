@@ -753,6 +753,19 @@ export class SharedNodeStore {
   // Track nodes currently being resynced to prevent concurrent resync operations
   private resyncingNodes = new Set<string>();
 
+  /**
+   * Monotonic database generation. ADR-053 ("One Daemon, Multiple Local
+   * Databases") lets the desktop hot-swap the active database; `clearAll()`
+   * (invoked by the switch) bumps this counter so any read dispatched against
+   * the previous database — whose promise resolves *after* the swap — is
+   * detectable as stale and dropped, instead of populating the now-active store
+   * with the previous database's rows (orphans unreferenced by the new tree
+   * that would otherwise surface via global search / mention resolution until
+   * the next reload). Fetch-then-write paths capture `currentEpoch()` before
+   * awaiting the daemon and re-check it before applying the result.
+   */
+  private databaseEpoch = 0;
+
   private constructor() {
     // Private constructor for singleton
   }
@@ -948,7 +961,12 @@ export class SharedNodeStore {
     const cached = this.nodes.get(nodeId);
     if (cached) return cached;
 
+    const epoch = this.databaseEpoch;
     const fetched = await backendAdapter.getNode(nodeId);
+    // ADR-053: the active database switched while this read was in flight — the
+    // fetched row belongs to the previous database, so drop it instead of
+    // populating the now-active store.
+    if (this.databaseEpoch !== epoch) return undefined;
     if (fetched) {
       this.setNode(fetched, { type: 'database', reason: 'ensure-node' });
       return fetched;
@@ -2181,6 +2199,17 @@ export class SharedNodeStore {
   }
 
   /**
+   * The current database generation (see `databaseEpoch`). A fetch-then-write
+   * path captures this before awaiting the daemon; if it has advanced by the
+   * time the response lands, the active database was switched underneath the
+   * read and the result belongs to the previous database — the caller must drop
+   * it rather than write it into the now-active store.
+   */
+  currentEpoch(): number {
+    return this.databaseEpoch;
+  }
+
+  /**
    * Evict every cached node and its per-node metadata.
    *
    * Used both by tests and by the ADR-053 database hot-swap: switching the
@@ -2192,8 +2221,13 @@ export class SharedNodeStore {
    * Hot-swap callers must flush pending saves (`flushAllPendingSaves`) BEFORE
    * switching the routed clients so in-flight writes land in the database they
    * were made against, not the one being switched to.
+   *
+   * Bumps `databaseEpoch` so any read dispatched against the previous database
+   * but still in flight is dropped rather than written into the now-active
+   * store — see `currentEpoch()`.
    */
   clearAll(): void {
+    this.databaseEpoch++;
     this.nodesClear();
     this.versions.clear();
     this.pendingUpdates.clear();
@@ -2225,17 +2259,30 @@ export class SharedNodeStore {
       // databaseSource is reused for both the parent prefetch and the children below.
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
 
+      // ADR-053: capture the database generation before any daemon read so a
+      // switch mid-flight is detectable below and the results are dropped
+      // rather than written into the now-active database's store.
+      const epoch = this.databaseEpoch;
+
       // Ensure the parent node itself is in the store before loading children.
       // This prevents BaseNodeViewer from treating a not-yet-loaded parent as a
       // stale/deleted node and closing the tab prematurely (issue #941).
+      let parentNode: Node | null = null;
       if (!this.nodes.has(parentId)) {
-        const parentNode = await backendAdapter.getNode(parentId);
-        if (parentNode) {
-          this.setNode(parentNode, databaseSource);
-        }
+        parentNode = await backendAdapter.getNode(parentId);
       }
 
       const nodes = await backendAdapter.getChildren(parentId);
+
+      // The active database switched while these reads were in flight — the
+      // rows belong to the previous database, so apply none of them (writing
+      // them, or their structureTree edges, would orphan the previous
+      // database's nodes into the now-active store).
+      if (this.databaseEpoch !== epoch) return [];
+
+      if (parentNode) {
+        this.setNode(parentNode, databaseSource);
+      }
 
       // Add nodes to store with database source
       // Database source type will automatically mark nodes as persisted (see determinePersistenceBehavior)
@@ -2297,7 +2344,15 @@ export class SharedNodeStore {
 
   private async doLoadChildrenTree(parentId: string): Promise<Node[]> {
     try {
+      // ADR-053: capture the database generation before the daemon read so a
+      // switch mid-flight is detectable below.
+      const epoch = this.databaseEpoch;
       const tree = await backendAdapter.getChildrenTree(parentId);
+
+      // The active database switched while this read was in flight — the tree
+      // belongs to the previous database, so drop it rather than batch it (and
+      // its structureTree edges) into the now-active store.
+      if (this.databaseEpoch !== epoch) return [];
 
       if (!tree) {
         // Date nodes are virtual — they are created lazily in the backend when their first
@@ -2605,7 +2660,13 @@ export class SharedNodeStore {
     this.resyncingNodes.add(nodeId);
 
     try {
+      // ADR-053: capture the database generation before the daemon read.
+      const epoch = this.databaseEpoch;
       const serverNode = await backendAdapter.getNode(nodeId);
+
+      // The active database switched while this resync was in flight — the
+      // fetched row belongs to the previous database, so drop it.
+      if (this.databaseEpoch !== epoch) return;
 
       if (serverNode) {
         // Replace in-memory node with server state

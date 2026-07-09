@@ -318,7 +318,13 @@ class BrowserSyncService {
    */
   private async fetchAndUpdateNode(nodeId: string, eventType: string): Promise<void> {
     try {
+      // ADR-053: capture the database generation before the read for parity with
+      // the Tauri path. Browser (HTTP-adapter) mode does not currently support
+      // switching databases, so the epoch never advances here — the guard is
+      // defensive and future-proof.
+      const epoch = sharedNodeStore.currentEpoch();
       const node = await backendAdapter.getNode(nodeId);
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
       if (node) {
         // Normalize node data to type-specific format (e.g., TaskNode with flat status)
         const normalizedNode = normalizeNodeData(node);
