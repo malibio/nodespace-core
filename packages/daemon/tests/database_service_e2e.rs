@@ -16,7 +16,8 @@ use std::time::Duration;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_daemon::nodespace::DatabaseStatus as ProtoDatabaseStatus;
 use nodespace_daemon::nodespace::{
-    CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest, ListDatabasesRequest,
+    node_event::Event as NodeEventKind, CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest,
+    ListDatabasesRequest, WatchRequest,
 };
 use nodespace_daemon::{
     DatabaseManager, DatabaseServiceClient, DatabaseServiceImpl, DatabaseServiceServer,
@@ -28,7 +29,28 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
-use tonic::{Code, Request};
+use tonic::{Code, Request, Streaming};
+
+/// Read from a `WatchNodes` stream until a `Created` event for `node_id`
+/// arrives (skipping any unrelated events), returning the whole envelope so the
+/// caller can assert its `database_id`. Bounded by a per-message timeout.
+async fn await_created(
+    stream: &mut Streaming<nodespace_daemon::nodespace::NodeEvent>,
+    node_id: &str,
+) -> String {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), stream.message())
+            .await
+            .expect("timed out waiting for a watch event")
+            .expect("watch stream error")
+            .expect("watch stream closed");
+        if let Some(NodeEventKind::Created(ref data)) = event.event {
+            if data.id == node_id {
+                return event.database_id;
+            }
+        }
+    }
+}
 
 /// A model-less build context — with `has_model = false` no embedding wiring
 /// runs, so the dropped watch sender is harmless (it is never read).
@@ -201,6 +223,102 @@ async fn create_second_database_then_route_a_write_to_it() {
         .await
         .unwrap_err();
     assert_eq!(rejected.code(), Code::NotFound);
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn watch_events_are_stamped_with_the_serving_database_id() {
+    let (mut db, node, shutdown, tempdir) = spawn().await;
+
+    let default_id = db
+        .list(ListDatabasesRequest {})
+        .await
+        .unwrap()
+        .into_inner()
+        .default_database_id;
+
+    let second_id = db
+        .create(CreateDatabaseRequest {
+            name: "Second".into(),
+            path: Some(tempdir.path().join("second.db").display().to_string()),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .id;
+
+    // Open the watch streams BEFORE mutating so the events are observed. Each
+    // stream is routed to its database by the header (the default stream omits
+    // it). Separate client handles keep the streaming responses independent.
+    let mut watch_default = node.clone();
+    let mut default_stream = watch_default
+        .watch_nodes(Request::new(WatchRequest {
+            node_type: String::new(),
+            root_id: String::new(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut watch_second = node.clone();
+    let mut second_stream = watch_second
+        .watch_nodes(with_db_header(
+            WatchRequest {
+                node_type: String::new(),
+                root_id: String::new(),
+            },
+            &second_id,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // A write routed to the second database → its watch event carries the second
+    // database's id, not the default's.
+    let mut writer = node.clone();
+    let in_second = writer
+        .create_node(with_db_header(
+            CreateNodeRequest {
+                node_type: "text".into(),
+                content: "second-db node".into(),
+                parent_id: None,
+                properties: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
+                position: None,
+            },
+            &second_id,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .node_id;
+    assert_eq!(
+        await_created(&mut second_stream, &in_second).await,
+        second_id
+    );
+
+    // A header-less write → the default stream stamps the default database's id.
+    let in_default = writer
+        .create_node(Request::new(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "default-db node".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .node_id;
+    assert_eq!(
+        await_created(&mut default_stream, &in_default).await,
+        default_id
+    );
 
     let _ = shutdown.send(());
 }

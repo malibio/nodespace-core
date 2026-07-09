@@ -70,6 +70,10 @@ pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,
     /// Shared with EmbeddingsServiceImpl; populated by the background load task.
     embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
+    /// Registry id of the database this impl serves (ADR-053), stamped onto
+    /// `WatchNodes` events. Empty when the daemon serves a single unregistered
+    /// database (Pro daemon) or when the impl is constructed directly in tests.
+    database_id: String,
 }
 
 impl NodeServiceImpl {
@@ -80,7 +84,16 @@ impl NodeServiceImpl {
         Self {
             node_service,
             embedding_state,
+            database_id: String::new(),
         }
+    }
+
+    /// Tag this database's `WatchNodes` events with its registry id (ADR-053).
+    /// Set by [`crate::build_database_services`] when a database is opened
+    /// through the registry; left empty for the single-database Pro daemon.
+    pub fn with_database_id(mut self, database_id: String) -> Self {
+        self.database_id = database_id;
+        self
     }
 
     /// Resolve which database a request targets (ADR-053) and return that
@@ -1260,6 +1273,8 @@ impl GrpcNodeService for NodeServiceImpl {
         // outlives `&self` (it is returned to tonic and polled independently),
         // so it cannot borrow from the handler scope.
         let node_service = this.node_service.clone();
+        // The database this stream serves (ADR-053) — stamped onto every event.
+        let database_id = this.database_id.clone();
 
         let stream = async_stream::stream! {
             loop {
@@ -1272,7 +1287,10 @@ impl GrpcNodeService for NodeServiceImpl {
                         // future workload makes this hot, parallelize by
                         // dispatching translations to a bounded mpsc.
                         if let Some(event) = convert_domain_event(&envelope.event, &node_service).await {
-                            yield Ok(event);
+                            yield Ok(NodeEvent {
+                                event: Some(event),
+                                database_id: database_id.clone(),
+                            });
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
@@ -1354,12 +1372,10 @@ pub(crate) fn node_to_proto(node: Node) -> NodeData {
 async fn convert_domain_event(
     event: &DomainEvent,
     node_service: &Arc<CoreNodeService>,
-) -> Option<NodeEvent> {
+) -> Option<NodeEventKind> {
     match event {
         DomainEvent::NodeCreated { node_id, .. } => match node_service.get_node(node_id).await {
-            Ok(Some(node)) => Some(NodeEvent {
-                event: Some(NodeEventKind::Created(node_to_proto(node))),
-            }),
+            Ok(Some(node)) => Some(NodeEventKind::Created(node_to_proto(node))),
             Ok(None) => {
                 tracing::debug!(node_id = %node_id, "NodeCreated event skipped: node already gone");
                 None
@@ -1369,40 +1385,32 @@ async fn convert_domain_event(
                 None
             }
         },
-        DomainEvent::NodeUpdated { node, .. } => Some(NodeEvent {
-            event: Some(NodeEventKind::Updated(node_to_proto(node.clone()))),
-        }),
-        DomainEvent::NodeDeleted { id, node_type } => Some(NodeEvent {
-            event: Some(NodeEventKind::Deleted(NodeDeleted {
-                node_id: id.clone(),
-                node_type: node_type.clone(),
-            })),
-        }),
-        DomainEvent::RelationshipCreated { relationship } => Some(NodeEvent {
-            event: Some(NodeEventKind::RelationshipCreated(relationship_to_proto(
-                relationship,
-            ))),
-        }),
-        DomainEvent::RelationshipUpdated { relationship } => Some(NodeEvent {
-            event: Some(NodeEventKind::RelationshipUpdated(relationship_to_proto(
-                relationship,
-            ))),
-        }),
+        DomainEvent::NodeUpdated { node, .. } => {
+            Some(NodeEventKind::Updated(node_to_proto(node.clone())))
+        }
+        DomainEvent::NodeDeleted { id, node_type } => Some(NodeEventKind::Deleted(NodeDeleted {
+            node_id: id.clone(),
+            node_type: node_type.clone(),
+        })),
+        DomainEvent::RelationshipCreated { relationship } => Some(
+            NodeEventKind::RelationshipCreated(relationship_to_proto(relationship)),
+        ),
+        DomainEvent::RelationshipUpdated { relationship } => Some(
+            NodeEventKind::RelationshipUpdated(relationship_to_proto(relationship)),
+        ),
         DomainEvent::RelationshipDeleted {
             id,
             from_id,
             to_id,
             relationship_type,
-        } => Some(NodeEvent {
-            event: Some(NodeEventKind::RelationshipDeleted(
-                RelationshipDeletedPayload {
-                    id: id.clone(),
-                    from_id: from_id.clone(),
-                    to_id: to_id.clone(),
-                    relationship_type: relationship_type.clone(),
-                },
-            )),
-        }),
+        } => Some(NodeEventKind::RelationshipDeleted(
+            RelationshipDeletedPayload {
+                id: id.clone(),
+                from_id: from_id.clone(),
+                to_id: to_id.clone(),
+                relationship_type: relationship_type.clone(),
+            },
+        )),
     }
 }
 
