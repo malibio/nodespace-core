@@ -77,6 +77,13 @@ Date format for all date properties: **YYYY-MM-DD**. Available operators: `equal
 
 All commands accept `--json` for machine-readable output.
 
+**Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `search`, `mention`, `schema`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).
+
+```bash
+nodespace --database work node create --type text --content "work note"
+NODESPACE_DATABASE=work nodespace search "meeting notes"
+```
+
 ### Create a node
 
 ```bash
@@ -220,6 +227,41 @@ nodespace schema get person
 ```
 
 **Output:** Schema nodes as JSON (same shape as regular nodes; `node_type="schema"`)
+
+### Manage local databases
+
+One daemon serves a registry of local databases. These subcommands operate on that registry globally — they are never affected by the `--database` flag.
+
+```bash
+# List every registered database (the default is marked with *)
+nodespace database list
+
+# Create a brand-new database and register it
+nodespace database create work
+nodespace database create work --path /path/to/work.db   # explicit file location
+
+# Register an existing database file already on disk
+nodespace database register /path/to/existing.db
+
+# Rename a database's label (by name or id)
+nodespace database rename work "Work Projects"
+
+# Set the daemon-wide default database (used by requests without --database)
+nodespace database use work
+
+# Unregister a database (never deletes the underlying file)
+nodespace database remove work
+```
+
+**Options:**
+- `create <name> [--path <path>]` — omit `--path` to let the daemon place the file under its managed database directory
+- `rename <name|id> <new-name>` — relabels the entry without moving the file
+- `use <name|id>` — sets the registry's default; all clients that don't pass `--database`/`NODESPACE_DATABASE` route here afterwards
+- `remove <name|id>` — detaches the registry entry only; the database file is left on disk
+
+A database is addressed by **name or id**. When a name is ambiguous (shared by more than one database), select by id instead — `database list --json` shows each id.
+
+**Output:** `list` prints a table (or the full list with `--json`); the other commands print the affected database record (`--json` emits the full `DatabaseInfo`).
 
 ## Skills Reference
 

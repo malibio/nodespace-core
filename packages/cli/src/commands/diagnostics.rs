@@ -1,17 +1,25 @@
-//! `nodespace diagnostics` — print a developer-facing summary of the
-//! daemon's database state. Mirrors the now-deleted Tauri
-//! `get_database_diagnostics` command but lives in the CLI because the
-//! intended audience (developers debugging persistence) uses the shell, not
-//! the desktop UI.
+//! `nodespace diagnostics` — print a developer-facing summary of the daemon's
+//! database state. Mirrors the now-deleted Tauri `get_database_diagnostics`
+//! command but lives in the CLI because the intended audience (developers
+//! debugging persistence) uses the shell, not the desktop UI.
+//!
+//! With multiple local databases (ADR-053) the report enumerates the whole
+//! registry and runs node/root/schema counts against the *targeted* database —
+//! the one selected by `--database`, or the daemon's default when none is given.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use nodespace_daemon::nodespace::{GetAllSchemasRequest, GetRootsRequest, QueryNodesSimpleRequest};
-use nodespace_daemon::{resolve_db_path, NodeServiceClient};
+use nodespace_daemon::nodespace::{
+    GetAllSchemasRequest, GetRootsRequest, ListDatabasesRequest, QueryNodesSimpleRequest,
+};
+use nodespace_daemon::DatabaseServiceClient;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tonic::transport::Channel;
+
+use super::database::status_str;
+use crate::NodeClient;
 
 /// Upper bound on the per-query fetch when counting nodes. Diagnostics is a
 /// developer tool, not a hot path — keeping this generous avoids surprise
@@ -26,10 +34,25 @@ const RECENT_LIMIT: usize = 10;
 #[derive(Args, Debug)]
 pub struct DiagnosticsArgs {}
 
+/// One registered database as reported by the diagnostics enumeration.
+#[derive(Debug)]
+pub struct DatabaseSummary {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub is_default: bool,
+    pub status: String,
+}
+
 #[derive(Debug)]
 pub struct DiagnosticsReport {
-    pub database_path: String,
-    pub database_exists: bool,
+    /// Every database registered with the daemon.
+    pub databases: Vec<DatabaseSummary>,
+    /// Id of the database the counts below were computed against.
+    pub targeted_database_id: String,
+    /// On-disk path of the targeted database.
+    pub targeted_database_path: String,
+    /// Size on disk of the targeted database, `None` when the file is absent.
     pub database_size_bytes: Option<u64>,
     pub total_node_count: usize,
     pub root_node_count: usize,
@@ -39,12 +62,13 @@ pub struct DiagnosticsReport {
 }
 
 pub async fn run(
-    client: &mut NodeServiceClient<Channel>,
+    node_client: &mut NodeClient,
+    db_client: &mut DatabaseServiceClient<Channel>,
+    target_id: Option<&str>,
     _args: DiagnosticsArgs,
     json_output: bool,
 ) -> Result<()> {
-    let db_path = resolve_db_path().context("resolve daemon database path")?;
-    let report = collect(client, &db_path).await;
+    let report = collect(node_client, db_client, target_id).await;
     if json_output {
         print_json(&report)
     } else {
@@ -53,23 +77,78 @@ pub async fn run(
     }
 }
 
-/// Build a diagnostics report against the given `db_path`. Split out from
-/// `run` so integration tests can point at a tempdir-backed daemon without
-/// the env-var dance `resolve_db_path()` requires.
-pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) -> DiagnosticsReport {
+/// Build a diagnostics report: enumerate the registry via `DatabaseService.List`
+/// and count nodes/roots/schemas in the targeted database via `node_client`
+/// (which already carries the routing header for that database).
+///
+/// Split out from `run` so integration tests can drive it against a tempdir
+/// daemon. `target_id` is the resolved id of the selected database, or `None`
+/// for the daemon's default.
+pub async fn collect(
+    node_client: &mut NodeClient,
+    db_client: &mut DatabaseServiceClient<Channel>,
+    target_id: Option<&str>,
+) -> DiagnosticsReport {
     let mut errors: Vec<String> = Vec::new();
 
-    let database_path = db_path.to_string_lossy().to_string();
-    let database_exists = db_path.exists();
-    let database_size_bytes = if database_exists {
-        Some(database_size(db_path, &mut errors))
+    // Enumerate the registry.
+    let (databases, default_id) = match db_client.list(ListDatabasesRequest {}).await {
+        Ok(response) => {
+            let inner = response.into_inner();
+            let summaries: Vec<DatabaseSummary> = inner
+                .databases
+                .iter()
+                .map(|d| DatabaseSummary {
+                    id: d.id.clone(),
+                    name: d.name.clone(),
+                    path: d.path.clone(),
+                    is_default: d.is_default,
+                    status: status_str(d.status).to_string(),
+                })
+                .collect();
+            (summaries, inner.default_database_id)
+        }
+        Err(e) => {
+            errors.push(format!("ListDatabases failed: {e}"));
+            (Vec::new(), String::new())
+        }
+    };
+
+    // Identify the targeted database: an explicit selection by id, otherwise the
+    // registry's default. Its path drives the size-on-disk figure; the node
+    // client is already routed to the same database by its header.
+    let targeted = match target_id {
+        Some(id) => databases.iter().find(|d| d.id == id),
+        None => databases
+            .iter()
+            .find(|d| d.is_default)
+            .or_else(|| databases.iter().find(|d| d.id == default_id)),
+    };
+    let (targeted_database_id, targeted_database_path) = match targeted {
+        Some(d) => (d.id.clone(), d.path.clone()),
+        None => {
+            match target_id {
+                Some(id) => errors.push(format!("targeted database '{id}' is not registered")),
+                None => errors.push("no default database is set".to_string()),
+            }
+            (String::new(), String::new())
+        }
+    };
+
+    let database_size_bytes = if !targeted_database_path.is_empty() {
+        let path = Path::new(&targeted_database_path);
+        if path.exists() {
+            Some(database_size(path, &mut errors))
+        } else {
+            None
+        }
     } else {
         None
     };
 
     // Pull all nodes once (bounded by QUERY_LIMIT) to compute total count
     // and surface the most-recently-created IDs from a single snapshot.
-    let mut all_nodes = match client
+    let mut all_nodes = match node_client
         .query_nodes_simple(QueryNodesSimpleRequest {
             id: None,
             mentioned_by: None,
@@ -100,7 +179,7 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
 
     let total_node_count = all_nodes.len();
 
-    let root_node_count = match client
+    let root_node_count = match node_client
         .get_roots(GetRootsRequest {
             limit: 0,
             offset: 0,
@@ -132,7 +211,7 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
         .map(|n| n.id.clone())
         .collect();
 
-    let schema_count = match client.get_all_schemas(GetAllSchemasRequest {}).await {
+    let schema_count = match node_client.get_all_schemas(GetAllSchemasRequest {}).await {
         Ok(response) => response.into_inner().count,
         Err(e) => {
             errors.push(format!("GetAllSchemas failed: {e}"));
@@ -141,8 +220,9 @@ pub async fn collect(client: &mut NodeServiceClient<Channel>, db_path: &Path) ->
     };
 
     DiagnosticsReport {
-        database_path,
-        database_exists,
+        databases,
+        targeted_database_id,
+        targeted_database_path,
         database_size_bytes,
         total_node_count,
         root_node_count,
@@ -252,22 +332,29 @@ fn format_size(bytes: u64) -> String {
 fn print_human(r: &DiagnosticsReport) {
     println!("NodeSpace Diagnostics");
     println!("─────────────────────────────────────");
-    println!("Database path:   {}", r.database_path);
-    println!(
-        "Database exists: {}",
-        if r.database_exists { "yes" } else { "no" }
-    );
-    match r.database_size_bytes {
-        Some(bytes) => println!("Database size:   {}", format_size(bytes)),
-        None => println!("Database size:   n/a"),
-    }
-    println!("Total nodes:     {}", r.total_node_count);
-    println!("Root nodes:      {}", r.root_node_count);
-    println!("Schemas:         {}", r.schema_count);
-    if r.recent_node_ids.is_empty() {
-        println!("Recent node IDs: (none)");
+    if r.databases.is_empty() {
+        println!("Registered databases: (none)");
     } else {
-        println!("Recent node IDs: {}", r.recent_node_ids.join(", "));
+        println!("Registered databases:");
+        for d in &r.databases {
+            let marker = if d.is_default { "*" } else { " " };
+            println!("  {marker} {} [{}] {} — {}", d.name, d.status, d.id, d.path);
+        }
+    }
+    println!();
+    println!("Targeted database: {}", r.targeted_database_id);
+    println!("Targeted path:     {}", r.targeted_database_path);
+    match r.database_size_bytes {
+        Some(bytes) => println!("Database size:     {}", format_size(bytes)),
+        None => println!("Database size:     n/a"),
+    }
+    println!("Total nodes:       {}", r.total_node_count);
+    println!("Root nodes:        {}", r.root_node_count);
+    println!("Schemas:           {}", r.schema_count);
+    if r.recent_node_ids.is_empty() {
+        println!("Recent node IDs:   (none)");
+    } else {
+        println!("Recent node IDs:   {}", r.recent_node_ids.join(", "));
     }
     if !r.errors.is_empty() {
         println!();
@@ -280,8 +367,15 @@ fn print_human(r: &DiagnosticsReport) {
 
 fn print_json(r: &DiagnosticsReport) -> Result<()> {
     let value = json!({
-        "database_path": r.database_path,
-        "database_exists": r.database_exists,
+        "databases": r.databases.iter().map(|d| json!({
+            "id": d.id,
+            "name": d.name,
+            "path": d.path,
+            "is_default": d.is_default,
+            "status": d.status,
+        })).collect::<Vec<_>>(),
+        "targeted_database_id": r.targeted_database_id,
+        "targeted_database_path": r.targeted_database_path,
         "database_size_bytes": r.database_size_bytes,
         "total_node_count": r.total_node_count,
         "root_node_count": r.root_node_count,

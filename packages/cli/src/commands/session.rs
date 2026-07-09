@@ -8,12 +8,11 @@ use nodespace_daemon::nodespace::{
     LaunchSessionRequest, ListSessionsRequest, StreamOutputRequest, TerminateSessionRequest,
     WriteInputRequest,
 };
-use nodespace_daemon::AgentSessionServiceClient;
 use tokio::io::AsyncReadExt;
-use tonic::transport::Channel;
 use tonic::Request;
 
 use crate::terminal::{write_stdout, RawMode};
+use crate::SessionClient;
 
 #[derive(Subcommand, Debug)]
 pub enum SessionAction {
@@ -61,11 +60,7 @@ pub struct KillArgs {
     pub session_id: String,
 }
 
-pub async fn run(
-    client: &mut AgentSessionServiceClient<Channel>,
-    action: SessionAction,
-    _json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut SessionClient, action: SessionAction, _json: bool) -> Result<()> {
     match action {
         SessionAction::Launch(args) => launch(client, args).await,
         SessionAction::Attach(args) => attach(client, args).await,
@@ -74,7 +69,7 @@ pub async fn run(
     }
 }
 
-async fn launch(client: &mut AgentSessionServiceClient<Channel>, args: LaunchArgs) -> Result<()> {
+async fn launch(client: &mut SessionClient, args: LaunchArgs) -> Result<()> {
     let (cols, rows) = detect_terminal_size(args.cols, args.rows);
 
     let resp = client
@@ -97,11 +92,11 @@ async fn launch(client: &mut AgentSessionServiceClient<Channel>, args: LaunchArg
     stream_bridge(client, resp.session_id).await
 }
 
-async fn attach(client: &mut AgentSessionServiceClient<Channel>, args: AttachArgs) -> Result<()> {
+async fn attach(client: &mut SessionClient, args: AttachArgs) -> Result<()> {
     stream_bridge(client, args.session_id).await
 }
 
-async fn list(client: &mut AgentSessionServiceClient<Channel>) -> Result<()> {
+async fn list(client: &mut SessionClient) -> Result<()> {
     let resp = client
         .list_sessions(Request::new(ListSessionsRequest {}))
         .await
@@ -121,7 +116,7 @@ async fn list(client: &mut AgentSessionServiceClient<Channel>) -> Result<()> {
     Ok(())
 }
 
-async fn kill(client: &mut AgentSessionServiceClient<Channel>, args: KillArgs) -> Result<()> {
+async fn kill(client: &mut SessionClient, args: KillArgs) -> Result<()> {
     let resp = client
         .terminate_session(Request::new(TerminateSessionRequest {
             session_id: args.session_id.clone(),
@@ -144,10 +139,7 @@ async fn kill(client: &mut AgentSessionServiceClient<Channel>, args: KillArgs) -
 /// Concurrently streams output from the session to stdout and forwards raw
 /// stdin to the session's PTY input. Runs until the output stream ends,
 /// the user presses Ctrl+D, or the user presses Ctrl+C (detach, no kill).
-async fn stream_bridge(
-    client: &mut AgentSessionServiceClient<Channel>,
-    session_id: String,
-) -> Result<()> {
+async fn stream_bridge(client: &mut SessionClient, session_id: String) -> Result<()> {
     let _raw = RawMode::enter()?;
 
     // Open the output stream.

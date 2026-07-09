@@ -10,9 +10,9 @@ use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
     EnsureModelReadyRequest, ListModelsRequest, RecommendedModelRequest,
 };
-use nodespace_daemon::LocalAgentServiceClient;
 use serde_json::json;
-use tonic::transport::Channel;
+
+use crate::LocalAgentClient;
 
 #[derive(Subcommand, Debug)]
 pub enum ModelAction {
@@ -30,11 +30,7 @@ pub struct LoadArgs {
     pub model_id: Option<String>,
 }
 
-pub async fn run(
-    client: &mut LocalAgentServiceClient<Channel>,
-    action: ModelAction,
-    json: bool,
-) -> Result<()> {
+pub async fn run(client: &mut LocalAgentClient, action: ModelAction, json: bool) -> Result<()> {
     match action {
         ModelAction::List => list(client, json).await,
         ModelAction::Load(args) => load(client, args, json).await,
@@ -42,7 +38,7 @@ pub async fn run(
     }
 }
 
-async fn list(client: &mut LocalAgentServiceClient<Channel>, json: bool) -> Result<()> {
+async fn list(client: &mut LocalAgentClient, json: bool) -> Result<()> {
     let response = client
         .list_models(ListModelsRequest {})
         .await
@@ -94,11 +90,7 @@ async fn list(client: &mut LocalAgentServiceClient<Channel>, json: bool) -> Resu
     Ok(())
 }
 
-async fn load(
-    client: &mut LocalAgentServiceClient<Channel>,
-    args: LoadArgs,
-    json: bool,
-) -> Result<()> {
+async fn load(client: &mut LocalAgentClient, args: LoadArgs, json: bool) -> Result<()> {
     let model_id = match args.model_id {
         Some(id) => id,
         None => {
@@ -168,7 +160,7 @@ async fn load(
     Ok(())
 }
 
-async fn recommended(client: &mut LocalAgentServiceClient<Channel>, json: bool) -> Result<()> {
+async fn recommended(client: &mut LocalAgentClient, json: bool) -> Result<()> {
     let model_id = client
         .recommended_model(RecommendedModelRequest {})
         .await

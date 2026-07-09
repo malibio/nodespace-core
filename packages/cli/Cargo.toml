@@ -28,5 +28,8 @@ libc = "0.2"
 
 [dev-dependencies]
 nodespace-core = { workspace = true }
+nodespace-agent = { workspace = true }
+nodespace-nlp-engine = { workspace = true }
 tempfile = "3.0"
 tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-stream = { version = "0.1", features = ["net"] }
