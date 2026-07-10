@@ -12,7 +12,9 @@
 
 use crate::services::GrpcClient;
 use nodespace_proto::nodespace::{
-    GetCaptureSettingsRequest, ListDatabasesRequest, UpdateCaptureSettingsRequest,
+    GetCaptureSettingsRequest, ListDatabasesRequest, ListOpenAiCompatConfigsRequest,
+    OpenAiCompatConfig as ProtoOpenAiCompatConfig, SetOpenAiCompatConfigsRequest,
+    UpdateCaptureSettingsRequest,
 };
 use tauri::{AppHandle, Manager};
 
@@ -189,4 +191,90 @@ fn str_to_content_level(s: &str) -> Result<i32, String> {
             other
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible provider configs
+// ---------------------------------------------------------------------------
+
+/// An OpenAI-compatible provider config as sent to/from the frontend. Mirrors
+/// `OpenAiCompatConfig` in `$lib/types/ai-chat-node.ts`.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiCompatConfigResult {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub api_key: String,
+    /// Model identifier sent as the wire-protocol "model" field — distinct
+    /// from `name`, which is only a cosmetic UI label.
+    pub model: String,
+}
+
+impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfigResult {
+    fn from(c: ProtoOpenAiCompatConfig) -> Self {
+        Self {
+            id: c.id,
+            name: c.name,
+            base_url: c.base_url,
+            api_key: c.api_key,
+            model: c.model,
+        }
+    }
+}
+
+impl From<OpenAiCompatConfigResult> for ProtoOpenAiCompatConfig {
+    fn from(c: OpenAiCompatConfigResult) -> Self {
+        Self {
+            id: c.id,
+            name: c.name,
+            base_url: c.base_url,
+            api_key: c.api_key,
+            model: c.model,
+        }
+    }
+}
+
+/// Get all configured OpenAI-compatible provider configs from the daemon.
+#[tauri::command]
+pub async fn get_openai_compat_configs(
+    grpc_client: tauri::State<'_, GrpcClient>,
+) -> Result<Vec<OpenAiCompatConfigResult>, String> {
+    let mut client = grpc_client.settings_client().await;
+    let resp = client
+        .list_open_ai_compat_configs(ListOpenAiCompatConfigsRequest {})
+        .await
+        .map_err(|e| format!("Failed to list OpenAI-compat configs: {}", e))?
+        .into_inner();
+
+    Ok(resp
+        .configs
+        .into_iter()
+        .map(OpenAiCompatConfigResult::from)
+        .collect())
+}
+
+/// Replace the full set of OpenAI-compatible provider configs on the daemon.
+#[tauri::command]
+pub async fn set_openai_compat_configs(
+    grpc_client: tauri::State<'_, GrpcClient>,
+    configs: Vec<OpenAiCompatConfigResult>,
+) -> Result<Vec<OpenAiCompatConfigResult>, String> {
+    let mut client = grpc_client.settings_client().await;
+    let resp = client
+        .set_open_ai_compat_configs(SetOpenAiCompatConfigsRequest {
+            configs: configs
+                .into_iter()
+                .map(ProtoOpenAiCompatConfig::from)
+                .collect(),
+        })
+        .await
+        .map_err(|e| format!("Failed to save OpenAI-compat configs: {}", e))?
+        .into_inner();
+
+    Ok(resp
+        .configs
+        .into_iter()
+        .map(OpenAiCompatConfigResult::from)
+        .collect())
 }

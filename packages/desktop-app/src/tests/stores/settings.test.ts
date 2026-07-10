@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({
@@ -14,7 +14,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args)
 }));
 
-import { settingsStore, loadSettings, updateDisplaySetting } from '$lib/stores/settings.svelte';
+import {
+  settingsStore,
+  loadSettings,
+  updateDisplaySetting,
+  saveOpenAiConfigs,
+} from '$lib/stores/settings.svelte';
 import type { AppSettings } from '$lib/stores/settings.svelte';
 
 describe('Settings Store', () => {
@@ -28,9 +33,27 @@ describe('Settings Store', () => {
     defaultModelSelection: null,
   };
 
+  function enableTauri(): void {
+    (globalThis.window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  }
+
+  function disableTauri(): void {
+    delete (globalThis.window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     settingsStore.appSettings = null;
+    localStorage.clear();
+    disableTauri();
+  });
+
+  afterEach(() => {
+    // singleFork test execution shares one `window` across every test file
+    // in the run — an enabled flag left set here would leak into unrelated
+    // suites (e.g. tauri-commands.test.ts's "outside Tauri" fallback tests).
+    disableTauri();
+    localStorage.clear();
   });
 
   describe('appSettings store', () => {
@@ -106,6 +129,83 @@ describe('Settings Store', () => {
 
       // Optimistic update on null store should keep it null
       expect(settingsStore.appSettings).toBeNull();
+    });
+  });
+
+  describe('OpenAI-compat config daemon persistence', () => {
+    it('loadSettings refreshes openAiConfigs from the daemon when running under Tauri', async () => {
+      enableTauri();
+      const backendSettings = {
+        activeDatabasePath: mockSettings.activeDatabasePath,
+        display: mockSettings.display,
+      };
+      const daemonConfigs = [
+        { id: 'abc', name: 'My Endpoint', baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-4o' },
+      ];
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'get_settings') return Promise.resolve(backendSettings);
+        if (cmd === 'get_openai_compat_configs') return Promise.resolve(daemonConfigs);
+        return Promise.resolve(undefined);
+      });
+
+      await loadSettings();
+
+      expect(mockInvoke).toHaveBeenCalledWith('get_openai_compat_configs');
+      expect(settingsStore.appSettings?.openAiConfigs).toEqual(daemonConfigs);
+    });
+
+    it('loadSettings falls back to the local cache if the daemon call fails', async () => {
+      enableTauri();
+      const backendSettings = {
+        activeDatabasePath: mockSettings.activeDatabasePath,
+        display: mockSettings.display,
+      };
+      localStorage.setItem(
+        'nodespace-settings',
+        JSON.stringify({
+          openAiConfigs: [
+            { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '', model: 'cached-model' },
+          ],
+        })
+      );
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'get_settings') return Promise.resolve(backendSettings);
+        if (cmd === 'get_openai_compat_configs') return Promise.reject(new Error('daemon unreachable'));
+        return Promise.resolve(undefined);
+      });
+
+      await loadSettings();
+
+      expect(settingsStore.appSettings?.openAiConfigs).toEqual([
+        { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '', model: 'cached-model' },
+      ]);
+    });
+
+    it('saveOpenAiConfigs writes to localStorage immediately and pushes to the daemon', async () => {
+      enableTauri();
+      mockInvoke.mockResolvedValue([]);
+      const configs = [
+        { id: 'new-id', name: 'New Endpoint', baseUrl: 'https://new.example.com', apiKey: 'sk-new', model: 'gpt-4o' },
+      ];
+
+      await saveOpenAiConfigs(configs);
+
+      expect(mockInvoke).toHaveBeenCalledWith('set_openai_compat_configs', { configs });
+      const cached = JSON.parse(localStorage.getItem('nodespace-settings') ?? '{}');
+      expect(cached.openAiConfigs).toEqual(configs);
+    });
+
+    it('saveOpenAiConfigs keeps the local write even if the daemon push fails', async () => {
+      enableTauri();
+      mockInvoke.mockRejectedValue(new Error('daemon unreachable'));
+      const configs = [
+        { id: 'x', name: 'X', baseUrl: 'https://x.example.com', apiKey: '', model: 'model-x' },
+      ];
+
+      await saveOpenAiConfigs(configs);
+
+      const cached = JSON.parse(localStorage.getItem('nodespace-settings') ?? '{}');
+      expect(cached.openAiConfigs).toEqual(configs);
     });
   });
 });

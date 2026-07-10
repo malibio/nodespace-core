@@ -28,6 +28,7 @@
     chatModelList,
     ollamaAvailable,
     getSystemRamGb,
+    getOpenAiCompatConfigsFromDaemon,
     type ChatModelEntry,
   } from '$lib/services/tauri-commands';
   import { AGENT_EVENTS } from '$lib/types/agent-types';
@@ -105,15 +106,26 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [list, ram, ollama] = await Promise.all([
+      const [list, ram, ollama, daemonConfigs] = await Promise.all([
         chatModelList(),
         getSystemRamGb(),
         ollamaAvailable(),
+        getOpenAiCompatConfigsFromDaemon().catch((err) => {
+          log.warn('Failed to load OpenAI-compat configs from daemon, using local cache', err);
+          return null;
+        }),
       ]);
       models = list;
       ramGb = ram;
       ollamaRunning = ollama;
-      openAiConfigs = getOpenAiConfigs();
+      openAiConfigs =
+        daemonConfigs?.map((c) => ({
+          id: c.id,
+          name: c.name,
+          baseUrl: c.baseUrl,
+          apiKey: c.apiKey,
+          model: c.model,
+        })) ?? getOpenAiConfigs();
     } catch (err) {
       log.error('Failed to load model list', err);
     } finally {

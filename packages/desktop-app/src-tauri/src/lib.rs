@@ -510,6 +510,8 @@ pub fn run() {
             commands::settings::update_display_settings,
             commands::settings::get_capture_settings,
             commands::settings::update_capture_settings,
+            commands::settings::get_openai_compat_configs,
+            commands::settings::set_openai_compat_configs,
             // Local database registry commands (ADR-053)
             commands::database::list_databases,
             commands::database::create_database,

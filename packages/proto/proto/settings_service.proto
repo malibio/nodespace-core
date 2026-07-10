@@ -17,6 +17,14 @@ service SettingsService {
   // Persist session capture settings. Changes take effect immediately for
   // sessions launched after this call.
   rpc UpdateCaptureSettings(UpdateCaptureSettingsRequest) returns (CaptureSettingsResponse);
+
+  // List all configured OpenAI-compatible provider configs (API keys included —
+  // this RPC is only reachable over the local Tauri<->daemon gRPC connection).
+  rpc ListOpenAiCompatConfigs(ListOpenAiCompatConfigsRequest) returns (ListOpenAiCompatConfigsResponse);
+
+  // Replace the full set of OpenAI-compatible provider configs. The Settings
+  // GUI sends the complete list on every add/edit/remove.
+  rpc SetOpenAiCompatConfigs(SetOpenAiCompatConfigsRequest) returns (ListOpenAiCompatConfigsResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -50,4 +58,40 @@ message CaptureSettingsResponse {
   bool enabled = 1;
   bool sync = 2;
   CaptureContentLevel content = 3;
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible provider configs
+// ---------------------------------------------------------------------------
+
+// A user-configured OpenAI-compatible chat completions endpoint (e.g. a
+// self-hosted vLLM/LM Studio server, or Ollama's own /v1/chat/completions).
+message OpenAiCompatConfig {
+  // UUID generated client-side when the config is created. Referenced by
+  // ai-chat nodes as model = "openai-compat:<id>".
+  string id = 1;
+  // User-provided display name shown in the model selector. Cosmetic only —
+  // never sent to the endpoint.
+  string name = 2;
+  // Base URL of the endpoint, e.g. "https://api.openai.com/v1". Requests are
+  // sent to "<base_url>/chat/completions".
+  string base_url = 3;
+  // API key sent as "Authorization: Bearer <api_key>". May be empty for
+  // endpoints that do not require auth (e.g. a local Ollama server).
+  string api_key = 4;
+  // Model identifier sent as the JSON "model" field in chat-completions
+  // requests, e.g. "gpt-4o" or "llama-3.1-8b-instruct". Required by the real
+  // OpenAI API and any server hosting more than one model; single-model
+  // local servers (Ollama, LM Studio) generally ignore it.
+  string model = 5;
+}
+
+message ListOpenAiCompatConfigsRequest {}
+
+message ListOpenAiCompatConfigsResponse {
+  repeated OpenAiCompatConfig configs = 1;
+}
+
+message SetOpenAiCompatConfigsRequest {
+  repeated OpenAiCompatConfig configs = 1;
 }

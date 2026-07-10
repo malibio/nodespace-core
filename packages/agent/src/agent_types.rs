@@ -255,6 +255,8 @@ pub enum ModelFamily {
     MistralSmall,
     /// Model served via Ollama (family determined by Ollama).
     Ollama,
+    /// Model served via a user-configured OpenAI-compatible endpoint.
+    OpenAiCompat,
 }
 
 /// Backend used to serve a language model.
