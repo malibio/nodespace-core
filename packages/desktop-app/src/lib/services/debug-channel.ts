@@ -10,8 +10,14 @@
  * env var names — no daemon or HTTP endpoint involved.
  */
 
+import { isVitest as isTest } from '$lib/utils/is-vitest';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+// `args`/`result` are untruncated at the type level — callers are
+// responsible for bounding them before constructing the event (the two
+// current callers in diagnostic-logger.ts already pass values through
+// truncateArgs/truncateResult).
 export type DebugEvent =
   | { kind: 'console'; timestamp: string; level: LogLevel; message: string; data?: unknown }
   | {
@@ -27,20 +33,16 @@ export type DebugEvent =
   | { kind: 'dom_snapshot'; timestamp: string; html: string }
   | { kind: 'store_dump'; timestamp: string; stores: Record<string, unknown> };
 
-const isTest =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITEST === 'true') ||
-  (typeof process !== 'undefined' && process.env?.VITEST === 'true');
-
 let channelState: 'unknown' | 'on' | 'off' = 'unknown';
 let channelInit: Promise<void> | null = null;
 
 /**
  * Synchronous best-effort read of the channel's enabled state. Returns
  * `false` until the async probe (triggered by the first `debugChannelWrite`
- * call) resolves — callers that need the definitive answer should await
- * `debugChannelWrite`'s internal probe indirectly by checking again after a
- * microtask, or just call `debugChannelWrite` unconditionally since it's
- * already a no-op when disabled.
+ * call) resolves. The only current caller, `logger.ts`'s `shouldLog`, treats
+ * a stale `false` as "fall through to normal level-based gating" — so the
+ * worst case is a handful of startup log lines evaluated before the channel
+ * is known to be on, not any loss of data once the app is running.
  */
 export function isChannelEnabledSync(): boolean {
   return channelState === 'on';
@@ -84,7 +86,14 @@ export function debugChannelWrite(event: DebugEvent): void {
   })();
 }
 
-/** Capture the current DOM as one debug-channel event. On-demand only. */
+/**
+ * Capture the current DOM as one debug-channel event. On-demand only.
+ *
+ * May include user content (node text, journal entries) verbatim in the
+ * NDJSON file — acceptable because the channel is dev-only, opt-in via
+ * `NS_FRONTEND_LOG`, and local-file-only (never transmitted). Do not enable
+ * this channel in shipped builds.
+ */
 export function captureDomSnapshot(): void {
   debugChannelWrite({
     kind: 'dom_snapshot',
@@ -107,10 +116,18 @@ function toDumpable(value: unknown): unknown {
  * Capture a snapshot of the highest-value global stores as one debug-channel
  * event. On-demand only — dynamic imports keep this from pulling every store
  * into the eagerly-loaded module graph.
+ *
+ * May include user content and PII (e.g. `proSync.userEmail`) verbatim —
+ * same dev-only/opt-in/local-file-only tradeoff as `captureDomSnapshot`
+ * above. Never enable this channel in shipped builds.
  */
 export async function captureStoreDump(): Promise<void> {
   const stores: Record<string, unknown> = {};
   try {
+    // sharedNodeStore is node-graph-shaped and much larger than the other
+    // stores below — pluck just the node map instead of blanket-stringifying
+    // the whole singleton (which also carries internal bookkeeping fields
+    // like subscription maps that aren't useful in a dump).
     const { sharedNodeStore } = await import('./shared-node-store.svelte');
     stores.sharedNodeStore = {
       nodes: toDumpable(sharedNodeStore.nodes)

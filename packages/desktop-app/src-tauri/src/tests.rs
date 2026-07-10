@@ -196,9 +196,19 @@ mod nodespace_tests {
     // it so they don't race each other under parallel test execution.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    // Recover from a poisoned lock instead of propagating the panic: these
+    // guarded blocks are pure env-var read/write assertions, so a prior
+    // test's panic while holding the lock shouldn't cascade into every
+    // subsequent test in this file also failing with a PoisonError.
+    fn env_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn test_frontend_log_enabled_false_when_env_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock_guard();
         std::env::remove_var("NS_FRONTEND_LOG");
 
         assert!(!frontend_log_enabled());
@@ -206,7 +216,7 @@ mod nodespace_tests {
 
     #[test]
     fn test_frontend_log_enabled_true_when_env_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("debug.ndjson");
         std::env::set_var("NS_FRONTEND_LOG", &path);
@@ -218,7 +228,7 @@ mod nodespace_tests {
 
     #[test]
     fn test_frontend_log_noop_when_env_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock_guard();
         std::env::remove_var("NS_FRONTEND_LOG");
 
         // Best-effort no-op: must not panic even though nothing is written.
@@ -227,7 +237,7 @@ mod nodespace_tests {
 
     #[test]
     fn test_frontend_log_appends_ndjson_lines() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("debug.ndjson");
         std::env::set_var("NS_FRONTEND_LOG", &path);

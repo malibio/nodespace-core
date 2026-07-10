@@ -28,6 +28,7 @@
  */
 
 import { debugChannelWrite, isChannelEnabledSync } from '$lib/services/debug-channel';
+import { isVitest as isTest } from '$lib/utils/is-vitest';
 
 // Define log levels as const array for type safety and single source of truth
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
@@ -38,11 +39,6 @@ interface LoggerConfig {
   level: LogLevel;
   prefix?: string;
 }
-
-// Environment detection (cached at module load)
-const isTest =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITEST === 'true') ||
-  (typeof process !== 'undefined' && process.env?.VITEST === 'true');
 
 const isProd =
   (typeof import.meta !== 'undefined' && import.meta.env?.PROD === true) ||
