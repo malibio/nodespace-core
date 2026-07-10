@@ -6,14 +6,13 @@
 //! - `NodeEmbeddingService` - Embedding generation and semantic search (`nlp` feature)
 //! - `EmbeddingProcessor` - Background task for processing stale root embeddings (`nlp` feature)
 //! - `NodeAccessor` - Read-only trait for behavior-driven node access (Issue #1018)
-//! - `SchemaTableManager` - DDL generation for schema-defined tables
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
 //! - `InboundRelationshipCache` - Fast NLP discovery of inbound relationships
 //! - `QueryService` - Query execution with SQL translation (Issue #440)
 //! - `CollectionService` - Collection path parsing and membership management (Issue #756)
 //!
 //! Schema nodes are managed via generic NodeService CRUD operations (Issue #690).
-//! Validation is handled by SchemaNodeBehavior. DDL generation by SchemaTableManager.
+//! Validation is handled by SchemaNodeBehavior.
 //!
 //! Services coordinate between the database layer and application logic,
 //! implementing business rules and orchestrating complex operations.
@@ -32,7 +31,6 @@ pub mod migrations;
 pub mod node_service;
 pub mod query_service;
 pub mod relationship_cache;
-pub mod schema_table_manager;
 
 /// Read-only node accessor for behavior-driven content extraction (Issue #1018)
 ///
@@ -198,7 +196,6 @@ pub use query_service::{
     SortConfig, SortDirection,
 };
 pub use relationship_cache::{CacheStats, InboundRelationship, InboundRelationshipCache};
-pub use schema_table_manager::SchemaTableManager;
 
 #[cfg(test)]
 mod tests {

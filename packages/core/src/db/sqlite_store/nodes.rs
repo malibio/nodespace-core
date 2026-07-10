@@ -276,33 +276,6 @@ impl SqliteStore {
         Ok(updated_node)
     }
 
-    pub async fn create_schema_node_atomic(
-        &self,
-        node: Node,
-        _ddl_statements: Vec<String>,
-        source: Option<String>,
-    ) -> Result<Node> {
-        if node.node_type != "schema" {
-            return Err(anyhow::anyhow!(
-                "create_schema_node_atomic only accepts schema nodes, got '{}'",
-                node.node_type
-            ));
-        }
-        // Legacy graph-DB DDL statements (DEFINE TABLE etc.) are not applicable to SQLite — ignore.
-        self.create_node(node, source, None).await
-    }
-
-    pub async fn update_schema_node_atomic(
-        &self,
-        id: &str,
-        update: NodeUpdate,
-        _ddl_statements: Vec<String>,
-        source: Option<String>,
-    ) -> Result<Node> {
-        // Legacy graph-DB DDL statements are not applicable to SQLite — ignore.
-        self.update_node(id, update, source).await
-    }
-
     pub async fn switch_node_type_atomic(
         &self,
         node_id: &str,
