@@ -178,50 +178,20 @@ impl NodeService {
             self.validate_playbook_rules(&node.properties).await?;
         }
 
-        // For schema nodes, use atomic creation with DDL generation (Issue #691, #703)
-        if node.node_type == "schema" {
-            // Parse schema relationships from properties (Issue #703)
-            let relationships: Vec<crate::models::schema::SchemaRelationship> = node
-                .properties
-                .get("relationships")
-                .and_then(|r| serde_json::from_value(r.clone()).ok())
-                .unwrap_or_default();
-
-            // Generate DDL statements for relationships
-            let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
-
-            // Generate relationship table DDL (if it has relationships)
-            let ddl_statements = if !relationships.is_empty() {
-                table_manager.generate_relationship_ddl_statements(&node.id, &relationships)?
-            } else {
-                vec![]
-            };
-
-            // Execute atomic create: schema node + relationship DDL in one transaction
-            self.store
-                .create_schema_node_atomic(node.clone(), ddl_statements, self.client_id.clone())
-                .await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-            tracing::info!("Atomically created schema node '{}' with DDL sync", node.id);
-        } else {
-            // Regular node creation
-            let db_start = std::time::Instant::now();
-            self.store
-                .create_node(
-                    node.clone(),
-                    self.client_id.clone(),
-                    self.execution_context.clone(),
-                )
-                .await
-                .map_err(|e| {
-                    NodeServiceError::query_failed(format!("Failed to insert node: {}", e))
-                })?;
-            tracing::debug!(
-                "create_node: database insert completed in {}ms",
-                db_start.elapsed().as_millis()
-            );
-        }
+        // Schema nodes go through the normal create path
+        let db_start = std::time::Instant::now();
+        self.store
+            .create_node(
+                node.clone(),
+                self.client_id.clone(),
+                self.execution_context.clone(),
+            )
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+        tracing::debug!(
+            "create_node: database insert completed in {}ms",
+            db_start.elapsed().as_millis()
+        );
 
         // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
 
@@ -738,39 +708,11 @@ impl NodeService {
             lifecycle_status: None, // Schema update doesn't change lifecycle_status
         };
 
-        // For schema nodes, use atomic update with DDL generation (Issue #690, #703)
-        if updated.node_type == "schema" {
-            // Parse schema relationships from properties (Issue #703)
-            let relationships: Vec<crate::models::schema::SchemaRelationship> = updated
-                .properties
-                .get("relationships")
-                .and_then(|r| serde_json::from_value(r.clone()).ok())
-                .unwrap_or_default();
-
-            // Generate DDL statements for relationships
-            let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
-
-            // Generate relationship table DDL (if it has relationships)
-            let ddl_statements = if !relationships.is_empty() {
-                table_manager.generate_relationship_ddl_statements(id, &relationships)?
-            } else {
-                vec![]
-            };
-
-            // Execute atomic update: node + relationship DDL in one transaction
-            self.store
-                .update_schema_node_atomic(id, node_update, ddl_statements, self.client_id.clone())
-                .await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-            tracing::info!("Atomically updated schema node '{}' with DDL sync", id);
-        } else {
-            // Regular node update
-            self.store
-                .update_node(id, node_update, self.client_id.clone())
-                .await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-        }
+        // Schema nodes go through the normal update path
+        self.store
+            .update_node(id, node_update, self.client_id.clone())
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
 

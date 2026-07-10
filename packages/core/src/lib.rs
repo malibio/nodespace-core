@@ -15,7 +15,7 @@
 //!
 //! - [`models`] - Data structures (Node, Task, Person, etc.)
 //! - [`behaviors`] - Node type system and trait-based behaviors
-//! - [`services`] - Business services (NodeService, SchemaTableManager, etc.)
+//! - [`services`] - Business services (NodeService, etc.)
 //! - [`db`] - Database layer with SQLite (libsql) integration
 //! - [`markdown`] - Markdown import/export and templating (library)
 //! - [`schema`] - Schema creation and updates (library)

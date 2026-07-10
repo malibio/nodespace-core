@@ -1132,40 +1132,19 @@ impl NodeService {
             .map(|s| (s.id.clone(), !s.fields.is_empty()))
             .collect();
 
-        // Universal Graph Architecture (Issue #783): Properties stored in node.properties.
-        // Only relationship tables are created for relationships.
+        // Universal Graph Architecture: Properties stored in node.properties.
+        // Schema nodes go through the normal create path.
         {
-            let table_manager = crate::services::schema_table_manager::SchemaTableManager::new();
-
-            // For each schema: atomically create schema node + relationship table DDL (if any)
             for schema in &core_schemas {
                 let schema_id = schema.id.clone();
                 let node = schema.clone().into_node();
 
-                // Universal Graph Architecture: Only generate relationship table DDL for relationships
-                let ddl_statements = if !schema.relationships.is_empty() {
-                    table_manager
-                        .generate_relationship_ddl_statements(&schema_id, &schema.relationships)
-                        .map_err(|e| {
-                            NodeServiceError::SerializationError(format!(
-                                "Failed to generate relationship DDL for '{}': {}",
-                                schema_id, e
-                            ))
-                        })?
-                } else {
-                    vec![]
-                };
-
-                // Atomically create schema node + execute DDL
-                store
-                    .create_schema_node_atomic(node, ddl_statements, None)
-                    .await
-                    .map_err(|e| {
-                        NodeServiceError::SerializationError(format!(
-                            "Failed to create schema node '{}': {}",
-                            schema_id, e
-                        ))
-                    })?;
+                store.create_node(node, None, None).await.map_err(|e| {
+                    NodeServiceError::SerializationError(format!(
+                        "Failed to create schema node '{}': {}",
+                        schema_id, e
+                    ))
+                })?;
             }
         } // ← Arc clone dropped here, enabling Arc::get_mut() below
 
