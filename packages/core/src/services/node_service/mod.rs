@@ -1011,6 +1011,90 @@ impl NodeService {
         Ok(())
     }
 
+    /// Read the cloud tenant (schema + collection) this database is bound to, from
+    /// the DatabaseSettingsNode singleton (ADR-053 per-database cloud sync). Returns
+    /// `Some((schema, collection))` only when both are present and non-empty; `None`
+    /// when the database is unbound — a fresh install, or one whose tenant has never
+    /// been set. Callers treat `None` as "no cloud sync target yet".
+    pub async fn get_bound_tenant(&self) -> Result<Option<(String, String)>, NodeServiceError> {
+        let Some(node) = self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            return Ok(None);
+        };
+        let settings = node.properties.get("database-settings");
+        let schema = settings
+            .and_then(|s| s.get("bound_tenant_schema"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let collection = settings
+            .and_then(|s| s.get("bound_tenant_collection"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if schema.is_empty() || collection.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some((schema.to_string(), collection.to_string())))
+    }
+
+    /// Bind this database to a cloud tenant (schema + collection) by writing the
+    /// authoritative fields on the DatabaseSettingsNode singleton (ADR-053). Merges
+    /// into the existing `database-settings` namespace so sibling fields (sync state,
+    /// auth status) are preserved. Once set, `get_bound_tenant` returns these values
+    /// until re-bound. The singleton is seeded on database open, so a missing one is
+    /// an error rather than a silent no-op.
+    pub async fn set_bound_tenant(
+        &self,
+        schema: &str,
+        collection: &str,
+    ) -> Result<(), NodeServiceError> {
+        let node = self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                NodeServiceError::InitializationError(
+                    "cannot bind tenant: DatabaseSettingsNode singleton not found".to_string(),
+                )
+            })?;
+
+        let mut properties = node.properties.clone();
+        let root = properties.as_object_mut().ok_or_else(|| {
+            NodeServiceError::InitializationError(
+                "DatabaseSettingsNode properties are not a JSON object".to_string(),
+            )
+        })?;
+        let settings = root
+            .entry("database-settings")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                NodeServiceError::InitializationError(
+                    "DatabaseSettingsNode `database-settings` is not a JSON object".to_string(),
+                )
+            })?;
+        settings.insert(
+            "bound_tenant_schema".to_string(),
+            serde_json::Value::String(schema.to_string()),
+        );
+        settings.insert(
+            "bound_tenant_collection".to_string(),
+            serde_json::Value::String(collection.to_string()),
+        );
+
+        self.update_node(
+            &node.id,
+            node.version,
+            NodeUpdate::new().with_properties(properties),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Seed core schema definitions if database is fresh
     ///
     /// Checks if schema nodes exist. If not, creates all core schemas
@@ -3094,6 +3178,48 @@ mod tests {
             .expect("owner has_role edge exists");
         assert_eq!(edge.properties["role"], "owner");
         assert_eq!(edge.properties["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn test_get_set_bound_tenant_roundtrip() {
+        let (service, _temp) = create_test_service().await;
+        const COLL: &str = "c0000000-0000-0000-0000-000000000001";
+
+        // Fresh install: unbound.
+        assert_eq!(service.get_bound_tenant().await.unwrap(), None);
+
+        // Bind → get returns exactly what was set.
+        service.set_bound_tenant("tenant_demo", COLL).await.unwrap();
+        assert_eq!(
+            service.get_bound_tenant().await.unwrap(),
+            Some(("tenant_demo".to_string(), COLL.to_string()))
+        );
+
+        // Sibling fields in the `database-settings` namespace are preserved (merge,
+        // not overwrite).
+        let node = &service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap()[0];
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], false);
+        assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+
+        // Re-bind overwrites.
+        service
+            .set_bound_tenant("tenant_other", "c9999999-0000-0000-0000-000000000009")
+            .await
+            .unwrap();
+        assert_eq!(
+            service.get_bound_tenant().await.unwrap(),
+            Some((
+                "tenant_other".to_string(),
+                "c9999999-0000-0000-0000-000000000009".to_string()
+            ))
+        );
+
+        // Empty schema or collection is treated as unbound.
+        service.set_bound_tenant("", "").await.unwrap();
+        assert_eq!(service.get_bound_tenant().await.unwrap(), None);
     }
 
     #[tokio::test]
