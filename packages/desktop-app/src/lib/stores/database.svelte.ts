@@ -11,6 +11,7 @@ import {
   DEFAULT_PANE_ID
 } from '$lib/stores/navigation.svelte';
 import { formatDateISO } from '$lib/utils/date-formatting';
+import { DATABASE_SETTINGS_NODE_ID } from '$lib/plugins/ui-extensions';
 
 const log = createLogger('DatabaseStore');
 
@@ -86,6 +87,9 @@ class DatabaseStore {
         // so the switcher always shows a concrete selection.
         this.activeDatabaseId =
           this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
+        // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
+        // variant machine can read sync_enabled/auth_status.
+        this.hydrateDatabaseSettings();
       }
     } catch (err) {
       this.error = String(err);
@@ -146,10 +150,25 @@ class DatabaseStore {
       // Reload the sidebar from the new database.
       collectionsData.loadCollections();
       schemasData.loadSchemas();
+      // Re-hydrate the new database's DatabaseSettingsNode (the previous one was
+      // evicted by clearAll) so the Pro-sync variant re-resolves for it.
+      this.hydrateDatabaseSettings();
     } catch (err) {
       this.error = String(err);
       log.error('Failed to switch database', { id, error: err });
     }
+  }
+
+  /**
+   * Load the active database's `DatabaseSettingsNode` into the shared store so the
+   * Pro-sync variant machine resolves from its `sync_enabled`/`auth_status`.
+   * Fire-and-forget: the switch/load must not block on it, and a missing node
+   * (older database not yet backfilled) simply leaves the variant at its default.
+   */
+  private hydrateDatabaseSettings(): void {
+    sharedNodeStore.ensureNode(DATABASE_SETTINGS_NODE_ID).catch((err) => {
+      log.debug('Could not hydrate DatabaseSettingsNode', { error: err });
+    });
   }
 
   /**

@@ -18,10 +18,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 // switch → clear → reset → reload orchestration without their real behavior.
 const flushAllPendingSaves = vi.fn((..._a: unknown[]) => Promise.resolve(new Set<string>()));
 const clearAll = vi.fn((..._a: unknown[]) => undefined);
+const ensureNode = vi.fn((..._a: unknown[]) => Promise.resolve(undefined));
 vi.mock('$lib/services/shared-node-store.svelte', () => ({
   sharedNodeStore: {
     flushAllPendingSaves: (...a: unknown[]) => flushAllPendingSaves(...a),
-    clearAll: (...a: unknown[]) => clearAll(...a)
+    clearAll: (...a: unknown[]) => clearAll(...a),
+    ensureNode: (...a: unknown[]) => ensureNode(...a)
   }
 }));
 

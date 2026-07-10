@@ -28,6 +28,11 @@ const { svc, proSyncMock } = vi.hoisted(() => ({
 
 vi.mock('$lib/services/membership-service', () => ({ membershipService: svc }));
 vi.mock('$lib/stores/pro-sync.svelte', () => ({ proSync: proSyncMock }));
+// membership.isPro now delegates to the two-axis gate; map it back to the store's
+// own `isPro` flag so these roster/invite tests keep toggling one signal.
+vi.mock('$lib/plugins/ui-extensions.svelte', () => ({
+	isProSyncActive: () => proSyncMock.isPro
+}));
 
 import { membership } from '$lib/stores/membership.svelte';
 

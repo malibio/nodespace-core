@@ -26,9 +26,9 @@
   import { createLogger } from '$lib/utils/logger';
   import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
   import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
-  import ProSyncPill from '$lib/components/pro-sync-pill.svelte';
-  import ProReloginModal from '$lib/components/pro-relogin-modal.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
+  import { getActiveChromeContributions } from '$lib/plugins/ui-extensions.svelte';
+  import ExtensionOutlet from '$lib/plugins/extension-outlet.svelte';
   import ConflictToast from '$lib/components/conflict-toast.svelte';
   import { recoveredItems } from '$lib/stores/recovered-items.svelte';
   import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
@@ -53,20 +53,6 @@
   // First-launch onboarding wizard (Issue #1180).
   let showOnboarding = $state(false);
 
-  // Pro re-login prompt (T18, #1304). The daemon emits AUTH_REQUIRED when the
-  // persisted refresh token can't be renewed; we surface a modal offering a
-  // fresh sign-in or working offline. Dismissal is tracked per-episode via
-  // proSync.authRequiredEpisode (bumped each time the daemon re-enters
-  // auth-required), so the modal re-arms automatically with no effect needed.
-  let dismissedEpisode = $state(-1);
-  let reloginPending = $state(false);
-
-  let showReloginModal = $derived(
-    proSync.isPro &&
-      proSync.state === 'auth-required' &&
-      dismissedEpisode !== proSync.authRequiredEpisode
-  );
-
   // Recovered Items (core#1303): once the daemon's probe confirms Pro tier, load
   // the local-only recovery log. If the daemon preserved any conflict "losers",
   // show a one-time snackbar on first open; the inline badge handles per-node
@@ -84,24 +70,6 @@
         conflictType: 'recovered-items'
       });
     });
-  }
-
-  async function handleReloginSignIn() {
-    if (reloginPending) return;
-    reloginPending = true;
-    try {
-      // Same PKCE flow the sync pill uses; the daemon opens the browser and
-      // the modal closes as `sync:status` transitions away from auth-required.
-      await invoke('pro_initiate_oauth');
-    } catch (e) {
-      log.warn('pro_initiate_oauth (relogin) failed', { error: e });
-    } finally {
-      reloginPending = false;
-    }
-  }
-
-  function handleReloginWorkOffline() {
-    dismissedEpisode = proSync.authRequiredEpisode;
   }
 
   /**
@@ -656,11 +624,15 @@
           <PaneManager />
         </div>
 
-        <!-- Pro-tier sync pill. Renders only when the daemon's capability
-             probe finds nodespace.pro.v1.CloudSyncService — community mode
-             hides it entirely. Floats top-right of the app-shell content. -->
+        <!-- Pro chrome overlay slot (sync pill / upgrade teaser / enable-sync
+             prompt) — registry-driven. The active variant resolves from
+             the daemon tier and the active database's DatabaseSettingsNode, so the
+             community build shows an upgrade teaser and each Pro state its own
+             pill. Floats top-right of the app-shell content. -->
         <div class="pro-sync-pill-slot">
-          <ProSyncPill />
+          {#each getActiveChromeContributions('app-shell-overlay') as c (c.variant)}
+            <ExtensionOutlet load={c.lazyLoad} />
+          {/each}
         </div>
       </div>
 
@@ -674,14 +646,11 @@
     <!-- Conflict resolution notifications (Issue #642) -->
     <ConflictToast />
 
-    <!-- Pro re-login prompt when the daemon's session can't be refreshed (T18, #1304) -->
-    <ProReloginModal
-      open={showReloginModal}
-      detail={proSync.detail}
-      pending={reloginPending}
-      onSignIn={handleReloginSignIn}
-      onWorkOffline={handleReloginWorkOffline}
-    />
+    <!-- Pro chrome modal slot (re-login prompt when the daemon's session can't be
+         refreshed, T18) — registry-driven. -->
+    {#each getActiveChromeContributions('app-shell-modal') as c (c.variant)}
+      <ExtensionOutlet load={c.lazyLoad} />
+    {/each}
   </NodeServiceContext>
 </ThemeProvider>
 

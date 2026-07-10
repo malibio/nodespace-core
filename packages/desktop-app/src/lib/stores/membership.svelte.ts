@@ -5,8 +5,9 @@
  * caller's own identity, so the Collaboration view (S3/S4) and onboarding inbox
  * (S5) read reactive state instead of calling the daemon on every render.
  *
- * Pro-gated: every method early-returns / yields empty in community mode
- * (`proSync.tier !== 'pro'`), so the community build stays behaviorally
+ * Pro-gated on the two-axis check: every method early-returns / yields
+ * empty unless the daemon is Pro AND sync is enabled for the active database (see
+ * {@link MembershipStore.isPro}), so the community build stays behaviorally
  * unchanged — it never touches the membership commands.
  *
  * Caller identity: fetched once via `pro_current_person` (see the S2 design note
@@ -24,7 +25,7 @@ import {
 	type Permission,
 	type Person
 } from '$lib/services/membership-service';
-import { proSync } from '$lib/stores/pro-sync.svelte';
+import { isProSyncActive } from '$lib/plugins/ui-extensions.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('MembershipStore');
@@ -62,9 +63,14 @@ class MembershipStore {
 	joinableError = $state<string | null>(null);
 	private joinableLoaded = false;
 
-	/** Pro-gate — the whole store is inert in community mode. */
+	/**
+	 * Two-axis Pro-gate: the store is inert unless the daemon is Pro AND
+	 * sync is enabled for the *active database* (its DatabaseSettingsNode has
+	 * `sync_enabled: true`). has_role edges are per-database under ADR-053, so a Pro
+	 * daemon whose active database hasn't enabled sync has no roster to manage.
+	 */
 	get isPro(): boolean {
-		return proSync.isPro;
+		return isProSyncActive();
 	}
 
 	/**
