@@ -278,6 +278,7 @@ export interface OpenAiCompatConfigDto {
   name: string;
   baseUrl: string;
   apiKey: string;
+  model: string;
 }
 
 /** Read all OpenAI-compatible provider configs from the daemon (source of truth). */

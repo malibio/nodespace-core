@@ -124,6 +124,7 @@
           name: c.name,
           baseUrl: c.baseUrl,
           apiKey: c.apiKey,
+          model: c.model,
         })) ?? getOpenAiConfigs();
     } catch (err) {
       log.error('Failed to load model list', err);

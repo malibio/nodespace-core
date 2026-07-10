@@ -62,7 +62,7 @@
   // --- OpenAI-compat configs ---
   let openAiConfigs = $state<OpenAiCompatConfig[]>([]);
   let editingConfig = $state<OpenAiCompatConfig | null>(null);
-  let editForm = $state({ name: '', baseUrl: '', apiKey: '' });
+  let editForm = $state({ name: '', baseUrl: '', apiKey: '', model: '' });
   let isNewConfig = $state(false);
 
   // --- Default model ---
@@ -105,6 +105,7 @@
         name: c.name,
         baseUrl: c.baseUrl,
         apiKey: c.apiKey,
+        model: c.model,
       }));
       buildDefaultOptions();
     } catch (e) {
@@ -136,14 +137,25 @@
   // --- OpenAI-compat CRUD ---
   function startAdd() {
     isNewConfig = true;
-    editForm = { name: '', baseUrl: '', apiKey: '' };
-    editingConfig = { id: globalThis.crypto.randomUUID(), name: '', baseUrl: '', apiKey: '' };
+    editForm = { name: '', baseUrl: '', apiKey: '', model: '' };
+    editingConfig = {
+      id: globalThis.crypto.randomUUID(),
+      name: '',
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+    };
   }
 
   function startEdit(config: OpenAiCompatConfig) {
     isNewConfig = false;
     editingConfig = config;
-    editForm = { name: config.name, baseUrl: config.baseUrl, apiKey: config.apiKey };
+    editForm = {
+      name: config.name,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+    };
   }
 
   async function saveConfig() {
@@ -363,11 +375,16 @@
           <input class="form-input" type="url" bind:value={editForm.baseUrl} placeholder="https://api.openai.com/v1" />
         </label>
         <label class="form-label">
+          Model
+          <input class="form-input" type="text" bind:value={editForm.model} placeholder="e.g. gpt-4o" />
+        </label>
+        <p class="mm-desc">The exact model identifier the endpoint expects — required by the real OpenAI API and any server hosting more than one model.</p>
+        <label class="form-label">
           API Key
           <input class="form-input" type="password" bind:value={editForm.apiKey} placeholder="sk-…" />
         </label>
         <div class="form-actions">
-          <button class="btn btn--primary btn--sm" onclick={saveConfig} disabled={!editForm.name || !editForm.baseUrl}>Save</button>
+          <button class="btn btn--primary btn--sm" onclick={saveConfig} disabled={!editForm.name || !editForm.baseUrl || !editForm.model}>Save</button>
           <button class="btn btn--sm" onclick={cancelEdit}>Cancel</button>
         </div>
       </div>

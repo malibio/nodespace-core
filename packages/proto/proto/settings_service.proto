@@ -70,7 +70,8 @@ message OpenAiCompatConfig {
   // UUID generated client-side when the config is created. Referenced by
   // ai-chat nodes as model = "openai-compat:<id>".
   string id = 1;
-  // User-provided display name shown in the model selector.
+  // User-provided display name shown in the model selector. Cosmetic only —
+  // never sent to the endpoint.
   string name = 2;
   // Base URL of the endpoint, e.g. "https://api.openai.com/v1". Requests are
   // sent to "<base_url>/chat/completions".
@@ -78,6 +79,11 @@ message OpenAiCompatConfig {
   // API key sent as "Authorization: Bearer <api_key>". May be empty for
   // endpoints that do not require auth (e.g. a local Ollama server).
   string api_key = 4;
+  // Model identifier sent as the JSON "model" field in chat-completions
+  // requests, e.g. "gpt-4o" or "llama-3.1-8b-instruct". Required by the real
+  // OpenAI API and any server hosting more than one model; single-model
+  // local servers (Ollama, LM Studio) generally ignore it.
+  string model = 5;
 }
 
 message ListOpenAiCompatConfigsRequest {}

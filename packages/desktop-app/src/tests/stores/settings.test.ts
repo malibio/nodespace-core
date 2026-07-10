@@ -140,7 +140,7 @@ describe('Settings Store', () => {
         display: mockSettings.display,
       };
       const daemonConfigs = [
-        { id: 'abc', name: 'My Endpoint', baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test' },
+        { id: 'abc', name: 'My Endpoint', baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test', model: 'gpt-4o' },
       ];
       mockInvoke.mockImplementation((cmd: string) => {
         if (cmd === 'get_settings') return Promise.resolve(backendSettings);
@@ -164,7 +164,7 @@ describe('Settings Store', () => {
         'nodespace-settings',
         JSON.stringify({
           openAiConfigs: [
-            { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '' },
+            { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '', model: 'cached-model' },
           ],
         })
       );
@@ -177,7 +177,7 @@ describe('Settings Store', () => {
       await loadSettings();
 
       expect(settingsStore.appSettings?.openAiConfigs).toEqual([
-        { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '' },
+        { id: 'cached', name: 'Cached', baseUrl: 'https://cached.example.com', apiKey: '', model: 'cached-model' },
       ]);
     });
 
@@ -185,7 +185,7 @@ describe('Settings Store', () => {
       enableTauri();
       mockInvoke.mockResolvedValue([]);
       const configs = [
-        { id: 'new-id', name: 'New Endpoint', baseUrl: 'https://new.example.com', apiKey: 'sk-new' },
+        { id: 'new-id', name: 'New Endpoint', baseUrl: 'https://new.example.com', apiKey: 'sk-new', model: 'gpt-4o' },
       ];
 
       await saveOpenAiConfigs(configs);
@@ -199,7 +199,7 @@ describe('Settings Store', () => {
       enableTauri();
       mockInvoke.mockRejectedValue(new Error('daemon unreachable'));
       const configs = [
-        { id: 'x', name: 'X', baseUrl: 'https://x.example.com', apiKey: '' },
+        { id: 'x', name: 'X', baseUrl: 'https://x.example.com', apiKey: '', model: 'model-x' },
       ];
 
       await saveOpenAiConfigs(configs);

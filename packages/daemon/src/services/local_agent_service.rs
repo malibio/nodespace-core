@@ -983,10 +983,21 @@ impl LocalAgentServiceImpl {
                 }
             };
 
+            // `model` is the wire-protocol identifier (e.g. "gpt-4o"); `name` is
+            // only a cosmetic UI label and must never be sent as the request's
+            // "model" field — real OpenAI-API and multi-model servers reject or
+            // misroute an arbitrary display string. Empty only for configs
+            // created before this field existed; single-model local servers
+            // (Ollama, LM Studio) generally ignore the field either way.
+            let model = if config.model.is_empty() {
+                "default".to_string()
+            } else {
+                config.model.clone()
+            };
             let engine = OpenAiCompatInferenceEngine::new(
                 config.base_url.clone(),
                 config.api_key.clone(),
-                config.name.clone(),
+                model,
             );
             let swapped = self
                 .replace_engine_if_changed(model_id, Arc::new(engine))

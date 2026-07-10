@@ -206,6 +206,9 @@ pub struct OpenAiCompatConfigResult {
     pub name: String,
     pub base_url: String,
     pub api_key: String,
+    /// Model identifier sent as the wire-protocol "model" field — distinct
+    /// from `name`, which is only a cosmetic UI label.
+    pub model: String,
 }
 
 impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfigResult {
@@ -215,6 +218,7 @@ impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfigResult {
             name: c.name,
             base_url: c.base_url,
             api_key: c.api_key,
+            model: c.model,
         }
     }
 }
@@ -226,6 +230,7 @@ impl From<OpenAiCompatConfigResult> for ProtoOpenAiCompatConfig {
             name: c.name,
             base_url: c.base_url,
             api_key: c.api_key,
+            model: c.model,
         }
     }
 }

@@ -39,10 +39,11 @@ pub struct OpenAiCompatInferenceEngine {
     /// are sent to "<base_url>/chat/completions".
     base_url: String,
     api_key: String,
-    /// Model name sent in the request body. OpenAI-compatible servers vary in
-    /// how strictly they validate this; many (LM Studio, Ollama) ignore it if
-    /// only one model is loaded, so a fixed placeholder is used when the
-    /// caller does not have a specific downstream model name.
+    /// Model identifier sent as the request body's "model" field — must be
+    /// the provider's actual model id (e.g. "gpt-4o"), not a cosmetic UI
+    /// label. Real OpenAI-API and multi-model servers reject or misroute an
+    /// unrecognized value; single-model local servers (Ollama, LM Studio)
+    /// generally ignore it.
     model_name: String,
 }
 
@@ -54,6 +55,15 @@ impl OpenAiCompatInferenceEngine {
             api_key,
             model_name,
         }
+    }
+
+    /// The wire-protocol model identifier this engine sends as the request
+    /// body's "model" field. Exposed so callers (and tests) can distinguish
+    /// it from a config's cosmetic `name` — see
+    /// `LocalAgentService::load_model_and_collect_events`, which must pass
+    /// `config.model`, not `config.name`, into [`Self::new`].
+    pub fn model_name(&self) -> &str {
+        &self.model_name
     }
 }
 
@@ -456,5 +466,18 @@ mod tests {
         let count = futures::executor::block_on(engine.token_count(text))
             .expect("token_count should succeed");
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn model_name_reflects_the_constructor_arg_not_a_display_label() {
+        // Regression guard: callers (LocalAgentService::load_model_and_collect_events)
+        // must pass the config's wire-protocol `model` field into `new`, never the
+        // cosmetic `name` field a user typed into the Settings UI.
+        let engine = OpenAiCompatInferenceEngine::new(
+            "https://api.openai.com/v1".to_string(),
+            "sk-test".to_string(),
+            "gpt-4o".to_string(),
+        );
+        assert_eq!(engine.model_name(), "gpt-4o");
     }
 }

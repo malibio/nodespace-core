@@ -86,6 +86,7 @@ class SettingsStore {
           name: c.name,
           baseUrl: c.baseUrl,
           apiKey: c.apiKey,
+          model: c.model,
         }));
         writeLocalSettings({ openAiConfigs });
       } catch (err) {
@@ -138,7 +139,13 @@ class SettingsStore {
     }
     try {
       await setOpenAiCompatConfigsOnDaemon(
-        configs.map((c) => ({ id: c.id, name: c.name, baseUrl: c.baseUrl, apiKey: c.apiKey }))
+        configs.map((c) => ({
+          id: c.id,
+          name: c.name,
+          baseUrl: c.baseUrl,
+          apiKey: c.apiKey,
+          model: c.model,
+        }))
       );
     } catch (err) {
       log.error('Failed to persist OpenAI-compat configs to daemon:', err);

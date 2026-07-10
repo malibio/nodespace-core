@@ -43,6 +43,10 @@ pub struct OpenAiCompatConfig {
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
+    /// Model identifier sent as the wire-protocol "model" field — distinct
+    /// from `name`, which is only a cosmetic UI label.
+    #[serde(default)]
+    pub model: String,
 }
 
 impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfig {
@@ -52,6 +56,7 @@ impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfig {
             name: c.name,
             base_url: c.base_url,
             api_key: c.api_key,
+            model: c.model,
         }
     }
 }
@@ -63,6 +68,7 @@ impl From<OpenAiCompatConfig> for ProtoOpenAiCompatConfig {
             name: c.name,
             base_url: c.base_url,
             api_key: c.api_key,
+            model: c.model,
         }
     }
 }
@@ -330,6 +336,7 @@ mod tests {
             name: "My Endpoint".to_string(),
             base_url: "https://api.example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
+            model: "gpt-4o".to_string(),
         };
 
         let set_resp = svc
@@ -361,6 +368,7 @@ mod tests {
             name: "A".to_string(),
             base_url: "https://a.example.com".to_string(),
             api_key: String::new(),
+            model: "model-a".to_string(),
         };
         svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
             configs: vec![first],
@@ -373,6 +381,7 @@ mod tests {
             name: "B".to_string(),
             base_url: "https://b.example.com".to_string(),
             api_key: String::new(),
+            model: "model-b".to_string(),
         };
         let resp = svc
             .set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
@@ -395,6 +404,7 @@ mod tests {
             name: "Target".to_string(),
             base_url: "https://target.example.com".to_string(),
             api_key: "key".to_string(),
+            model: "target-model".to_string(),
         };
         svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
             configs: vec![config],
@@ -437,6 +447,7 @@ mod tests {
                 name: "A".to_string(),
                 base_url: "https://a.example.com".to_string(),
                 api_key: "sk-secret".to_string(),
+                model: "gpt-4o".to_string(),
             }],
         }))
         .await
