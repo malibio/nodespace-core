@@ -392,7 +392,7 @@ impl TaskNode {
             )));
         }
 
-        // Try new nested format first, fall back to old flat format (Issue #397)
+        // Try nested format first, fall back to flat format (used by the markdown importer)
         let task_props = node
             .properties
             .get("task")
