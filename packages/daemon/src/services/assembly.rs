@@ -14,7 +14,9 @@ use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_agent::skill_pipeline::{seed_skill_nodes, seed_tool_nodes};
 use nodespace_core::markdown::prepare_nodes_from_template;
-use nodespace_core::services::{EmbeddingProcessor, NodeAccessor, NodeEmbeddingService};
+use nodespace_core::services::{
+    EmbeddingProcessor, EmbeddingScheduler, NodeAccessor, NodeEmbeddingService,
+};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_nlp_engine::EmbeddingService;
 use tokio::sync::{watch, RwLock};
@@ -41,6 +43,11 @@ pub struct SharedContext {
     /// Whether an NLP model file was found at startup. Gates both the
     /// per-database embedding wiring and the `EmbeddingsService` registration.
     pub has_model: bool,
+    /// Process-global embedding scheduler (ADR-053: per-database compute
+    /// scoping). Grants the active database's embedding batches priority over
+    /// other open databases so foreground work is not blocked by another
+    /// database's backlog. Shared by every database's `EmbeddingProcessor`.
+    pub scheduler: Arc<EmbeddingScheduler>,
 }
 
 /// Process-global services shared across every database the daemon serves
@@ -95,6 +102,10 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
         })
     });
 
+    // One scheduler backs every database's embedding processor so the active
+    // database's batches take priority on the single shared model (ADR-053).
+    let scheduler = Arc::new(EmbeddingScheduler::new());
+
     Ok((
         SharedServices {
             settings,
@@ -102,6 +113,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
                 pty_manager,
                 model: model_rx,
                 has_model,
+                scheduler,
             },
         },
         model_task,
@@ -146,8 +158,12 @@ pub async fn build_database_services(
 
     let node_service = Arc::new(node_service);
 
-    let node_service_grpc = NodeServiceImpl::new(node_service.clone(), embedding_state.clone())
-        .with_database_id(database_id.to_string());
+    let node_service_grpc = NodeServiceImpl::new(
+        node_service.clone(),
+        embedding_state.clone(),
+        shared.scheduler.clone(),
+    )
+    .with_database_id(database_id.to_string());
 
     // EmbeddingsService is only registered when a model file exists at startup
     // (the shared model). If the model appears later, the endpoint is absent
@@ -184,8 +200,10 @@ pub async fn build_database_services(
         let ns = node_service.clone();
         let state = embedding_state.clone();
         let svc_state = embedding_svc_state.clone();
+        let scheduler = shared.scheduler.clone();
+        let db_id = database_id.to_string();
         tokio::spawn(async move {
-            wire_database_embeddings_bg(model, store, ns, state, svc_state).await;
+            wire_database_embeddings_bg(model, store, ns, state, svc_state, scheduler, db_id).await;
         })
     });
 
@@ -297,6 +315,8 @@ async fn wire_database_embeddings_bg(
     node_service: Arc<CoreNodeService>,
     state: Arc<RwLock<Option<EmbeddingReady>>>,
     svc_state: Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>,
+    scheduler: Arc<EmbeddingScheduler>,
+    db_id: String,
 ) {
     // Wait for the shared model to be published (or the sender to drop).
     let nlp = loop {
@@ -317,7 +337,7 @@ async fn wire_database_embeddings_bg(
         behaviors,
     ));
 
-    let processor = match EmbeddingProcessor::new(embedding_service.clone()) {
+    let processor = match EmbeddingProcessor::new(embedding_service.clone(), scheduler, db_id) {
         Ok(p) => Arc::new(p),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to init EmbeddingProcessor — semantic search disabled");

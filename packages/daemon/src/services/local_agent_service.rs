@@ -87,6 +87,11 @@ struct LocalAgentServiceInner {
     token_tx: broadcast::Sender<AgentChunk>,
     /// Cancellation tokens keyed by node_id.
     turn_tokens: TurnTokens,
+    /// Cancels this database's background event watcher when the database is
+    /// closed (ADR-053: per-database compute scoping). Shared across the cheap
+    /// `Arc` clones tonic hands to request handlers, so a single `shutdown()`
+    /// stops the watcher spawned from any clone.
+    shutdown_token: CancellationToken,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -118,8 +123,17 @@ impl LocalAgentServiceImpl {
                 embedding_service,
                 token_tx,
                 turn_tokens: Arc::new(Mutex::new(HashMap::new())),
+                shutdown_token: CancellationToken::new(),
             }),
         }
+    }
+
+    /// Stop this database's background event watcher (ADR-053: per-database
+    /// compute scoping). Called when the owning database is closed or evicted so
+    /// its watcher does not keep subscribing to a now-detached event bus.
+    /// Idempotent and cheap — cancelling an already-cancelled token is a no-op.
+    pub fn shutdown(&self) {
+        self.inner.shutdown_token.cancel();
     }
 
     fn build_noop_service(
@@ -210,7 +224,19 @@ impl LocalAgentServiceImpl {
 
             let mut rx = this.inner.node_service.subscribe_to_events();
             loop {
-                match rx.recv().await {
+                let event = tokio::select! {
+                    // Stop promptly when the owning database is closed (ADR-053),
+                    // even if no further events arrive on the bus.
+                    _ = this.inner.shutdown_token.cancelled() => {
+                        tracing::info!(
+                            "LocalAgentService event watcher: database closed, stopping"
+                        );
+                        break;
+                    }
+                    event = rx.recv() => event,
+                };
+
+                match event {
                     Ok(envelope) => {
                         let (node_id, node_type) = match &envelope.event {
                             nodespace_core::db::events::DomainEvent::NodeCreated {

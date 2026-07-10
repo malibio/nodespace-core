@@ -15,14 +15,36 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use nodespace_core::models::EmbeddingConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use super::assembly::{build_database_services, DatabaseServices, SharedContext};
+
+/// How often the idle reaper scans open databases for eviction (ADR-053:
+/// per-database compute scoping).
+const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Default idle window before a non-default, non-active database is evicted.
+/// Overridable via `NODESPACE_DB_IDLE_SECS`.
+const DEFAULT_IDLE_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+/// Resolve the idle-eviction window, honoring `NODESPACE_DB_IDLE_SECS` (seconds)
+/// when set to a valid non-zero value; otherwise the built-in default.
+fn idle_window() -> Duration {
+    match std::env::var("NODESPACE_DB_IDLE_SECS") {
+        Ok(raw) => match raw.parse::<u64>() {
+            Ok(secs) if secs > 0 => Duration::from_secs(secs),
+            _ => DEFAULT_IDLE_WINDOW,
+        },
+        Err(_) => DEFAULT_IDLE_WINDOW,
+    }
+}
 
 /// Stable identifier for a registered database.
 ///
@@ -160,6 +182,10 @@ pub struct DatabaseManager {
     /// by [`DatabaseManager::get_or_open`]; the shared `Arc` is what request
     /// routing hands to the gRPC handlers.
     open: RwLock<HashMap<DatabaseId, Arc<DatabaseServices>>>,
+    /// Last time each open database served a routed request (ADR-053:
+    /// per-database compute scoping). Drives idle eviction. `Instant` is
+    /// monotonic, so this is unaffected by wall-clock changes.
+    last_activity: RwLock<HashMap<DatabaseId, Instant>>,
     /// Process-global build context (PTY manager + embedding model) every
     /// per-database service set is assembled from.
     context: SharedContext,
@@ -175,6 +201,7 @@ impl DatabaseManager {
             registry_path,
             registry: RwLock::new(registry),
             open: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
             context,
         })
     }
@@ -264,7 +291,10 @@ impl DatabaseManager {
             }
             registry.save(&self.registry_path).await?;
         }
-        self.open.write().await.remove(id);
+        // Tear down the database's compute (processor + event watcher) as well as
+        // its registry entry — unregistering must not leave a detached watcher
+        // running (ADR-053: per-database compute scoping).
+        self.close(id).await;
         Ok(())
     }
 
@@ -374,6 +404,7 @@ impl DatabaseManager {
     pub async fn get_or_open(&self, id: &DatabaseId) -> Result<Arc<DatabaseServices>> {
         // Fast path: already open.
         if let Some(services) = self.open.read().await.get(id).cloned() {
+            self.touch(id).await;
             return Ok(services);
         }
 
@@ -398,10 +429,129 @@ impl DatabaseManager {
         // drop ours and reuse theirs so every request shares one open handle.
         let mut open = self.open.write().await;
         if let Some(existing) = open.get(id).cloned() {
+            drop(open);
+            self.touch(id).await;
             return Ok(existing);
         }
         open.insert(id.clone(), services.clone());
+        drop(open);
+        self.touch(id).await;
         Ok(services)
+    }
+
+    /// Record that `id` just served a request, resetting its idle timer
+    /// (ADR-053: per-database compute scoping).
+    async fn touch(&self, id: &DatabaseId) {
+        self.last_activity
+            .write()
+            .await
+            .insert(id.clone(), Instant::now());
+    }
+
+    /// Close one open database, dropping only that database's compute — its
+    /// `EmbeddingProcessor` and event watcher (ADR-053: per-database compute
+    /// scoping). Returns `true` if the database was open.
+    ///
+    /// This never touches the process-global embedding model: the shared NLP
+    /// engine and its GPU context stay up for the other databases. Releasing the
+    /// GPU context is one-way and belongs solely to daemon shutdown. Callers must
+    /// not close the default or the active database.
+    pub async fn close(&self, id: &DatabaseId) -> bool {
+        let services = self.open.write().await.remove(id);
+        self.last_activity.write().await.remove(id);
+        let Some(services) = services else {
+            return false;
+        };
+        // Stop the per-database ai-chat event watcher.
+        services.local_agent.shutdown();
+        // Drop only this database's embedding processor (stops its background
+        // task on drop). The shared model is left untouched.
+        if let Some(ready) = services.embedding_state.write().await.take() {
+            drop(ready.processor);
+        }
+        true
+    }
+
+    /// Close every open database (ADR-053: per-database compute scoping),
+    /// dropping each one's processor and event watcher. Called on daemon
+    /// shutdown before the process-global GPU context is released exactly once.
+    pub async fn shutdown_all(&self) {
+        let mut open = self.open.write().await;
+        for services in open.values() {
+            services.local_agent.shutdown();
+            if let Some(ready) = services.embedding_state.write().await.take() {
+                drop(ready.processor);
+            }
+        }
+        open.clear();
+        self.last_activity.write().await.clear();
+    }
+
+    /// Spawn the background idle reaper (ADR-053: per-database compute scoping).
+    ///
+    /// Every [`IDLE_CHECK_INTERVAL`] it evicts each open database that is all of:
+    /// not the default, not the active database, idle beyond the configured
+    /// window, and not mid-drain on embeddings. Evicted databases reopen
+    /// transparently on their next request via [`DatabaseManager::get_or_open`].
+    /// The default and active databases are never evicted, so the single-database
+    /// community path is unaffected.
+    pub fn spawn_idle_reaper(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        let window = idle_window();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(IDLE_CHECK_INTERVAL);
+            // Skip the immediate first tick so nothing is evicted at boot.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                this.evict_idle_databases(window).await;
+            }
+        });
+    }
+
+    /// Evict every open database that has been idle longer than `window` and is
+    /// neither the default, the active database, nor mid-drain on embeddings
+    /// (ADR-053: per-database compute scoping).
+    pub async fn evict_idle_databases(&self, window: Duration) {
+        let default_id = self.registry.read().await.default_database.clone();
+        let active_id = self.context.scheduler.active_id();
+        let now = Instant::now();
+
+        // Collect candidates under the read locks, then close them afterward so
+        // we never hold `open` while awaiting the per-database writes in `close`.
+        let candidates: Vec<(DatabaseId, Arc<DatabaseServices>)> = {
+            let open = self.open.read().await;
+            let activity = self.last_activity.read().await;
+            open.iter()
+                .filter(|(id, _)| default_id.as_ref() != Some(*id))
+                .filter(|(id, _)| active_id.as_deref() != Some(id.as_str()))
+                .filter(|(id, _)| {
+                    // A database with no recorded activity has only just been
+                    // inserted into `open` (the touch lands a moment later) — treat
+                    // it as freshly used, never as idle, so it can't be evicted in
+                    // that window.
+                    activity
+                        .get(*id)
+                        .map(|seen| now.duration_since(*seen) > window)
+                        .unwrap_or(false)
+                })
+                .map(|(id, services)| (id.clone(), services.clone()))
+                .collect()
+        };
+
+        for (id, services) in candidates {
+            // Never evict a database with embedding work still queued — its
+            // processor is mid-drain.
+            if has_pending_embeddings(&services).await {
+                continue;
+            }
+            if self.close(&id).await {
+                tracing::info!(
+                    database_id = %id,
+                    "Evicted idle database (ADR-053 per-database compute scoping)"
+                );
+            }
+        }
     }
 
     /// Push a new entry into the registry and persist it. The first registered
@@ -429,10 +579,37 @@ impl DatabaseManager {
     }
 }
 
+/// Whether a database still has stale embeddings queued (ADR-053). Used to hold
+/// off idle eviction while its processor is mid-drain. A database whose model
+/// has not yet wired (or has none) has no processor running, so it reports no
+/// pending work.
+async fn has_pending_embeddings(services: &DatabaseServices) -> bool {
+    let guard = services.embedding_state.read().await;
+    let Some(ready) = guard.as_ref() else {
+        return false;
+    };
+    // Debounce window `0` counts every stale root, not just those past debounce —
+    // any queued work should defer eviction.
+    match ready
+        .embedding_service
+        .store()
+        .get_stale_embedding_root_ids(None, 0, EmbeddingConfig::default().max_retries)
+        .await
+    {
+        Ok(ids) => !ids.is_empty(),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to check pending embeddings during idle sweep");
+            // On error, be conservative and treat the database as busy.
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use nodespace_agent::pty::PtySessionManager;
+    use nodespace_core::services::EmbeddingScheduler;
     use nodespace_nlp_engine::EmbeddingService;
     use tokio::sync::watch;
 
@@ -445,6 +622,7 @@ mod tests {
             pty_manager: Arc::new(PtySessionManager::new()),
             model,
             has_model: false,
+            scheduler: Arc::new(EmbeddingScheduler::new()),
         }
     }
 

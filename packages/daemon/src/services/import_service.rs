@@ -1035,6 +1035,7 @@ mod tests {
     use super::*;
     use crate::services::SharedContext;
     use nodespace_agent::pty::PtySessionManager;
+    use nodespace_core::services::EmbeddingScheduler;
     use nodespace_nlp_engine::EmbeddingService;
     use tokio::sync::watch;
 
@@ -1044,6 +1045,7 @@ mod tests {
             pty_manager: Arc::new(PtySessionManager::new()),
             model,
             has_model: false,
+            scheduler: Arc::new(EmbeddingScheduler::new()),
         }
     }
 
