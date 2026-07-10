@@ -186,6 +186,71 @@ mod nodespace_tests {
     }
 
     // ========================================================================
+    // Debug Channel Tests (frontend_log / frontend_log_enabled — NDJSON sink)
+    // ========================================================================
+
+    use crate::{frontend_log, frontend_log_enabled};
+    use std::sync::Mutex;
+
+    // `NS_FRONTEND_LOG` is process-global env state; serialize tests that touch
+    // it so they don't race each other under parallel test execution.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_frontend_log_enabled_false_when_env_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("NS_FRONTEND_LOG");
+
+        assert!(!frontend_log_enabled());
+    }
+
+    #[test]
+    fn test_frontend_log_enabled_true_when_env_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debug.ndjson");
+        std::env::set_var("NS_FRONTEND_LOG", &path);
+
+        assert!(frontend_log_enabled());
+
+        std::env::remove_var("NS_FRONTEND_LOG");
+    }
+
+    #[test]
+    fn test_frontend_log_noop_when_env_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("NS_FRONTEND_LOG");
+
+        // Best-effort no-op: must not panic even though nothing is written.
+        frontend_log(r#"{"kind":"console","message":"hi"}"#.to_string());
+    }
+
+    #[test]
+    fn test_frontend_log_appends_ndjson_lines() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debug.ndjson");
+        std::env::set_var("NS_FRONTEND_LOG", &path);
+
+        frontend_log(r#"{"kind":"console","message":"first"}"#.to_string());
+        frontend_log(r#"{"kind":"console","message":"second"}"#.to_string());
+
+        std::env::remove_var("NS_FRONTEND_LOG");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], r#"{"kind":"console","message":"first"}"#);
+        assert_eq!(lines[1], r#"{"kind":"console","message":"second"}"#);
+
+        // Every line must be valid, independently parseable JSON (NDJSON).
+        for line in &lines {
+            let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(parsed.get("kind").is_some());
+        }
+    }
+
+    // ========================================================================
     // Menu Integration Tests
     // ========================================================================
 

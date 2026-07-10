@@ -27,6 +27,8 @@
  *   - Test: All logs disabled (unless explicitly enabled)
  */
 
+import { debugChannelWrite, isChannelEnabledSync } from '$lib/services/debug-channel';
+
 // Define log levels as const array for type safety and single source of truth
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
@@ -84,48 +86,13 @@ const DEFAULT_LEVEL: LogLevel = isProd
  * const log = new Logger({ enabled: true, level: 'debug', prefix: 'Test' });
  */
 // ── Frontend-console capture (diagnostic) ──────────────────────────────────────
-// When `NS_FRONTEND_LOG` is set (a file path), the app's `frontend_log` Tauri
-// command appends each frontend log line to that file. Gated by a one-time
-// `frontend_log_enabled` query, so normal builds, the browser, and tests pay no
-// cost. A long-term aid for diagnosing cross-window / cloud-sync behaviour in the
-// real GUI (where the Svelte console isn't otherwise capturable headlessly).
-let forwardState: 'unknown' | 'on' | 'off' = 'unknown';
-let forwardInit: Promise<void> | null = null;
-
+// When `NS_FRONTEND_LOG` is set (a file path), every console-level log is also
+// emitted as a `console` DebugEvent on the structured NDJSON debug channel (see
+// debug-channel.ts). A long-term aid for diagnosing cross-window / cloud-sync
+// behaviour in the real GUI (where the Svelte console isn't otherwise
+// capturable headlessly), and for AI agents inspecting the packaged WKWebView.
 function forwardToFile(level: LogLevel, message: string, data?: unknown): void {
-  // Tests pay no cost: never touch the Tauri `invoke` bridge under VITEST, or the
-  // one-time `frontend_log_enabled` probe pollutes invoke-call assertions elsewhere.
-  if (isTest) return;
-  void (async () => {
-    try {
-      if (forwardState === 'unknown') {
-        if (!forwardInit) {
-          forwardInit = (async () => {
-            try {
-              const { invoke } = await import('@tauri-apps/api/core');
-              forwardState = (await invoke<boolean>('frontend_log_enabled')) ? 'on' : 'off';
-            } catch {
-              forwardState = 'off';
-            }
-          })();
-        }
-        await forwardInit;
-      }
-      if (forwardState !== 'on') return;
-      const { invoke } = await import('@tauri-apps/api/core');
-      let line = `${new Date().toISOString()} [${level.toUpperCase()}] ${message}`;
-      if (data !== undefined) {
-        try {
-          line += ` ${JSON.stringify(data)}`;
-        } catch {
-          line += ` ${String(data)}`;
-        }
-      }
-      await invoke('frontend_log', { line });
-    } catch {
-      /* best-effort diagnostic only */
-    }
-  })();
+  debugChannelWrite({ kind: 'console', timestamp: new Date().toISOString(), level, message, data });
 }
 
 // Probe capture-enabled at module load so debug logging activates promptly when
@@ -147,9 +114,9 @@ export class Logger {
   private shouldLog(level: LogLevel): boolean {
     if (!this.config.enabled) return false;
 
-    // When frontend-console capture is on (NS_FRONTEND_LOG set), log every level
-    // so the captured file is complete even though release builds default to warn.
-    if (forwardState === 'on') return true;
+    // When the debug channel is on (NS_FRONTEND_LOG set), log every level so
+    // the captured file is complete even though release builds default to warn.
+    if (isChannelEnabledSync()) return true;
 
     const currentLevelIndex = LOG_LEVELS.indexOf(this.config.level);
     const requestedLevelIndex = LOG_LEVELS.indexOf(level);
