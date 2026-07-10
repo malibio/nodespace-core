@@ -142,7 +142,7 @@ mod tests {
         let node = Node::new(
             "task".to_string(),
             "Test".to_string(),
-            json!({"assignee_id": "user-123"}),
+            json!({"assignee": "user-123"}),
         );
         let task = TaskNode::from_node(node).unwrap();
         assert_eq!(task.assignee_id(), Some("user-123".to_string()));
@@ -171,7 +171,7 @@ mod tests {
         let node = Node::new(
             "task".to_string(),
             "Test".to_string(),
-            json!({"assignee_id": "user-123"}),
+            json!({"assignee": "user-123"}),
         );
         let mut task = TaskNode::from_node(node).unwrap();
 

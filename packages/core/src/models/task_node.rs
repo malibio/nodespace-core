@@ -377,9 +377,9 @@ impl TaskNode {
     ///
     /// # Property Formats
     ///
-    /// Supports both property formats (Issue #397):
-    /// - New nested format: `properties.task.status`
-    /// - Old flat format: `properties.status` (deprecated, for backward compat)
+    /// Supports both property formats:
+    /// - Nested format: `properties.task.status`
+    /// - Flat format: `properties.status` (used by the markdown importer)
     ///
     /// # Errors
     ///
@@ -420,12 +420,8 @@ impl TaskNode {
             .and_then(parse_to_date_string);
 
         // Extract assignee from properties
-        // Note: Supports both "assignee_id" (legacy) and "assignee" (canonical) field names.
-        // The struct field is `assignee`, and `into_node()` serializes as "assignee".
-        // We read both for backward compatibility with any older data using "assignee_id".
         let assignee = props
-            .get("assignee_id")
-            .or_else(|| props.get("assignee"))
+            .get("assignee")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 

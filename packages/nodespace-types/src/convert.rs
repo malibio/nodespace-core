@@ -115,7 +115,6 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
 
     let assignee = props
         .get("assignee")
-        .or_else(|| props.get("assignee_id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
