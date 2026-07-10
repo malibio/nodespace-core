@@ -526,10 +526,14 @@ impl DatabaseManager {
                 .filter(|(id, _)| default_id.as_ref() != Some(*id))
                 .filter(|(id, _)| active_id.as_deref() != Some(id.as_str()))
                 .filter(|(id, _)| {
+                    // A database with no recorded activity has only just been
+                    // inserted into `open` (the touch lands a moment later) — treat
+                    // it as freshly used, never as idle, so it can't be evicted in
+                    // that window.
                     activity
                         .get(*id)
                         .map(|seen| now.duration_since(*seen) > window)
-                        .unwrap_or(true)
+                        .unwrap_or(false)
                 })
                 .map(|(id, services)| (id.clone(), services.clone()))
                 .collect()

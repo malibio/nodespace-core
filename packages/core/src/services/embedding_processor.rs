@@ -96,21 +96,35 @@ pub struct EmbeddingScheduler {
 }
 
 /// A held scheduler slot. Dropping it releases the shared-model gate and, for an
-/// active-database batch, decrements the active-waiter count and wakes any
-/// deferred non-active waiters so priority is re-evaluated.
+/// active-database batch, drops the [`HighPriorityReservation`] which decrements
+/// the active-waiter count and wakes any deferred non-active waiters so priority
+/// is re-evaluated.
 pub struct SchedulerPermit<'a> {
     _permit: SemaphorePermit<'a>,
-    scheduler: &'a EmbeddingScheduler,
-    is_active: bool,
+    /// Present only for an active-database batch.
+    _reservation: Option<HighPriorityReservation<'a>>,
 }
 
-impl Drop for SchedulerPermit<'_> {
+/// RAII active-waiter reservation. Bumping `high_waiters` *before* the gate is
+/// acquired is what makes concurrent non-active batches defer; guarding it in a
+/// drop type ensures an `acquire` future cancelled while awaiting the gate can
+/// never leak the count (a leak would defer every non-active database forever).
+struct HighPriorityReservation<'a> {
+    scheduler: &'a EmbeddingScheduler,
+}
+
+impl<'a> HighPriorityReservation<'a> {
+    fn new(scheduler: &'a EmbeddingScheduler) -> Self {
+        scheduler.high_waiters.fetch_add(1, Ordering::SeqCst);
+        Self { scheduler }
+    }
+}
+
+impl Drop for HighPriorityReservation<'_> {
     fn drop(&mut self) {
-        if self.is_active {
-            self.scheduler.high_waiters.fetch_sub(1, Ordering::SeqCst);
-            // Wake deferred non-active waiters so they re-check the backlog.
-            self.scheduler.notify.notify_waiters();
-        }
+        self.scheduler.high_waiters.fetch_sub(1, Ordering::SeqCst);
+        // Wake deferred non-active waiters so they re-check the backlog.
+        self.scheduler.notify.notify_waiters();
     }
 }
 
@@ -163,9 +177,11 @@ impl EmbeddingScheduler {
     /// re-evaluated each time.
     pub async fn acquire(&self, db_id: &str) -> SchedulerPermit<'_> {
         if self.is_active(db_id) {
-            // Register before contending so any concurrent non-active waiter sees
-            // this batch and defers.
-            self.high_waiters.fetch_add(1, Ordering::SeqCst);
+            // Register as a high-priority waiter BEFORE contending for the gate so
+            // any concurrent non-active waiter sees this batch and defers. The
+            // reservation is RAII-guarded, so if this future is dropped while
+            // awaiting the gate the count is released rather than leaked.
+            let reservation = HighPriorityReservation::new(self);
             let permit = self
                 .gate
                 .acquire()
@@ -173,8 +189,7 @@ impl EmbeddingScheduler {
                 .expect("scheduler semaphore never closes");
             SchedulerPermit {
                 _permit: permit,
-                scheduler: self,
-                is_active: true,
+                _reservation: Some(reservation),
             }
         } else {
             // Defer while the active database has batches queued. Register on the
@@ -196,8 +211,7 @@ impl EmbeddingScheduler {
                 .expect("scheduler semaphore never closes");
             SchedulerPermit {
                 _permit: permit,
-                scheduler: self,
-                is_active: false,
+                _reservation: None,
             }
         }
     }
@@ -525,52 +539,54 @@ mod tests {
     /// non-active database's batch that was requested first — proving
     /// active-first priority without loading any embedding model.
     #[tokio::test]
-    async fn scheduler_grants_active_batch_before_deferred_non_active() {
+    async fn scheduler_prioritizes_active_over_earlier_queued_non_active() {
+        // Distinguishes active-first priority from a plain FIFO gate: a non-active
+        // batch requests the gate BEFORE a second active batch, yet the active one
+        // must still be granted first. A FIFO gate would grant the earlier request
+        // and yield ["B", "A2"].
         let scheduler = Arc::new(EmbeddingScheduler::new());
         scheduler.set_active(Some("A".to_string()));
 
         let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
 
-        // A non-active batch grabs the single gate permit and holds it, so any
-        // subsequent acquire must wait.
-        let b1 = scheduler.acquire("B").await;
+        // An active batch holds the gate (high_waiters -> 1).
+        let a1 = scheduler.acquire("A").await;
 
-        // Spawn the active database's batch. It registers as a high-priority
-        // waiter (high_waiters -> 1) and then blocks on the gate held by b1.
-        let sched_a = scheduler.clone();
-        let order_a = order.clone();
-        let a_task = tokio::spawn(async move {
-            let _p = sched_a.acquire("A").await;
-            order_a.lock().unwrap().push("A");
+        // A non-active batch requests next. Because active work is pending it
+        // parks on the notifier instead of queueing on the gate. The single-thread
+        // test runtime runs it to that park on one yield.
+        let sched_b = scheduler.clone();
+        let order_b = order.clone();
+        let b_task = tokio::spawn(async move {
+            let _p = sched_b.acquire("B").await;
+            order_b.lock().unwrap().push("B");
         });
+        tokio::task::yield_now().await;
 
-        // Wait until the active batch has registered its intent. Reading the
-        // private counter is possible because this test lives in-module.
-        while scheduler.high_waiters.load(Ordering::SeqCst) == 0 {
+        // A SECOND active batch requests *after* B and queues on the gate. Reading
+        // the private counter is possible because this test lives in-module.
+        let sched_a2 = scheduler.clone();
+        let order_a2 = order.clone();
+        let a2_task = tokio::spawn(async move {
+            let _p = sched_a2.acquire("A").await;
+            order_a2.lock().unwrap().push("A2");
+        });
+        while scheduler.high_waiters.load(Ordering::SeqCst) < 2 {
             tokio::task::yield_now().await;
         }
 
-        // Spawn a second non-active batch. It sees high_waiters > 0 and defers on
-        // the notifier rather than contending for the gate.
-        let sched_b2 = scheduler.clone();
-        let order_b2 = order.clone();
-        let b2_task = tokio::spawn(async move {
-            let _p = sched_b2.acquire("B").await;
-            order_b2.lock().unwrap().push("B2");
-        });
+        // Release the first active batch. The second active batch wins the gate
+        // over the earlier-requested non-active batch, which stays parked until
+        // all active work drains.
+        drop(a1);
 
-        // Release the gate. The active batch (already blocked on the gate) is
-        // granted next; only after it drains (high_waiters -> 0) is the deferred
-        // non-active batch woken.
-        drop(b1);
-
-        a_task.await.unwrap();
-        b2_task.await.unwrap();
+        a2_task.await.unwrap();
+        b_task.await.unwrap();
 
         assert_eq!(
             *order.lock().unwrap(),
-            vec!["A", "B2"],
-            "active database's batch must be granted before the deferred non-active batch"
+            vec!["A2", "B"],
+            "an active batch requested after a non-active one must still be granted first"
         );
     }
 }
