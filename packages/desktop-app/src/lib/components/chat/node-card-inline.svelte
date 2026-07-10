@@ -38,8 +38,11 @@
   // reactive watch (ADR-049). Once fetched, `node` updates via the store read above.
   onMount(() => {
     if (sharedNodeStore.getNode(nodeId)) return;
+    // ADR-053: capture the database generation so a switch mid-fetch drops this
+    // read instead of writing the previous database's node into the now-active store.
+    const epoch = sharedNodeStore.currentEpoch();
     backendAdapter.getNode(nodeId).then((fetched) => {
-      if (fetched) {
+      if (fetched && sharedNodeStore.currentEpoch() === epoch) {
         sharedNodeStore.setNode(fetched, { type: 'database', reason: 'node-card-fetch' }, true);
       }
     }).catch((e) => {

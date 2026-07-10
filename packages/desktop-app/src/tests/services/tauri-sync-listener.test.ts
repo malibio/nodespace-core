@@ -323,6 +323,67 @@ describe('TauriSyncListener', () => {
 		});
 	});
 
+	// ADR-053: switching the active database bumps the store's database epoch.
+	// A domain-event hydration whose read was already in flight across that
+	// switch resolves with the previous database's row — it must be dropped, not
+	// written into the now-active store, or the switch leaks orphan nodes.
+	describe('ADR-053 in-flight read drop across a database switch', () => {
+		beforeEach(async () => {
+			await initializeTauriSyncListeners();
+		});
+
+		afterEach(() => {
+			proSync.tier = 'unknown'; // singleton — restore for later tests
+		});
+
+		it('community path drops a node:created fetch that resolves after a switch', async () => {
+			proSync.tier = 'community'; // direct fetchAndUpdateNode path
+
+			// getNode hangs so the database can switch while the read is in flight.
+			let resolveGet!: (node: Node | null) => void;
+			const pending = new Promise<Node | null>((resolve) => {
+				resolveGet = resolve;
+			});
+			vi.mocked(backendAdapterModule.backendAdapter.getNode).mockImplementation(() => pending);
+
+			// The event dispatches the fetch (now pending on the previous database).
+			emitTauriEvent('node:created', { id: 'node1' });
+
+			// The active database switches while the read is outstanding.
+			sharedNodeStore.clearAll();
+
+			// The read finally resolves with the previous database's row.
+			resolveGet(createTestNode('node1'));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			// Dropped — not written into the now-active store.
+			expect(sharedNodeStore.hasNode('node1')).toBe(false);
+		});
+
+		it('Pro coalescer drops a queued burst that resolves after a switch', async () => {
+			proSync.tier = 'pro'; // flushPendingNodeFetches path
+
+			let resolveGet!: (node: Node | null) => void;
+			const pending = new Promise<Node | null>((resolve) => {
+				resolveGet = resolve;
+			});
+			vi.mocked(backendAdapterModule.backendAdapter.getNode).mockImplementation(() => pending);
+
+			// Queue the event; let the coalescing window fire so the flush reaches
+			// its (now-pending) read.
+			emitTauriEvent('node:created', { id: 'node1' });
+			await new Promise((resolve) => setTimeout(resolve, 40));
+
+			// Switch databases while the coalesced read is outstanding.
+			sharedNodeStore.clearAll();
+
+			resolveGet(createTestNode('node1'));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(sharedNodeStore.hasNode('node1')).toBe(false);
+		});
+	});
+
 	describe('Unified Relationship Events - has_child (Issue #811)', () => {
 		beforeEach(async () => {
 			await initializeTauriSyncListeners();

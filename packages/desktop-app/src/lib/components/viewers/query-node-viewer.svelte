@@ -71,6 +71,9 @@
 
   async function loadAndQuery(schemaId: string) {
     const loadId = ++currentLoadId;
+    // ADR-053: capture the database generation so a switch mid-load drops these
+    // rows instead of writing the previous database's nodes into the now-active store.
+    const epoch = sharedNodeStore.currentEpoch();
     queryState = 'loading';
     error = null;
     schemaNode = null;
@@ -97,6 +100,8 @@
       // so updates from other panes propagate reactively without re-querying.
       const nodes = await backendAdapter.queryNodes({ nodeType: schema.id });
       if (loadId !== currentLoadId) return;
+      // Drop the write if the active database switched while the query was in flight.
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
       const databaseSource = { type: 'database' as const, reason: 'query-node-viewer initial load' };
       for (const node of nodes) {
         sharedNodeStore.setNode(node, databaseSource);

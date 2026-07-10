@@ -18,11 +18,15 @@ vi.mock('$lib/utils/logger', () => ({
 const getNode = vi.fn();
 const setNode = vi.fn();
 const fetchNode = vi.fn();
+const currentEpoch = vi.fn().mockReturnValue(0);
 
 vi.mock('$lib/services/shared-node-store.svelte', () => ({
   sharedNodeStore: {
     getNode: (...a: unknown[]) => getNode(...a),
-    setNode: (...a: unknown[]) => setNode(...a)
+    setNode: (...a: unknown[]) => setNode(...a),
+    // ADR-053 epoch guard: the on-mount fetch captures currentEpoch() and
+    // re-checks it before setNode. A stable value keeps the read in-epoch.
+    currentEpoch: (...a: unknown[]) => currentEpoch(...a)
   }
 }));
 

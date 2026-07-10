@@ -102,6 +102,12 @@ async function flushPendingNodeFetches(): Promise<void> {
   flushInProgress = true;
   tombstonedDuringFlush.clear();
   try {
+    // ADR-053: capture the database generation before the reads so a switch
+    // mid-flush drops the whole burst rather than writing the previous
+    // database's rows into the now-active store. isActiveDatabaseEvent gates on
+    // event arrival, before these async fetches dispatch, so it cannot close
+    // this in-flight window on its own.
+    const epoch = sharedNodeStore.currentEpoch();
     const fetched = await Promise.all(
       ids.map((id) =>
         backendAdapter.getNode(id).catch((error) => {
@@ -110,6 +116,10 @@ async function flushPendingNodeFetches(): Promise<void> {
         })
       )
     );
+
+    // The active database switched while these reads were in flight — the rows
+    // belong to the previous database, so apply none of them.
+    if (sharedNodeStore.currentEpoch() !== epoch) return;
 
     // Synchronous apply loop — no `await` between setNode calls, so Svelte
     // coalesces the resulting reactive updates into a single render. A node
@@ -166,7 +176,13 @@ function stripNodePrefix(id: string): string {
  */
 async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<void> {
   try {
+    // ADR-053: capture the database generation before the read so a switch
+    // mid-fetch drops the write rather than writing the previous database's row
+    // into the now-active store (isActiveDatabaseEvent gates before this async
+    // fetch dispatches, so it does not cover the in-flight window).
+    const epoch = sharedNodeStore.currentEpoch();
     const node = await backendAdapter.getNode(nodeId);
+    if (sharedNodeStore.currentEpoch() !== epoch) return;
     if (node) {
       const normalizedNode = normalizeNodeData(node);
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);

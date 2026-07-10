@@ -69,6 +69,9 @@ export class NavigationService {
       const { backendAdapter } = await import('./backend-adapter');
 
       try {
+        // ADR-053: capture the database generation before the daemon read so a
+        // switch mid-fetch drops the write below.
+        const epoch = sharedNodeStore.currentEpoch();
         const fetchedNode = await backendAdapter.getNode(nodeId);
         if (!fetchedNode) {
           log.error(`Node ${nodeId} not found in backend`);
@@ -76,7 +79,15 @@ export class NavigationService {
         }
         node = fetchedNode;
 
-        // Add to store for future use
+        // The active database switched while this read was in flight — the
+        // fetched row belongs to the previous database. Drop it and abort the
+        // navigation rather than opening a tab for a node absent from the
+        // now-active store.
+        if (sharedNodeStore.currentEpoch() !== epoch) {
+          return null;
+        }
+
+        // Add to store for future use.
         // Use type 'database' and skipPersistence since already in backend (or virtual)
         sharedNodeStore.setNode(
           node,
