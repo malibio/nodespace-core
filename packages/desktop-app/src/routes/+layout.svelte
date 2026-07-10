@@ -10,6 +10,11 @@
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { initializeApp } from '$lib/services/app-initialization';
   import { onDaemonReconnect } from '$lib/services/daemon-status';
+  import {
+    isChannelEnabled,
+    captureDomSnapshot,
+    captureStoreDump
+  } from '$lib/services/debug-channel';
 
   let isInitialized = false;
   let initError: string | null = null;
@@ -77,6 +82,20 @@
       // Store error for display on screen
       initError = error instanceof Error ? error.message : String(error);
     }
+  });
+
+  // Expose on-demand debug-channel captures for AI agents / developers driving
+  // the packaged WKWebView via Safari Web Inspector. Gated on the same
+  // NS_FRONTEND_LOG probe the rest of the debug channel uses — normal builds
+  // never touch `window.__ns_debug`.
+  onMount(() => {
+    void isChannelEnabled().then(enabled => {
+      if (!enabled) return;
+      (window as unknown as { __ns_debug: unknown }).__ns_debug = {
+        captureDomSnapshot,
+        captureStoreDump
+      };
+    });
   });
 
   // Retry whichever of the above didn't succeed on the first attempt once

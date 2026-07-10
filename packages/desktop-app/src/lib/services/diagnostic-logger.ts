@@ -12,6 +12,7 @@
  */
 
 import { createLogger } from '$lib/utils/logger';
+import { debugChannelWrite } from '$lib/services/debug-channel';
 
 const log = createLogger('DiagnosticLogger');
 
@@ -205,6 +206,16 @@ export async function withDiagnosticLogging<T>(
       result: truncateResult(result)
     });
 
+    debugChannelWrite({
+      kind: 'invoke',
+      timestamp: new Date().toISOString(),
+      method: methodName,
+      args: truncateArgs(args),
+      durationMs,
+      status: 'success',
+      result: truncateResult(result)
+    });
+
     return result;
   } catch (error) {
     const durationMs = performance.now() - startTime;
@@ -220,6 +231,16 @@ export async function withDiagnosticLogging<T>(
     log.error(`[ERROR] ${methodName} (${durationMs.toFixed(2)}ms)`, {
       error: errorMessage,
       args: truncateArgs(args)
+    });
+
+    debugChannelWrite({
+      kind: 'invoke',
+      timestamp: new Date().toISOString(),
+      method: methodName,
+      args: truncateArgs(args),
+      durationMs,
+      status: 'error',
+      error: errorMessage
     });
 
     throw error;

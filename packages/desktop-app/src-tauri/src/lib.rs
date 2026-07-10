@@ -39,16 +39,20 @@ fn toggle_sidebar() -> String {
     "Sidebar toggled!".to_string()
 }
 
-/// True when frontend-console capture is enabled (env `NS_FRONTEND_LOG` set to a
-/// file path). The frontend gates its forwarding on this so normal builds pay no
-/// IPC cost; diagnostics set the env per window to capture the Svelte event flow.
+/// True when the frontend debug channel is enabled (env `NS_FRONTEND_LOG` set to
+/// a file path). The frontend gates its forwarding on this so normal builds pay
+/// no IPC cost; diagnostics set the env per window to capture console messages,
+/// invoke/network calls, DOM snapshots, and store dumps as structured NDJSON.
 #[tauri::command]
 fn frontend_log_enabled() -> bool {
     std::env::var_os("NS_FRONTEND_LOG").is_some()
 }
 
-/// Append a frontend log line to the file named by `NS_FRONTEND_LOG`. No-op if the
-/// env var is unset. Best-effort (diagnostic only) — never fails the caller.
+/// Append one NDJSON debug-channel line to the file named by `NS_FRONTEND_LOG`.
+/// `line` is a pre-serialized JSON object (see `DebugEvent` on the frontend) —
+/// this command is a dumb sink with no schema knowledge of its contents.
+/// No-op if the env var is unset. Best-effort (diagnostic only) — never fails
+/// the caller.
 #[tauri::command]
 fn frontend_log(line: String) {
     if let Some(path) = std::env::var_os("NS_FRONTEND_LOG") {
