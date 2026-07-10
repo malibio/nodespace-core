@@ -42,8 +42,6 @@ const SYSTEMD_SERVICE_NAME: &str = "nodespace.service";
 // project's PUBLISHABLE key (safe to bake into the binary).
 const PRO_SUPABASE_URL: Option<&str> = option_env!("NODESPACE_PRO_SUPABASE_URL");
 const PRO_ANON_KEY: Option<&str> = option_env!("NODESPACE_PRO_ANON_KEY");
-const PRO_SCHEMA: Option<&str> = option_env!("NODESPACE_PRO_SCHEMA");
-const PRO_COLLECTION: Option<&str> = option_env!("NODESPACE_PRO_COLLECTION");
 
 /// True when this binary was built as the Pro edition (cloud env baked in).
 fn is_pro_build() -> bool {
@@ -629,19 +627,18 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
             .to_string_lossy(),
     );
 
-    // Pro edition: inject the Supabase cloud env the sync daemon needs (#156). The
-    // values are baked at build time; all are XML-safe (JWT chars / URLs / schema
-    // names contain no `<>&`). Empty for a community build.
+    // Pro edition: inject the deployment-wide Supabase endpoint the sync daemon
+    // needs. Only the project URL and publishable anon key are baked in — both are
+    // deployment-wide, not tenant-specific. The tenant a database syncs to (schema +
+    // collection) is bound per database at runtime and is deliberately NOT injected
+    // here (ADR-053 per-database cloud sync). Both values are XML-safe (JWT chars /
+    // URLs contain no `<>&`). Empty for a community build.
     let pro_env = if is_pro_build() {
         format!(
             "        <key>NODESPACED_PRO_SUPABASE_URL</key>\n        <string>{url}</string>\n\
-             \x20       <key>NODESPACED_PRO_ANON_KEY</key>\n        <string>{key}</string>\n\
-             \x20       <key>NODESPACED_PRO_SCHEMA</key>\n        <string>{schema}</string>\n\
-             \x20       <key>NODESPACED_PRO_COLLECTION</key>\n        <string>{coll}</string>\n",
+             \x20       <key>NODESPACED_PRO_ANON_KEY</key>\n        <string>{key}</string>\n",
             url = xml_escape(PRO_SUPABASE_URL.unwrap_or_default()),
             key = xml_escape(PRO_ANON_KEY.unwrap_or_default()),
-            schema = xml_escape(PRO_SCHEMA.unwrap_or_default()),
-            coll = xml_escape(PRO_COLLECTION.unwrap_or_default()),
         )
     } else {
         String::new()
