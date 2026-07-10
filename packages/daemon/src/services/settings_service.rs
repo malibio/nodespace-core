@@ -197,7 +197,23 @@ impl SettingsServiceImpl {
             .map_err(|e| Status::internal(format!("Failed to serialize daemon config: {}", e)))?;
         tokio::fs::write(&self.config_path, contents)
             .await
-            .map_err(|e| Status::internal(format!("Failed to write daemon config: {}", e)))
+            .map_err(|e| Status::internal(format!("Failed to write daemon config: {}", e)))?;
+
+        // daemon.toml now holds real third-party API keys (openai_compat.configs) —
+        // restrict to owner-only so other local accounts on a shared machine can't
+        // read them off disk. Unix-only; this is a macOS/Linux desktop app.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            tokio::fs::set_permissions(&self.config_path, perms)
+                .await
+                .map_err(|e| {
+                    Status::internal(format!("Failed to set daemon config permissions: {}", e))
+                })?;
+        }
+
+        Ok(())
     }
 
     fn capture_to_response(capture: &CaptureConfig) -> CaptureSettingsResponse {
@@ -406,5 +422,34 @@ mod tests {
             .await
             .expect("missing file should not error");
         assert!(found.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_config_restricts_daemon_toml_to_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![ProtoOpenAiCompatConfig {
+                id: "a".to_string(),
+                name: "A".to_string(),
+                base_url: "https://a.example.com".to_string(),
+                api_key: "sk-secret".to_string(),
+            }],
+        }))
+        .await
+        .expect("set should succeed");
+
+        let metadata = tokio::fs::metadata(&config_path)
+            .await
+            .expect("daemon.toml should exist after write");
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "daemon.toml should be owner-read/write only, got {:o}",
+            mode
+        );
     }
 }
