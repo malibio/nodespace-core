@@ -183,7 +183,9 @@ pub use collection_service::{
     COLLECTION_PATH_DELIMITER, MAX_COLLECTION_DEPTH,
 };
 #[cfg(feature = "nlp")]
-pub use embedding_processor::{EmbeddingProcessor, EmbeddingWaker};
+pub use embedding_processor::{
+    EmbeddingProcessor, EmbeddingScheduler, EmbeddingWaker, SchedulerPermit,
+};
 #[cfg(feature = "nlp")]
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;

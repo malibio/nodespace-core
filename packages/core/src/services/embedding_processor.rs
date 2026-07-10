@@ -30,9 +30,10 @@
 
 use crate::services::error::NodeServiceError;
 use crate::services::NodeEmbeddingService;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify, Semaphore, SemaphorePermit};
 
 /// Handle to wake the embedding processor
 ///
@@ -63,6 +64,140 @@ impl EmbeddingWaker {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 tracing::warn!("EmbeddingProcessor has shut down, wake ignored");
+            }
+        }
+    }
+}
+
+/// Process-global gate that gives the active database's embedding work priority
+/// over every other open database (ADR-053: per-database compute scoping).
+///
+/// The embedding model is a single process-global resource, so only one database
+/// may run a batch through it at a time. This scheduler enforces that mutual
+/// exclusion *and* a priority: while the active database has embedding batches
+/// queued, batches from other databases defer. When the active database drains,
+/// the others proceed. Priority is re-evaluated per batch, so a non-active
+/// database is never starved permanently — it resumes the moment the active
+/// database goes idle.
+///
+/// The scheduler keys on the database id as a plain [`String`] (the registry
+/// ULID) so this core type stays free of any daemon-side identifier type.
+pub struct EmbeddingScheduler {
+    /// The database whose live edit stream marks it active, if any.
+    active: Mutex<Option<String>>,
+    /// Single-permit gate: only one database runs a batch through the shared
+    /// model at a time.
+    gate: Semaphore,
+    /// Count of active-database batches queued or in flight. Non-active batches
+    /// wait while this is non-zero.
+    high_waiters: AtomicUsize,
+    /// Wakes deferred non-active waiters when the active backlog drains.
+    notify: Notify,
+}
+
+/// A held scheduler slot. Dropping it releases the shared-model gate and, for an
+/// active-database batch, decrements the active-waiter count and wakes any
+/// deferred non-active waiters so priority is re-evaluated.
+pub struct SchedulerPermit<'a> {
+    _permit: SemaphorePermit<'a>,
+    scheduler: &'a EmbeddingScheduler,
+    is_active: bool,
+}
+
+impl Drop for SchedulerPermit<'_> {
+    fn drop(&mut self) {
+        if self.is_active {
+            self.scheduler.high_waiters.fetch_sub(1, Ordering::SeqCst);
+            // Wake deferred non-active waiters so they re-check the backlog.
+            self.scheduler.notify.notify_waiters();
+        }
+    }
+}
+
+impl Default for EmbeddingScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EmbeddingScheduler {
+    /// Create a scheduler with no active database.
+    pub fn new() -> Self {
+        Self {
+            active: Mutex::new(None),
+            gate: Semaphore::new(1),
+            high_waiters: AtomicUsize::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    /// Mark which database is active (the one with a live edit stream), or clear
+    /// it with `None`. The active database's embedding batches take priority.
+    pub fn set_active(&self, db_id: Option<String>) {
+        *self.active.lock().expect("scheduler active lock poisoned") = db_id;
+    }
+
+    /// The currently active database id, if any.
+    pub fn active_id(&self) -> Option<String> {
+        self.active
+            .lock()
+            .expect("scheduler active lock poisoned")
+            .clone()
+    }
+
+    /// Whether `db_id` is currently the active database.
+    pub fn is_active(&self, db_id: &str) -> bool {
+        self.active
+            .lock()
+            .expect("scheduler active lock poisoned")
+            .as_deref()
+            == Some(db_id)
+    }
+
+    /// Acquire the shared-model gate for one batch on behalf of `db_id`.
+    ///
+    /// The active database registers itself as a high-priority waiter and then
+    /// contends for the gate directly. A non-active database first waits until no
+    /// active-database batches are queued, then contends for the gate. The
+    /// returned permit must be dropped between batches so priority is
+    /// re-evaluated each time.
+    pub async fn acquire(&self, db_id: &str) -> SchedulerPermit<'_> {
+        if self.is_active(db_id) {
+            // Register before contending so any concurrent non-active waiter sees
+            // this batch and defers.
+            self.high_waiters.fetch_add(1, Ordering::SeqCst);
+            let permit = self
+                .gate
+                .acquire()
+                .await
+                .expect("scheduler semaphore never closes");
+            SchedulerPermit {
+                _permit: permit,
+                scheduler: self,
+                is_active: true,
+            }
+        } else {
+            // Defer while the active database has batches queued. Register on the
+            // notifier *before* re-checking the count so an active batch that
+            // drains between the check and the await cannot be missed.
+            loop {
+                let notified = self.notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.high_waiters.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+                notified.await;
+            }
+            let permit = self
+                .gate
+                .acquire()
+                .await
+                .expect("scheduler semaphore never closes");
+            SchedulerPermit {
+                _permit: permit,
+                scheduler: self,
+                is_active: false,
             }
         }
     }
@@ -100,10 +235,19 @@ impl EmbeddingProcessor {
     ///
     /// # Arguments
     /// * `embedding_service` - The embedding service for processing nodes
+    /// * `scheduler` - Process-global gate that grants the active database's
+    ///   batches priority over other databases (ADR-053: per-database compute
+    ///   scoping)
+    /// * `db_id` - This database's registry id, used to ask the scheduler
+    ///   whether this database is the active one
     ///
     /// # Returns
     /// A new EmbeddingProcessor instance with active background task
-    pub fn new(embedding_service: Arc<NodeEmbeddingService>) -> Result<Self, NodeServiceError> {
+    pub fn new(
+        embedding_service: Arc<NodeEmbeddingService>,
+        scheduler: Arc<EmbeddingScheduler>,
+        db_id: String,
+    ) -> Result<Self, NodeServiceError> {
         tracing::info!("EmbeddingProcessor initializing (purely event-driven model)");
 
         let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(10);
@@ -132,7 +276,8 @@ impl EmbeddingProcessor {
                         while trigger_rx.try_recv().is_ok() {}
 
                         // Process embeddings that have passed their debounce window
-                        let has_pending = Self::process_until_empty(&service_clone).await;
+                        let has_pending =
+                            Self::process_until_empty(&service_clone, &scheduler, &db_id).await;
 
                         // If there are pending embeddings that haven't passed debounce yet,
                         // schedule a delayed wake to process them later
@@ -177,12 +322,27 @@ impl EmbeddingProcessor {
     ///
     /// Returns true if there are pending stale embeddings that haven't passed
     /// their debounce window yet (requiring a delayed wake to be scheduled).
-    async fn process_until_empty(service: &Arc<NodeEmbeddingService>) -> bool {
+    ///
+    /// Each batch runs under a [`SchedulerPermit`] so the active database's
+    /// embedding work takes priority over other open databases (ADR-053). The
+    /// permit is released between batches, re-evaluating priority every batch.
+    async fn process_until_empty(
+        service: &Arc<NodeEmbeddingService>,
+        scheduler: &Arc<EmbeddingScheduler>,
+        db_id: &str,
+    ) -> bool {
         const BATCH_SIZE: usize = 10;
         let mut total_processed = 0;
 
         loop {
-            match service.process_stale_embeddings(Some(BATCH_SIZE)).await {
+            // Hold the shared-model gate only for the duration of one batch, then
+            // drop it before checking for more work so a higher-priority database
+            // can interleave.
+            let batch_result = {
+                let _permit = scheduler.acquire(db_id).await;
+                service.process_stale_embeddings(Some(BATCH_SIZE)).await
+            };
+            match batch_result {
                 Ok(0) => {
                     // No more stale embeddings ready to process
                     if total_processed > 0 {
@@ -332,5 +492,85 @@ mod tests {
         // Both wakes should have sent signals
         assert!(trigger_rx.try_recv().is_ok(), "First wake should send");
         assert!(trigger_rx.try_recv().is_ok(), "Second wake should send");
+    }
+
+    #[test]
+    fn scheduler_tracks_active_database() {
+        let scheduler = EmbeddingScheduler::new();
+        assert!(scheduler.active_id().is_none());
+        assert!(!scheduler.is_active("A"));
+
+        scheduler.set_active(Some("A".to_string()));
+        assert!(scheduler.is_active("A"));
+        assert!(!scheduler.is_active("B"));
+        assert_eq!(scheduler.active_id().as_deref(), Some("A"));
+
+        scheduler.set_active(None);
+        assert!(!scheduler.is_active("A"));
+        assert!(scheduler.active_id().is_none());
+    }
+
+    /// With no active database, a batch acquires the gate immediately (no
+    /// deferral) — the community single-database path is unaffected.
+    #[tokio::test]
+    async fn scheduler_grants_immediately_when_no_active_database() {
+        let scheduler = EmbeddingScheduler::new();
+        let permit = scheduler.acquire("only-db").await;
+        drop(permit);
+        // A second acquire also succeeds immediately (gate released on drop).
+        let _permit = scheduler.acquire("only-db").await;
+    }
+
+    /// The active database's batch is granted the shared-model gate ahead of a
+    /// non-active database's batch that was requested first — proving
+    /// active-first priority without loading any embedding model.
+    #[tokio::test]
+    async fn scheduler_grants_active_batch_before_deferred_non_active() {
+        let scheduler = Arc::new(EmbeddingScheduler::new());
+        scheduler.set_active(Some("A".to_string()));
+
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // A non-active batch grabs the single gate permit and holds it, so any
+        // subsequent acquire must wait.
+        let b1 = scheduler.acquire("B").await;
+
+        // Spawn the active database's batch. It registers as a high-priority
+        // waiter (high_waiters -> 1) and then blocks on the gate held by b1.
+        let sched_a = scheduler.clone();
+        let order_a = order.clone();
+        let a_task = tokio::spawn(async move {
+            let _p = sched_a.acquire("A").await;
+            order_a.lock().unwrap().push("A");
+        });
+
+        // Wait until the active batch has registered its intent. Reading the
+        // private counter is possible because this test lives in-module.
+        while scheduler.high_waiters.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        // Spawn a second non-active batch. It sees high_waiters > 0 and defers on
+        // the notifier rather than contending for the gate.
+        let sched_b2 = scheduler.clone();
+        let order_b2 = order.clone();
+        let b2_task = tokio::spawn(async move {
+            let _p = sched_b2.acquire("B").await;
+            order_b2.lock().unwrap().push("B2");
+        });
+
+        // Release the gate. The active batch (already blocked on the gate) is
+        // granted next; only after it drains (high_waiters -> 0) is the deferred
+        // non-active batch woken.
+        drop(b1);
+
+        a_task.await.unwrap();
+        b2_task.await.unwrap();
+
+        assert_eq!(
+            *order.lock().unwrap(),
+            vec!["A", "B2"],
+            "active database's batch must be granted before the deferred non-active batch"
+        );
     }
 }
