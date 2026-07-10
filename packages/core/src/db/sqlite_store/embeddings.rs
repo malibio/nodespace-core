@@ -562,7 +562,7 @@ impl SqliteStore {
             .join(" OR ");
 
         let sql = format!(
-            "SELECT n.id FROM node n JOIN node_fts f ON f.id = n.id WHERE node_fts MATCH ?1 AND n.lifecycle_status != 'deleted' ORDER BY rank LIMIT {}",
+            "SELECT n.id FROM node n JOIN node_fts f ON f.id = n.id WHERE node_fts MATCH ?1 ORDER BY rank LIMIT {}",
             candidate_limit
         );
 
@@ -599,18 +599,13 @@ impl SqliteStore {
 
             if let Some(row) = rows.next().await? {
                 let root_id: String = row.get(0)?;
-                // Verify root is not deleted
-                if let Ok(Some(n)) = self.get_node(&root_id).await {
-                    if n.lifecycle_status != "deleted" {
-                        root_ids.insert(root_id);
-                    }
+                if self.get_node(&root_id).await.is_ok_and(|n| n.is_some()) {
+                    root_ids.insert(root_id);
                 }
             } else {
                 // node_id is itself the root
-                if let Ok(Some(n)) = self.get_node(&node_id).await {
-                    if n.lifecycle_status != "deleted" {
-                        root_ids.insert(node_id);
-                    }
+                if self.get_node(&node_id).await.is_ok_and(|n| n.is_some()) {
+                    root_ids.insert(node_id);
                 }
             }
         }
