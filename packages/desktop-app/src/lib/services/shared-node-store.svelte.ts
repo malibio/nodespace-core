@@ -41,6 +41,7 @@ import type {
 } from '$lib/types/update-protocol';
 import { conflictNotifications, type ConflictNotification } from '$lib/stores/conflict-notifications.svelte';
 import { normalizeNodeData } from './node-normalize';
+import { decideRemoteUpdate, shouldSkipStaleAiChatUpdate } from './remote-update-policy';
 
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
   'version-mismatch': 'Your edit conflicted with a remote change',
@@ -697,43 +698,6 @@ export class SharedNodeStore {
     if (typeof confirmed === 'number') return confirmed;
     const local = this.nodes.get(nodeId);
     return local?.version ?? 1;
-  }
-
-  /**
-   * Decide whether an incoming database broadcast is plausibly an echo of
-   * *this client's own* most-recent write. Used by the skip-while-editing
-   * guard to decide whether to stash the broadcast's `node.version` for
-   * the next OCC.
-   *
-   * Returns `true` only when `incoming.content` matches the content this
-   * client last sent to the backend for this node (tracked in
-   * `lastPersistedContent`, populated by the persistence path right
-   * before the RPC fires). That covers the canonical case the guard
-   * exists for: our own write looping back through the daemon broadcast.
-   *
-   * Returns `false` for everything else, including any incoming content
-   * we have no last-sent record for. This is deliberately conservative
-   * — false negatives just defer to OCC (the next UpdateNode RPC carries
-   * the local `node.version` and the backend's OCC surfaces any
-   * conflict), while false positives would silently overwrite a foreign
-   * writer's change. The earlier `local.startsWith(incoming)` heuristic
-   * had exactly that false-positive shape: alice with optimistic
-   * `"hello world"` + bob writes `"hello"` → bob's broadcast falsely
-   * classified as own-echo → bob's version stashed → alice's next RPC
-   * overwrites bob.
-   *
-   * Trade-off: a client that has never persisted this node before
-   * (initial-load path, no edits) reports false for all broadcasts —
-   * including legitimate own-echoes from the daemon's first confirmation
-   * after load. That's fine: with no last-sent record, the local
-   * `node.version` is the load-time version, OCC won't conflict against
-   * the daemon's confirm-of-the-same-state, and the next genuine edit
-   * populates the cache for subsequent echoes.
-   */
-  private isPlausibleOwnEcho(_local: Node, incoming: Node): boolean {
-    const lastSent = this.lastPersistedContent.get(incoming.id);
-    if (lastSent === undefined) return false;
-    return lastSent === (incoming.content ?? '');
   }
 
   // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
@@ -1491,7 +1455,8 @@ export class SharedNodeStore {
     const existingNode = this.nodes.get(node.id);
     const isHierarchyChange = !existingNode;
 
-    // Skip-while-editing guard. A daemon-broadcast event (source.type ===
+    // Skip-while-editing guard, policy extracted to `remote-update-policy.ts`
+    // (`decideRemoteUpdate`). A daemon-broadcast event (source.type ===
     // 'database') arriving for a node the user is actively editing — or has
     // unsaved local changes for — would otherwise overwrite the optimistic
     // store with the *older* server-confirmed state. The optimistic state is
@@ -1521,61 +1486,32 @@ export class SharedNodeStore {
     // branch taken.
     const isFocused = focusManager.editingNodeId === node.id;
     const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
-    const isDatabaseSource = source.type === 'database';
-    // IMPORTANT: `isFocused || hasPending` MUST be extracted into a variable.
-    // The Svelte compiler's strict_equals transform drops parentheses from
-    // inline boolean expressions involving reactive reads, turning
-    // `isDatabaseSource && existingNode && (isFocused || hasPending)` into
-    // `isDatabaseSource && existingNode && isFocused || hasPending` at runtime.
-    // With || having lower precedence than &&, `|| hasPending` would fire the
-    // guard for any pending node regardless of source type.
-    const isActivelyEdited = isFocused || hasPending;
-    // ai-chat nodes are never "typed into" — the messages array is written
-    // programmatically via updateNode, and the daemon appends assistant
-    // replies autonomously. Skipping daemon broadcasts here causes version
-    // drift: the store stays at the user-send version while the daemon is
-    // N+1 ahead (after writing the assistant reply), so the next user send
-    // hits an OCC conflict. Always accept daemon updates for ai-chat.
-    const isAiChatNode = node.nodeType === 'ai-chat';
-    if (isAiChatNode && isDatabaseSource && existingNode) {
-      // AiChatNode is normalized — messages live at top-level, not properties['ai-chat']['messages']
-      type AiChatLike = Node & { messages?: unknown[] };
-      const incomingMsgs = (node as AiChatLike).messages;
-      const existingMsgs = (existingNode as AiChatLike).messages;
-      const incomingCount = Array.isArray(incomingMsgs) ? incomingMsgs.length : 0;
-      const existingCount = Array.isArray(existingMsgs) ? existingMsgs.length : 0;
-      if (incomingCount < existingCount) {
-        log.debug(`setNode: skipping ai-chat database update with fewer messages`, { nodeId: node.id, incomingCount, existingCount });
-        return;
-      }
+
+    if (shouldSkipStaleAiChatUpdate(node, existingNode, source)) {
+      log.debug(`setNode: skipping ai-chat database update with fewer messages`, { nodeId: node.id });
+      return;
     }
-    if (isDatabaseSource && existingNode && isActivelyEdited && !isAiChatNode) {
+
+    const decision = decideRemoteUpdate(
+      node,
+      existingNode,
+      source,
+      { isFocused, hasPending },
+      this.lastPersistedContent.get(node.id)
+    );
+
+    if (!decision.apply) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +
           `(focused=${isFocused}, pending=${hasPending})`
       );
-      // Only stash the server-confirmed version when the broadcast is
-      // plausibly an echo of *this client's own write* — otherwise the
-      // next UpdateNode RPC would carry the foreign writer's version
-      // against our content, defeating OCC and silently overwriting the
-      // foreign change.
-      //
-      // Heuristic: if the existing optimistic content equals or starts
-      // with the incoming content, the incoming is an older snapshot of
-      // OUR work (either an exact echo of our most-recent confirm, or a
-      // prefix from before the user typed more characters). Otherwise it
-      // is a foreign change — preserve OCC by leaving the cache empty so
-      // the next RPC uses our local `node.version`, which will conflict
-      // and surface the divergence.
-      if (typeof node.version === 'number' && this.isPlausibleOwnEcho(existingNode, node)) {
+      if (decision.stashVersion && typeof node.version === 'number') {
         this.serverConfirmedVersions.set(node.id, node.version);
-      } else {
-        // #1437: this is a FOREIGN write to a node the user is actively editing
-        // (not our own echo). We skip the clobber above to protect the optimistic
-        // text, but previously left NO signal — relying on a later OCC to surface
-        // the divergence, which may never fire if our local version was already
-        // synced. So the user keeps typing over a stale base, unaware another
-        // writer changed the node. Proactively raise a version-mismatch
+      }
+      if (decision.notifyConflict) {
+        // #1437: a FOREIGN write to a node the user is actively editing (not
+        // our own echo). We skip the clobber to protect the optimistic text,
+        // but that must not be silent — raise a version-mismatch
         // notification (deduped per node) so the conflict is visible.
         const alreadyFlagged = conflictNotifications.notifications.some(
           (n) => n.nodeId === node.id && n.conflictType === 'version-mismatch'
@@ -1872,36 +1808,26 @@ export class SharedNodeStore {
 
       // Same guard as setNode: never overwrite an ai-chat node with a snapshot
       // that has fewer messages than what's already in the store.
-      if (node.nodeType === 'ai-chat' && source.type === 'database' && existingNode) {
-        type AiChatLike = Node & { messages?: unknown[] };
-        const incomingMsgs = (node as AiChatLike).messages;
-        const existingMsgs = (existingNode as AiChatLike).messages;
-        const incomingCount = Array.isArray(incomingMsgs) ? incomingMsgs.length : 0;
-        const existingCount = Array.isArray(existingMsgs) ? existingMsgs.length : 0;
-        if (incomingCount < existingCount) {
-          log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id, incomingCount, existingCount });
-          continue;
-        }
+      if (shouldSkipStaleAiChatUpdate(node, existingNode, source)) {
+        log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id });
+        continue;
       }
 
-      // Same skip-while-editing guard as setNode (nodespace-sync#76): a concurrent
-      // tree (re)load with a `database` source must NOT clobber a node the user is
-      // actively editing — `doLoadChildrenTree` passes a database source, so a
-      // reload for a parent whose child is mid-keystroke would overwrite the
-      // child's optimistic content. ai-chat is exempt (messages are written
-      // programmatically; skipping causes version drift). Extract the predicate
-      // into a variable — the Svelte strict_equals transform drops parentheses
-      // from inline `a && b && (c || d)` reactive reads, turning it into
-      // `a && b && c || d`.
+      // Same skip-while-editing guard/policy as setNode (nodespace-sync#76): a
+      // concurrent tree (re)load with a `database` source must NOT clobber a
+      // node the user is actively editing — `doLoadChildrenTree` passes a
+      // database source, so a reload for a parent whose child is mid-keystroke
+      // would overwrite the child's optimistic content.
       const isFocused = focusManager.editingNodeId === node.id;
       const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
-      const isActivelyEdited = isFocused || hasPending;
-      if (
-        source.type === 'database' &&
-        existingNode &&
-        isActivelyEdited &&
-        node.nodeType !== 'ai-chat'
-      ) {
+      const decision = decideRemoteUpdate(
+        node,
+        existingNode,
+        source,
+        { isFocused, hasPending },
+        this.lastPersistedContent.get(node.id)
+      );
+      if (!decision.apply) {
         log.debug(
           `batchSetNodes: skipping clobber of actively-edited node ${node.id} ` +
             `(focused=${isFocused}, pending=${hasPending})`
@@ -1909,8 +1835,9 @@ export class SharedNodeStore {
         // Stash the server-confirmed version only when the broadcast is plausibly
         // an echo of THIS client's own write; otherwise leave it empty so the next
         // RPC uses our local version, conflicts, and surfaces the foreign change
-        // (preserves OCC). Mirrors setNode exactly.
-        if (typeof node.version === 'number' && this.isPlausibleOwnEcho(existingNode, node)) {
+        // (preserves OCC). Mirrors setNode's decision, but batchSetNodes does not
+        // raise conflict notifications (pre-existing behavior, unchanged here).
+        if (decision.stashVersion && typeof node.version === 'number') {
           this.serverConfirmedVersions.set(node.id, node.version);
         }
         this.persistedNodeIds.add(node.id);
