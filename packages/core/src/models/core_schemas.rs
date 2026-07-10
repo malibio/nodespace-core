@@ -1000,6 +1000,45 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     fields: None,
                     item_fields: None,
                 },
+                SchemaField {
+                    name: "bound_tenant_schema".to_string(),
+                    field_type: "string".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some(
+                        "The cloud tenant this database binds to (ADR-053 per-database \
+                         cloud sync), as a Supabase schema name. Empty until the Pro sync \
+                         daemon binds the database; inert on the free/community tier."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "bound_tenant_collection".to_string(),
+                    field_type: "string".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some(
+                        "The default collection id within the bound tenant (ADR-053 \
+                         per-database cloud sync). Empty until the database is bound."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
             ],
             relationships: vec![],
             title_template: None,
@@ -1146,13 +1185,15 @@ mod tests {
     fn test_database_settings_schema_has_fields() {
         // ADR-037: database-settings is a Core singleton carrying sync_enabled
         // (boolean) and auth_status (Core-protected enum: local/connected).
+        // ADR-053 added bound_tenant_schema/bound_tenant_collection (per-database
+        // cloud tenant binding).
         let schemas = get_core_schemas();
         let settings = schemas
             .iter()
             .find(|s| s.id == "database-settings")
             .unwrap();
 
-        assert_eq!(settings.fields.len(), 2);
+        assert_eq!(settings.fields.len(), 4);
 
         let sync_enabled = settings
             .get_field("sync_enabled")
@@ -1175,6 +1216,16 @@ mod tests {
             .map(|ev| ev.value.as_str())
             .collect();
         assert_eq!(values, vec!["local", "connected"]);
+
+        for name in ["bound_tenant_schema", "bound_tenant_collection"] {
+            let field = settings
+                .get_field(name)
+                .unwrap_or_else(|| panic!("database-settings has {name}"));
+            assert_eq!(field.field_type, "string");
+            assert_eq!(field.protection, SchemaProtectionLevel::Core);
+            assert_eq!(field.required, Some(false));
+            assert_eq!(field.default, None);
+        }
     }
 
     #[test]

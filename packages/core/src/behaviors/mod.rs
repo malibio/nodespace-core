@@ -2085,8 +2085,10 @@ impl NodeBehavior for PersonNodeBehavior {
 /// Built-in behavior for the database-settings singleton node
 ///
 /// DatabaseSettingsNode is the single container for database-level configuration:
-/// `sync_enabled` (user intent to sync) and `auth_status` (system-managed cloud
-/// bind state). Tenant roles are NOT stored here — they live on the `has_role`
+/// `sync_enabled` (user intent to sync), `auth_status` (system-managed cloud
+/// bind state), and `bound_tenant_schema`/`bound_tenant_collection` (the cloud
+/// tenant this database binds to under ADR-053 per-database cloud sync — empty
+/// until bound). Tenant roles are NOT stored here — they live on the `has_role`
 /// edge (PersonNode → DatabaseSettingsNode). Per ADR-037, both `role` and
 /// `auth_status` were moved off PersonNode as part of that revision.
 pub struct DatabaseSettingsNodeBehavior;
@@ -2118,6 +2120,17 @@ impl NodeBehavior for DatabaseSettingsNodeBehavior {
                 return Err(NodeValidationError::InvalidProperties(
                     "sync_enabled must be a boolean".to_string(),
                 ));
+            }
+        }
+
+        // Validate the bound-tenant fields are strings if present (ADR-053).
+        for field in ["bound_tenant_schema", "bound_tenant_collection"] {
+            if let Some(value) = node.properties.get(field) {
+                if !value.is_string() && !value.is_null() {
+                    return Err(NodeValidationError::InvalidProperties(format!(
+                        "{field} must be a string"
+                    )));
+                }
             }
         }
 
