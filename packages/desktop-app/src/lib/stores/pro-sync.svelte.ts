@@ -84,6 +84,15 @@ class ProSyncStore {
   authRequiredEpisode = $state(0);
 
   /**
+   * The `authRequiredEpisode` the user last dismissed via "Work offline". Held on
+   * the store (not inside the re-login slot component) so a dismissal survives the
+   * slot remounting when the resolved variant flips between `sign-in` and
+   * `connected` — both map to the same re-login slot, so a flip must not re-arm an
+   * already-dismissed modal. `-1` = nothing dismissed yet.
+   */
+  dismissedReloginEpisode = $state(-1);
+
+  /**
    * Bumped each time `userEmail` transitions from empty to non-empty — i.e. a fresh
    * sign-in. Lets consumers (the sync pill's first-run onboarding) react to the
    * transition via a derived comparison instead of an effect that reads and writes
@@ -91,6 +100,15 @@ class ProSyncStore {
    */
   signedInEpisode = $state(0);
 
+  /**
+   * Axis 1 only: "this daemon binary CAN sync" (the capability probe found
+   * a Pro daemon). This is NOT "sync is active" — whether sync is enabled and
+   * authenticated for the *active database* is axis 2, held on that database's
+   * DatabaseSettingsNode. Use `isProSyncActive()` from `ui-extensions.svelte` for
+   * the combined two-axis gate (what the membership store keys off). The
+   * recovered-items log is per-user, not per-database, so it keys off this
+   * axis-1 flag directly.
+   */
   isPro = $derived(this.tier === 'pro');
 
   /**

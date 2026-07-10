@@ -22,12 +22,19 @@
   import { navigationStore, addTab, setActiveTab } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import { v4 as uuidv4 } from 'uuid';
-  import CollaborationView from '$lib/components/collaboration/collaboration-view.svelte';
-  import { proSync } from '$lib/stores/pro-sync.svelte';
+  import { getActiveViewerExtensions } from '$lib/plugins/ui-extensions.svelte';
+  import ExtensionOutlet from '$lib/plugins/extension-outlet.svelte';
 
-  // Collection sub-view: "contents" (member nodes, the default/community view) or
-  // "collaboration" (people & roles, Pro only — the tab strip only appears for Pro).
-  let activeView = $state<'contents' | 'collaboration'>('contents');
+  // Collection sub-views: the built-in "contents" tab (member nodes, always shown)
+  // plus any registry-contributed tabs (e.g. the Pro "Collaboration" tab). The
+  // active tab is 'contents' or a contributed tab's id.
+  let activeView = $state<string>('contents');
+
+  // Viewer extensions contributed for the current Pro-sync variant. Empty in the
+  // community build (variant `teaser`), so the tab strip and the collaboration
+  // view never appear — the collection viewer imports nothing Pro.
+  const collabExtensions = $derived(getActiveViewerExtensions('collection'));
+  const activeExtension = $derived(collabExtensions.find((e) => e.tab.id === activeView));
 
   const log = createLogger('CollectionNodeViewer');
 
@@ -175,8 +182,10 @@
       <p class="collection-description">{collection.properties.description}</p>
     {/if}
 
-    {#if proSync.isPro}
-      <!-- Pro-only: switch between the collection's content nodes and its people. -->
+    {#if collabExtensions.length > 0}
+      <!-- Registry-contributed tabs (e.g. the Pro "Collaboration" tab) alongside
+           the built-in contents view; the strip only appears when something
+           contributes for the active variant. -->
       <div class="collection-tabs" role="tablist">
         <button
           class="tab"
@@ -185,19 +194,23 @@
           aria-selected={activeView === 'contents'}
           onclick={() => (activeView = 'contents')}>Contents</button
         >
-        <button
-          class="tab"
-          class:active={activeView === 'collaboration'}
-          role="tab"
-          aria-selected={activeView === 'collaboration'}
-          onclick={() => (activeView = 'collaboration')}>Collaboration</button
-        >
+        {#each collabExtensions as ext (ext.tab.id)}
+          <button
+            class="tab"
+            class:active={activeView === ext.tab.id}
+            role="tab"
+            aria-selected={activeView === ext.tab.id}
+            onclick={() => (activeView = ext.tab.id)}>{ext.tab.label}</button
+          >
+        {/each}
       </div>
     {/if}
   </div>
 
-  {#if proSync.isPro && activeView === 'collaboration'}
-    <CollaborationView collectionId={nodeId} />
+  {#if activeExtension}
+    {#key activeExtension.variant}
+      <ExtensionOutlet load={activeExtension.lazyLoad} props={{ nodeId }} />
+    {/key}
   {:else}
   <!-- Content -->
   <div class="collection-content">
