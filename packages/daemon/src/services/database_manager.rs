@@ -94,6 +94,15 @@ pub struct DatabaseEntry {
     /// Last time the database was opened, if ever.
     #[serde(default)]
     pub last_opened_at: Option<DateTime<Utc>>,
+    /// The cloud tenant schema this database binds to (ADR-053 per-database cloud
+    /// sync), mirrored from the database's DatabaseSettingsNode so the bound
+    /// tenant can be shown before the database is opened. Empty until bound.
+    #[serde(default)]
+    pub bound_tenant_schema: Option<String>,
+    /// The default collection id within the bound tenant, mirrored alongside
+    /// `bound_tenant_schema`. Empty until bound.
+    #[serde(default)]
+    pub bound_tenant_collection: Option<String>,
 }
 
 /// Runtime status of a registered database, derived at read time.
@@ -322,6 +331,28 @@ impl DatabaseManager {
         registry.save(&self.registry_path).await
     }
 
+    /// Mirror a database's bound cloud tenant into the registry (ADR-053
+    /// per-database cloud sync) so the binding can be shown before the database
+    /// is opened. Pass `None` to clear it on unbind. The authoritative record is
+    /// the database's DatabaseSettingsNode; this registry field is a display
+    /// mirror kept in step with it.
+    pub async fn set_bound_tenant(
+        &self,
+        id: &DatabaseId,
+        schema: Option<String>,
+        collection: Option<String>,
+    ) -> Result<()> {
+        let mut registry = self.registry.write().await;
+        let entry = registry
+            .databases
+            .iter_mut()
+            .find(|e| &e.id == id)
+            .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
+        entry.bound_tenant_schema = schema;
+        entry.bound_tenant_collection = collection;
+        registry.save(&self.registry_path).await
+    }
+
     /// Ensure a default database is registered, returning its id.
     ///
     /// On first boot the registry is empty; this registers `path` under `name`
@@ -360,6 +391,8 @@ impl DatabaseManager {
             path,
             created_at: Utc::now(),
             last_opened_at: None,
+            bound_tenant_schema: None,
+            bound_tenant_collection: None,
         });
         registry.default_database = Some(id.clone());
         registry.save(&self.registry_path).await?;
@@ -568,6 +601,8 @@ impl DatabaseManager {
             path,
             created_at: Utc::now(),
             last_opened_at: None,
+            bound_tenant_schema: None,
+            bound_tenant_collection: None,
         };
         let mut registry = self.registry.write().await;
         registry.databases.push(entry.clone());
@@ -657,6 +692,52 @@ mod tests {
         let snap = mgr.list().await;
         assert_eq!(snap.databases.len(), 1);
         assert_eq!(snap.databases[0].entry.name, "Default");
+    }
+
+    #[tokio::test]
+    async fn set_bound_tenant_mirrors_persists_and_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(path.clone(), test_context())
+            .await
+            .unwrap();
+        let id = mgr
+            .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
+            .await
+            .unwrap();
+
+        // Fresh registrations are unbound.
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases[0].entry.bound_tenant_schema, None);
+        assert_eq!(snap.databases[0].entry.bound_tenant_collection, None);
+
+        mgr.set_bound_tenant(&id, Some("tenant_demo".into()), Some("c0".into()))
+            .await
+            .unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_schema.as_deref(),
+            Some("tenant_demo")
+        );
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_collection.as_deref(),
+            Some("c0")
+        );
+
+        // The binding survives a reload — the mirror is persisted to the registry.
+        drop(mgr);
+        let mgr = DatabaseManager::load(path, test_context()).await.unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_schema.as_deref(),
+            Some("tenant_demo")
+        );
+
+        // Unbind clears the mirror.
+        mgr.set_bound_tenant(&id, None, None).await.unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases[0].entry.bound_tenant_schema, None);
+        assert_eq!(snap.databases[0].entry.bound_tenant_collection, None);
     }
 
     #[tokio::test]
