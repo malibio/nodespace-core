@@ -11,12 +11,10 @@
 //! command functions directly, so the OCC conflict (or its absence, once
 //! calls are properly sequenced) is real, not simulated.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::nodes::{
     create_node, get_children, move_node, reorder_node, CreateNodeInput, InsertPositionInput,
 };
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
 fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeInput {
@@ -38,7 +36,7 @@ fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeI
 #[tokio::test]
 async fn rapid_indent_then_outdent_survives_against_a_real_daemon() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let root_id = uuid::Uuid::new_v4().to_string();
@@ -108,7 +106,7 @@ async fn rapid_indent_then_outdent_survives_against_a_real_daemon() {
 #[tokio::test]
 async fn rapid_sibling_creation_preserves_insertion_order() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let root_id = uuid::Uuid::new_v4().to_string();
@@ -159,7 +157,7 @@ async fn rapid_sibling_creation_preserves_insertion_order() {
 #[tokio::test]
 async fn concurrent_reorders_of_distinct_nodes_all_succeed() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let root_id = uuid::Uuid::new_v4().to_string();
@@ -212,7 +210,7 @@ async fn concurrent_reorders_of_distinct_nodes_all_succeed() {
 #[ignore = "known race — see #1561"]
 async fn concurrent_reorders_produce_correct_final_order() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let root_id = uuid::Uuid::new_v4().to_string();

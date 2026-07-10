@@ -27,7 +27,9 @@ use std::time::Duration;
 use nodespace_app_lib::commands::nodes::{create_node, update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
 use nodespace_app_lib::watcher;
-use nodespace_app_test_support::{hold_connect_mutex_and_socket_env, SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{
+    hold_connect_mutex_and_socket_env, SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT,
+};
 use serde_json::json;
 use tauri::Listener;
 use tokio_util::sync::CancellationToken;
@@ -90,7 +92,7 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     // immune to later env changes). The guard acquired below is a SEPARATE,
     // later, longer-held acquisition — for watcher::run, not for this
     // connect() call.
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
     let handle = harness.handle();
 
@@ -183,7 +185,7 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
 #[tokio::test]
 async fn watcher_delivers_a_real_node_created_event() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
     let handle = harness.handle();
     let _socket_guard = hold_connect_mutex_and_socket_env(&daemon).await;

@@ -31,6 +31,22 @@ use std::time::Duration;
 use nodespace_app_lib::services::GrpcClient;
 use tauri::Manager;
 
+/// Default timeout for `TauriTestApp::connect`'s daemon-health wait, shared
+/// by every `tests/*.rs` call site instead of each hardcoding its own
+/// duplicate literal.
+///
+/// 60s, not the 30s this used to be: spawning a whole OS process (daemon
+/// binary load + socket bind) is CPU-bound work, and within a single
+/// `tests/*.rs` binary `#[tokio::test]`s run concurrently by default, so
+/// several real daemon spawns can contend for the same cores at once —
+/// worse on a machine that also has an unrelated `cargo test` running
+/// elsewhere (see #1610). 30s was tuned for an unloaded machine and had no
+/// headroom for that; 60s gives slack without materially raising the
+/// wall-clock cost of a clean, unloaded run, since `wait_for_daemon` returns
+/// as soon as the socket is healthy rather than sleeping out the full
+/// duration.
+pub const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// A running headless `nodespaced` pointed at a temp-dir socket and database.
 /// Killed on drop so a panicking test never leaks the process.
 pub struct SpawnedDaemon {

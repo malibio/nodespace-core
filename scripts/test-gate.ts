@@ -42,7 +42,20 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
 await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)", () => {
   const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
-  return $`cargo test -p nodespace-app`.env({ ...process.env, NODESPACED_TEST_BIN: binary });
+  // --test-threads=2: every test in this suite spawns a real nodespaced
+  // process and waits for it to bind a socket — far more load-sensitive
+  // than nodespace-core's in-process assertions (which cap the same way,
+  // see rust:test above). Cargo already runs each tests/*.rs file's binary
+  // sequentially, but within one binary (e.g. node_crud_tauri_seam_test.rs's
+  // 5 tests) all tests run concurrently by default, so several real daemon
+  // spawns can still contend for CPU at once inside a single binary — on
+  // top of whatever else is running on the machine, which is what actually
+  // produced the daemon-health timeouts in #1610. Capping to 2 trades a
+  // modest wall-clock increase for run reliability under background load.
+  return $`cargo test -p nodespace-app -- --test-threads=2`.env({
+    ...process.env,
+    NODESPACED_TEST_BIN: binary,
+  });
 });
 
 console.log("\n✓ All tests passed — pushing.\n");

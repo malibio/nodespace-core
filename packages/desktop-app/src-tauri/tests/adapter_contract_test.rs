@@ -16,13 +16,11 @@
 //! a change that breaks the contract on one path and not the other shows up
 //! as exactly one of the two suites failing.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::nodes::{
     create_node, get_children, move_node, update_task_node, CreateNodeInput, InsertPositionInput,
 };
 use nodespace_app_lib::types::{TaskNodeUpdate, TaskStatus};
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
 fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeInput {
@@ -52,7 +50,7 @@ fn task_input(id: &str) -> CreateNodeInput {
 #[tokio::test]
 async fn task_tri_state_update_clear_set_no_change_matches_the_http_adapter_contract() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -108,7 +106,7 @@ async fn task_tri_state_update_clear_set_no_change_matches_the_http_adapter_cont
 #[tokio::test]
 async fn create_node_insert_position_matches_the_http_adapter_contract() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let parent_id = uuid::Uuid::new_v4().to_string();
@@ -146,7 +144,7 @@ async fn create_node_insert_position_matches_the_http_adapter_contract() {
 #[tokio::test]
 async fn move_node_insert_position_matches_the_http_adapter_contract() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let parent_a_id = uuid::Uuid::new_v4().to_string();
