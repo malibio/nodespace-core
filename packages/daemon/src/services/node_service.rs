@@ -28,8 +28,8 @@ use nodespace_core::ops::{
     OpsError,
 };
 use nodespace_core::services::{
-    InsertPosition, InsertPositionOwned, NodeAccessor, NodeService as CoreNodeService,
-    NodeServiceError,
+    EmbeddingScheduler, InsertPosition, InsertPositionOwned, NodeAccessor,
+    NodeService as CoreNodeService, NodeServiceError,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
@@ -74,17 +74,22 @@ pub struct NodeServiceImpl {
     /// `WatchNodes` events. Empty when the daemon serves a single unregistered
     /// database (Pro daemon) or when the impl is constructed directly in tests.
     database_id: String,
+    /// Process-global embedding scheduler (ADR-053). A live `WatchNodes` stream
+    /// marks this database active so its embedding batches take priority.
+    scheduler: Arc<EmbeddingScheduler>,
 }
 
 impl NodeServiceImpl {
     pub fn new(
         node_service: Arc<CoreNodeService>,
         embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
+        scheduler: Arc<EmbeddingScheduler>,
     ) -> Self {
         Self {
             node_service,
             embedding_state,
             database_id: String::new(),
+            scheduler,
         }
     }
 
@@ -1256,6 +1261,14 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<WatchRequest>,
     ) -> Result<Response<Self::WatchNodesStream>, Status> {
         let this = self.route(&request).await?;
+
+        // A live edit stream marks this database active (ADR-053: per-database
+        // compute scoping): its embedding batches now take priority over other
+        // open databases' backlogs on the shared model. The desktop opens this
+        // stream on the database the user is looking at, so the active signal
+        // tracks the foreground database with no extra protocol.
+        this.scheduler.set_active(Some(this.database_id.clone()));
+
         let req = request.into_inner();
         if !req.node_type.is_empty() || !req.root_id.is_empty() {
             // Filtering is intentionally out of scope for the initial implementation
@@ -1568,7 +1581,9 @@ mod tests {
     use nodespace_agent::pty::PtySessionManager;
     use nodespace_core::db::SqliteStore;
     use nodespace_core::ops::node_ops;
-    use nodespace_core::services::{CollectionService, NodeService as CoreNodeService};
+    use nodespace_core::services::{
+        CollectionService, EmbeddingScheduler, NodeService as CoreNodeService,
+    };
     use nodespace_nlp_engine::EmbeddingService;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1582,6 +1597,7 @@ mod tests {
         let svc = Arc::new(NodeServiceImpl::new(
             core_svc,
             Arc::new(tokio::sync::RwLock::new(None)),
+            Arc::new(EmbeddingScheduler::new()),
         ));
         (svc, tmp)
     }
@@ -1594,6 +1610,7 @@ mod tests {
             pty_manager: Arc::new(PtySessionManager::new()),
             model,
             has_model: false,
+            scheduler: Arc::new(EmbeddingScheduler::new()),
         }
     }
 

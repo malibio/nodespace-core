@@ -56,7 +56,11 @@ async fn spawn_test_daemon() -> (PathBuf, oneshot::Sender<()>, TempDir) {
             .await
             .expect("failed to build NodeService"),
     );
-    let service = NodeServiceImpl::new(node_service, Arc::new(tokio::sync::RwLock::new(None)));
+    let service = NodeServiceImpl::new(
+        node_service,
+        Arc::new(tokio::sync::RwLock::new(None)),
+        Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
+    );
 
     let listener = UnixListener::bind(&sock_path).expect("failed to bind test UDS socket");
     let incoming = UnixListenerStream::new(listener);
@@ -96,6 +100,7 @@ fn routing_test_context() -> SharedContext {
         pty_manager: Arc::new(PtySessionManager::new()),
         model,
         has_model: false,
+        scheduler: Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
     }
 }
 

@@ -15,13 +15,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use nodespace_agent::local_agent::otlp_tracer;
-use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
     build_base_router, build_shared_services, resolve_db_path, tray, BaseServices, DatabaseManager,
     DatabaseServiceImpl, DatabaseServices, DbManagerLayer, SharedContext,
 };
-use tokio::sync::RwLock;
+use nodespace_nlp_engine::EmbeddingService;
+use tokio::sync::watch;
 use tonic::transport::Server;
 
 /// ADR-053: construct the [`DatabaseManager`], register + lazily open the
@@ -191,6 +191,11 @@ async fn serve_headless() -> Result<()> {
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
     let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
+    // Reap idle non-default databases so a switched-away database stops consuming
+    // compute (ADR-053: per-database compute scoping).
+    manager.spawn_idle_reaper();
+    let shared_model = shared.context.model.clone();
+    let shutdown_manager = manager.clone();
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -220,7 +225,9 @@ async fn serve_headless() -> Result<()> {
     .await
     .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
-    drain_gpu(bundle.embedding_state.clone()).await;
+    // Drain every open database's compute, then release the shared GPU once.
+    shutdown_manager.shutdown_all().await;
+    release_shared_gpu(&shared_model).await;
     Ok(())
 }
 
@@ -241,6 +248,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
     let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
+    // Reap idle non-default databases so a switched-away database stops consuming
+    // compute (ADR-053: per-database compute scoping).
+    manager.spawn_idle_reaper();
+    let shared_model = shared.context.model.clone();
+    let shutdown_manager = manager.clone();
 
     if let Some(parent) = sock.parent() {
         tokio::fs::create_dir_all(parent)
@@ -280,7 +292,9 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     .await
     .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
-    drain_gpu(bundle.embedding_state.clone()).await;
+    // Drain every open database's compute, then release the shared GPU once.
+    shutdown_manager.shutdown_all().await;
+    release_shared_gpu(&shared_model).await;
     Ok(())
 }
 
@@ -345,6 +359,11 @@ async fn serve_headless() -> Result<()> {
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
     let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
+    // Reap idle non-default databases so a switched-away database stops consuming
+    // compute (ADR-053: per-database compute scoping).
+    manager.spawn_idle_reaper();
+    let shared_model = shared.context.model.clone();
+    let shutdown_manager = manager.clone();
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
@@ -397,7 +416,9 @@ async fn serve_headless() -> Result<()> {
     })
     .await
     .context("gRPC server terminated with error")?;
-    drain_gpu(bundle.embedding_state.clone()).await;
+    // Drain every open database's compute, then release the shared GPU once.
+    shutdown_manager.shutdown_all().await;
+    release_shared_gpu(&shared_model).await;
     Ok(())
 }
 
@@ -417,6 +438,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
     let (shared, _model_task) = build_shared_services().await?;
     let (manager, bundle) = open_default_database(&db_path, shared.context.clone()).await?;
+    // Reap idle non-default databases so a switched-away database stops consuming
+    // compute (ADR-053: per-database compute scoping).
+    manager.spawn_idle_reaper();
+    let shared_model = shared.context.model.clone();
+    let shutdown_manager = manager.clone();
 
     let shutdown_controller = controller.clone();
     let combined_shutdown = async move {
@@ -474,21 +500,28 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     })
     .await
     .context("gRPC server terminated with error")?;
-    drain_gpu(bundle.embedding_state.clone()).await;
+    // Drain every open database's compute, then release the shared GPU once.
+    shutdown_manager.shutdown_all().await;
+    release_shared_gpu(&shared_model).await;
     Ok(())
 }
 
-/// GPU drain protocol: drop processor first (shuts down background task),
-/// then release the GPU context from the NLP engine.
-async fn drain_gpu(state: Arc<RwLock<Option<EmbeddingReady>>>) {
-    let ready = state.write().await.take();
-    if let Some(ready) = ready {
-        drop(ready.processor);
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        tracing::info!("Releasing GPU context...");
-        ready.embedding_service.nlp_engine().release_gpu_context();
-        tracing::info!("GPU context released");
-    }
+/// Release the process-global GPU context after every database has been drained
+/// (ADR-053: per-database compute scoping).
+///
+/// `DatabaseManager::shutdown_all` has already dropped each database's embedding
+/// processor, so this releases the single shared NLP engine's GPU context
+/// exactly once. `release_gpu_context` is one-way and global — it must never run
+/// on a per-database close, only here on daemon shutdown. A short settle lets any
+/// in-flight batch unwind before the model is torn down.
+async fn release_shared_gpu(model: &watch::Receiver<Option<Arc<EmbeddingService>>>) {
+    let Some(nlp) = model.borrow().clone() else {
+        return; // no model was ever loaded
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tracing::info!("Releasing GPU context...");
+    nlp.release_gpu_context();
+    tracing::info!("GPU context released");
 }
 
 /// Install the shutdown signal future at boot time so a failure to register

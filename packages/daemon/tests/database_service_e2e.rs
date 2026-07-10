@@ -60,6 +60,7 @@ fn test_context() -> SharedContext {
         pty_manager: Arc::new(PtySessionManager::new()),
         model,
         has_model: false,
+        scheduler: Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
     }
 }
 

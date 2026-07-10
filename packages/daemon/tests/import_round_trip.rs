@@ -44,6 +44,7 @@ async fn spawn_import_daemon() -> (
     let node_svc = NodeServiceImpl::new(
         Arc::clone(&node_service),
         Arc::new(tokio::sync::RwLock::new(None)),
+        Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
     );
     let import_svc = ImportServiceImpl::new(Arc::clone(&node_service));
 
