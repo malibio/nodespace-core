@@ -184,11 +184,15 @@ pub async fn build_database_services(
         shared.pty_manager.clone(),
         assembler,
         node_service.clone(),
-        capture_config_path,
+        capture_config_path.clone(),
     );
 
     let import = ImportServiceImpl::new(node_service.clone());
-    let local_agent = LocalAgentServiceImpl::new(node_service.clone(), embedding_svc_state.clone());
+    let local_agent = LocalAgentServiceImpl::new(
+        node_service.clone(),
+        embedding_svc_state.clone(),
+        capture_config_path,
+    );
     local_agent.start_event_watcher();
 
     // Wire this database's embedding processor from the shared model once it

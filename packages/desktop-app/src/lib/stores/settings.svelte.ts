@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '$lib/utils/logger';
 import type { OpenAiCompatConfig, AiChatProvider } from '$lib/types/ai-chat-node';
+import {
+  getOpenAiCompatConfigsFromDaemon,
+  setOpenAiCompatConfigsOnDaemon,
+} from '$lib/services/tauri-commands';
 
 const log = createLogger('SettingsStore');
 
@@ -26,6 +30,11 @@ export interface AppSettings {
 
 // ---------------------------------------------------------------------------
 // localStorage helpers for client-side settings
+//
+// OpenAI-compat configs are persisted on the daemon (~/.nodespace/daemon.toml,
+// via SettingsService) — that is the source of truth the backend reads by
+// UUID when loading an "openai-compat:<uuid>" model. localStorage is kept as
+// a synchronous read cache only, refreshed from the daemon on loadSettings().
 // ---------------------------------------------------------------------------
 
 interface LocalPersistedSettings {
@@ -65,9 +74,27 @@ class SettingsStore {
       const settings =
         await invoke<Omit<AppSettings, 'openAiConfigs' | 'defaultModelSelection'>>('get_settings');
       const local = readLocalSettings();
+
+      // Refresh the OpenAI-compat cache from the daemon (source of truth).
+      // Falls back to the local cache if the daemon call fails (e.g. offline
+      // dev-proxy mode) so the UI still has something to show.
+      let openAiConfigs = local.openAiConfigs ?? [];
+      try {
+        const daemonConfigs = await getOpenAiCompatConfigsFromDaemon();
+        openAiConfigs = daemonConfigs.map((c) => ({
+          id: c.id,
+          name: c.name,
+          baseUrl: c.baseUrl,
+          apiKey: c.apiKey,
+        }));
+        writeLocalSettings({ openAiConfigs });
+      } catch (err) {
+        log.warn('Failed to load OpenAI-compat configs from daemon, using local cache', err);
+      }
+
       this.appSettings = {
         ...settings,
-        openAiConfigs: local.openAiConfigs ?? [],
+        openAiConfigs,
         defaultModelSelection: local.defaultModelSelection ?? null,
       };
     } catch (err) {
@@ -98,10 +125,23 @@ class SettingsStore {
     }
   }
 
-  saveOpenAiConfigs(configs: OpenAiCompatConfig[]): void {
+  /**
+   * Persist the full set of OpenAI-compat configs. Writes to the local cache
+   * immediately (so synchronous getOpenAiConfigs() readers see the change),
+   * then pushes to the daemon — the backend-accessible source of truth used
+   * to resolve "openai-compat:<uuid>" models.
+   */
+  async saveOpenAiConfigs(configs: OpenAiCompatConfig[]): Promise<void> {
     writeLocalSettings({ openAiConfigs: configs });
     if (this.appSettings) {
       this.appSettings = { ...this.appSettings, openAiConfigs: configs };
+    }
+    try {
+      await setOpenAiCompatConfigsOnDaemon(
+        configs.map((c) => ({ id: c.id, name: c.name, baseUrl: c.baseUrl, apiKey: c.apiKey }))
+      );
+    } catch (err) {
+      log.error('Failed to persist OpenAI-compat configs to daemon:', err);
     }
   }
 
@@ -123,8 +163,8 @@ export function getOpenAiConfigs(): OpenAiCompatConfig[] {
   return readLocalSettings().openAiConfigs ?? [];
 }
 
-export function saveOpenAiConfigs(configs: OpenAiCompatConfig[]): void {
-  settingsStore.saveOpenAiConfigs(configs);
+export function saveOpenAiConfigs(configs: OpenAiCompatConfig[]): Promise<void> {
+  return settingsStore.saveOpenAiConfigs(configs);
 }
 
 export function getDefaultModelSelection(): ModelSelection | null {

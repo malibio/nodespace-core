@@ -92,6 +92,9 @@ struct LocalAgentServiceInner {
     /// `Arc` clones tonic hands to request handlers, so a single `shutdown()`
     /// stops the watcher spawned from any clone.
     shutdown_token: CancellationToken,
+    /// Path to `~/.nodespace/daemon.toml`, read to resolve OpenAI-compatible
+    /// provider configs by UUID when loading an `openai-compat:<uuid>` model.
+    daemon_config_path: std::path::PathBuf,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -102,7 +105,11 @@ pub struct LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
-    pub fn new(node_service: Arc<NodeService>, embedding_service: SharedEmbeddingService) -> Self {
+    pub fn new(
+        node_service: Arc<NodeService>,
+        embedding_service: SharedEmbeddingService,
+        daemon_config_path: std::path::PathBuf,
+    ) -> Self {
         let gguf =
             Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
         let ollama = Arc::new(OllamaModelManager::new());
@@ -124,6 +131,7 @@ impl LocalAgentServiceImpl {
                 token_tx,
                 turn_tokens: Arc::new(Mutex::new(HashMap::new())),
                 shutdown_token: CancellationToken::new(),
+                daemon_config_path,
             }),
         }
     }
@@ -924,9 +932,76 @@ impl LocalAgentServiceImpl {
     async fn load_model_and_collect_events(&self, model_id: &str) -> Vec<ModelLoadProgressEvent> {
         use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
         use nodespace_agent::local_agent::ollama_inference::OllamaInferenceEngine;
+        use nodespace_agent::local_agent::openai_compat_inference::{
+            is_openai_compat, strip_openai_compat_prefix, OpenAiCompatInferenceEngine,
+        };
         use nodespace_nlp_engine::chat::ChatConfig;
 
         let mut events = Vec::new();
+
+        // OpenAI-compat configs are user-defined (stored in daemon.toml), not part
+        // of the model catalog `list()` returns — resolve and branch on them first
+        // so they never fall through to the "Unknown model" / GGUF path below.
+        if is_openai_compat(model_id) {
+            let config_id = strip_openai_compat_prefix(model_id);
+
+            events.push(ModelLoadProgressEvent {
+                event_type: "loading".to_string(),
+                model_id: model_id.to_string(),
+                message: Some("Connecting to OpenAI-compatible endpoint...".to_string()),
+                ..Default::default()
+            });
+
+            let config = match crate::services::settings_service::find_openai_compat_config(
+                &self.inner.daemon_config_path,
+                config_id,
+            )
+            .await
+            {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    events.push(ModelLoadProgressEvent {
+                        event_type: "error".to_string(),
+                        model_id: model_id.to_string(),
+                        error_message: Some(format!(
+                            "No OpenAI-compatible provider config found for '{config_id}'. Check Settings > Integrations."
+                        )),
+                        ..Default::default()
+                    });
+                    return events;
+                }
+                Err(e) => {
+                    events.push(ModelLoadProgressEvent {
+                        event_type: "error".to_string(),
+                        model_id: model_id.to_string(),
+                        error_message: Some(format!(
+                            "Failed to read OpenAI-compatible provider config: {e}"
+                        )),
+                        ..Default::default()
+                    });
+                    return events;
+                }
+            };
+
+            let engine = OpenAiCompatInferenceEngine::new(
+                config.base_url.clone(),
+                config.api_key.clone(),
+                config.name.clone(),
+            );
+            let swapped = self
+                .replace_engine_if_changed(model_id, Arc::new(engine))
+                .await;
+
+            events.push(ModelLoadProgressEvent {
+                event_type: "ready".to_string(),
+                model_id: model_id.to_string(),
+                message: Some(format!("{} ready", config.name)),
+                engine_swapped: Some(swapped),
+                ..Default::default()
+            });
+
+            return events;
+        }
 
         let models = match self.inner.model_manager.list().await {
             Ok(m) => m,
@@ -1296,7 +1371,8 @@ mod tests {
         );
         let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
         let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
-        let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding);
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding, daemon_config_path);
         (svc, node_service, tempdir)
     }
 
@@ -1350,5 +1426,61 @@ mod tests {
             .collect();
         assert_eq!(assistants.len(), 2);
         assert!(assistants.iter().all(|m| m.reasoning.is_none()));
+    }
+
+    #[tokio::test]
+    async fn load_openai_compat_model_without_config_returns_clear_error() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+
+        // No daemon.toml exists yet, so the config lookup returns None. This
+        // must surface a specific "no config found" error, not fall through to
+        // the GGUF path-resolution failure the bug report described.
+        let events = svc
+            .load_model_and_collect_events("openai-compat:missing-uuid")
+            .await;
+
+        let error_event = events
+            .iter()
+            .find(|e| e.event_type == "error")
+            .expect("an error event should be emitted");
+        let message = error_event
+            .error_message
+            .as_deref()
+            .expect("error_message should be set");
+        assert!(
+            message.contains("No OpenAI-compatible provider config found"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            !message.to_lowercase().contains("gguf"),
+            "error must not leak the GGUF path-resolution failure: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_openai_compat_model_with_config_swaps_engine() {
+        let (svc, _node_service, tempdir) = test_service().await;
+        let config_path = tempdir.path().join("daemon.toml");
+        let toml = r#"
+[[openai_compat.configs]]
+id = "abc-123"
+name = "My Endpoint"
+base_url = "http://127.0.0.1:9999/v1"
+api_key = "sk-test"
+"#;
+        tokio::fs::write(&config_path, toml)
+            .await
+            .expect("write daemon.toml");
+
+        let events = svc
+            .load_model_and_collect_events("openai-compat:abc-123")
+            .await;
+
+        let ready_event = events
+            .iter()
+            .find(|e| e.event_type == "ready")
+            .expect("a ready event should be emitted");
+        assert_eq!(ready_event.engine_swapped, Some(true));
+        assert!(events.iter().all(|e| e.event_type != "error"));
     }
 }

@@ -270,6 +270,31 @@ export async function updateCaptureSettings(
 }
 
 // ============================================================================
+// OpenAI-compatible Provider Config Commands
+// ============================================================================
+
+export interface OpenAiCompatConfigDto {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
+/** Read all OpenAI-compatible provider configs from the daemon (source of truth). */
+export async function getOpenAiCompatConfigsFromDaemon(): Promise<OpenAiCompatConfigDto[]> {
+  if (!isTauri()) return [];
+  return invoke<OpenAiCompatConfigDto[]>('get_openai_compat_configs');
+}
+
+/** Replace the full set of OpenAI-compatible provider configs on the daemon. */
+export async function setOpenAiCompatConfigsOnDaemon(
+  configs: OpenAiCompatConfigDto[]
+): Promise<OpenAiCompatConfigDto[]> {
+  if (!isTauri()) return configs;
+  return invoke<OpenAiCompatConfigDto[]>('set_openai_compat_configs', { configs });
+}
+
+// ============================================================================
 // PTY Agent Availability Commands (Issue #1124)
 // ============================================================================
 

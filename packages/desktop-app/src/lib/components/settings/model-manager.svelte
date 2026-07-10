@@ -9,7 +9,11 @@
     saveDefaultModelSelection,
     type ModelSelection,
   } from '$lib/stores/settings.svelte';
-  import { ollamaAvailable, chatModelList } from '$lib/services/tauri-commands';
+  import {
+    ollamaAvailable,
+    chatModelList,
+    getOpenAiCompatConfigsFromDaemon,
+  } from '$lib/services/tauri-commands';
   import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
   import type { ModelFamily } from '$lib/types/agent-types';
   import { createLogger } from '$lib/utils/logger';
@@ -90,8 +94,22 @@
 
   onMount(async () => {
     if (models.length === 0) modelStore.refreshModels();
+    // Show the local cache immediately, then refresh from the daemon (source
+    // of truth) — avoids a blank list while the round-trip is in flight.
     openAiConfigs = getOpenAiConfigs();
     defaultModel = getDefaultModelSelection();
+    try {
+      const daemonConfigs = await getOpenAiCompatConfigsFromDaemon();
+      openAiConfigs = daemonConfigs.map((c) => ({
+        id: c.id,
+        name: c.name,
+        baseUrl: c.baseUrl,
+        apiKey: c.apiKey,
+      }));
+      buildDefaultOptions();
+    } catch (e) {
+      log.warn('Failed to refresh OpenAI-compat configs from daemon', e);
+    }
 
     await checkOllama();
   });
@@ -128,7 +146,7 @@
     editForm = { name: config.name, baseUrl: config.baseUrl, apiKey: config.apiKey };
   }
 
-  function saveConfig() {
+  async function saveConfig() {
     if (!editingConfig) return;
     const updated = { ...editingConfig, ...editForm };
     if (isNewConfig) {
@@ -136,14 +154,14 @@
     } else {
       openAiConfigs = openAiConfigs.map((c) => (c.id === updated.id ? updated : c));
     }
-    saveOpenAiConfigs(openAiConfigs);
+    await saveOpenAiConfigs(openAiConfigs);
     editingConfig = null;
     buildDefaultOptions();
   }
 
-  function deleteConfig(id: string) {
+  async function deleteConfig(id: string) {
     openAiConfigs = openAiConfigs.filter((c) => c.id !== id);
-    saveOpenAiConfigs(openAiConfigs);
+    await saveOpenAiConfigs(openAiConfigs);
     if (defaultModel?.configId === id) {
       defaultModel = null;
       saveDefaultModelSelection(null);
