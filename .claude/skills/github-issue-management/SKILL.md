@@ -49,7 +49,34 @@ Read /Users/malibio/nodespace/nodespace-docs/development/issue-workflow.md
 - ✅ **Self-contained**: All implementation details included (lines 208-230)
 - ✅ **Quality gates**: Pre-creation checklist (lines 244-252)
 
-### Step 2: Validate Content Against Rules
+### Step 2: Search nodespace-docs for Relevant Architecture (MANDATORY)
+
+**Every issue that changes, reverses, or contradicts an existing architectural decision, convention, or documented policy MUST be checked against `nodespace-docs` before creation.** This repo carries no docs of its own — ADRs, architecture, and standards live only in `../nodespace-docs/`, so this is the only place the check can happen.
+
+```bash
+# Always pull first — local nodespace-docs can be behind remote
+cd /Users/malibio/nodespace/nodespace-docs && git pull origin main
+```
+
+**Search for relevant prior decisions before drafting the issue:**
+```bash
+# Search ADRs and architecture docs for terms central to the issue's subject
+grep -rli "<key term(s) from the issue subject>" /Users/malibio/nodespace/nodespace-docs/decisions /Users/malibio/nodespace/nodespace-docs/architecture /Users/malibio/nodespace/nodespace-docs/components 2>/dev/null
+```
+
+Read any ADR or architecture doc that matches — not just the filename, the full content — before drafting the issue. Pay particular attention to:
+- **Status**: an ADR marked `Accepted` is a live constraint until formally superseded; a `Superseded` ADR names what replaced it — follow that chain to the current decision.
+- **Decision** and **Rationale** sections: does the issue's proposed solution match, extend, or reverse this?
+
+**If the issue's proposed solution contradicts, reverses, or supersedes an existing ADR or documented convention:**
+- The issue is a decision change, not just an implementation task. Say so explicitly in the issue body — do not let it read as a routine fix.
+- The issue MUST name the specific ADR(s)/doc(s) being reversed or superseded, with path and a one-line summary of what they currently say (see "Architecture Impact" in Required Structure below).
+- Flag in the issue that a companion `nodespace-docs` change (a new superseding ADR, or an edit to the existing one) is required as part of the work — don't leave the docs silently out of sync with what the code ends up doing. `nodespace-docs` commits/pushes go straight to `main` per that repo's own workflow (no branches/PRs there).
+- If you are not certain whether the proposed change reverses a prior decision, treat it as uncertain and flag it for the user rather than silently proceeding either way.
+
+**If no relevant ADR or architecture doc exists:** note that in the issue (e.g., "No prior ADR found for this area") so the reviewer knows the search happened rather than was skipped.
+
+### Step 3: Validate Content Against Rules
 
 **CRITICAL VALIDATION CHECKS (BLOCKING):**
 
@@ -65,6 +92,7 @@ Read /Users/malibio/nodespace/nodespace-docs/development/issue-workflow.md
 - Acceptance Criteria (checkboxes with testable requirements)
 - Technical Specifications (file paths, patterns, references)
 - Self-contained details (implementer can work without asking questions)
+- **Architecture Impact** (only when Step 2 found a relevant ADR/doc): names the specific ADR(s) affected, whether this issue reverses/supersedes/extends them, and whether a companion `nodespace-docs` change is required
 
 #### ✅ REFERENCE FORMATTING:
 - GitHub issues use simple `#number` format (not "Issue #number - Title")
@@ -96,6 +124,12 @@ bun run gh:create --title "Natural Descriptive Title" \
 
 ## Proposed Solution
 [High-level approach]
+
+## Architecture Impact
+[Only include this section if Step 2's nodespace-docs search found a relevant ADR/doc.
+Name the specific ADR(s) affected (path + one-line summary of the current decision),
+state whether this issue reverses/supersedes/extends it, and note whether a companion
+nodespace-docs change (new ADR or edit) is required as part of the work.]
 
 ## Acceptance Criteria
 - [ ] Testable requirement 1
@@ -230,6 +264,29 @@ Enhanced Search Component with Fuzzy Matching
 Fix Button Click Handler in Navigation Menu
 ```
 
+### ❌ Violation 5: Skipping the nodespace-docs Architecture Check
+
+**WRONG:**
+```markdown
+## Proposed Solution
+Add a ci.yml workflow that runs tests on every PR.
+```
+*(Silent — no mention that ADR-047 already decided GitHub Actions is scoped to
+release/signing only and that a `ci.yml` test-gate was explicitly rejected.)*
+
+**CORRECT:**
+```markdown
+## Proposed Solution
+Add a ci.yml workflow that runs tests on every PR.
+
+## Architecture Impact
+This reverses ADR-047 (../nodespace-docs/decisions/047-ci-gating-policy.md),
+which decided local pre-push hooks are the sole test gate and explicitly
+rejected a ci.yml test-running workflow. This issue requires a companion
+nodespace-docs change: either a new ADR superseding ADR-047, or an edit to
+ADR-047 updating its Status and Decision to reflect the reversal.
+```
+
 ### ❌ Violation 4: Missing Self-Contained Details
 
 **WRONG:**
@@ -326,6 +383,11 @@ What user problem does this solve?
 
 ## Proposed Solution
 High-level approach to solving the problem.
+
+## Architecture Impact
+[Only include this section if Step 2's nodespace-docs search found a relevant ADR/doc.
+Name the specific ADR(s) affected, state whether this issue reverses/supersedes/extends
+the existing decision, and note whether a companion nodespace-docs change is required.]
 
 ## Implementation Approach
 
@@ -446,6 +508,8 @@ bun run gh:list --status open
 **This skill succeeds when:**
 - ✅ Issue follows ALL workflow guide standards
 - ✅ Zero forbidden content (estimates, bad formatting)
+- ✅ nodespace-docs was searched for relevant ADRs/architecture before drafting
+- ✅ Any reversed/superseded ADR is named explicitly with an Architecture Impact section
 - ✅ All quality gates passed
 - ✅ Self-contained and implementable
 - ✅ Created/updated via proper bun commands
