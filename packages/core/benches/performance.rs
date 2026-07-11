@@ -695,7 +695,11 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, std::slice::from_ref(&rel_name)));
+                        black_box(
+                            resolver
+                                .resolve_path(&root, std::slice::from_ref(&rel_name))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total
@@ -717,7 +721,7 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -742,7 +746,7 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -764,10 +768,10 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         // First call populates cache
-                        resolver.resolve_path(&root, &segments);
+                        resolver.resolve_path(&root, &segments).await;
                         // Second call should hit cache
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -899,7 +903,9 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
 
         group.bench_function("simple_property_no_resolver", |b| {
             b.iter(|| {
-                black_box(cel::evaluate_conditions(&conditions, &node, &evt, None));
+                rt.block_on(async {
+                    black_box(cel::evaluate_conditions(&conditions, &node, &evt, None).await);
+                });
             });
         });
     }
@@ -921,12 +927,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(cel::evaluate_conditions(
-                            &conditions,
-                            &node,
-                            &evt,
-                            Some(&mut resolver),
-                        ));
+                        black_box(
+                            cel::evaluate_conditions(&conditions, &node, &evt, Some(&mut resolver))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total
@@ -952,12 +956,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(cel::evaluate_conditions(
-                            &conditions,
-                            &node,
-                            &evt,
-                            Some(&mut resolver),
-                        ));
+                        black_box(
+                            cel::evaluate_conditions(&conditions, &node, &evt, Some(&mut resolver))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total

@@ -4,9 +4,11 @@
 //! Created per rule evaluation, with a segment cache to prevent
 //! redundant DB queries for overlapping paths.
 //!
-//! Uses `tokio::task::block_in_place` for the sync bridge since
-//! cel-interpreter's `Program::execute()` is synchronous while
-//! NodeService is async.
+//! All graph traversal happens here, ahead of CEL evaluation: paths are
+//! resolved with plain `async`/`.await` against NodeService, and the
+//! results are injected into the CEL context before `Program::execute()`
+//! (which is synchronous) ever runs. This keeps the sync/async boundary
+//! at the CEL-evaluation edge instead of bridging it internally.
 
 use crate::models::Node;
 use crate::playbook::cel::{json_to_cel, key, node_to_cel_value};
@@ -58,7 +60,7 @@ impl GraphResolver {
     /// 4. For "many" relationships, return Collection
     ///
     /// Uses the segment cache: if a prefix has already been resolved, starts from there.
-    pub fn resolve_path(&mut self, root_node: &Node, segments: &[String]) -> ResolvedValue {
+    pub async fn resolve_path(&mut self, root_node: &Node, segments: &[String]) -> ResolvedValue {
         if segments.is_empty() {
             return ResolvedValue::Node(root_node.clone());
         }
@@ -116,7 +118,7 @@ impl GraphResolver {
             }
 
             // Try as a relationship
-            let related = self.fetch_related_nodes(&current_node.id, segment);
+            let related = self.fetch_related_nodes(&current_node.id, segment).await;
             match related {
                 Ok(nodes) if nodes.is_empty() => {
                     let result = ResolvedValue::Missing;
@@ -164,7 +166,7 @@ impl GraphResolver {
     }
 
     /// Resolve a collection path and return the collection nodes.
-    pub fn resolve_collection(
+    pub async fn resolve_collection(
         &mut self,
         root_node: &Node,
         collection: &ExtractedPath,
@@ -175,44 +177,30 @@ impl GraphResolver {
             return vec![];
         }
 
-        match self.resolve_path(root_node, &segments[1..]) {
+        match self.resolve_path(root_node, &segments[1..]).await {
             ResolvedValue::Collection(nodes) => nodes,
             ResolvedValue::Node(n) => vec![n],
             _ => vec![],
         }
     }
 
-    /// Fetch related nodes using the sync bridge.
-    ///
-    /// Uses `tokio::task::block_in_place` + `Handle::current().block_on()`
-    /// which is safe because:
-    /// - We're on a multi-threaded tokio runtime
-    /// - Only the single RuleProcessor task calls this
-    fn fetch_related_nodes(
+    /// Fetch related nodes directly via NodeService.
+    async fn fetch_related_nodes(
         &self,
         node_id: &str,
         relationship_name: &str,
     ) -> Result<Vec<Node>, String> {
-        let handle = tokio::runtime::Handle::current();
-        let node_service = Arc::clone(&self.node_service);
-        let node_id = node_id.to_string();
-        let rel_name = relationship_name.to_string();
-
-        tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                node_service
-                    .get_related_nodes(&node_id, &rel_name, "out")
-                    .await
-                    .map_err(|e| e.to_string())
-            })
-        })
+        self.node_service
+            .get_related_nodes(node_id, relationship_name, "out")
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Build an enriched CEL context with graph-resolved paths.
     ///
     /// Takes the base node and extracted paths, resolves each path against
     /// the graph, and injects the resolved values as nested CEL Maps.
-    pub fn enrich_context(
+    pub async fn enrich_context(
         &mut self,
         root_node: &Node,
         paths: &[ExtractedPath],
@@ -229,7 +217,7 @@ impl GraphResolver {
 
             // Resolve the relationship chain (skip "node" prefix)
             let segments = &path.segments[1..];
-            match self.resolve_path(root_node, segments) {
+            match self.resolve_path(root_node, segments).await {
                 ResolvedValue::Node(n) => {
                     resolved_values.insert(path.segments.clone(), node_to_cel_value(&n));
                 }
@@ -251,7 +239,7 @@ impl GraphResolver {
             if coll.collection.root != "node" {
                 continue;
             }
-            let nodes = self.resolve_collection(root_node, &coll.collection);
+            let nodes = self.resolve_collection(root_node, &coll.collection).await;
             if !nodes.is_empty() {
                 let list: Vec<Value> = nodes.iter().map(node_to_cel_value).collect();
                 resolved_values.insert(coll.collection.segments.clone(), Value::List(list.into()));
@@ -669,7 +657,7 @@ mod tests {
             svc.create_node(node.clone()).await.unwrap();
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
-            let result = resolver.resolve_path(&node, &["status".to_string()]);
+            let result = resolver.resolve_path(&node, &["status".to_string()]).await;
             match result {
                 ResolvedValue::Scalar(v) => assert_eq!(v, json!("open")),
                 other => panic!("expected Scalar, got {:?}", other),
@@ -686,7 +674,9 @@ mod tests {
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
             // "nonexistent" is neither a property nor a relationship
-            let result = resolver.resolve_path(&node, &["nonexistent".to_string()]);
+            let result = resolver
+                .resolve_path(&node, &["nonexistent".to_string()])
+                .await;
             assert!(matches!(result, ResolvedValue::Missing));
         }
 
@@ -721,7 +711,7 @@ mod tests {
                 .unwrap();
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
-            let result = resolver.resolve_path(&issue, &["story".to_string()]);
+            let result = resolver.resolve_path(&issue, &["story".to_string()]).await;
             match result {
                 ResolvedValue::Node(n) => assert_eq!(n.id, "gr-s1"),
                 other => panic!("expected Node, got {:?}", other),
@@ -776,21 +766,25 @@ mod tests {
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
 
             // Resolve task -> story -> epic
-            let result = resolver.resolve_path(&task, &["story".to_string(), "epic".to_string()]);
+            let result = resolver
+                .resolve_path(&task, &["story".to_string(), "epic".to_string()])
+                .await;
             match result {
                 ResolvedValue::Node(n) => assert_eq!(n.id, "gr-e1"),
                 other => panic!("expected Node for story.epic, got {:?}", other),
             }
 
             // Resolve task -> story -> epic -> status (scalar property on the target)
-            let result = resolver.resolve_path(
-                &task,
-                &[
-                    "story".to_string(),
-                    "epic".to_string(),
-                    "status".to_string(),
-                ],
-            );
+            let result = resolver
+                .resolve_path(
+                    &task,
+                    &[
+                        "story".to_string(),
+                        "epic".to_string(),
+                        "status".to_string(),
+                    ],
+                )
+                .await;
             match result {
                 ResolvedValue::Scalar(v) => assert_eq!(v, json!("in_progress")),
                 other => panic!("expected Scalar for story.epic.status, got {:?}", other),
@@ -825,11 +819,15 @@ mod tests {
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
 
             // First call populates cache
-            let r1 = resolver.resolve_path(&task, &["story".to_string(), "status".to_string()]);
+            let r1 = resolver
+                .resolve_path(&task, &["story".to_string(), "status".to_string()])
+                .await;
             assert!(matches!(r1, ResolvedValue::Scalar(_)));
 
             // Second call should hit cache (same result)
-            let r2 = resolver.resolve_path(&task, &["story".to_string(), "status".to_string()]);
+            let r2 = resolver
+                .resolve_path(&task, &["story".to_string(), "status".to_string()])
+                .await;
             assert!(matches!(r2, ResolvedValue::Scalar(_)));
         }
 
@@ -866,7 +864,9 @@ mod tests {
                 .unwrap();
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
-            let result = resolver.resolve_path(&parent, &["subtasks".to_string()]);
+            let result = resolver
+                .resolve_path(&parent, &["subtasks".to_string()])
+                .await;
             match result {
                 ResolvedValue::Collection(nodes) => {
                     assert_eq!(nodes.len(), 2);
@@ -914,7 +914,7 @@ mod tests {
                 root: "node".to_string(),
             }];
 
-            let result = resolver.enrich_context(&source, &paths, &[]);
+            let result = resolver.enrich_context(&source, &paths, &[]).await;
             // Should have resolved node.target.status
             let key = vec![
                 "node".to_string(),
@@ -933,7 +933,7 @@ mod tests {
             svc.create_node(node.clone()).await.unwrap();
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
-            let result = resolver.resolve_path(&node, &[]);
+            let result = resolver.resolve_path(&node, &[]).await;
             match result {
                 ResolvedValue::Node(n) => assert_eq!(n.id, "gr-t6"),
                 other => panic!("expected Node, got {:?}", other),
@@ -950,8 +950,9 @@ mod tests {
 
             let mut resolver = GraphResolver::new(Arc::clone(&svc));
             // "status" is a scalar property, can't walk further
-            let result =
-                resolver.resolve_path(&node, &["status".to_string(), "deeper".to_string()]);
+            let result = resolver
+                .resolve_path(&node, &["status".to_string(), "deeper".to_string()])
+                .await;
             assert!(matches!(result, ResolvedValue::Missing));
         }
 
@@ -1017,7 +1018,7 @@ mod tests {
                 root: "node".to_string(),
             }];
 
-            let result = resolver.enrich_context(&task, &paths, &[]);
+            let result = resolver.enrich_context(&task, &paths, &[]).await;
 
             let key = vec![
                 "node".to_string(),
@@ -1078,7 +1079,7 @@ mod tests {
                 root: "node".to_string(),
             };
 
-            let nodes = resolver.resolve_collection(&parent, &collection_path);
+            let nodes = resolver.resolve_collection(&parent, &collection_path).await;
             assert_eq!(nodes.len(), 2, "should resolve 2 collection nodes");
             let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
             assert!(ids.contains(&"gr-i9a"));
@@ -1133,7 +1134,7 @@ mod tests {
                 }],
             }];
 
-            let result = resolver.enrich_context(&parent, &[], &collections);
+            let result = resolver.enrich_context(&parent, &[], &collections).await;
 
             let key = vec!["node".to_string(), "tasks".to_string()];
             assert!(

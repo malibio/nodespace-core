@@ -176,7 +176,7 @@ impl BindingContext {
     /// Supported roots: `trigger`, `actions`, `item`.
     ///
     /// Handles both `actions[0].result.field` and `actions.0.result.field` formats.
-    pub fn resolve_binding(&mut self, path: &str) -> Result<Value, String> {
+    pub async fn resolve_binding(&mut self, path: &str) -> Result<Value, String> {
         let segments: Vec<&str> = path.split('.').collect();
         let first = segments.first().copied().ok_or("empty binding path")?;
 
@@ -190,14 +190,14 @@ impl BindingContext {
         }
 
         match first {
-            "trigger" => self.resolve_trigger_path(&segments[1..]),
+            "trigger" => self.resolve_trigger_path(&segments[1..]).await,
             "actions" => self.resolve_action_path(&segments[1..]),
             "item" => self.resolve_item_path(&segments[1..]),
             other => Err(format!("unknown binding root: '{}'", other)),
         }
     }
 
-    fn resolve_trigger_path(&mut self, segments: &[&str]) -> Result<Value, String> {
+    async fn resolve_trigger_path(&mut self, segments: &[&str]) -> Result<Value, String> {
         match segments.first().copied() {
             Some("node") => {
                 // Try JSON navigation first (direct properties)
@@ -209,7 +209,10 @@ impl BindingContext {
                         if let Some(ref mut resolver) = self.graph_resolver {
                             let path_segments: Vec<String> =
                                 segments[1..].iter().map(|s| s.to_string()).collect();
-                            match resolver.resolve_path(&self.trigger_node_model, &path_segments) {
+                            match resolver
+                                .resolve_path(&self.trigger_node_model, &path_segments)
+                                .await
+                            {
                                 crate::playbook::graph_resolver::ResolvedValue::Node(n) => {
                                     serde_json::to_value(&n).map_err(|e| e.to_string())
                                 }
@@ -324,25 +327,26 @@ fn navigate_json(value: &Value, segments: &[&str]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 /// Resolve all `{binding}` templates in a JSON value recursively.
-fn resolve_bindings_in_value(
+async fn resolve_bindings_in_value(
     value: &Value,
     ctx: &mut BindingContext,
 ) -> Result<Value, ActionError> {
     match value {
-        Value::String(s) => resolve_bindings_in_string(s, ctx),
+        Value::String(s) => resolve_bindings_in_string(s, ctx).await,
         Value::Object(obj) => {
             let mut resolved = serde_json::Map::new();
             for (k, v) in obj {
-                resolved.insert(k.clone(), resolve_bindings_in_value(v, ctx)?);
+                let resolved_v = Box::pin(resolve_bindings_in_value(v, ctx)).await?;
+                resolved.insert(k.clone(), resolved_v);
             }
             Ok(Value::Object(resolved))
         }
         Value::Array(arr) => {
-            let resolved: Result<Vec<_>, _> = arr
-                .iter()
-                .map(|v| resolve_bindings_in_value(v, ctx))
-                .collect();
-            Ok(Value::Array(resolved?))
+            let mut resolved = Vec::with_capacity(arr.len());
+            for v in arr {
+                resolved.push(Box::pin(resolve_bindings_in_value(v, ctx)).await?);
+            }
+            Ok(Value::Array(resolved))
         }
         other => Ok(other.clone()),
     }
@@ -355,16 +359,19 @@ fn resolve_bindings_in_value(
 ///
 /// If the string contains bindings mixed with literal text, each binding is
 /// stringified and interpolated into the result (always returns a string).
-fn resolve_bindings_in_string(s: &str, ctx: &mut BindingContext) -> Result<Value, ActionError> {
+async fn resolve_bindings_in_string(
+    s: &str,
+    ctx: &mut BindingContext,
+) -> Result<Value, ActionError> {
     // Fast path: entire string is a single binding like "{trigger.node.id}"
     if s.starts_with('{') && s.ends_with('}') && !s[1..s.len() - 1].contains('{') {
         let path = &s[1..s.len() - 1];
-        return ctx
-            .resolve_binding(path)
-            .map_err(|msg| ActionError::BindingResolutionFailed {
+        return ctx.resolve_binding(path).await.map_err(|msg| {
+            ActionError::BindingResolutionFailed {
                 path: path.to_string(),
                 message: msg,
-            });
+            }
+        });
     }
 
     // General case: scan for `{...}` patterns and interpolate
@@ -388,7 +395,7 @@ fn resolve_bindings_in_string(s: &str, ctx: &mut BindingContext) -> Result<Value
                 result.push('{');
                 result.push_str(&path);
             } else {
-                let resolved = ctx.resolve_binding(&path).map_err(|msg| {
+                let resolved = ctx.resolve_binding(&path).await.map_err(|msg| {
                     ActionError::BindingResolutionFailed {
                         path: path.clone(),
                         message: msg,
@@ -442,7 +449,7 @@ pub async fn execute_actions(
             // ---------------------------------------------------------------
 
             // Step 1: Resolve the full collection before iteration begins
-            let collection = match ctx.resolve_binding(for_each_path) {
+            let collection = match ctx.resolve_binding(for_each_path).await {
                 Ok(Value::Array(items)) => items,
                 Ok(_) => {
                     return ActionResult::Failed(ActionError::ForEachResolutionFailed {
@@ -470,7 +477,7 @@ pub async fn execute_actions(
                 ctx.current_item = Some(item.clone());
 
                 // Re-resolve params with the item binding available
-                let item_params = match resolve_bindings_in_value(&action.params, &mut ctx) {
+                let item_params = match resolve_bindings_in_value(&action.params, &mut ctx).await {
                     Ok(p) => p,
                     Err(e) => return ActionResult::Failed(e),
                 };
@@ -500,7 +507,7 @@ pub async fn execute_actions(
             // ---------------------------------------------------------------
 
             // Resolve bindings in params
-            let resolved_params = match resolve_bindings_in_value(&action.params, &mut ctx) {
+            let resolved_params = match resolve_bindings_in_value(&action.params, &mut ctx).await {
                 Ok(p) => p,
                 Err(e) => return ActionResult::Failed(e),
             };
@@ -838,55 +845,56 @@ mod tests {
     // BindingContext::resolve_binding — trigger.node paths
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_trigger_node_id() {
+    #[tokio::test]
+    async fn test_resolve_trigger_node_id() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = ctx.resolve_binding("trigger.node.id").unwrap();
+        let result = ctx.resolve_binding("trigger.node.id").await.unwrap();
         assert_eq!(result, json!("node-123"));
     }
 
-    #[test]
-    fn test_resolve_trigger_node_type() {
+    #[tokio::test]
+    async fn test_resolve_trigger_node_type() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = ctx.resolve_binding("trigger.node.nodeType").unwrap();
+        let result = ctx.resolve_binding("trigger.node.nodeType").await.unwrap();
         assert_eq!(result, json!("task"));
     }
 
-    #[test]
-    fn test_resolve_trigger_node_content() {
+    #[tokio::test]
+    async fn test_resolve_trigger_node_content() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = ctx.resolve_binding("trigger.node.content").unwrap();
+        let result = ctx.resolve_binding("trigger.node.content").await.unwrap();
         assert_eq!(result, json!("Test content"));
     }
 
-    #[test]
-    fn test_resolve_trigger_node_nested_properties() {
+    #[tokio::test]
+    async fn test_resolve_trigger_node_nested_properties() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
         let result = ctx
             .resolve_binding("trigger.node.properties.task.status")
+            .await
             .unwrap();
         assert_eq!(result, json!("open"));
     }
 
-    #[test]
-    fn test_resolve_trigger_node_title() {
+    #[tokio::test]
+    async fn test_resolve_trigger_node_title() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = ctx.resolve_binding("trigger.node.title").unwrap();
+        let result = ctx.resolve_binding("trigger.node.title").await.unwrap();
         assert_eq!(result, json!("Test Node"));
     }
 
@@ -894,8 +902,8 @@ mod tests {
     // BindingContext::resolve_binding — trigger.property paths
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_trigger_property_key() {
+    #[tokio::test]
+    async fn test_resolve_trigger_property_key() {
         let node = make_test_node("node-123", "task");
         let event = make_property_changed_event(
             "node-123",
@@ -909,13 +917,13 @@ mod tests {
         let mut ctx = BindingContext::new(&node, &event, None);
 
         assert_eq!(
-            ctx.resolve_binding("trigger.property.key").unwrap(),
+            ctx.resolve_binding("trigger.property.key").await.unwrap(),
             json!("task.status")
         );
     }
 
-    #[test]
-    fn test_resolve_trigger_property_old_value() {
+    #[tokio::test]
+    async fn test_resolve_trigger_property_old_value() {
         let node = make_test_node("node-123", "task");
         let event = make_property_changed_event(
             "node-123",
@@ -929,13 +937,15 @@ mod tests {
         let mut ctx = BindingContext::new(&node, &event, None);
 
         assert_eq!(
-            ctx.resolve_binding("trigger.property.old_value").unwrap(),
+            ctx.resolve_binding("trigger.property.old_value")
+                .await
+                .unwrap(),
             json!("open")
         );
     }
 
-    #[test]
-    fn test_resolve_trigger_property_new_value() {
+    #[tokio::test]
+    async fn test_resolve_trigger_property_new_value() {
         let node = make_test_node("node-123", "task");
         let event = make_property_changed_event(
             "node-123",
@@ -949,13 +959,15 @@ mod tests {
         let mut ctx = BindingContext::new(&node, &event, None);
 
         assert_eq!(
-            ctx.resolve_binding("trigger.property.new_value").unwrap(),
+            ctx.resolve_binding("trigger.property.new_value")
+                .await
+                .unwrap(),
             json!("done")
         );
     }
 
-    #[test]
-    fn test_resolve_trigger_property_null_old_value() {
+    #[tokio::test]
+    async fn test_resolve_trigger_property_null_old_value() {
         let node = make_test_node("node-123", "task");
         let event = make_property_changed_event(
             "node-123",
@@ -969,18 +981,23 @@ mod tests {
         let mut ctx = BindingContext::new(&node, &event, None);
 
         assert_eq!(
-            ctx.resolve_binding("trigger.property.old_value").unwrap(),
+            ctx.resolve_binding("trigger.property.old_value")
+                .await
+                .unwrap(),
             Value::Null
         );
     }
 
-    #[test]
-    fn test_resolve_trigger_property_not_available_on_created() {
+    #[tokio::test]
+    async fn test_resolve_trigger_property_not_available_on_created() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let err = ctx.resolve_binding("trigger.property.key").unwrap_err();
+        let err = ctx
+            .resolve_binding("trigger.property.key")
+            .await
+            .unwrap_err();
         assert!(err.contains("not a PropertyChanged event"));
     }
 
@@ -988,8 +1005,8 @@ mod tests {
     // BindingContext::resolve_binding — actions[N].result paths
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_action_result() {
+    #[tokio::test]
+    async fn test_resolve_action_result() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
@@ -997,12 +1014,12 @@ mod tests {
         ctx.action_results
             .push(json!({"id": "new-node-456", "nodeType": "text"}));
 
-        let result = ctx.resolve_binding("actions[0].result.id").unwrap();
+        let result = ctx.resolve_binding("actions[0].result.id").await.unwrap();
         assert_eq!(result, json!("new-node-456"));
     }
 
-    #[test]
-    fn test_resolve_action_result_no_bracket_syntax() {
+    #[tokio::test]
+    async fn test_resolve_action_result_no_bracket_syntax() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
@@ -1010,17 +1027,20 @@ mod tests {
         ctx.action_results.push(json!({"id": "abc"}));
 
         // Also works with just the number (without brackets)
-        let result = ctx.resolve_binding("actions.0.result.id").unwrap();
+        let result = ctx.resolve_binding("actions.0.result.id").await.unwrap();
         assert_eq!(result, json!("abc"));
     }
 
-    #[test]
-    fn test_resolve_action_result_not_yet_available() {
+    #[tokio::test]
+    async fn test_resolve_action_result_not_yet_available() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let err = ctx.resolve_binding("actions[0].result.id").unwrap_err();
+        let err = ctx
+            .resolve_binding("actions[0].result.id")
+            .await
+            .unwrap_err();
         assert!(err.contains("has no result yet"));
     }
 
@@ -1028,25 +1048,31 @@ mod tests {
     // BindingContext::resolve_binding — item paths
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_item_path() {
+    #[tokio::test]
+    async fn test_resolve_item_path() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
         ctx.current_item = Some(json!({"id": "item-1", "name": "First"}));
 
-        assert_eq!(ctx.resolve_binding("item.id").unwrap(), json!("item-1"));
-        assert_eq!(ctx.resolve_binding("item.name").unwrap(), json!("First"));
+        assert_eq!(
+            ctx.resolve_binding("item.id").await.unwrap(),
+            json!("item-1")
+        );
+        assert_eq!(
+            ctx.resolve_binding("item.name").await.unwrap(),
+            json!("First")
+        );
     }
 
-    #[test]
-    fn test_resolve_item_not_in_loop() {
+    #[tokio::test]
+    async fn test_resolve_item_not_in_loop() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let err = ctx.resolve_binding("item.id").unwrap_err();
+        let err = ctx.resolve_binding("item.id").await.unwrap_err();
         assert!(err.contains("not in a for_each loop"));
     }
 
@@ -1054,13 +1080,13 @@ mod tests {
     // BindingContext::resolve_binding — error cases
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_unknown_root() {
+    #[tokio::test]
+    async fn test_resolve_unknown_root() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let err = ctx.resolve_binding("unknown.field").unwrap_err();
+        let err = ctx.resolve_binding("unknown.field").await.unwrap_err();
         assert!(err.contains("unknown binding root"));
     }
 
@@ -1068,40 +1094,45 @@ mod tests {
     // resolve_bindings_in_string tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_single_binding_preserves_type_number() {
+    #[tokio::test]
+    async fn test_single_binding_preserves_type_number() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
         // version is a number, should be preserved as json number
-        let result = resolve_bindings_in_string("{trigger.node.version}", &mut ctx).unwrap();
+        let result = resolve_bindings_in_string("{trigger.node.version}", &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(result, json!(1));
     }
 
-    #[test]
-    fn test_single_binding_preserves_type_string() {
+    #[tokio::test]
+    async fn test_single_binding_preserves_type_string() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = resolve_bindings_in_string("{trigger.node.id}", &mut ctx).unwrap();
+        let result = resolve_bindings_in_string("{trigger.node.id}", &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(result, json!("node-123"));
     }
 
-    #[test]
-    fn test_single_binding_preserves_type_object() {
+    #[tokio::test]
+    async fn test_single_binding_preserves_type_object() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result =
-            resolve_bindings_in_string("{trigger.node.properties.task}", &mut ctx).unwrap();
+        let result = resolve_bindings_in_string("{trigger.node.properties.task}", &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(result, json!({"status": "open", "priority": "high"}));
     }
 
-    #[test]
-    fn test_mixed_text_and_bindings() {
+    #[tokio::test]
+    async fn test_mixed_text_and_bindings() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
@@ -1110,27 +1141,32 @@ mod tests {
             "Node {trigger.node.id} is type {trigger.node.nodeType}",
             &mut ctx,
         )
+        .await
         .unwrap();
         assert_eq!(result, json!("Node node-123 is type task"));
     }
 
-    #[test]
-    fn test_no_bindings_returns_literal() {
+    #[tokio::test]
+    async fn test_no_bindings_returns_literal() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let result = resolve_bindings_in_string("just a plain string", &mut ctx).unwrap();
+        let result = resolve_bindings_in_string("just a plain string", &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(result, json!("just a plain string"));
     }
 
-    #[test]
-    fn test_binding_resolution_failed_error() {
+    #[tokio::test]
+    async fn test_binding_resolution_failed_error() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
-        let err = resolve_bindings_in_string("{nonexistent.path}", &mut ctx).unwrap_err();
+        let err = resolve_bindings_in_string("{nonexistent.path}", &mut ctx)
+            .await
+            .unwrap_err();
         match err {
             ActionError::BindingResolutionFailed { path, .. } => {
                 assert_eq!(path, "nonexistent.path");
@@ -1143,8 +1179,8 @@ mod tests {
     // resolve_bindings_in_value tests (recursive)
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_resolve_bindings_in_value_object() {
+    #[tokio::test]
+    async fn test_resolve_bindings_in_value_object() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
@@ -1157,43 +1193,43 @@ mod tests {
             }
         });
 
-        let resolved = resolve_bindings_in_value(&params, &mut ctx).unwrap();
+        let resolved = resolve_bindings_in_value(&params, &mut ctx).await.unwrap();
         assert_eq!(resolved["content"], json!("Created from node-123"));
         assert_eq!(resolved["properties"]["source"], json!("node-123"));
         // node_type has no binding, preserved as-is
         assert_eq!(resolved["node_type"], json!("text"));
     }
 
-    #[test]
-    fn test_resolve_bindings_in_value_array() {
+    #[tokio::test]
+    async fn test_resolve_bindings_in_value_array() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
         let params = json!(["{trigger.node.id}", "literal", "{trigger.node.nodeType}"]);
 
-        let resolved = resolve_bindings_in_value(&params, &mut ctx).unwrap();
+        let resolved = resolve_bindings_in_value(&params, &mut ctx).await.unwrap();
         assert_eq!(resolved[0], json!("node-123"));
         assert_eq!(resolved[1], json!("literal"));
         assert_eq!(resolved[2], json!("task"));
     }
 
-    #[test]
-    fn test_resolve_bindings_in_value_non_string_passthrough() {
+    #[tokio::test]
+    async fn test_resolve_bindings_in_value_non_string_passthrough() {
         let node = make_test_node("node-123", "task");
         let event = make_node_created_event("node-123", "task");
         let mut ctx = BindingContext::new(&node, &event, None);
 
         let params = json!(42);
-        let resolved = resolve_bindings_in_value(&params, &mut ctx).unwrap();
+        let resolved = resolve_bindings_in_value(&params, &mut ctx).await.unwrap();
         assert_eq!(resolved, json!(42));
 
         let params = json!(true);
-        let resolved = resolve_bindings_in_value(&params, &mut ctx).unwrap();
+        let resolved = resolve_bindings_in_value(&params, &mut ctx).await.unwrap();
         assert_eq!(resolved, json!(true));
 
         let params = json!(null);
-        let resolved = resolve_bindings_in_value(&params, &mut ctx).unwrap();
+        let resolved = resolve_bindings_in_value(&params, &mut ctx).await.unwrap();
         assert_eq!(resolved, Value::Null);
     }
 
