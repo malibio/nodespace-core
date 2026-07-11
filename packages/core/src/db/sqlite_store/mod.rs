@@ -918,6 +918,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_upsert_embeddings_batches_across_chunk_boundary() -> Result<()> {
+        // #1524: embedding/vec_embeddings inserts are now batched into multi-row
+        // statements chunked under SQLite's bound-parameter ceiling. Exercise a
+        // chunk count large enough to span more than one batch statement.
+        let (store, _tmp) = create_test_store().await?;
+        let node = store
+            .create_node(
+                Node::new("text".to_string(), "many chunks".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        let n = 130; // > EMBEDDING_CHUNK (60) and > VEC_CHUNK's per-call fraction
+        let embeddings: Vec<_> = (0..n)
+            .map(|i| {
+                let mut e = unit_embedding(&node.id, i % 768);
+                e.chunk_index = i as i32;
+                e.total_chunks = n as i32;
+                e
+            })
+            .collect();
+        store.upsert_embeddings(&node.id, embeddings).await?;
+
+        let got = store.get_embeddings(&node.id).await?;
+        assert_eq!(got.len(), n, "all chunks across batch boundaries persisted");
+        assert_eq!(vec_row_count(&store).await?, n as i64);
+        for (i, e) in got.iter().enumerate() {
+            assert_eq!(e.chunk_index, i as i32, "chunk order preserved");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_stale_embedding_markers_bulk_across_chunk_boundary() -> Result<()> {
+        // #1524: marker inserts are now batched multi-row statements. Exercise a
+        // node count large enough to span more than one batch (ID_CHUNK = 180),
+        // plus a duplicate node_id to confirm INSERT OR IGNORE still dedupes via
+        // idx_emb_unique(node_id, model_name, chunk_index).
+        let (store, _tmp) = create_test_store().await?;
+        let mut node_ids = Vec::new();
+        for i in 0..200 {
+            let node = store
+                .create_node(
+                    Node::new("text".to_string(), format!("root {i}"), json!({})),
+                    None,
+                    None,
+                )
+                .await?;
+            node_ids.push(node.id);
+        }
+        // Duplicate the first id to verify OR IGNORE dedupes rather than erroring.
+        node_ids.push(node_ids[0].clone());
+
+        let created = store.create_stale_embedding_markers_bulk(&node_ids).await?;
+        assert_eq!(created, node_ids.len());
+
+        let mut rows = store
+            .db
+            .query("SELECT COUNT(*) FROM embedding WHERE stale = 1", ())
+            .await?;
+        let count: i64 = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(
+            count, 200,
+            "one marker per distinct node, duplicate ignored by unique index"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_mark_stale_excludes_from_search() -> Result<()> {
         let (store, _tmp) = create_test_store().await?;
         let node = store
