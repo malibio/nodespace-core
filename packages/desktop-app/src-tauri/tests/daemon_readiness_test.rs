@@ -23,10 +23,8 @@
 //! generates (see the comment on `daemon_status_body` in `lib.rs`). No
 //! Tauri mock runtime is needed to exercise it for real.
 
-use std::time::Duration;
-
 use nodespace_app_lib::daemon_setup::{check_daemon_socket, wait_for_daemon, DaemonStatus};
-use nodespace_app_test_support::{EnvGuard, SpawnedDaemon, CONNECT_MUTEX};
+use nodespace_app_test_support::{EnvGuard, SpawnedDaemon, CONNECT_MUTEX, DAEMON_CONNECT_TIMEOUT};
 
 #[tokio::test]
 async fn not_running_before_daemon_starts() {
@@ -61,7 +59,7 @@ async fn wait_for_daemon_observes_a_real_bind_as_healthy() {
 
     // Recovered: wait_for_daemon polls check_daemon_socket across the real
     // daemon's startup and bind, however long that actually takes.
-    let status = wait_for_daemon(&daemon.socket_path, Duration::from_secs(30)).await;
+    let status = wait_for_daemon(&daemon.socket_path, DAEMON_CONNECT_TIMEOUT).await;
     assert_eq!(
         status,
         DaemonStatus::Healthy,
@@ -90,7 +88,7 @@ async fn check_daemon_status_command_agrees_with_the_real_daemon() {
     // Wait for the real daemon to finish starting (however long that takes;
     // see the comment above these tests for why we don't race an
     // intermediate NotRunning read against it).
-    let status = wait_for_daemon(&daemon.socket_path, Duration::from_secs(30)).await;
+    let status = wait_for_daemon(&daemon.socket_path, DAEMON_CONNECT_TIMEOUT).await;
     assert_eq!(status, DaemonStatus::Healthy, "daemon never became healthy");
 
     assert_eq!(

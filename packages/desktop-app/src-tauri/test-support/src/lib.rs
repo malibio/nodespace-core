@@ -22,6 +22,14 @@
 //! flagging whichever subset any single test binary doesn't happen to call
 //! as unused — `-D warnings` in `rust:lint` would otherwise hard-fail on
 //! that per-binary view.
+//!
+//! Running this crate's tests directly with a bare `cargo test -p
+//! nodespace-app` uses cargo's default per-binary test concurrency, NOT the
+//! `--test-threads=1` the pre-push gate (`scripts/test-gate.ts`) applies —
+//! see that file's comment for why serializing matters here. Prefer `cargo
+//! test -p nodespace-app -- --test-threads=1` when iterating locally on more
+//! than one test in the same file to avoid the same daemon-spawn contention
+//! #1610 fixed in the gate.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -30,6 +38,25 @@ use std::time::Duration;
 
 use nodespace_app_lib::services::GrpcClient;
 use tauri::Manager;
+
+/// Default timeout for `TauriTestApp::connect`'s daemon-health wait, shared
+/// by every `tests/*.rs` call site instead of each hardcoding its own
+/// duplicate literal.
+///
+/// 60s, not the 30s this used to be: spawning a whole OS process (daemon
+/// binary load + socket bind) is CPU-bound work, and within a single
+/// `tests/*.rs` binary `#[tokio::test]`s run concurrently by default, so
+/// several real daemon spawns can contend for the same cores at once —
+/// worse on a machine that also has an unrelated `cargo test` running
+/// elsewhere (see #1610). 30s was tuned for an unloaded machine and had no
+/// headroom for that; 60s gives slack without materially raising the
+/// wall-clock cost of a clean, unloaded run, since `wait_for_daemon` returns
+/// as soon as the socket is healthy rather than sleeping out the full
+/// duration. This is a ceiling on the failure case, not an added cost on
+/// the success path — a healthy daemon returns in well under a second, so
+/// raising this value does not add 60s to every test's typical run time,
+/// only to how long a genuinely stuck run takes to fail.
+pub const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A running headless `nodespaced` pointed at a temp-dir socket and database.
 /// Killed on drop so a panicking test never leaks the process.

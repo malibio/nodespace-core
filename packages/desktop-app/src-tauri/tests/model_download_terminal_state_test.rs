@@ -24,12 +24,12 @@
 //! state contract is the same regardless of how long the `downloading`
 //! phase runs.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::chat_models::{
     chat_model_cancel_download, chat_model_list, chat_model_load, chat_model_unload,
 };
-use nodespace_app_test_support::{model_file_available, SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{
+    model_file_available, SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT,
+};
 use nodespace_proto::nodespace::DownloadModelRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -88,7 +88,7 @@ async fn drain_download_events(harness: &TauriTestApp, model_id: &str) -> Vec<St
 async fn download_of_an_already_present_model_reaches_ready_with_no_error() {
     skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
 
     let event_types = drain_download_events(&harness, MODEL_ID).await;
 
@@ -106,7 +106,7 @@ async fn download_of_an_already_present_model_reaches_ready_with_no_error() {
 async fn chat_model_list_still_succeeds_after_a_download() {
     skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     drain_download_events(&harness, MODEL_ID).await;
@@ -127,7 +127,7 @@ async fn chat_model_list_still_succeeds_after_a_download() {
 #[tokio::test]
 async fn cancel_of_a_download_with_no_stray_downloading_state_left_behind() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     // Cancelling a model that isn't mid-download must not error and must
@@ -156,7 +156,7 @@ async fn cancel_of_a_download_with_no_stray_downloading_state_left_behind() {
 async fn load_then_unload_reaches_a_clean_terminal_state() {
     skip_if_model_absent!();
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     drain_download_events(&harness, MODEL_ID).await;

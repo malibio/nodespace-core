@@ -42,7 +42,29 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
 await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)", () => {
   const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
-  return $`cargo test -p nodespace-app`.env({ ...process.env, NODESPACED_TEST_BIN: binary });
+  // --test-threads=1: every test in this suite spawns a real nodespaced
+  // process, which loads a real embedding model (Metal shader compilation
+  // included) before its socket binds — far more load-sensitive than
+  // nodespace-core's in-process assertions (which cap concurrency the same
+  // way, see rust:test above, though that suite has no equivalent per-test
+  // process-spawn cost). Cargo already runs each tests/*.rs file's binary
+  // sequentially, but within one binary (e.g. node_crud_tauri_seam_test.rs's
+  // 5 tests) all tests run concurrently by default. `SpawnedDaemon::spawn()`
+  // happens BEFORE any test acquires test-support's CONNECT_MUTEX (which
+  // only serializes the health-wait/connect step, not the spawn itself), so
+  // without this flag several real daemon processes can be mid-spawn at
+  // once fully uncoordinated — self-inflicted CPU/GPU contention this suite
+  // creates on its own, made worse by whatever else is running on the
+  // machine (see #1610). Tried --test-threads=2 first; it still reproduced
+  // #1610's exact daemon-health timeout under real background load, so =1
+  // was needed, not just a higher timeout. Serializing daemon spawns costs
+  // almost nothing here — the suite's total wall-clock is dominated by the
+  // one real-inference test (~25-40s), and the rest are sub-second each —
+  // so =1 trades no meaningful time for real reliability.
+  return $`cargo test -p nodespace-app -- --test-threads=1`.env({
+    ...process.env,
+    NODESPACED_TEST_BIN: binary,
+  });
 });
 
 console.log("\n✓ All tests passed — pushing.\n");

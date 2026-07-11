@@ -9,12 +9,10 @@
 //! before the prior write's confirmation lands would be caught here, not
 //! just hoped away.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::nodes::create_node;
 use nodespace_app_lib::commands::nodes::{update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
 fn text_input(id: &str, content: &str) -> CreateNodeInput {
@@ -36,7 +34,7 @@ fn text_input(id: &str, content: &str) -> CreateNodeInput {
 #[tokio::test]
 async fn one_coalesced_edit_produces_exactly_one_version_increment() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -78,7 +76,7 @@ async fn one_coalesced_edit_produces_exactly_one_version_increment() {
 #[tokio::test]
 async fn second_coalesced_edit_uses_the_confirmed_version_not_a_stale_guess() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();

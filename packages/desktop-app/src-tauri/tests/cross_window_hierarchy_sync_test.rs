@@ -9,10 +9,8 @@
 //! `TauriTestApp::connect` calls against the same `SpawnedDaemon` model:
 //! two independent command-layer clients, sharing nothing but the daemon.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::nodes::{create_node, get_children, move_node, CreateNodeInput};
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
 fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeInput {
@@ -34,8 +32,8 @@ fn text_input(id: &str, content: &str, parent_id: Option<String>) -> CreateNodeI
 #[tokio::test]
 async fn a_second_independent_client_observes_hierarchy_changes_made_by_the_first() {
     let daemon = SpawnedDaemon::spawn();
-    let window_a = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
-    let window_b = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let window_a = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
+    let window_b = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
 
     let a_state = window_a.client_state();
     let b_state = window_b.client_state();
@@ -103,7 +101,7 @@ async fn a_second_independent_client_observes_hierarchy_changes_made_by_the_firs
 #[tokio::test]
 async fn a_client_connecting_after_writes_immediately_sees_converged_state() {
     let daemon = SpawnedDaemon::spawn();
-    let window_a = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let window_a = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let a_state = window_a.client_state();
 
     let root_id = uuid::Uuid::new_v4().to_string();
@@ -121,7 +119,7 @@ async fn a_client_connecting_after_writes_immediately_sees_converged_state() {
     }
 
     // A late-joining window, connected only after all writes completed.
-    let window_c = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let window_c = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let c_children = get_children(window_c.client_state(), root_id)
         .await
         .expect("window C: get_children failed");

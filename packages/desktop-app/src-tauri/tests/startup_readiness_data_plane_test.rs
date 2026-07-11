@@ -22,7 +22,9 @@
 use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{create_node, CreateNodeInput};
-use nodespace_app_test_support::{hold_connect_mutex_and_socket_env, SpawnedDaemon};
+use nodespace_app_test_support::{
+    hold_connect_mutex_and_socket_env, SpawnedDaemon, DAEMON_CONNECT_TIMEOUT,
+};
 use serde_json::json;
 use tauri::Manager;
 
@@ -88,7 +90,7 @@ async fn a_command_fails_cleanly_before_readiness_and_succeeds_after_without_rec
     // new GrpcClient, no explicit reconnect call.
     let status = nodespace_app_lib::daemon_setup::wait_for_daemon(
         &daemon.socket_path,
-        Duration::from_secs(30),
+        DAEMON_CONNECT_TIMEOUT,
     )
     .await;
     assert_eq!(

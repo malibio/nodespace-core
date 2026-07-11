@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use nodespace_app_lib::commands::nodes::{create_node, get_node, update_node, CreateNodeInput};
 use nodespace_app_lib::types::NodeUpdate;
-use nodespace_app_test_support::{model_file_available, SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{
+    model_file_available, SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT,
+};
 use nodespace_proto::nodespace::EnsureModelReadyRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -114,7 +116,7 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
     }
 
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     // chat_model_load's gRPC call only updates the model manager's
@@ -177,8 +179,15 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
         "update_node's own response must reflect the processing status just written: {after_send:?}"
     );
 
+    // 300s, not the 180s this used to be: this is a real inference call
+    // competing for the same CPU as every other daemon-spawning test in this
+    // suite (see DAEMON_CONNECT_TIMEOUT's comment) — under representative
+    // background load a token-by-token completion can take meaningfully
+    // longer than on an idle machine. poll_until_idle_with_new_assistant_reply
+    // returns as soon as the turn completes, so this only raises the ceiling
+    // for a genuinely slow/stuck run, not the typical wall-clock cost.
     let final_node =
-        poll_until_idle_with_new_assistant_reply(&state, &id, 0, Duration::from_secs(180)).await;
+        poll_until_idle_with_new_assistant_reply(&state, &id, 0, Duration::from_secs(300)).await;
 
     assert_eq!(final_node["status"], json!("idle"));
     let messages = final_node["messages"]

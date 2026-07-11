@@ -7,12 +7,10 @@
 //! through `HttpAdapter`, but through the adapter that actually ships in the
 //! desktop build.
 
-use std::time::Duration;
-
 use nodespace_app_lib::commands::nodes::CreateNodeInput;
 use nodespace_app_lib::commands::nodes::{create_node, delete_node, get_node, update_node};
 use nodespace_app_lib::types::NodeUpdate;
-use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp};
+use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
 fn text_input(id: &str, content: &str) -> CreateNodeInput {
@@ -29,7 +27,7 @@ fn text_input(id: &str, content: &str) -> CreateNodeInput {
 #[tokio::test]
 async fn creates_a_node_and_reads_it_back() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -52,7 +50,7 @@ async fn creates_a_node_and_reads_it_back() {
 #[tokio::test]
 async fn updates_a_node_and_increments_version_each_time() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -98,7 +96,7 @@ async fn updates_a_node_and_increments_version_each_time() {
 #[tokio::test]
 async fn deletes_a_node_and_confirms_it_is_absent() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -120,7 +118,7 @@ async fn deletes_a_node_and_confirms_it_is_absent() {
 #[tokio::test]
 async fn creates_a_parent_child_hierarchy_through_the_command_layer() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let parent_id = uuid::Uuid::new_v4().to_string();
@@ -147,7 +145,7 @@ async fn creates_a_parent_child_hierarchy_through_the_command_layer() {
 #[tokio::test]
 async fn persists_node_properties_through_the_round_trip() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, Duration::from_secs(30)).await;
+    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
     let state = harness.client_state();
 
     let id = uuid::Uuid::new_v4().to_string();
