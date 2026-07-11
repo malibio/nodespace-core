@@ -10,7 +10,8 @@
   - Click member to open in new tab
   - Works with both direct member_of edges and path-based collections
 
-  Follows the *NodeViewer pattern (like DateNodeViewer) for page-level viewers.
+  Named as a *NodeViewer for page-level-viewer consistency, but renders its own
+  layout directly rather than wrapping BaseNodeViewer (unlike DateNodeViewer).
 -->
 
 <script lang="ts">

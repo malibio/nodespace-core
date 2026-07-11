@@ -7,7 +7,7 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import TextNode from './text-node.svelte';
+  import TextNode from '$lib/design/components/text-node.svelte';
   import type { TreeNodeData } from '$lib/types/tree';
 
   // Props

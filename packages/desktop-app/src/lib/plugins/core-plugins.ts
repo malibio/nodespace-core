@@ -43,7 +43,7 @@ export const textNodePlugin: PluginDefinition = {
   },
   // No viewer - text nodes use BaseNodeViewer (default)
   node: {
-    lazyLoad: () => import('../components/text-node.svelte'),
+    lazyLoad: () => import('../design/components/text-node.svelte'),
     priority: 1
   },
   reference: {
@@ -245,7 +245,7 @@ export const checkboxNodePlugin: PluginDefinition = {
     canBeChild: true
   },
   node: {
-    lazyLoad: () => import('../components/viewers/checkbox-node.svelte'),
+    lazyLoad: () => import('../design/components/checkbox-node.svelte'),
     priority: 1
   },
   reference: {
@@ -527,7 +527,7 @@ export const queryNodePlugin: PluginDefinition = {
     canBeChild: true
   },
   node: {
-    lazyLoad: () => import('../components/query-node.svelte'),
+    lazyLoad: () => import('../design/components/query-node.svelte'),
     priority: 1
   },
   reference: {

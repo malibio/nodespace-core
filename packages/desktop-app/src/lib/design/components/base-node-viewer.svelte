@@ -372,10 +372,8 @@
     }
   }
 
-  // ============================================================================
-  // Issue #653: ALL $effect blocks REMOVED from BaseNodeViewer
-  // ============================================================================
-  // Content persistence is now event-driven (no effects watching derived state):
+  // BaseNodeViewer has no $effect blocks watching derived state. Persistence is
+  // event-driven instead:
   //
   // 1. Content changes: on:contentChanged → nodeManager.updateNodeContent()
   //    → sharedNodeStore.updateNode() → PersistenceCoordinator (debounced)
@@ -385,13 +383,6 @@
   //
   // 3. Node deletions: handleCombineWithPrevious/handleDeleteNode
   //    → nodeManager.combineNodes() → sharedNodeStore.deleteNode()
-  //
-  // Benefits of eliminating effects:
-  // - Simpler mental model: changes trigger persistence directly
-  // - No derived state watching (anti-pattern for side effects)
-  // - No need for lastSavedContent tracking (effects compared state changes)
-  // - No isLoadingInitialNodes guard (effects needed to skip initial load)
-  // ============================================================================
 
   /**
    * Helper function to promote a viewer-local placeholder to a real node

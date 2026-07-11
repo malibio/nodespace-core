@@ -763,11 +763,6 @@
     }
   });
 
-  // REMOVED: View mode rendering effect - now handled by viewHtml $derived
-  // REMOVED: Content sync effect - now handled by reactive factory function
-  // REMOVED: Config sync effect - now handled by reactive factory function
-  // REMOVED: Dropdown state sync - controller manages this internally through event handlers
-
   // AutoFocus on mount: When a node mounts with autoFocus=true, set it as the editing node
   // This is the standard Svelte pattern - request focus when component mounts
   onMount(() => {
