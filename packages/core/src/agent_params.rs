@@ -58,8 +58,7 @@ pub struct SearchSemanticParams {
     pub include_markdown: Option<usize>,
 
     /// Include archived nodes in search results (default: false).
-    /// By default, search only returns active nodes. Nodes with
-    /// lifecycle_status = "deleted" are never included.
+    /// By default, search only returns active nodes.
     #[serde(default)]
     pub include_archived: Option<bool>,
 

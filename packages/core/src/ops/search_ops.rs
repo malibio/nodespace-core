@@ -322,11 +322,7 @@ pub async fn search_semantic(
             if !NodeEmbeddingService::matches_scope(&node.node_type, &scope) {
                 return false;
             }
-            let status = &node.lifecycle_status;
-            if status == "deleted" {
-                return false;
-            }
-            if status == "archived" && !include_archived {
+            if node.lifecycle_status == "archived" && !include_archived {
                 return false;
             }
             if let Some(ref member_ids) = collection_member_ids {
