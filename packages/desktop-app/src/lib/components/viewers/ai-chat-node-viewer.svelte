@@ -160,6 +160,25 @@
       return;
     }
 
+    if (selection.provider === 'pty') {
+      // PTY sessions store no messages and no model — the conversation lives
+      // in the external harness. AiChatPtySession owns harness selection and
+      // capture:* properties from here.
+      const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
+      sharedNodeStore.updateNode(
+        nodeId,
+        {
+          properties: {
+            messages: current?.messages ?? [],
+            status: current?.status ?? 'active',
+            provider: 'pty',
+          },
+        },
+        { type: 'viewer', viewerId: 'ai-chat-viewer' }
+      );
+      return;
+    }
+
     // ollama / openai-compat: write directly.
     const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
     sharedNodeStore.updateNode(
