@@ -1352,6 +1352,64 @@ async fn test_bm25_search_roots_no_match_returns_empty() -> Result<()> {
     Ok(())
 }
 
+/// Test that a single call correctly partitions multiple simultaneous matches
+/// across independent trees, including two matches that share one root, a
+/// match nested three levels deep in a separate tree, and a match that is
+/// itself a root — the batched CTE must resolve each to the right root
+/// without cross-contamination between seeds.
+#[tokio::test]
+async fn test_bm25_search_roots_batches_multiple_matches_across_trees() -> Result<()> {
+    let (_embedding_service, node_service, store, _temp_dir) = create_unified_test_env().await?;
+
+    // Tree A: root with two children that both match "shared-term".
+    let root_a = create_root_node(&node_service, "text", "Tree A overview").await?;
+    let child_a1 = create_child_node(
+        &node_service,
+        &root_a.id,
+        "text",
+        "shared-term in child one",
+    )
+    .await?;
+    let child_a2 = create_child_node(
+        &node_service,
+        &root_a.id,
+        "text",
+        "shared-term in child two",
+    )
+    .await?;
+
+    // Tree B: root -> child -> grandchild, match buried in the grandchild.
+    let root_b = create_root_node(&node_service, "text", "Tree B overview").await?;
+    let child_b = create_child_node(&node_service, &root_b.id, "text", "Tree B section").await?;
+    let grandchild_b =
+        create_child_node(&node_service, &child_b.id, "text", "shared-term deep leaf").await?;
+
+    // Tree C: an unparented node that is itself a root and itself the match.
+    let root_c = create_root_node(&node_service, "text", "shared-term standalone root").await?;
+
+    let roots = store.bm25_search_roots("shared-term", 50).await?;
+
+    assert_eq!(
+        roots.len(),
+        3,
+        "Should resolve to exactly 3 distinct roots, not one per match: {:?}",
+        roots
+    );
+    assert!(roots.contains(&root_a.id), "Tree A's root should surface");
+    assert!(roots.contains(&root_b.id), "Tree B's root should surface");
+    assert!(roots.contains(&root_c.id), "Standalone root should surface");
+    assert!(
+        !roots.contains(&child_a1.id) && !roots.contains(&child_a2.id),
+        "Tree A's children should not appear as roots"
+    );
+    assert!(
+        !roots.contains(&child_b.id) && !roots.contains(&grandchild_b.id),
+        "Tree B's child/grandchild should not appear as roots"
+    );
+
+    Ok(())
+}
+
 /// Test the hybrid tiering logic: intersection (tier 1) vs KNN-only (tier 2)
 ///
 /// Verifies intersection signal by directly running BM25 and KNN independently
