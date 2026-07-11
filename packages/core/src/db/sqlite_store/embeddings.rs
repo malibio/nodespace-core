@@ -581,36 +581,55 @@ impl SqliteStore {
             return Ok(HashSet::new());
         }
 
-        // Resolve each match to its root using recursive CTE
-        let mut root_ids = HashSet::new();
+        // Resolve every match to its root in one set operation: seed the recursive
+        // CTE with the whole match set (depth 0), walk `has_child` parents, and for
+        // each seed keep the deepest ancestor reached (its root, or itself if it has
+        // no parent).
+        let placeholders: Vec<String> = (1..=matching_ids.len())
+            .map(|i| format!("?{}", i))
+            .collect();
+        let sql = format!(
+            r#"WITH RECURSIVE ancestors(seed_id, node_id, depth) AS (
+                SELECT id, id, 0 FROM node WHERE id IN ({})
+                UNION ALL
+                SELECT a.seed_id, r.in_node, a.depth + 1 FROM relationship r
+                JOIN ancestors a ON r.out_node = a.node_id
+                WHERE r.relationship_type = 'has_child' AND a.depth < 100
+            )
+            SELECT seed_id, node_id FROM ancestors a
+            WHERE a.depth = (SELECT MAX(depth) FROM ancestors WHERE seed_id = a.seed_id)"#,
+            placeholders.join(", ")
+        );
 
-        for node_id in matching_ids {
-            let mut rows = self.db.query(
-                r#"WITH RECURSIVE ancestors(node_id, depth) AS (
-                    SELECT in_node, 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'
-                    UNION ALL
-                    SELECT r.in_node, a.depth + 1 FROM relationship r
-                    JOIN ancestors a ON r.out_node = a.node_id
-                    WHERE r.relationship_type = 'has_child' AND a.depth < 100
-                )
-                SELECT node_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
-                libsql::params![node_id.clone()],
-            ).await.context("Failed to get root for BM25 match")?;
+        let params: Vec<libsql::Value> = matching_ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
 
-            if let Some(row) = rows.next().await? {
-                let root_id: String = row.get(0)?;
-                if self.get_node(&root_id).await.is_ok_and(|n| n.is_some()) {
-                    root_ids.insert(root_id);
-                }
-            } else {
-                // node_id is itself the root
-                if self.get_node(&node_id).await.is_ok_and(|n| n.is_some()) {
-                    root_ids.insert(node_id);
-                }
-            }
+        let mut rows = self
+            .db
+            .query(&sql, params)
+            .await
+            .context("Failed to resolve BM25 roots")?;
+
+        let mut candidate_roots: HashSet<String> = HashSet::new();
+        while let Some(row) = rows.next().await? {
+            let root_id: String = row.get(1)?;
+            candidate_roots.insert(root_id);
         }
 
-        Ok(root_ids)
+        if candidate_roots.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // Defensive existence re-check, batched into a single `id IN (...)` query
+        // instead of a per-root `get_node` round-trip.
+        let candidate_vec: Vec<String> = candidate_roots.into_iter().collect();
+        let existing = self.get_nodes_by_ids(&candidate_vec).await?;
+        Ok(candidate_vec
+            .into_iter()
+            .filter(|id| existing.contains_key(id))
+            .collect())
     }
 
     pub async fn create_stale_embedding_marker(&self, node_id: &str) -> Result<()> {
