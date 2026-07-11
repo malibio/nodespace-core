@@ -490,6 +490,10 @@ impl GrpcNodeService for NodeServiceImpl {
             _ => None,
         };
 
+        // Cap at 500 regardless of client-requested value — matches the scale
+        // of ExecuteQueryInput's own default (50) while still allowing large
+        // explicit pulls, without letting a client request an unbounded scan.
+        const MAX_EXECUTE_QUERY_LIMIT: usize = 500;
         let input = query_ops::ExecuteQueryInput {
             target_type: req.target_type,
             filters,
@@ -497,7 +501,7 @@ impl GrpcNodeService for NodeServiceImpl {
             limit: if req.limit == 0 {
                 None
             } else {
-                Some(req.limit as usize)
+                Some((req.limit as usize).min(MAX_EXECUTE_QUERY_LIMIT))
             },
         };
 

@@ -26,8 +26,8 @@ use nodespace_agent::pty::PtySessionManager;
 use nodespace_cli::{commands, connect, connect_database, DatabaseIdInterceptor};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
-    CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest, ListDatabasesRequest,
-    QueryNodesSimpleRequest,
+    CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest, GetRelatedNodesRequest,
+    ListDatabasesRequest, QueryNodesSimpleRequest,
 };
 use nodespace_daemon::{
     DatabaseManager, DatabaseServiceImpl, DatabaseServiceServer, DbManagerLayer, NodeServiceImpl,
@@ -823,10 +823,15 @@ async fn schema_create_rejects_malformed_params() {
     )
     .await
     .expect_err("malformed params_json should error");
+    let status = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<tonic::Status>())
+        .expect("expected tonic::Status in error chain");
+    assert_eq!(status.code(), Code::InvalidArgument);
     assert!(
-        err.to_string().to_lowercase().contains("params_json")
-            || err.to_string().to_lowercase().contains("rpc failed"),
-        "unexpected error: {err}"
+        status.message().contains("params_json"),
+        "expected status message to name the offending field, got: {}",
+        status.message()
     );
 
     let _ = shutdown.send(());
@@ -973,7 +978,7 @@ async fn relationship_create_and_get() {
         commands::relationship::RelationshipAction::Get(commands::relationship::GetArgs {
             id: source.clone(),
             relationship_name: "blocks".into(),
-            direction: "out".into(),
+            direction: commands::relationship::Direction::Out,
         }),
         true,
     )
@@ -984,27 +989,98 @@ async fn relationship_create_and_get() {
 }
 
 #[tokio::test]
-async fn relationship_get_rejects_invalid_direction() {
+async fn relationship_create_rejects_relationship_undefined_on_source_schema() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
     let mut client = connect(&sock, DatabaseIdInterceptor::none())
         .await
         .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    // Plain "text" nodes have no schema-defined relationships at all, so
+    // any non-built-in relationship name must be rejected (find-then-edit
+    // guidance: the relationship must already exist on the source's schema).
+    let source = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "source".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed source")
+        .into_inner()
+        .node_id;
+
+    let target = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "target".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed target")
+        .into_inner()
+        .node_id;
 
     let err = commands::relationship::run(
         &mut client,
-        commands::relationship::RelationshipAction::Get(commands::relationship::GetArgs {
-            id: "some-id".into(),
-            relationship_name: "blocks".into(),
-            direction: "sideways".into(),
+        commands::relationship::RelationshipAction::Create(commands::relationship::CreateArgs {
+            from: source,
+            relationship_name: "not_a_defined_relationship".into(),
+            to: target,
+            edge_data: None,
         }),
         true,
     )
     .await
-    .expect_err("invalid direction should error");
-    assert_eq!(
-        err.downcast_ref::<tonic::Status>().map(|s| s.code()),
-        Some(Code::InvalidArgument)
+    .expect_err("relationship not defined on schema should error");
+    let status = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<tonic::Status>())
+        .expect("expected tonic::Status in error chain");
+    assert!(
+        status.message().contains("not_a_defined_relationship")
+            || status.message().contains("not defined"),
+        "expected error to name the undefined relationship, got: {}",
+        status.message()
     );
+
+    let _ = shutdown.send(());
+}
+
+// `nodespace relationship get --direction` is a clap ValueEnum (only "out"/"in"
+// are constructible), so an invalid direction can no longer reach the CLI's
+// GetArgs at all — clap itself rejects it before this test's code would run.
+// The daemon-side validation this used to exercise is still real (any other
+// gRPC client, not just this CLI, can send an arbitrary string on the wire),
+// so this drives GetRelatedNodesRequest directly against the raw client.
+#[tokio::test]
+async fn get_related_nodes_rpc_rejects_invalid_direction() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let status = raw
+        .get_related_nodes(GetRelatedNodesRequest {
+            node_id: "some-id".into(),
+            relationship_name: "blocks".into(),
+            direction: "sideways".into(),
+        })
+        .await
+        .expect_err("invalid direction should error");
+    assert_eq!(status.code(), Code::InvalidArgument);
 
     let _ = shutdown.send(());
 }

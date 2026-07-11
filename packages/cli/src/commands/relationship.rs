@@ -6,11 +6,26 @@
 //! `create_schema`/`update_schema` relationship definitions.
 
 use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use nodespace_daemon::nodespace::{CreateRelationshipRequest, GetRelatedNodesRequest};
 use serde_json::json;
 
 use crate::NodeClient;
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum Direction {
+    Out,
+    In,
+}
+
+impl Direction {
+    fn as_wire_str(self) -> &'static str {
+        match self {
+            Direction::Out => "out",
+            Direction::In => "in",
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum RelationshipAction {
@@ -43,9 +58,9 @@ pub struct GetArgs {
     /// Relationship name (as defined on the node's schema).
     #[arg(long = "type")]
     pub relationship_name: String,
-    /// Direction to traverse: "out" (default) or "in".
-    #[arg(long, default_value = "out")]
-    pub direction: String,
+    /// Direction to traverse.
+    #[arg(long, value_enum, default_value_t = Direction::Out)]
+    pub direction: Direction,
 }
 
 pub async fn run(client: &mut NodeClient, action: RelationshipAction, json: bool) -> Result<()> {
@@ -90,7 +105,7 @@ async fn get(client: &mut NodeClient, args: GetArgs, json_out: bool) -> Result<(
         .get_related_nodes(GetRelatedNodesRequest {
             node_id: args.id,
             relationship_name: args.relationship_name,
-            direction: args.direction,
+            direction: args.direction.as_wire_str().to_string(),
         })
         .await
         .context("GetRelatedNodes RPC failed")?
