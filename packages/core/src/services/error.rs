@@ -378,10 +378,9 @@ mod tests {
                 node_type: "bogus".to_string(),
                 location: "rule[0].trigger".to_string(),
             },
-            PlaybookValidationError::InvalidCondition {
-                expression: "1++2".to_string(),
-                message: "parse error".to_string(),
-                location: "rule[0].condition[0]".to_string(),
+            PlaybookValidationError::MissingActionParam {
+                param: "node_type".to_string(),
+                location: "rule[0].action[0]".to_string(),
             },
         ];
         let err = NodeServiceError::playbook_validation_failed(&errors);
@@ -392,7 +391,7 @@ mod tests {
         ));
         assert!(msg.contains("Playbook validation failed"));
         assert!(msg.contains("bogus"));
-        assert!(msg.contains("parse error"));
+        assert!(msg.contains("missing required param"));
     }
 
     #[test]

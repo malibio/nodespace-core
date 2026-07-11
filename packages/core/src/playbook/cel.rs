@@ -67,11 +67,6 @@ pub enum ConditionResult {
         /// Index of the first failing condition.
         condition_index: usize,
     },
-    /// A condition had a compile error (should have been caught at save time).
-    CompileError {
-        condition_index: usize,
-        message: String,
-    },
 }
 
 // ---------------------------------------------------------------------------

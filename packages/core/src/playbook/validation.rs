@@ -46,12 +46,6 @@ pub enum PlaybookValidationError {
         actual_version: u32,
         location: String,
     },
-    /// A CEL condition expression failed to compile.
-    InvalidCondition {
-        expression: String,
-        message: String,
-        location: String,
-    },
     /// A relationship type in an action doesn't exist on the referenced schema.
     UnknownRelationshipType {
         relationship_type: String,
@@ -92,15 +86,6 @@ impl std::fmt::Display for PlaybookValidationError {
                 f,
                 "version mismatch for '{}' at {}: declared '{}', schema has {}",
                 node_type, location, declared_version, actual_version
-            ),
-            Self::InvalidCondition {
-                expression,
-                message,
-                location,
-            } => write!(
-                f,
-                "invalid CEL condition at {}: '{}' — {}",
-                location, expression, message
             ),
             Self::UnknownRelationshipType {
                 relationship_type,
@@ -808,13 +793,6 @@ mod tests {
         assert!(err.to_string().contains("version mismatch"));
         assert!(err.to_string().contains("declared '3'"));
         assert!(err.to_string().contains("schema has 2"));
-
-        let err = PlaybookValidationError::InvalidCondition {
-            expression: "bad ==".to_string(),
-            message: "unexpected end".to_string(),
-            location: "rule[0].condition[0]".to_string(),
-        };
-        assert!(err.to_string().contains("invalid CEL condition"));
 
         let err = PlaybookValidationError::UnknownRelationshipType {
             relationship_type: "foo_bar".to_string(),

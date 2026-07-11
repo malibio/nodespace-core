@@ -252,6 +252,15 @@ mod playbook_tests {
 
         let parsed = parse_rule(&def).unwrap();
         assert_eq!(parsed.conditions[0].source, "node.status == 'draft'");
+
+        // The compiled Program is cached, not recompiled — cloning the rule
+        // (as happens on every `OrderedRuleRef` lookup) shares the same
+        // underlying Program via Arc rather than recompiling it.
+        let cloned = parsed.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &parsed.conditions[0].program,
+            &cloned.conditions[0].program
+        ));
     }
 
     #[test]
