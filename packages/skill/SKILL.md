@@ -13,7 +13,7 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 
 **Hierarchy is first-class edges, not nesting.** A node has one parent edge. Children are ordered via fractional ordering — siblings have a stable position without gap-numbering. Moving or reordering a node is an edge operation (change the parent or sibling position), not a recreate-and-delete.
 
-**Relationships are distinct from hierarchy and mentions.** A relationship is a named, schema-defined edge between two nodes (e.g. `billed_to`, `has_task`) — different from the one parent edge and from inline `mention` links captured from markdown content. Relationships must be defined on a schema (via `create_schema`/`update_schema`) before they can be used; `nodespace relationship create` on a node whose schema has no matching relationship name fails.
+**Relationships are distinct from hierarchy and mentions.** A relationship is a named, schema-defined edge between two nodes (e.g. `billed_to`, `has_task`) — different from the one parent edge and from inline `mention` links captured from markdown content. Relationships must be defined on a schema (via `nodespace schema create`/`nodespace schema update`) before they can be used; `nodespace relationship create` on a node whose schema has no matching relationship name fails.
 
 **Content is markdown.** Store prose, code blocks, lists — whatever fits the note. The export commands render it back as clean markdown.
 
