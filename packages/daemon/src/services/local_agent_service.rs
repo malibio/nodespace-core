@@ -1533,7 +1533,7 @@ mod tests {
         }
     }
 
-    // -- Issue #1526: agent-flow (stuck-state) coverage with a stub model ---
+    // -- Agent-flow (stuck-state) coverage with a stub model ----------------
 
     #[tokio::test]
     async fn send_message_reaches_idle_with_stub_engine() {

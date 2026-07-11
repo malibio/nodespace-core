@@ -1162,7 +1162,7 @@ mod tests {
         (mgr, tmp)
     }
 
-    // -- Issue #1526: model-download terminal-state coverage ----------------
+    // -- Model-download terminal-state coverage ------------------------------
     //
     // `download()`/`cancel_download()` only ever resolve against the
     // hardcoded, real, multi-GB HuggingFace `CATALOG` entries — there is no
