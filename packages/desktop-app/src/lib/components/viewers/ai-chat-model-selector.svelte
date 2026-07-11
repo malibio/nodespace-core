@@ -14,7 +14,7 @@
 
 <script lang="ts" module>
   export interface ModelSelection {
-    provider: 'native' | 'ollama' | 'openai-compat';
+    provider: 'native' | 'ollama' | 'openai-compat' | 'pty';
     modelId: string;
     configId?: string; // for openai-compat
   }
@@ -45,6 +45,7 @@
   // Sentinel values used in the <select> value attribute.
   const SETUP_SENTINEL = '__setup__';
   const HEADER_SENTINEL_PREFIX = '__header__';
+  const PTY_SENTINEL = '__pty__';
 
   let {
     nodeId,
@@ -229,6 +230,13 @@
       onSelect?.({ provider: 'openai-compat', modelId: configId, configId });
       return;
     }
+
+    if (value === PTY_SENTINEL) {
+      log.debug('PTY agent session selected', { nodeId });
+      // No model — the specific harness is chosen inside AiChatPtySession.
+      onSelect?.({ provider: 'pty', modelId: '' });
+      return;
+    }
   }
 
   function downloadBadgeText(m: ChatModelEntry): string {
@@ -305,6 +313,11 @@
           {/each}
         </optgroup>
       {/if}
+
+      <!-- ── Agent CLI (PTY) ── -->
+      <optgroup label="Agent CLI">
+        <option value={PTY_SENTINEL}>Launch agent session…</option>
+      </optgroup>
 
       <!-- ── Action: Set up… ── -->
       <optgroup label="─────────────────" disabled></optgroup>
