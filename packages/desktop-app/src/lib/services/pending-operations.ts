@@ -6,6 +6,10 @@
  * to avoid circular dependencies between SharedNodeStore and ReactiveNodeService.
  */
 
+import { createLogger } from '$lib/utils/logger';
+
+const log = createLogger('PendingOps');
+
 // Track pending move operations to prevent race conditions
 // When indent/outdent fires a moveNodeCommand, subsequent operations must wait for it
 const pendingMoveOperations: Map<string, Promise<void>> = new Map();
@@ -29,9 +33,9 @@ export async function waitForPendingMoveOperations(): Promise<void> {
  * Track a move operation and automatically clean up when done
  */
 export function trackMoveOperation(nodeId: string, operation: Promise<void>): Promise<void> {
-  console.debug(`[PendingOps] Tracking move for ${nodeId.substring(0, 8)}`);
+  log.debug(`Tracking move for ${nodeId.substring(0, 8)}`);
   const trackedPromise = operation.finally(() => {
-    console.debug(`[PendingOps] Move completed for ${nodeId.substring(0, 8)}`);
+    log.debug(`Move completed for ${nodeId.substring(0, 8)}`);
     pendingMoveOperations.delete(nodeId);
   });
   pendingMoveOperations.set(nodeId, trackedPromise);
@@ -44,6 +48,6 @@ export function trackMoveOperation(nodeId: string, operation: Promise<void>): Pr
  */
 export function getPendingMoveOperation(nodeId: string): Promise<void> | undefined {
   const op = pendingMoveOperations.get(nodeId);
-  console.debug(`[PendingOps] getPendingMoveOperation(${nodeId.substring(0, 8)}): ${op ? 'FOUND' : 'none'}`);
+  log.debug(`getPendingMoveOperation(${nodeId.substring(0, 8)}): ${op ? 'FOUND' : 'none'}`);
   return op;
 }

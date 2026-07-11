@@ -1148,34 +1148,16 @@ export function createTextareaController(
     });
   });
 
-  // ============================================================================
-  // Content Sync Effect - JUSTIFIED AS NECESSARY (Issue #695)
-  // ============================================================================
-  //
-  // WHY THIS EFFECT IS REQUIRED:
   // The TextareaController is a vanilla TypeScript class that doesn't inherently
-  // react to prop changes. This effect bridges Svelte's reactive system with
-  // the imperative controller by syncing external content changes.
+  // react to prop changes, so this effect bridges Svelte's reactive system with
+  // the imperative controller by syncing external content changes (database sync
+  // via SSE, undo/redo, parent programmatic updates, initial prop hydration).
+  // updateContent() early-returns when the textarea value already matches the
+  // prop, so typing doesn't trigger unnecessary DOM operations.
   //
-  // WHEN THIS RUNS:
-  // - External content changes (database sync via SSE, undo/redo operations)
-  // - Parent component programmatic updates
-  // - Initial prop hydration
-  //
-  // PERFORMANCE CONSIDERATIONS:
-  // - Early-return in updateContent() when textarea value matches prop prevents
-  //   unnecessary DOM operations during user typing
-  // - The overhead is minimal: just a function call and string comparison
-  //
-  // ALTERNATIVE CONSIDERED (Issue #695):
-  // Making the controller read directly from getters instead of caching values
-  // would eliminate this effect BUT would:
-  // 1. Break test isolation (controller would require reactive context)
-  // 2. Make the controller tightly coupled to Svelte's reactivity
-  // 3. Prevent direct instantiation in tests with 'new TextareaController(...)'
-  //
-  // CONCLUSION: Keep effect - necessary for external sync, minimal overhead
-  // ============================================================================
+  // The controller can't read content directly from a getter instead, because
+  // that would require a reactive context, breaking test isolation and direct
+  // instantiation with `new TextareaController(...)`.
   $effect(() => {
     const content = getContent();
     if (controller && content !== undefined) {
@@ -1183,20 +1165,8 @@ export function createTextareaController(
     }
   });
 
-  // ============================================================================
-  // Config Sync Effect - ELIMINATED (Issue #695)
-  // ============================================================================
-  //
-  // PREVIOUS APPROACH: $effect synced config changes via updateConfig()
-  //
-  // NEW APPROACH: Controller stores getConfig getter and reads on-demand
-  // via the private `config` getter property. No effect needed.
-  //
-  // BENEFITS:
-  // - One fewer $effect in the codebase (reduces effect-related bugs)
-  // - Config is read when needed, not pushed on every change
-  // - Tests can pass simple functions: () => ({ allowMultiline: true })
-  // ============================================================================
+  // Config changes need no effect: the controller stores a getConfig getter and
+  // reads it on-demand via its private `config` property.
 
   // Cleanup on destroy
   $effect.pre(() => {
