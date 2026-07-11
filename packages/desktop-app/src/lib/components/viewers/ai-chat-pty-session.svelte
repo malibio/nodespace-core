@@ -151,6 +151,14 @@
   let availabilityLoading = $state(true);
 
   onMount(async () => {
+    // Pre-select the agent chosen in the header AiChatModelSelector, when one
+    // was already stored on the node (issue #1450); otherwise keep the
+    // 'claude-code' default.
+    const nodeModel = node?.properties?.model as string | undefined;
+    if (nodeModel) {
+      selectedAgent = nodeModel;
+    }
+
     try {
       const [settings, availResult] = await Promise.all([
         getCaptureSettings(),

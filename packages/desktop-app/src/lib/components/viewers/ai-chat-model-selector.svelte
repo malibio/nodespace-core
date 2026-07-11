@@ -37,6 +37,7 @@
   import { addTab, navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import type { OpenAiCompatConfig } from '$lib/types/ai-chat-node';
+  import { agentStore, isLocalAgent } from '$lib/stores/agent-store.svelte';
 
   const log = createLogger('AiChatModelSelector');
 
@@ -45,7 +46,7 @@
   // Sentinel values used in the <select> value attribute.
   const SETUP_SENTINEL = '__setup__';
   const HEADER_SENTINEL_PREFIX = '__header__';
-  const PTY_SENTINEL = '__pty__';
+  const PTY_PREFIX = 'pty:';
 
   let {
     nodeId,
@@ -76,6 +77,15 @@
   const nativeModels = $derived(models.filter((m) => m.backend === 'gguf'));
   const ollamaModels = $derived(models.filter((m) => m.backend === 'ollama'));
   const ramTooLow = $derived(ramGb > 0 && ramGb < MIN_RAM_GB);
+
+  // PTY agents (Claude Code, Gemini CLI, Codex, ...) — excludes agentStore's
+  // "local:" entries, which are in-process llama.cpp models already surfaced
+  // in the "Local" section above. The full list (available + unavailable) is
+  // needed to render unavailable agents disabled rather than hiding them.
+  const ptyAgents = $derived(agentStore.agents.filter((a) => !isLocalAgent(a.id)));
+  const availablePtyAgents = $derived(
+    agentStore.availableAgents.filter((a) => !isLocalAgent(a.id))
+  );
 
   function isReady(m: ChatModelEntry): boolean {
     return m.status?.status === 'ready' || m.status?.status === 'loaded';
@@ -136,6 +146,9 @@
 
   onMount(async () => {
     await refresh();
+    if (agentStore.agents.length === 0) {
+      await agentStore.refreshAgents();
+    }
 
     if (isTauri) {
       try {
@@ -231,12 +244,16 @@
       return;
     }
 
-    if (value === PTY_SENTINEL) {
-      log.debug('PTY agent session selected', { nodeId });
-      // No model — the specific harness is chosen inside AiChatPtySession.
-      onSelect?.({ provider: 'pty', modelId: '' });
+    if (value.startsWith(PTY_PREFIX)) {
+      const agentId = value.slice(PTY_PREFIX.length);
+      log.debug('PTY agent selected', { provider: 'pty', agentId, nodeId });
+      onSelect?.({ provider: 'pty', modelId: agentId });
       return;
     }
+  }
+
+  function ptyValue(agentId: string): string {
+    return `${PTY_PREFIX}${agentId}`;
   }
 
   function downloadBadgeText(m: ChatModelEntry): string {
@@ -314,10 +331,16 @@
         </optgroup>
       {/if}
 
-      <!-- ── Agent CLI (PTY) ── -->
-      <optgroup label="Agent CLI">
-        <option value={PTY_SENTINEL}>Launch agent session…</option>
-      </optgroup>
+      <!-- ── PTY Agents ── -->
+      {#if availablePtyAgents.length > 0}
+        <optgroup label="PTY Agents">
+          {#each ptyAgents as agent (agent.id)}
+            <option value={ptyValue(agent.id)} disabled={!agent.available}>
+              {agent.name}{agent.available ? '' : ' (not installed)'}
+            </option>
+          {/each}
+        </optgroup>
+      {/if}
 
       <!-- ── Action: Set up… ── -->
       <optgroup label="─────────────────" disabled></optgroup>

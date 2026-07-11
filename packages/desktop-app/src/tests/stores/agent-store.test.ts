@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { agentStore } from '$lib/stores/agent-store.svelte';
+import { agentStore, availabilityToAgent } from '$lib/stores/agent-store.svelte';
+import type { AgentAvailabilityInfo } from '$lib/services/tauri-commands';
 
 // Mock the logger
 vi.mock('$lib/utils/logger', () => ({
@@ -154,6 +155,69 @@ describe('AgentStore', () => {
       expect(selected).toBeDefined();
       expect(selected!.id).toBe(agent.id);
       expect(selected!.name).toBe(agent.name);
+    });
+  });
+
+  describe('availabilityToAgent', () => {
+    it('maps a known agent type to its display label', () => {
+      const info: AgentAvailabilityInfo = {
+        agentType: 'claude-code',
+        binary: 'claude',
+        binaryFound: true,
+        authFound: true,
+        binaryPath: '/usr/local/bin/claude',
+        installHint: null,
+      };
+
+      const agent = availabilityToAgent(info);
+
+      expect(agent).toEqual({
+        id: 'claude-code',
+        name: 'Claude Code',
+        binary: 'claude',
+        args: [],
+        auth_method: { method: 'agent_managed' },
+        available: true,
+      });
+    });
+
+    it('falls back to the raw agentType when no label is known', () => {
+      const info: AgentAvailabilityInfo = {
+        agentType: 'some-future-agent',
+        binary: 'future-agent',
+        binaryFound: true,
+        authFound: true,
+        binaryPath: '/usr/local/bin/future-agent',
+        installHint: null,
+      };
+
+      expect(availabilityToAgent(info).name).toBe('some-future-agent');
+    });
+
+    it('is unavailable when the binary is missing', () => {
+      const info: AgentAvailabilityInfo = {
+        agentType: 'gemini-cli',
+        binary: 'gemini',
+        binaryFound: false,
+        authFound: true,
+        binaryPath: null,
+        installHint: 'npm install -g @google/gemini-cli',
+      };
+
+      expect(availabilityToAgent(info).available).toBe(false);
+    });
+
+    it('is unavailable when auth is missing even if the binary is found', () => {
+      const info: AgentAvailabilityInfo = {
+        agentType: 'gemini-cli',
+        binary: 'gemini',
+        binaryFound: true,
+        authFound: false,
+        binaryPath: '/usr/local/bin/gemini',
+        installHint: null,
+      };
+
+      expect(availabilityToAgent(info).available).toBe(false);
     });
   });
 

@@ -93,7 +93,9 @@
         ? `openai-compat:${model}`    // model = config UUID
         : provider === 'ollama'
           ? model                      // model = full daemon ID "ollama:<name>"
-          : `native:${model}`
+          : provider === 'pty'
+            ? `pty:${model}`           // model = agent id, e.g. "claude-code"
+            : `native:${model}`
       : ''
   );
 
@@ -161,12 +163,10 @@
     }
 
     if (selection.provider === 'pty') {
-      // PTY sessions store no messages and no model — the conversation lives
-      // in the external harness. AiChatPtySession owns harness selection and
-      // capture:* properties from here. Explicitly clear `model` with `null`:
-      // the backend's namespaced-properties merge is additive (omitted keys
-      // are left as-is), so a prior native/ollama selection would otherwise
-      // linger on the node after switching to PTY.
+      // PTY sessions store no messages — the conversation lives in the
+      // external harness. `model` holds the chosen agent id (e.g.
+      // "claude-code") so AiChatPtySession can pre-select it in the launch
+      // config; capture:* properties are filled in separately once launched.
       const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
       sharedNodeStore.updateNode(
         nodeId,
@@ -175,7 +175,7 @@
             messages: current?.messages ?? [],
             status: current?.status ?? 'active',
             provider: 'pty',
-            model: null,
+            model: selection.modelId || null,
           },
         },
         { type: 'viewer', viewerId: 'ai-chat-viewer' }
