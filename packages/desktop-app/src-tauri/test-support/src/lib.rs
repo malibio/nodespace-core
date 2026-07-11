@@ -22,6 +22,14 @@
 //! flagging whichever subset any single test binary doesn't happen to call
 //! as unused — `-D warnings` in `rust:lint` would otherwise hard-fail on
 //! that per-binary view.
+//!
+//! Running this crate's tests directly with a bare `cargo test -p
+//! nodespace-app` uses cargo's default per-binary test concurrency, NOT the
+//! `--test-threads=1` the pre-push gate (`scripts/test-gate.ts`) applies —
+//! see that file's comment for why serializing matters here. Prefer `cargo
+//! test -p nodespace-app -- --test-threads=1` when iterating locally on more
+//! than one test in the same file to avoid the same daemon-spawn contention
+//! #1610 fixed in the gate.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -44,7 +52,10 @@ use tauri::Manager;
 /// headroom for that; 60s gives slack without materially raising the
 /// wall-clock cost of a clean, unloaded run, since `wait_for_daemon` returns
 /// as soon as the socket is healthy rather than sleeping out the full
-/// duration.
+/// duration. This is a ceiling on the failure case, not an added cost on
+/// the success path — a healthy daemon returns in well under a second, so
+/// raising this value does not add 60s to every test's typical run time,
+/// only to how long a genuinely stuck run takes to fail.
 pub const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A running headless `nodespaced` pointed at a temp-dir socket and database.
