@@ -648,8 +648,8 @@ fn bench_path_extraction(c: &mut Criterion) {
 /// relationship chains. Also benchmarks cache effectiveness by resolving
 /// the same path twice and comparing latency.
 ///
-/// Requires a multi-threaded tokio runtime since GraphResolver uses
-/// `block_in_place` internally.
+/// Uses a multi-threaded runtime to match production, not because
+/// GraphResolver requires one — it resolves paths with plain async/.await.
 fn bench_graph_resolver(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

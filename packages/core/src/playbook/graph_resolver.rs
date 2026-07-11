@@ -718,6 +718,64 @@ mod tests {
             }
         }
 
+        /// Regression test: resolve_path/resolve_collection/enrich_context must
+        /// work on a single-threaded runtime. The old `block_in_place` bridge
+        /// would panic here; this proves the fix, not just its absence.
+        #[tokio::test(flavor = "current_thread")]
+        async fn resolve_path_and_enrich_context_work_under_current_thread_runtime() {
+            let (svc, _tmp) = create_test_service().await;
+
+            create_schema(&svc, "gr_story_ct", json!([])).await;
+            create_schema(
+                &svc,
+                "gr_issue_ct",
+                json!([{
+                    "name": "story",
+                    "target_type": "gr_story_ct",
+                    "direction": "out",
+                    "cardinality": "one"
+                }]),
+            )
+            .await;
+
+            let story = make_node("gr-s-ct1", "gr_story_ct", json!({"status": "active"}));
+            svc.create_node(story.clone()).await.unwrap();
+
+            let issue = make_node("gr-i-ct1", "gr_issue_ct", json!({"status": "open"}));
+            svc.create_node(issue.clone()).await.unwrap();
+
+            svc.create_relationship("gr-i-ct1", "story", "gr-s-ct1", json!({}))
+                .await
+                .unwrap();
+
+            let mut resolver = GraphResolver::new(Arc::clone(&svc));
+            let result = resolver.resolve_path(&issue, &["story".to_string()]).await;
+            match result {
+                ResolvedValue::Node(n) => assert_eq!(n.id, "gr-s-ct1"),
+                other => panic!("expected Node, got {:?}", other),
+            }
+
+            use crate::playbook::path_extractor::ExtractedPath;
+            let paths = vec![ExtractedPath {
+                segments: vec![
+                    "node".to_string(),
+                    "story".to_string(),
+                    "status".to_string(),
+                ],
+                root: "node".to_string(),
+            }];
+            let enriched = resolver.enrich_context(&issue, &paths, &[]).await;
+            let key = vec![
+                "node".to_string(),
+                "story".to_string(),
+                "status".to_string(),
+            ];
+            assert!(
+                enriched.contains_key(&key),
+                "enrich_context should resolve node.story.status on a current_thread runtime"
+            );
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn resolve_multi_hop_relationship_chain() {
             let (svc, _tmp) = create_test_service().await;
