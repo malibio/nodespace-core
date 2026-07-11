@@ -18,11 +18,15 @@
 //! mean carving a test-only code path into the production model-selection
 //! logic in `packages/daemon/src/services/local_agent_service.rs` — a
 //! change to a real inference subsystem's behavior, not a test concern.
-//! Instead, this uses `ministral-3b-q4km` — the smallest model in the
-//! catalog, already downloaded under `~/.nodespace/models/` on this
-//! machine — as the fastest available REAL model. It is a real inference
-//! call, not instant, so this test's timeout is generous (well beyond CRUD
-//! test scale) and it is the slowest test in this suite by design.
+//! Instead, this uses `ministral-8b-q4km` — downloaded under
+//! `~/.nodespace/models/` on this machine — as the fastest available REAL
+//! model confirmed to complete a turn reliably. (The smaller
+//! `ministral-3b-q4km` was tried first but reproducibly stalls to 0 tokens
+//! generated within the 300s timeout, independent of machine load —
+//! separate from an underlying investigation into that model's GGUF file
+//! or catalog config. It is a real inference call, not instant, so this
+//! test's timeout is generous (well beyond CRUD test scale) and it is the
+//! slowest test in this suite by design.
 
 use std::time::Duration;
 
@@ -35,13 +39,13 @@ use nodespace_proto::nodespace::EnsureModelReadyRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
-const MODEL_ID: &str = "ministral-3b-q4km";
+const MODEL_ID: &str = "ministral-8b-q4km";
 // Filename mapped from MODEL_ID by the CATALOG entry in
 // packages/agent/src/local_agent/model_manager.rs — kept in sync manually
 // since this test has no dependency on that crate. If this test starts
 // failing the `model_file_available` skip-check spuriously, confirm that
 // mapping hasn't changed.
-const MODEL_FILENAME: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
+const MODEL_FILENAME: &str = "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf";
 
 fn ai_chat_input(
     id: &str,
