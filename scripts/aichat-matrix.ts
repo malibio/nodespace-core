@@ -41,23 +41,6 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const WORKTREE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const AICHAT = join(WORKTREE, "scripts", "aichat.ts");
-
-const [label, outPathArg] = process.argv.slice(2);
-if (!label) {
-  console.error(
-    "usage: aichat-matrix.ts <label> [out.json]\n" +
-      "  label    arbitrary tag stored in the results (e.g. 'e4b' / '12b' / '31b')\n" +
-      "  out.json path to write results (default: /tmp/aichat-matrix-<label>-<ts>.json)",
-  );
-  process.exit(1);
-}
-
-const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const outPath = outPathArg ?? `/tmp/aichat-matrix-${label}-${ts}.json`;
-const baselinePath = process.env.AICHAT_MATRIX_BASELINE;
-
 // ---------------------------------------------------------------------------
 // Tool registry (cross-referenced against Tool::ALL in
 // packages/agent/src/local_agent/tools.rs — update here if the registry changes)
@@ -71,7 +54,7 @@ const ROUTING_TOOLS = ["search_skills"];
 // Structured expectation model
 // ---------------------------------------------------------------------------
 
-type Expectation =
+export type Expectation =
   // No graph-action tool fired at all (routing tools tolerated).
   | { kind: "noTools" }
   // The named tool fired exactly once (ignoring routing tools).
@@ -103,14 +86,14 @@ interface TurnResult {
 }
 
 /** Run one `aichat.ts send <id> <msg>` turn; parse its stdout. */
-function runTurn(chatId: string, message: string): {
+function runTurn(aichatPath: string, chatId: string, message: string): {
   toolsOffered: string;
   toolsCalled: string[];
   reply: string;
   latencyMs: number;
 } {
   const start = performance.now();
-  const r = Bun.spawnSync(["bun", "run", AICHAT, "send", chatId, message], {
+  const r = Bun.spawnSync(["bun", "run", aichatPath, "send", chatId, message], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env },
@@ -133,8 +116,8 @@ function runTurn(chatId: string, message: string): {
 }
 
 /** Create a fresh chat node via aichat.ts; return its id. */
-function newChat(): string {
-  const r = Bun.spawnSync(["bun", "run", AICHAT, "new"], {
+function newChat(aichatPath: string): string {
+  const r = Bun.spawnSync(["bun", "run", aichatPath, "new"], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env },
@@ -147,11 +130,11 @@ function newChat(): string {
 // Assertion logic
 // ---------------------------------------------------------------------------
 
-function actionTools(toolsCalled: string[]): string[] {
+export function actionTools(toolsCalled: string[]): string[] {
   return toolsCalled.filter((t) => !ROUTING_TOOLS.includes(t));
 }
 
-function assertExpectation(
+export function assertExpectation(
   expect: Expectation,
   toolsCalled: string[],
 ): { passed: boolean; failure?: string } {
@@ -288,84 +271,103 @@ const GROUPS: ScenarioStep[][] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Main eval loop
+// Main eval loop (CLI entrypoint only — not run when imported for tests)
 // ---------------------------------------------------------------------------
 
-console.error(`[aichat-matrix] label=${label} model=${process.env.NS_MODEL ?? "(default)"}`);
+if (import.meta.main) {
+  const WORKTREE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const AICHAT = join(WORKTREE, "scripts", "aichat.ts");
 
-const results: TurnResult[] = [];
-for (const group of GROUPS) {
-  const chatId = newChat();
-  console.error(`[${label}] chat ${chatId} for: ${group.map((g) => g.scenario).join(", ")}`);
-  for (const step of group) {
-    console.error(`[${label}] → ${step.scenario}: ${step.prompt}`);
-    const t = runTurn(chatId, step.prompt);
-    const { passed, failure } = assertExpectation(step.expect, t.toolsCalled);
-    results.push({ scenario: step.scenario, prompt: step.prompt, expect: step.expect, ...t, passed, failure });
-    const mark = passed ? "✓" : "✗";
-    console.error(`[${label}]   ${mark} tools=[${t.toolsCalled.join(",")}] ${t.latencyMs}ms`);
-    if (!passed) console.error(`[${label}]     ↳ ${failure}`);
+  const [label, outPathArg] = process.argv.slice(2);
+  if (!label) {
+    console.error(
+      "usage: aichat-matrix.ts <label> [out.json]\n" +
+        "  label    arbitrary tag stored in the results (e.g. 'e4b' / '12b' / '31b')\n" +
+        "  out.json path to write results (default: /tmp/aichat-matrix-<label>-<ts>.json)",
+    );
+    process.exit(1);
   }
-}
 
-const total = results.length;
-const failed = results.filter((r) => !r.passed).length;
-const passed = total - failed;
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const outPath = outPathArg ?? `/tmp/aichat-matrix-${label}-${ts}.json`;
+  const baselinePath = process.env.AICHAT_MATRIX_BASELINE;
 
-await Bun.write(outPath, JSON.stringify({ label, model: process.env.NS_MODEL ?? "(default)", results }, null, 2));
-console.error(`[${label}] wrote ${results.length} results to ${outPath}`);
+  console.error(`[aichat-matrix] label=${label} model=${process.env.NS_MODEL ?? "(default)"}`);
 
-// Print summary table
-console.log(`\n── Agent Eval Results ───────────────────────────────────────────────`);
-console.log(`   Label:   ${label}`);
-console.log(`   Model:   ${process.env.NS_MODEL ?? "(default)"}`);
-console.log(`   Passed:  ${passed}/${total}`);
-console.log(`────────────────────────────────────────────────────────────────────`);
-for (const r of results) {
-  const mark = r.passed ? "✓" : "✗";
-  console.log(`  ${mark} ${r.scenario}`);
-  if (!r.passed) console.log(`      ↳ ${r.failure}`);
-}
-console.log(`────────────────────────────────────────────────────────────────────\n`);
-
-// ---------------------------------------------------------------------------
-// Baseline comparison (optional)
-// ---------------------------------------------------------------------------
-
-if (baselinePath) {
-  try {
-    const baseline: { results: TurnResult[] } = JSON.parse(await Bun.file(baselinePath).text());
-    console.log(`── Baseline Comparison (vs ${baselinePath}) ──`);
-    let regressions = 0;
-    for (const cur of results) {
-      const base = baseline.results.find((f) => f.scenario === cur.scenario);
-      if (!base) {
-        console.log(`  NEW  ${cur.scenario} → ${cur.passed ? "pass" : "fail"}`);
-        continue;
-      }
-      if (base.passed && !cur.passed) {
-        console.log(`  REGRESSION  ${cur.scenario}: was passing, now failing — ${cur.failure}`);
-        regressions++;
-      } else if (!base.passed && cur.passed) {
-        console.log(`  FIXED  ${cur.scenario}: was failing, now passing`);
-      }
+  const results: TurnResult[] = [];
+  for (const group of GROUPS) {
+    const chatId = newChat(AICHAT);
+    console.error(`[${label}] chat ${chatId} for: ${group.map((g) => g.scenario).join(", ")}`);
+    for (const step of group) {
+      console.error(`[${label}] → ${step.scenario}: ${step.prompt}`);
+      const t = runTurn(AICHAT, chatId, step.prompt);
+      const { passed, failure } = assertExpectation(step.expect, t.toolsCalled);
+      results.push({ scenario: step.scenario, prompt: step.prompt, expect: step.expect, ...t, passed, failure });
+      const mark = passed ? "✓" : "✗";
+      console.error(`[${label}]   ${mark} tools=[${t.toolsCalled.join(",")}] ${t.latencyMs}ms`);
+      if (!passed) console.error(`[${label}]     ↳ ${failure}`);
     }
-    if (regressions > 0) {
-      console.error(`\n[aichat-matrix] ✗ ${regressions} regression(s) vs baseline — failing`);
-      process.exit(1);
-    } else {
-      console.log(`\n[aichat-matrix] ✓ No regressions vs baseline`);
-    }
-  } catch (e) {
-    console.error(`[aichat-matrix] Warning: could not read baseline at ${baselinePath}: ${e}`);
   }
-}
 
-// Fail the process if any scenario assertion failed (for CI)
-if (failed > 0) {
-  console.error(`\n[aichat-matrix] ✗ ${failed}/${total} scenarios failed`);
-  process.exit(1);
-} else {
-  console.error(`\n[aichat-matrix] ✓ All ${total} scenarios passed`);
-  process.exit(0);
+  const total = results.length;
+  const failed = results.filter((r) => !r.passed).length;
+  const passed = total - failed;
+
+  await Bun.write(outPath, JSON.stringify({ label, model: process.env.NS_MODEL ?? "(default)", results }, null, 2));
+  console.error(`[${label}] wrote ${results.length} results to ${outPath}`);
+
+  // Print summary table
+  console.log(`\n── Agent Eval Results ───────────────────────────────────────────────`);
+  console.log(`   Label:   ${label}`);
+  console.log(`   Model:   ${process.env.NS_MODEL ?? "(default)"}`);
+  console.log(`   Passed:  ${passed}/${total}`);
+  console.log(`────────────────────────────────────────────────────────────────────`);
+  for (const r of results) {
+    const mark = r.passed ? "✓" : "✗";
+    console.log(`  ${mark} ${r.scenario}`);
+    if (!r.passed) console.log(`      ↳ ${r.failure}`);
+  }
+  console.log(`────────────────────────────────────────────────────────────────────\n`);
+
+  // -------------------------------------------------------------------------
+  // Baseline comparison (optional)
+  // -------------------------------------------------------------------------
+
+  if (baselinePath) {
+    try {
+      const baseline: { results: TurnResult[] } = JSON.parse(await Bun.file(baselinePath).text());
+      console.log(`── Baseline Comparison (vs ${baselinePath}) ──`);
+      let regressions = 0;
+      for (const cur of results) {
+        const base = baseline.results.find((f) => f.scenario === cur.scenario);
+        if (!base) {
+          console.log(`  NEW  ${cur.scenario} → ${cur.passed ? "pass" : "fail"}`);
+          continue;
+        }
+        if (base.passed && !cur.passed) {
+          console.log(`  REGRESSION  ${cur.scenario}: was passing, now failing — ${cur.failure}`);
+          regressions++;
+        } else if (!base.passed && cur.passed) {
+          console.log(`  FIXED  ${cur.scenario}: was failing, now passing`);
+        }
+      }
+      if (regressions > 0) {
+        console.error(`\n[aichat-matrix] ✗ ${regressions} regression(s) vs baseline — failing`);
+        process.exit(1);
+      } else {
+        console.log(`\n[aichat-matrix] ✓ No regressions vs baseline`);
+      }
+    } catch (e) {
+      console.error(`[aichat-matrix] Warning: could not read baseline at ${baselinePath}: ${e}`);
+    }
+  }
+
+  // Fail the process if any scenario assertion failed (for CI)
+  if (failed > 0) {
+    console.error(`\n[aichat-matrix] ✗ ${failed}/${total} scenarios failed`);
+    process.exit(1);
+  } else {
+    console.error(`\n[aichat-matrix] ✓ All ${total} scenarios passed`);
+    process.exit(0);
+  }
 }
