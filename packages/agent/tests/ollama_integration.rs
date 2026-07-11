@@ -9,7 +9,10 @@
 //! `resolve_engine()` pins to `mistral:7b` specifically rather than "whatever
 //! Ollama lists first" — `first_ollama_model()` is order-dependent on local
 //! pull history and is not reproducible across machines/developers. Tests
-//! skip (not fail) if `mistral:7b` is not pulled locally.
+//! skip (not fail) if `mistral:7b` is not pulled locally. A handful of tests
+//! that only assert on generic inference/metadata behavior (not tool-call
+//! structure) still use `first_ollama_model()`, since they don't depend on
+//! which model answers.
 //!
 //! ## Known model-capability ceiling: `#[ignore]`d tests
 //!
@@ -24,24 +27,31 @@
 //! This matters in production too: `GraphToolExecutor::available_tools()`
 //! sends the full tool set (14 tools) on every turn with no dynamic
 //! scoping today, so real `mistral:7b` usage can hit the same narration
-//! failure on ordinary requests. Tracked as a follow-up production issue
-//! rather than fixed here, since a real fix (tool-count reduction via
-//! skill-based scoping, or a different default model) is an architecture
-//! decision out of scope for a test-suite triage.
+//! failure on ordinary requests. Not fixed here, since a real fix
+//! (tool-count reduction via skill-based scoping, or a different default
+//! Ollama model) is an architecture decision out of scope for a test-suite
+//! triage.
+//!
+//! ### Why mistral:7b specifically
 //!
 //! Evidence gathered during the investigation (10 tools, identical prompt,
 //! 3-5 repeated runs each): `mistral:7b` and `ministral-3:3b` (Mistral's own
 //! smaller 3B model) both fail deterministically; `ornith:9b` and
 //! `mistral-nemo:12b` both succeed reliably. Tool-calling reliability at
 //! this tool count scales with model size, not something fixable by
-//! swapping to a smaller/faster model. Both successful alternatives were
-//! ruled out for other reasons: `ornith:9b` is deliberately excluded from
-//! the production model picker (its recurrent/SSM layers can't reuse
-//! KV-cache across ReAct loop iterations — see the linked follow-up issue
-//! for tracking), and `mistral-nemo:12b` needs ~12GB and CPU-spills at
-//! `num_ctx=32768` on a 16GB machine (this project's documented minimum
-//! target), reintroducing the exact OOM class this investigation also hit
-//! independently against `mistral:7b` under concurrent memory pressure.
+//! swapping to a smaller/faster model.
+//!
+//! ### Why not the larger alternatives that succeeded
+//!
+//! Both successful alternatives were ruled out for other reasons: `ornith:9b`'s
+//! recurrent/SSM layers can't reuse KV-cache across ReAct loop iterations, so
+//! every multi-step tool-calling turn re-decodes the full prompt from scratch
+//! (a confirmed upstream `ggml-org/llama.cpp` limitation, not fixable here) —
+//! this is the same defect that keeps it out of the native-path model picker.
+//! `mistral-nemo:12b` needs ~12GB and CPU-spills at `num_ctx=32768` on a 16GB
+//! machine (this project's documented minimum target), reintroducing the
+//! exact OOM class this investigation also hit independently against
+//! `mistral:7b` under concurrent memory pressure.
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
@@ -718,7 +728,7 @@ async fn run_skill_inference(
 }
 
 #[tokio::test]
-#[ignore = "mistral:7b narrates a tool call as prose instead of calling search_semantic/search_nodes for this ambiguous-phrasing prompt, even with only 3 tools offered — deterministic model-capability limit, not flaky. Verified via raw Ollama API calls bypassing all NodeSpace code."]
+#[ignore = "mistral:7b narrates a tool call as prose instead of calling search_semantic/search_nodes for this ambiguous-phrasing prompt, even with only 3 tools offered — distinct from this file's other ignores (which hit a 6+-tool-count ceiling): this is a low-tool-count phrasing-ambiguity failure, deterministic model-capability limit, not flaky. Verified via raw Ollama API calls bypassing all NodeSpace code."]
 async fn test_skill_pipeline_research_real_model() {
     let test_name = "test_skill_pipeline_research_real_model";
     let Some(engine) = resolve_engine(test_name).await else {
