@@ -648,8 +648,8 @@ fn bench_path_extraction(c: &mut Criterion) {
 /// relationship chains. Also benchmarks cache effectiveness by resolving
 /// the same path twice and comparing latency.
 ///
-/// Requires a multi-threaded tokio runtime since GraphResolver uses
-/// `block_in_place` internally.
+/// Uses a multi-threaded runtime to match production, not because
+/// GraphResolver requires one — it resolves paths with plain async/.await.
 fn bench_graph_resolver(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -695,7 +695,11 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, std::slice::from_ref(&rel_name)));
+                        black_box(
+                            resolver
+                                .resolve_path(&root, std::slice::from_ref(&rel_name))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total
@@ -717,7 +721,7 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -742,7 +746,7 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -764,10 +768,10 @@ fn bench_graph_resolver(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         // First call populates cache
-                        resolver.resolve_path(&root, &segments);
+                        resolver.resolve_path(&root, &segments).await;
                         // Second call should hit cache
                         let start = std::time::Instant::now();
-                        black_box(resolver.resolve_path(&root, &segments));
+                        black_box(resolver.resolve_path(&root, &segments).await);
                         total += start.elapsed();
                     }
                     total
@@ -899,7 +903,9 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
 
         group.bench_function("simple_property_no_resolver", |b| {
             b.iter(|| {
-                black_box(cel::evaluate_conditions(&conditions, &node, &evt, None));
+                rt.block_on(async {
+                    black_box(cel::evaluate_conditions(&conditions, &node, &evt, None).await);
+                });
             });
         });
     }
@@ -921,12 +927,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(cel::evaluate_conditions(
-                            &conditions,
-                            &node,
-                            &evt,
-                            Some(&mut resolver),
-                        ));
+                        black_box(
+                            cel::evaluate_conditions(&conditions, &node, &evt, Some(&mut resolver))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total
@@ -952,12 +956,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                     for _ in 0..iters {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
-                        black_box(cel::evaluate_conditions(
-                            &conditions,
-                            &node,
-                            &evt,
-                            Some(&mut resolver),
-                        ));
+                        black_box(
+                            cel::evaluate_conditions(&conditions, &node, &evt, Some(&mut resolver))
+                                .await,
+                        );
                         total += start.elapsed();
                     }
                     total

@@ -400,7 +400,7 @@ fn parse_date_and_compute_days(date_str: &str, since: bool) -> Result<Value, Exe
 ///
 /// Missing path errors (NoSuchKey, UndeclaredReference) evaluate to `false`
 /// per the spec — the condition fails but the playbook remains active.
-pub fn evaluate_conditions(
+pub async fn evaluate_conditions(
     conditions: &[CompiledCondition],
     node: &Node,
     event: &DomainEvent,
@@ -424,7 +424,9 @@ pub fn evaluate_conditions(
 
         // Resolve paths that need graph traversal (multi-hop)
         if !all_paths.is_empty() || !all_collections.is_empty() {
-            resolver.enrich_context(node, &all_paths, &all_collections)
+            resolver
+                .enrich_context(node, &all_paths, &all_collections)
+                .await
         } else {
             HashMap::new()
         }
@@ -637,34 +639,36 @@ mod tests {
 
     // -- Condition evaluation tests --
 
-    #[test]
-    fn empty_conditions_pass() {
+    #[tokio::test]
+    async fn empty_conditions_pass() {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         assert_eq!(
-            evaluate_conditions(&[], &node, &event, None),
+            evaluate_conditions(&[], &node, &event, None).await,
             ConditionResult::Pass
         );
     }
 
-    #[test]
-    fn simple_true_condition_passes() {
+    #[tokio::test]
+    async fn simple_true_condition_passes() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result = evaluate_conditions(&conds(&["node.status == 'open'"]), &node, &event, None);
+        let result =
+            evaluate_conditions(&conds(&["node.status == 'open'"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
-    #[test]
-    fn simple_false_condition_fails() {
+    #[tokio::test]
+    async fn simple_false_condition_fails() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result = evaluate_conditions(&conds(&["node.status == 'done'"]), &node, &event, None);
+        let result =
+            evaluate_conditions(&conds(&["node.status == 'done'"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
-    #[test]
-    fn multiple_conditions_all_pass() {
+    #[tokio::test]
+    async fn multiple_conditions_all_pass() {
         let node = test_node("task", json!({"status": "open", "priority": "high"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
@@ -672,12 +676,13 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
-    #[test]
-    fn multiple_conditions_short_circuit_on_first_failure() {
+    #[tokio::test]
+    async fn multiple_conditions_short_circuit_on_first_failure() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
@@ -685,13 +690,14 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         // Should fail on condition 0, not 1
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
-    #[test]
-    fn missing_property_evaluates_to_false() {
+    #[tokio::test]
+    async fn missing_property_evaluates_to_false() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
@@ -699,23 +705,24 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
-    #[test]
-    fn non_boolean_result_treated_as_failure() {
+    #[tokio::test]
+    async fn non_boolean_result_treated_as_failure() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         // Expression returns a string, not a boolean
-        let result = evaluate_conditions(&conds(&["node.status"]), &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.status"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
     // -- PropertyChanged trigger context tests --
 
-    #[test]
-    fn property_changed_trigger_context() {
+    #[tokio::test]
+    async fn property_changed_trigger_context() {
         let node = test_node("task", json!({"status": "done"}));
         let event = node_updated_event(
             "task",
@@ -731,7 +738,8 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Pass);
 
         let result = evaluate_conditions(
@@ -739,23 +747,25 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
     // -- Custom function tests --
 
-    #[test]
-    fn today_function_returns_date_string() {
+    #[tokio::test]
+    async fn today_function_returns_date_string() {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // today() should return a string matching YYYY-MM-DD pattern
-        let result = evaluate_conditions(&conds(&["size(today()) == 10"]), &node, &event, None);
+        let result =
+            evaluate_conditions(&conds(&["size(today()) == 10"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
-    #[test]
-    fn days_since_past_date() {
+    #[tokio::test]
+    async fn days_since_past_date() {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // A date far in the past should have days_since > 0
@@ -764,12 +774,13 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
-    #[test]
-    fn days_until_future_date() {
+    #[tokio::test]
+    async fn days_until_future_date() {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // A date far in the future should have days_until > 0
@@ -778,12 +789,13 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
-    #[test]
-    fn days_since_invalid_date_evaluates_to_false() {
+    #[tokio::test]
+    async fn days_since_invalid_date_evaluates_to_false() {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // Invalid date string should cause function error → condition fails
@@ -792,27 +804,30 @@ mod tests {
             &node,
             &event,
             None,
-        );
+        )
+        .await;
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
     // -- Numeric comparison tests --
 
-    #[test]
-    fn numeric_property_comparison() {
+    #[tokio::test]
+    async fn numeric_property_comparison() {
         let node = test_node("invoice", json!({"amount": 1500}));
         let event = node_created_event("invoice");
-        let result = evaluate_conditions(&conds(&["node.amount > 1000"]), &node, &event, None);
+        let result =
+            evaluate_conditions(&conds(&["node.amount > 1000"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
     // -- Boolean property tests --
 
-    #[test]
-    fn boolean_property_evaluation() {
+    #[tokio::test]
+    async fn boolean_property_evaluation() {
         let node = test_node("task", json!({"archived": false}));
         let event = node_created_event("task");
-        let result = evaluate_conditions(&conds(&["node.archived == false"]), &node, &event, None);
+        let result =
+            evaluate_conditions(&conds(&["node.archived == false"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 

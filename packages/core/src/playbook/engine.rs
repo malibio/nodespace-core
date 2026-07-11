@@ -596,7 +596,8 @@ pub(crate) async fn rule_processor_loop(
                 &work_item.trigger_node,
                 &work_item.trigger_event.event,
                 Some(&mut resolver),
-            );
+            )
+            .await;
 
             match condition_result {
                 crate::playbook::cel::ConditionResult::Pass => {
