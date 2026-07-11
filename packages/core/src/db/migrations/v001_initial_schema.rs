@@ -78,6 +78,11 @@ CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (modified_at, node_id, 
 "#;
 
 pub async fn apply(tx: &libsql::Transaction) -> Result<()> {
+    // Naive `;`-splitting is safe here ONLY because BASELINE_SQL is plain
+    // CREATE TABLE/INDEX statements with no semicolons inside string literals or
+    // multi-statement trigger bodies (those are added separately below via
+    // individual `tx.execute` calls). Do not extend BASELINE_SQL with triggers or
+    // other multi-statement DDL without switching to a real statement splitter.
     for stmt in BASELINE_SQL.split(';') {
         let stmt = stmt.trim();
         if stmt.is_empty() {

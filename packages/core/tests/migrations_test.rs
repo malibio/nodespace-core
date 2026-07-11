@@ -106,6 +106,24 @@ async fn pre_runner_database_with_origin_already_applied_upgrades_without_error(
     let conn = open_raw(&db_path).await;
 
     migrations::run_up_to(&conn, 1).await.expect("apply v1");
+
+    // A row inserted before the out-of-band ALTER, the way real embedding rows
+    // predate the origin column on an existing user database.
+    conn.execute(
+        "INSERT INTO node (id, node_type, content, properties, lifecycle_status, version, created_at, modified_at) \
+         VALUES ('n1', 'text', 'hello', '{}', 'active', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        (),
+    )
+    .await
+    .expect("insert node");
+    conn.execute(
+        "INSERT INTO embedding (id, node_id, vector, created_at, modified_at) \
+         VALUES ('e1', 'n1', x'00', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        (),
+    )
+    .await
+    .expect("insert embedding");
+
     conn.execute(
         "ALTER TABLE embedding ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
         (),
@@ -124,6 +142,28 @@ async fn pre_runner_database_with_origin_already_applied_upgrades_without_error(
 
     assert_eq!(user_version(&conn).await, LATEST_VERSION);
     assert!(has_column(&conn, "embedding", "origin").await);
+
+    // The pre-existing row survives with the column's default, and the index is
+    // still rebuilt with `origin` leading even though the ALTER itself was skipped.
+    let mut rows = conn
+        .query("SELECT origin FROM embedding WHERE id = 'e1'", ())
+        .await
+        .unwrap();
+    let origin: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(origin, "local");
+
+    let mut idx = conn
+        .query(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_emb_modified'",
+            (),
+        )
+        .await
+        .unwrap();
+    let sql: String = idx.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(
+        sql.contains("origin"),
+        "index must be rebuilt with origin leading; was: {sql}"
+    );
 }
 
 #[tokio::test]

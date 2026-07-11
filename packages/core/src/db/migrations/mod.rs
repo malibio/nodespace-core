@@ -88,3 +88,25 @@ pub async fn run_up_to(conn: &libsql::Connection, target_version: i64) -> Result
 pub async fn run(conn: &libsql::Connection) -> Result<()> {
     run_up_to(conn, LATEST_VERSION).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards against the panic in `apply_migration`'s `unreachable!` arm: if
+    /// `LATEST_VERSION` is bumped without adding a matching `apply_migration` arm,
+    /// `run` would panic against a real user database instead of failing a build.
+    /// This test converts that mistake into a compile-time-adjacent, always-run
+    /// test failure instead.
+    #[tokio::test]
+    async fn every_version_up_to_latest_has_a_defined_migration() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("version_coverage.db");
+        crate::db::ensure_sqlite_vec_registered().await;
+        let database = libsql::Builder::new_local(&db_path).build().await.unwrap();
+        let conn = database.connect().unwrap();
+
+        // Panics via `unreachable!` if any version in range lacks an arm.
+        run_up_to(&conn, LATEST_VERSION).await.unwrap();
+    }
+}
