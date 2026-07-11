@@ -95,6 +95,38 @@ async fn already_current_database_is_a_no_op() {
 }
 
 #[tokio::test]
+async fn pre_runner_database_with_origin_already_applied_upgrades_without_error() {
+    // Regression: databases from before this migration runner existed may have
+    // had `embedding.origin` added by the old ad-hoc `migrate_embedding_origin`
+    // check, which ran outside `user_version` tracking. Such a DB has the column
+    // present but `user_version` still at 0. Migration 2's ALTER TABLE must not
+    // blow up with "duplicate column name" in that case.
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("pre_runner.db");
+    let conn = open_raw(&db_path).await;
+
+    migrations::run_up_to(&conn, 1).await.expect("apply v1");
+    conn.execute(
+        "ALTER TABLE embedding ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
+        (),
+    )
+    .await
+    .expect("simulate pre-existing ad-hoc origin column");
+    assert_eq!(
+        user_version(&conn).await,
+        1,
+        "precondition: version stayed at 1, only the column was added out-of-band"
+    );
+
+    migrations::run(&conn)
+        .await
+        .expect("must not fail on a DB that already has origin");
+
+    assert_eq!(user_version(&conn).await, LATEST_VERSION);
+    assert!(has_column(&conn, "embedding", "origin").await);
+}
+
+#[tokio::test]
 async fn database_on_migration_one_upgrades_through_all_subsequent_migrations() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let db_path = temp_dir.path().join("upgrade.db");
