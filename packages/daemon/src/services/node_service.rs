@@ -23,7 +23,7 @@ use nodespace_core::ops::{
         GetCollectionMembersInput, GetCollectionMembersRecursiveInput, GetNodeCollectionsInput,
         RemoveNodeFromCollectionInput, RenameCollectionInput,
     },
-    node_ops,
+    node_ops, query_ops, rel_ops,
     search_ops::{self, SearchSemanticInput},
     OpsError,
 };
@@ -45,18 +45,20 @@ use crate::nodespace::{
     AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, BatchUpdateFailure, ChatRequest,
     ChatResponse, CollectionIdResponse, CollectionIdsResponse, CollectionInfo,
     CollectionListResponse, CollectionMembersRequest, CreateCollectionRequest,
-    CreateMentionRequest, CreateNodeRequest, DeleteCollectionRequest, DeleteMentionRequest,
-    DeleteNodeRequest, DeleteNodeResponse, Empty, ExportMarkdownRequest, ExportMarkdownResponse,
+    CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest, CreateRelationshipResponse,
+    DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
+    ExecuteQueryRequest, ExportMarkdownRequest, ExportMarkdownResponse,
     FindCollectionByPathRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
-    GetNodesBatchRequest, GetNodesBatchResponse, GetRootsRequest, GetSchemaDefinitionRequest,
-    MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
-    MoveChildrenToParentRequest, MoveChildrenToParentResponse, MoveNodeRequest,
-    NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse, NodeReference,
-    NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
-    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
-    RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
-    RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SearchRequest,
+    GetNodesBatchRequest, GetNodesBatchResponse, GetRelatedNodesRequest, GetRelatedNodesResponse,
+    GetRootsRequest, GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
+    MentionResponse, MentionTargetRequest, MoveChildrenToParentRequest,
+    MoveChildrenToParentResponse, MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted,
+    NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse, NodeResponse,
+    NodeTreeResponse, OptionalNodeResponse, OptionalStringClear, OptionalTimestampClear,
+    QueryNodesSimpleRequest, RelationshipDeletedPayload, RelationshipPayload,
+    RemoveNodeFromCollectionRequest, RenameCollectionRequest, ReorderNodeRequest,
+    ReorderNodeResponse, SchemaParamsRequest, SchemaResultResponse, SearchRequest,
     UpdateNodeRequest, UpdateNodesBatchRequest, UpdateNodesBatchResponse, UpdateTaskNodeRequest,
     UpsertNodeWithParentRequest, WatchRequest,
 };
@@ -468,6 +470,51 @@ impl GrpcNodeService for NodeServiceImpl {
         }))
     }
 
+    async fn execute_query(
+        &self,
+        request: Request<ExecuteQueryRequest>,
+    ) -> Result<Response<NodeListResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let filters = match req.filters_json.as_deref() {
+            Some(raw) if !raw.is_empty() => serde_json::from_str(raw)
+                .map_err(|e| Status::invalid_argument(format!("invalid filters_json: {e}")))?,
+            _ => Vec::new(),
+        };
+        let sorting = match req.sorting_json.as_deref() {
+            Some(raw) if !raw.is_empty() => Some(
+                serde_json::from_str(raw)
+                    .map_err(|e| Status::invalid_argument(format!("invalid sorting_json: {e}")))?,
+            ),
+            _ => None,
+        };
+
+        let input = query_ops::ExecuteQueryInput {
+            target_type: req.target_type,
+            filters,
+            sorting,
+            limit: if req.limit == 0 {
+                None
+            } else {
+                Some(req.limit as usize)
+            },
+        };
+
+        let nodes = query_ops::execute_query_nodes(&this.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        let proto_nodes: Vec<NodeData> = nodes.into_iter().map(node_to_proto).collect();
+        let count = proto_nodes.len() as i32;
+
+        Ok(Response::new(NodeListResponse {
+            nodes: proto_nodes,
+            count,
+            collection_id: String::new(),
+        }))
+    }
+
     async fn mention_autocomplete(
         &self,
         request: Request<MentionAutocompleteRequest>,
@@ -688,6 +735,72 @@ impl GrpcNodeService for NodeServiceImpl {
             .collect();
 
         Ok(Response::new(NodeReferenceListResponse { references }))
+    }
+
+    async fn create_relationship(
+        &self,
+        request: Request<CreateRelationshipRequest>,
+    ) -> Result<Response<CreateRelationshipResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let edge_data =
+            match req.edge_data_json.as_deref() {
+                Some(raw) if !raw.is_empty() => Some(serde_json::from_str(raw).map_err(|e| {
+                    Status::invalid_argument(format!("invalid edge_data_json: {e}"))
+                })?),
+                _ => None,
+            };
+
+        let input = rel_ops::CreateRelInput {
+            source_id: req.source_id,
+            relationship_name: req.relationship_name,
+            target_id: req.target_id,
+            edge_data,
+        };
+
+        let output = rel_ops::create_relationship(&this.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        Ok(Response::new(CreateRelationshipResponse {
+            source_id: output.source_id,
+            relationship_name: output.relationship_name,
+            target_id: output.target_id,
+        }))
+    }
+
+    async fn get_related_nodes(
+        &self,
+        request: Request<GetRelatedNodesRequest>,
+    ) -> Result<Response<GetRelatedNodesResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        if req.direction != "in" && req.direction != "out" {
+            return Err(Status::invalid_argument("direction must be 'in' or 'out'"));
+        }
+
+        let input = rel_ops::GetRelatedInput {
+            node_id: req.node_id,
+            relationship_name: req.relationship_name,
+            direction: req.direction,
+        };
+
+        let output = rel_ops::get_related_nodes(&this.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        let related_nodes_json = serde_json::to_string(&output.related_nodes)
+            .map_err(|e| Status::internal(format!("failed to serialize related_nodes: {e}")))?;
+
+        Ok(Response::new(GetRelatedNodesResponse {
+            node_id: output.node_id,
+            relationship_name: output.relationship_name,
+            direction: output.direction,
+            related_nodes_json,
+            count: output.count as i32,
+        }))
     }
 
     async fn update_task_node(
@@ -981,6 +1094,42 @@ impl GrpcNodeService for NodeServiceImpl {
             node_id: req.schema_id,
             node_type,
             node_data: Some(node_to_proto(node)),
+        }))
+    }
+
+    async fn create_schema(
+        &self,
+        request: Request<SchemaParamsRequest>,
+    ) -> Result<Response<SchemaResultResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+        let params: serde_json::Value = serde_json::from_str(&req.params_json)
+            .map_err(|e| Status::invalid_argument(format!("invalid params_json: {e}")))?;
+
+        let result = nodespace_core::schema::handle_create_schema(&this.node_service, params)
+            .await
+            .map_err(markdown_error_to_status)?;
+
+        Ok(Response::new(SchemaResultResponse {
+            result_json: result.to_string(),
+        }))
+    }
+
+    async fn update_schema(
+        &self,
+        request: Request<SchemaParamsRequest>,
+    ) -> Result<Response<SchemaResultResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+        let params: serde_json::Value = serde_json::from_str(&req.params_json)
+            .map_err(|e| Status::invalid_argument(format!("invalid params_json: {e}")))?;
+
+        let result = nodespace_core::schema::handle_update_schema(&this.node_service, params)
+            .await
+            .map_err(markdown_error_to_status)?;
+
+        Ok(Response::new(SchemaResultResponse {
+            result_json: result.to_string(),
         }))
     }
 
@@ -1484,6 +1633,16 @@ fn ops_error_to_status(err: OpsError) -> Status {
 
 fn service_error_to_status(err: NodeServiceError) -> Status {
     ops_error_to_status(OpsError::from(err))
+}
+
+fn markdown_error_to_status(err: nodespace_core::markdown::MarkdownError) -> Status {
+    use nodespace_core::markdown::MarkdownError;
+    match err {
+        MarkdownError::InvalidParams(msg) => Status::invalid_argument(msg),
+        MarkdownError::NotFound(msg) => Status::not_found(msg),
+        MarkdownError::CreationFailed(msg) => Status::internal(msg),
+        MarkdownError::Internal(msg) => Status::internal(msg),
+    }
 }
 
 /// Build a `TaskNodeUpdate` from the proto's tri-state wrappers.

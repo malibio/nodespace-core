@@ -18,8 +18,11 @@ pub enum NodeAction {
     Get(GetArgs),
     /// Create a new node.
     Create(CreateArgs),
-    /// Update an existing node's content.
+    /// Update an existing node's content and/or properties.
     Update(UpdateArgs),
+    /// Set a task node's status (dedicated verb — do not use `update` for this).
+    #[command(name = "set-status")]
+    SetStatus(SetStatusArgs),
     /// Delete a node.
     Delete(DeleteArgs),
     /// List the direct children of a node.
@@ -59,9 +62,39 @@ pub struct CreateArgs {
 pub struct UpdateArgs {
     /// Node ID to update.
     pub id: String,
-    /// New content.
+    /// New content. Omit to leave content unchanged (e.g. when only setting properties).
     #[arg(long)]
-    pub content: String,
+    pub content: Option<String>,
+    /// Set one or more properties: `--property key=value` (repeatable). Values
+    /// are parsed as JSON when possible (numbers, booleans, `null`, arrays,
+    /// objects), otherwise treated as a plain string. Deep-merged into the
+    /// node's existing properties (unspecified keys are left untouched). Do
+    /// NOT use this to change a task's status; use `node set-status` instead.
+    #[arg(long = "property", value_parser = parse_property)]
+    pub properties: Vec<(String, serde_json::Value)>,
+}
+
+/// Parses a `key=value` CLI arg into (key, JSON value). `value` is parsed as
+/// JSON when possible so numbers/booleans/null/arrays/objects round-trip
+/// without extra quoting; falls back to a plain string otherwise.
+fn parse_property(s: &str) -> Result<(String, serde_json::Value), String> {
+    let (key, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected key=value, got '{s}'"))?;
+    if key.is_empty() {
+        return Err(format!("property key must not be empty in '{s}'"));
+    }
+    let parsed = serde_json::from_str(value)
+        .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+    Ok((key.to_string(), parsed))
+}
+
+#[derive(Args, Debug)]
+pub struct SetStatusArgs {
+    /// Task node ID.
+    pub id: String,
+    /// New status. Must be one of: open, in_progress, done, cancelled.
+    pub status: String,
 }
 
 #[derive(Args, Debug)]
@@ -136,6 +169,7 @@ pub async fn run(client: &mut NodeClient, action: NodeAction, json: bool) -> Res
         NodeAction::Get(args) => get(client, args, json).await,
         NodeAction::Create(args) => create(client, args, json).await,
         NodeAction::Update(args) => update(client, args, json).await,
+        NodeAction::SetStatus(args) => set_status(client, args, json).await,
         NodeAction::Delete(args) => delete(client, args, json).await,
         NodeAction::Children(args) => children(client, args, json).await,
         NodeAction::Query(args) => query(client, args, json).await,
@@ -177,13 +211,55 @@ async fn create(client: &mut NodeClient, args: CreateArgs, json: bool) -> Result
 }
 
 async fn update(client: &mut NodeClient, args: UpdateArgs, json: bool) -> Result<()> {
+    if args.content.is_none() && args.properties.is_empty() {
+        anyhow::bail!("update requires --content and/or at least one --property");
+    }
+
+    let properties = if args.properties.is_empty() {
+        None
+    } else {
+        let map: serde_json::Map<String, serde_json::Value> = args.properties.into_iter().collect();
+        Some(serde_json::Value::Object(map).to_string())
+    };
+
     let response = client
         .update_node(UpdateNodeRequest {
             node_id: args.id,
             version: None, // auto-fetch current version on the server
             node_type: None,
-            content: Some(args.content),
-            properties: None,
+            content: args.content,
+            properties,
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
+        })
+        .await
+        .context("UpdateNode RPC failed")?
+        .into_inner();
+
+    let node = response.node_data.context("daemon returned no node_data")?;
+    output::print_node(&node, json)
+}
+
+async fn set_status(client: &mut NodeClient, args: SetStatusArgs, json: bool) -> Result<()> {
+    const VALID_STATUSES: &[&str] = &["open", "in_progress", "done", "cancelled"];
+    if !VALID_STATUSES.contains(&args.status.as_str()) {
+        anyhow::bail!(
+            "invalid status '{}'; must be one of: {}",
+            args.status,
+            VALID_STATUSES.join(", ")
+        );
+    }
+
+    let properties = json!({ "status": args.status }).to_string();
+
+    let response = client
+        .update_node(UpdateNodeRequest {
+            node_id: args.id,
+            version: None, // auto-fetch current version on the server
+            node_type: None,
+            content: None,
+            properties: Some(properties),
             add_to_collection: None,
             remove_from_collection: None,
             lifecycle_status: None,

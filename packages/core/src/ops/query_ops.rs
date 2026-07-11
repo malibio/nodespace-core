@@ -190,15 +190,18 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), OpsError> {
 // Operation
 // ============================================================================
 
-/// Execute a structured property query via `QueryService`.
+/// Execute a structured property query via `QueryService`, returning raw
+/// domain `Node`s.
 ///
 /// Converts the agent's flat filter shape into a `QueryDefinition` and
 /// delegates to `QueryService::execute`, which generates proper SQL
-/// `json_extract` conditions against SQLite.
-pub async fn execute_query(
+/// `json_extract` conditions against SQLite. Shared by `execute_query`
+/// (agent tool call, typed-JSON output) and the gRPC `ExecuteQuery` handler
+/// (proto `NodeData` output) so validation/mapping isn't duplicated.
+pub async fn execute_query_nodes(
     node_service: &Arc<NodeService>,
     input: ExecuteQueryInput,
-) -> Result<ExecuteQueryOutput, OpsError> {
+) -> Result<Vec<Node>, OpsError> {
     validate_identifier(&input.target_type, "target_type")?;
 
     for item in &input.filters {
@@ -239,11 +242,21 @@ pub async fn execute_query(
     };
 
     let query_service = QueryService::new(node_service.store().clone());
-    let nodes = query_service
+    query_service
         .execute(&query)
         .await
-        .map_err(|e| OpsError::Internal(format!("execute_query failed: {}", e)))?;
+        .map_err(|e| OpsError::Internal(format!("execute_query failed: {}", e)))
+}
 
+/// Execute a structured property query, returning typed JSON values.
+///
+/// Thin wrapper over [`execute_query_nodes`] for callers (agent tool call)
+/// that want the typed-value shape rather than raw `Node`s.
+pub async fn execute_query(
+    node_service: &Arc<NodeService>,
+    input: ExecuteQueryInput,
+) -> Result<ExecuteQueryOutput, OpsError> {
+    let nodes = execute_query_nodes(node_service, input).await?;
     let count = nodes.len();
     let typed_nodes = nodes_to_typed_values(nodes)?;
 

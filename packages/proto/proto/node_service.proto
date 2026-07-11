@@ -49,9 +49,18 @@ service NodeService {
   rpc GetNodesBatch(GetNodesBatchRequest) returns (GetNodesBatchResponse);
   rpc UpdateNodesBatch(UpdateNodesBatchRequest) returns (UpdateNodesBatchResponse);
 
-  // Schemas (read-only)
+  // Schemas
   rpc GetAllSchemas(GetAllSchemasRequest) returns (NodeListResponse);
   rpc GetSchemaDefinition(GetSchemaDefinitionRequest) returns (NodeResponse);
+  rpc CreateSchema(SchemaParamsRequest) returns (SchemaResultResponse);
+  rpc UpdateSchema(SchemaParamsRequest) returns (SchemaResultResponse);
+
+  // Structured queries
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (NodeListResponse);
+
+  // Typed relationships (distinct from mentions)
+  rpc CreateRelationship(CreateRelationshipRequest) returns (CreateRelationshipResponse);
+  rpc GetRelatedNodes(GetRelatedNodesRequest) returns (GetRelatedNodesResponse);
 
   // Collections
   rpc GetAllCollections(GetAllCollectionsRequest) returns (CollectionListResponse);
@@ -366,6 +375,62 @@ message QueryNodesSimpleRequest {
 }
 
 // ---------------------------------------------------------------------------
+// ExecuteQuery — structured property queries with comparison operators
+// ---------------------------------------------------------------------------
+
+// Mirrors packages/core/src/ops/query_ops.rs ExecuteQueryInput. `filters`
+// and `sorting` are JSON-encoded (Vec<AgentFilterItem> / Vec<AgentSortItem>)
+// rather than modeled as proto messages, for the same reason as
+// SchemaParamsRequest: the shape is defined once via serde in the ops
+// layer, and filter items already carry a free-form `value` (serde_json::Value)
+// that has no natural proto representation without a oneof-per-scalar-type.
+message ExecuteQueryRequest {
+  // Target node type ("task", "text", etc.) or "*" for all types.
+  string target_type = 1;
+  // JSON-encoded array of filter conditions (AgentFilterItem[]); "[]" or
+  // unset = no filters.
+  optional string filters_json = 2;
+  // JSON-encoded array of sort configs (AgentSortItem[]); unset = unsorted.
+  optional string sorting_json = 3;
+  // Max results to return. 0 = server default (50).
+  uint32 limit = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Typed relationships (distinct from mentions — see rel_ops.rs)
+// ---------------------------------------------------------------------------
+
+message CreateRelationshipRequest {
+  string source_id = 1;
+  string relationship_name = 2;
+  string target_id = 3;
+  // JSON-encoded edge properties; unset = "{}".
+  optional string edge_data_json = 4;
+}
+
+message CreateRelationshipResponse {
+  string source_id = 1;
+  string relationship_name = 2;
+  string target_id = 3;
+}
+
+message GetRelatedNodesRequest {
+  string node_id = 1;
+  string relationship_name = 2;
+  // "out" (forward) or "in" (reverse).
+  string direction = 3;
+}
+
+message GetRelatedNodesResponse {
+  string node_id = 1;
+  string relationship_name = 2;
+  string direction = 3;
+  // JSON-encoded array of related node payloads (rel_ops::GetRelatedOutput.related_nodes).
+  string related_nodes_json = 4;
+  int32 count = 5;
+}
+
+// ---------------------------------------------------------------------------
 // MentionAutocomplete
 // ---------------------------------------------------------------------------
 
@@ -553,6 +618,27 @@ message GetSchemaDefinitionRequest {
 // strongly-typed view onto a node with node_type="schema". The Tauri proxy
 // reconstructs SchemaNode from the returned NodeData by calling
 // SchemaNode::from_node().
+
+// CreateSchema / UpdateSchema pass through JSON params/result verbatim.
+// Field/relationship shapes (SchemaField, SchemaRelationship, FieldRename,
+// AdditionalConstraints, title_template, etc.) are defined once in
+// packages/core/src/schema/mod.rs (CreateSchemaParams / UpdateSchemaParams)
+// and deserialized there via serde — mirroring them as proto messages would
+// duplicate that surface and drift. This is the same JSON-passthrough shape
+// the in-process local-agent tool call (handle_create_schema /
+// handle_update_schema) already uses.
+message SchemaParamsRequest {
+  // JSON-encoded CreateSchemaParams or UpdateSchemaParams (see
+  // packages/core/src/schema/mod.rs for the field shape).
+  string params_json = 1;
+}
+
+message SchemaResultResponse {
+  // JSON-encoded result value (schema_id, fields, relationships, warnings)
+  // on success; error responses use the gRPC Status channel instead of this
+  // field, mirroring every other RPC in this service.
+  string result_json = 1;
+}
 
 // ---------------------------------------------------------------------------
 // Collections

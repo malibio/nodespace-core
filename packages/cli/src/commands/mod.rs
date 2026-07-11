@@ -4,6 +4,8 @@ pub mod import;
 pub mod mention;
 pub mod model;
 pub mod node;
+pub mod query;
+pub mod relationship;
 pub mod schema;
 pub mod search;
 pub mod session;

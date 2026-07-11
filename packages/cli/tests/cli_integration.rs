@@ -235,7 +235,8 @@ async fn create_get_update_children_delete_round_trip() {
         &mut client,
         commands::node::NodeAction::Update(commands::node::UpdateArgs {
             id: parent_id.clone(),
-            content: "parent updated via CLI".into(),
+            content: Some("parent updated via CLI".into()),
+            properties: vec![],
         }),
         true,
     )
@@ -335,6 +336,10 @@ async fn search_without_embedding_service_reports_unavailable() {
         commands::search::SearchArgs {
             query: "anything".into(),
             node_types: vec![],
+            collection: None,
+            collection_id: None,
+            filters: None,
+            threshold: 0.0,
             limit: 0,
         },
         true,
@@ -738,6 +743,431 @@ async fn schema_list_and_get() {
     )
     .await
     .expect("schema list");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn schema_create_and_update_round_trip() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "amount", "type": "number"}
+                    ]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema create");
+
+    // Fetch the created schema back via the existing read path to confirm it landed.
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Get(commands::schema::SchemaGetArgs {
+            id: "invoice".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("schema get after create");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Update(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "schema_id": "invoice",
+                    "add_fields": [
+                        {"name": "currency", "type": "string"}
+                    ]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema update");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn schema_create_rejects_malformed_params() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let err = commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some("not json".into()),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect_err("malformed params_json should error");
+    assert!(
+        err.to_string().to_lowercase().contains("params_json")
+            || err.to_string().to_lowercase().contains("rpc failed"),
+        "unexpected error: {err}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn execute_query_filters_by_property() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    raw.create_node(CreateNodeRequest {
+        node_type: "task".into(),
+        content: "task one".into(),
+        parent_id: None,
+        properties: serde_json::json!({"status": "open"}).to_string(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
+        position: None,
+    })
+    .await
+    .expect("seed open task");
+
+    raw.create_node(CreateNodeRequest {
+        node_type: "task".into(),
+        content: "task two".into(),
+        parent_id: None,
+        properties: serde_json::json!({"status": "done"}).to_string(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
+        position: None,
+    })
+    .await
+    .expect("seed done task");
+
+    commands::query::run(
+        &mut client,
+        commands::query::QueryArgs {
+            target_type: "task".into(),
+            filters: Some(
+                serde_json::json!([
+                    {"type": "property", "operator": "equals", "property": "status", "value": "open"}
+                ])
+                .to_string(),
+            ),
+            sorting: None,
+            limit: 0,
+        },
+        true,
+    )
+    .await
+    .expect("execute query");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn relationship_create_and_get() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    // Relationships must be schema-defined (find-then-edit guidance: the
+    // relationship name must already exist on the source node's schema).
+    // Create a "ticket" schema with a "blocks" -> "ticket" relationship, then
+    // two ticket instances to relate.
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Ticket",
+                    "fields": [{"name": "title", "type": "string"}],
+                    "relationships": [
+                        {"name": "blocks", "target_type": "ticket", "direction": "out", "cardinality": "many"}
+                    ]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create ticket schema");
+
+    let source = raw
+        .create_node(CreateNodeRequest {
+            node_type: "ticket".into(),
+            content: "source".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed source")
+        .into_inner()
+        .node_id;
+
+    let target = raw
+        .create_node(CreateNodeRequest {
+            node_type: "ticket".into(),
+            content: "target".into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed target")
+        .into_inner()
+        .node_id;
+
+    commands::relationship::run(
+        &mut client,
+        commands::relationship::RelationshipAction::Create(commands::relationship::CreateArgs {
+            from: source.clone(),
+            relationship_name: "blocks".into(),
+            to: target.clone(),
+            edge_data: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create relationship");
+
+    commands::relationship::run(
+        &mut client,
+        commands::relationship::RelationshipAction::Get(commands::relationship::GetArgs {
+            id: source.clone(),
+            relationship_name: "blocks".into(),
+            direction: "out".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("get related nodes");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn relationship_get_rejects_invalid_direction() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let err = commands::relationship::run(
+        &mut client,
+        commands::relationship::RelationshipAction::Get(commands::relationship::GetArgs {
+            id: "some-id".into(),
+            relationship_name: "blocks".into(),
+            direction: "sideways".into(),
+        }),
+        true,
+    )
+    .await
+    .expect_err("invalid direction should error");
+    assert_eq!(
+        err.downcast_ref::<tonic::Status>().map(|s| s.code()),
+        Some(Code::InvalidArgument)
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_update_sets_properties_and_preserves_content() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "original content".into(),
+            parent_id: None,
+            properties: serde_json::json!({"existing": "keep-me"}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed node")
+        .into_inner()
+        .node_id;
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: id.clone(),
+            content: None,
+            properties: vec![("added".into(), serde_json::json!("value"))],
+        }),
+        true,
+    )
+    .await
+    .expect("update properties only");
+
+    let node = raw
+        .get_node(GetNodeRequest {
+            node_id: id.clone(),
+        })
+        .await
+        .expect("get node")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+    assert_eq!(
+        node.content, "original content",
+        "content must be preserved when only properties are set"
+    );
+    let props: serde_json::Value =
+        serde_json::from_str(&node.properties).expect("parse properties");
+    // Typed properties are namespaced under the node's type key on the wire
+    // (properties.<node_type>.<field>), per the typed-value shape produced by
+    // crate::models::node_to_typed_value.
+    assert_eq!(props["text"]["added"], "value");
+    assert_eq!(
+        props["text"]["existing"], "keep-me",
+        "existing properties must be deep-merged, not replaced"
+    );
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_update_rejects_empty_args() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let err = commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: "irrelevant".into(),
+            content: None,
+            properties: vec![],
+        }),
+        true,
+    )
+    .await
+    .expect_err("update with no content and no properties should error");
+    assert!(err.to_string().contains("--content"));
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_set_status_updates_status_property() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "task".into(),
+            content: "a task".into(),
+            parent_id: None,
+            properties: serde_json::json!({"status": "open"}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed task")
+        .into_inner()
+        .node_id;
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::SetStatus(commands::node::SetStatusArgs {
+            id: id.clone(),
+            status: "done".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("set status");
+
+    let node = raw
+        .get_node(GetNodeRequest {
+            node_id: id.clone(),
+        })
+        .await
+        .expect("get node")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+    let props: serde_json::Value =
+        serde_json::from_str(&node.properties).expect("parse properties");
+    assert_eq!(props["task"]["status"], "done");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn node_set_status_rejects_invalid_status() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let err = commands::node::run(
+        &mut client,
+        commands::node::NodeAction::SetStatus(commands::node::SetStatusArgs {
+            id: "irrelevant".into(),
+            status: "not-a-real-status".into(),
+        }),
+        true,
+    )
+    .await
+    .expect_err("invalid status should error");
+    assert!(err.to_string().contains("invalid status"));
 
     let _ = shutdown.send(());
 }
