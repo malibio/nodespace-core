@@ -82,6 +82,27 @@ function modelToAgent(model: ChatModelEntry): AcpAgentInfo {
   };
 }
 
+/** Display names for known PTY agent types, mirroring AiChatPtySession's AGENT_OPTIONS. */
+const PTY_AGENT_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  'gemini-cli': 'Gemini CLI',
+  pi: 'Pi',
+  'open-code': 'Open Code',
+};
+
+/** Convert a daemon availability entry to an AcpAgentInfo for unified display. */
+export function availabilityToAgent(info: tauriCommands.AgentAvailabilityInfo): AcpAgentInfo {
+  return {
+    id: info.agentType,
+    name: PTY_AGENT_LABELS[info.agentType] ?? info.agentType,
+    binary: info.binary,
+    args: [],
+    auth_method: { method: 'agent_managed' },
+    available: info.binaryFound && info.authFound,
+  };
+}
+
 class AgentStore {
   agents = $state<AcpAgentInfo[]>([]);
   selectedAgentId = $state<string | null>(null);
@@ -118,15 +139,16 @@ class AgentStore {
     this.isLoading = true;
     try {
       if (isTauri()) {
-        // Fetch ACP agents and local models in parallel
-        const [acpAgents, models] = await Promise.all([
-          tauriCommands.acpRefreshAgents(),
+        // Fetch PTY agent availability and local models in parallel
+        const [availability, models] = await Promise.all([
+          tauriCommands.ptyCheckAgentAvailability(),
           tauriCommands.chatModelList(),
         ]);
 
-        // Local models first, then ACP agents
+        // Local models first, then PTY agents
         const localAgents = models.map(modelToAgent);
-        this.agents = [...localAgents, ...acpAgents];
+        const ptyAgents = availability.agents.map(availabilityToAgent);
+        this.agents = [...localAgents, ...ptyAgents];
       } else {
         // Mock fallback: simulate network delay
         await new Promise((resolve) => setTimeout(resolve, 300));

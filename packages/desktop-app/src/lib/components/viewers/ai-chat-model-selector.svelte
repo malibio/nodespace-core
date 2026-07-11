@@ -80,9 +80,12 @@
 
   // PTY agents (Claude Code, Gemini CLI, Codex, ...) — excludes agentStore's
   // "local:" entries, which are in-process llama.cpp models already surfaced
-  // in the "Local" section above.
+  // in the "Local" section above. The full list (available + unavailable) is
+  // needed to render unavailable agents disabled rather than hiding them.
   const ptyAgents = $derived(agentStore.agents.filter((a) => !isLocalAgent(a.id)));
-  const availablePtyAgents = $derived(ptyAgents.filter((a) => a.available));
+  const availablePtyAgents = $derived(
+    agentStore.availableAgents.filter((a) => !isLocalAgent(a.id))
+  );
 
   function isReady(m: ChatModelEntry): boolean {
     return m.status?.status === 'ready' || m.status?.status === 'loaded';
