@@ -163,7 +163,10 @@
     if (selection.provider === 'pty') {
       // PTY sessions store no messages and no model — the conversation lives
       // in the external harness. AiChatPtySession owns harness selection and
-      // capture:* properties from here.
+      // capture:* properties from here. Explicitly clear `model` with `null`:
+      // the backend's namespaced-properties merge is additive (omitted keys
+      // are left as-is), so a prior native/ollama selection would otherwise
+      // linger on the node after switching to PTY.
       const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
       sharedNodeStore.updateNode(
         nodeId,
@@ -172,6 +175,7 @@
             messages: current?.messages ?? [],
             status: current?.status ?? 'active',
             provider: 'pty',
+            model: null,
           },
         },
         { type: 'viewer', viewerId: 'ai-chat-viewer' }

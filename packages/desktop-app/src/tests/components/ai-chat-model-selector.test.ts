@@ -58,11 +58,13 @@ function buildPtyUpdate(current: Partial<AiChatNode> | undefined): {
   messages: unknown[];
   status: string;
   provider: string;
+  model: null;
 } {
   return {
     messages: current?.messages ?? [],
     status: current?.status ?? 'active',
     provider: 'pty',
+    model: null,
   };
 }
 
@@ -98,7 +100,7 @@ describe('AiChatModelSelector — PTY selection', () => {
 });
 
 describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
-  it('writes provider "pty" with no model field, preserving existing messages/status', () => {
+  it('writes provider "pty" with model explicitly nulled, preserving existing messages/status', () => {
     const current: Partial<AiChatNode> = {
       messages: [{ role: 'user', content: 'hi' }] as AiChatNode['messages'],
       status: 'active',
@@ -107,7 +109,7 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
     const update = buildPtyUpdate(current);
 
     expect(update.provider).toBe('pty');
-    expect(update).not.toHaveProperty('model');
+    expect(update.model).toBeNull();
     expect(update.messages).toEqual(current.messages);
     expect(update.status).toBe('active');
   });
@@ -118,5 +120,22 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
     expect(update.provider).toBe('pty');
     expect(update.messages).toEqual([]);
     expect(update.status).toBe('active');
+  });
+
+  it('clears a stale model left over from a prior native/ollama selection', () => {
+    // Backend property merge is additive-only (omitted keys are left as-is),
+    // so switching providers must explicitly null out `model` or a prior
+    // selection like "qwen2.5-3b" would linger on the node after switching
+    // to PTY, which stores no model at all.
+    const current: Partial<AiChatNode> = {
+      provider: 'native',
+      model: 'qwen2.5-3b',
+      messages: [],
+      status: 'active',
+    };
+
+    const update = buildPtyUpdate(current);
+
+    expect(update.model).toBeNull();
   });
 });
