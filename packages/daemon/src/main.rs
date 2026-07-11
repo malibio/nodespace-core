@@ -10,6 +10,26 @@
 //!   5. Bring up the system tray on the main thread and spawn the tonic
 //!      `NodeService` handler on a worker tokio runtime.
 //!   6. Tear down cleanly on `SIGTERM`, `SIGINT`, or "Quit" from the tray.
+//!
+//! # Trust model (ADR-052)
+//!
+//! This daemon is single-user-local and has **no in-core authorization layer**
+//! — no `user_id`, no actor concept, no per-request ACL. Every request that
+//! reaches the gRPC services below is served with the daemon owner's full
+//! authority over the entire knowledge graph. That is deliberate, not an
+//! omission to be backfilled: for a single-user-local desktop app the **OS
+//! socket/pipe permission is the entire authorization boundary**. Whoever can
+//! open the socket gets the whole graph.
+//!
+//! On Unix, [`bind_uds_owner_only`] enforces that boundary as `0o600` with no
+//! ambient-umask exposure window. There is currently no peer-credential check
+//! (`SO_PEERCRED` / `LOCAL_PEERCRED`) backstopping the file permission — every
+//! connection accepted by the listener is handed straight to the tonic
+//! server. On Windows the Named Pipe below does **not** yet meet this trust
+//! model: it is created with the default DACL and `first_pipe_instance(false)`,
+//! so it is reachable by other local principals and squattable (tracked
+//! separately; see ADR-052 for the full security review and remediation
+//! plan). Do not assume a peer-identity check exists anywhere in this file.
 
 use std::sync::Arc;
 
@@ -378,6 +398,12 @@ async fn serve_headless() -> Result<()> {
             loop {
                 // .first_pipe_instance(false): multiple clients connect serially
                 // to the same pipe name — each iteration creates a fresh instance.
+                // SECURITY GAP (ADR-052): this pipe is created with the default
+                // DACL and does not restrict access to the owning user,
+                // and `first_pipe_instance(false)` permits another local process to
+                // pre-create/squat the pipe name. Unlike the Unix socket path (see
+                // `bind_uds_owner_only`), the "OS permission is the authorization
+                // boundary" trust model does NOT hold here until both are fixed.
                 let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
                     Ok(s) => s,
                     Err(e) => {
@@ -460,6 +486,8 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
         let name = name.clone();
         async_stream::stream! {
             loop {
+                // See the security-gap note on the equivalent call in `serve_headless`
+                // above (ADR-052): this pipe is not yet owner-only.
                 let server = match ServerOptions::new().first_pipe_instance(false).create(&name) {
                     Ok(s) => s,
                     Err(e) => {
