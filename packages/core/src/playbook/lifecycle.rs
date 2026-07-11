@@ -304,7 +304,9 @@ fn playbook_references_node_type(playbook: &ParsedPlaybook, node_type: &str) -> 
 fn playbook_has_paths_through_schema(playbook: &ParsedPlaybook, schema_node_type: &str) -> bool {
     for rule in &playbook.rules {
         for condition in &rule.conditions {
-            if let Ok(extraction) = crate::playbook::path_extractor::extract_paths(condition) {
+            if let Ok(extraction) =
+                crate::playbook::path_extractor::extract_paths(&condition.source)
+            {
                 // Check if any extracted path mentions a segment that looks like the schema type
                 for path in &extraction.paths {
                     if path.segments.iter().any(|s| s == schema_node_type) {
@@ -636,7 +638,10 @@ mod tests {
                     node_type: "task".to_string(),
                     property_key: None,
                 },
-                conditions: vec!["node.story.epic.status == 'active'".to_string()],
+                conditions: vec![crate::playbook::cel::CompiledCondition::compile(
+                    "node.story.epic.status == 'active'",
+                )
+                .unwrap()],
                 actions: vec![],
             })],
             status: PlaybookStatus::Active,

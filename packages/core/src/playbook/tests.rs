@@ -215,6 +215,55 @@ mod playbook_tests {
     }
 
     #[test]
+    fn test_parse_invalid_cel_condition() {
+        let def = RuleDefinition {
+            name: "bad condition".to_string(),
+            trigger: TriggerDefinition {
+                trigger_type: "graph_event".to_string(),
+                on: Some("node_created".to_string()),
+                node_type: Some("invoice".to_string()),
+                property_key: None,
+                cron: None,
+            },
+            conditions: vec!["1 + + 2".to_string()],
+            actions: vec![],
+        };
+
+        assert!(matches!(
+            parse_rule(&def),
+            Err(PlaybookParseError::InvalidCondition(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_condition_compiles_program_once() {
+        let def = RuleDefinition {
+            name: "compiled rule".to_string(),
+            trigger: TriggerDefinition {
+                trigger_type: "graph_event".to_string(),
+                on: Some("node_created".to_string()),
+                node_type: Some("invoice".to_string()),
+                property_key: None,
+                cron: None,
+            },
+            conditions: vec!["node.status == 'draft'".to_string()],
+            actions: vec![],
+        };
+
+        let parsed = parse_rule(&def).unwrap();
+        assert_eq!(parsed.conditions[0].source, "node.status == 'draft'");
+
+        // The compiled Program is cached, not recompiled — cloning the rule
+        // (as happens on every `OrderedRuleRef` lookup) shares the same
+        // underlying Program via Arc rather than recompiling it.
+        let cloned = parsed.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &parsed.conditions[0].program,
+            &cloned.conditions[0].program
+        ));
+    }
+
+    #[test]
     fn test_parse_all_action_types() {
         for (input, expected) in [
             ("create_node", ActionType::CreateNode),

@@ -29,7 +29,7 @@ use cel_interpreter::{Context, ExecutionError, Program, Value};
 use chrono::{Local, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::db::events::DomainEvent;
 use crate::models::Node;
@@ -41,7 +41,7 @@ use crate::playbook::path_extractor;
 // ---------------------------------------------------------------------------
 
 /// Errors from CEL compilation (parse-time).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CelCompileError {
     pub expression: String,
     pub message: String,
@@ -67,11 +67,6 @@ pub enum ConditionResult {
         /// Index of the first failing condition.
         condition_index: usize,
     },
-    /// A condition had a compile error (should have been caught at save time).
-    CompileError {
-        condition_index: usize,
-        message: String,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +81,27 @@ pub fn compile_condition(expr: &str) -> Result<Program, CelCompileError> {
         expression: expr.to_string(),
         message: e.to_string(),
     })
+}
+
+/// A CEL condition compiled once at parse/save time and cached for reuse.
+///
+/// `Program` is not `Clone`, so the compiled program is wrapped in `Arc`
+/// to allow `ParsedRule` (and `CompiledCondition` itself) to be cheaply cloned.
+#[derive(Debug, Clone)]
+pub struct CompiledCondition {
+    /// The original CEL expression source, needed for path extraction and diagnostics.
+    pub source: String,
+    pub program: Arc<Program>,
+}
+
+impl CompiledCondition {
+    pub fn compile(expr: &str) -> Result<Self, CelCompileError> {
+        let program = compile_condition(expr)?;
+        Ok(Self {
+            source: expr.to_string(),
+            program: Arc::new(program),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +386,10 @@ fn parse_date_and_compute_days(date_str: &str, since: bool) -> Result<Value, Exe
 
 /// Evaluate all conditions for a rule against the trigger node and event.
 ///
+/// Each condition's `Program` was compiled once, at parse/save time (see
+/// `CompiledCondition::compile`), and is executed here directly — no
+/// recompilation on the hot path.
+///
 /// Conditions are evaluated in order with short-circuit on first failure.
 /// An empty conditions list results in `ConditionResult::Pass`.
 ///
@@ -381,7 +401,7 @@ fn parse_date_and_compute_days(date_str: &str, since: bool) -> Result<Value, Exe
 /// Missing path errors (NoSuchKey, UndeclaredReference) evaluate to `false`
 /// per the spec — the condition fails but the playbook remains active.
 pub fn evaluate_conditions(
-    conditions: &[String],
+    conditions: &[CompiledCondition],
     node: &Node,
     event: &DomainEvent,
     resolver: Option<&mut GraphResolver>,
@@ -396,7 +416,7 @@ pub fn evaluate_conditions(
         let mut all_paths = Vec::new();
         let mut all_collections = Vec::new();
         for condition in conditions {
-            if let Ok(extraction) = path_extractor::extract_paths(condition) {
+            if let Ok(extraction) = path_extractor::extract_paths(&condition.source) {
                 all_paths.extend(extraction.paths);
                 all_collections.extend(extraction.collections);
             }
@@ -415,34 +435,20 @@ pub fn evaluate_conditions(
     let ctx = build_condition_context_with_resolved(node, event, &resolved_values);
 
     for (i, condition) in conditions.iter().enumerate() {
-        let program = match compile_condition(condition) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(
-                    "CEL compile error in condition[{}] '{}': {}",
-                    i, condition, e.message
-                );
-                return ConditionResult::CompileError {
-                    condition_index: i,
-                    message: e.message,
-                };
-            }
-        };
-
-        match program.execute(&ctx) {
+        match condition.program.execute(&ctx) {
             Ok(Value::Bool(true)) => {
-                debug!("Condition[{}] passed: {}", i, condition);
+                debug!("Condition[{}] passed: {}", i, condition.source);
                 // Continue to next condition
             }
             Ok(Value::Bool(false)) => {
-                debug!("Condition[{}] failed (false): {}", i, condition);
+                debug!("Condition[{}] failed (false): {}", i, condition.source);
                 return ConditionResult::Fail { condition_index: i };
             }
             Ok(other) => {
                 // Non-boolean result — treat as failure
                 debug!(
                     "Condition[{}] returned non-boolean {:?}: {}",
-                    i, other, condition
+                    i, other, condition.source
                 );
                 return ConditionResult::Fail { condition_index: i };
             }
@@ -450,7 +456,7 @@ pub fn evaluate_conditions(
                 // Missing path → false (spec: condition not met, playbook stays active)
                 debug!(
                     "Condition[{}] has missing path (evaluates to false): {}",
-                    i, condition
+                    i, condition.source
                 );
                 return ConditionResult::Fail { condition_index: i };
             }
@@ -459,7 +465,7 @@ pub fn evaluate_conditions(
                 // The playbook stays active; it's the condition that doesn't match.
                 debug!(
                     "Condition[{}] runtime error (evaluates to false): {} — {}",
-                    i, condition, e
+                    i, condition.source, e
                 );
                 return ConditionResult::Fail { condition_index: i };
             }
@@ -513,6 +519,14 @@ mod tests {
             node: test_node(node_type, json!({})),
             changed_properties: changes,
         }
+    }
+
+    /// Helper: compile a single condition for tests.
+    fn conds(exprs: &[&str]) -> Vec<CompiledCondition> {
+        exprs
+            .iter()
+            .map(|e| CompiledCondition::compile(e).expect("valid CEL"))
+            .collect()
     }
 
     // -- Compilation tests --
@@ -637,8 +651,7 @@ mod tests {
     fn simple_true_condition_passes() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result =
-            evaluate_conditions(&["node.status == 'open'".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.status == 'open'"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Pass);
     }
 
@@ -646,8 +659,7 @@ mod tests {
     fn simple_false_condition_fails() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result =
-            evaluate_conditions(&["node.status == 'done'".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.status == 'done'"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
@@ -656,10 +668,7 @@ mod tests {
         let node = test_node("task", json!({"status": "open", "priority": "high"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
-            &[
-                "node.status == 'open'".to_string(),
-                "node.priority == 'high'".to_string(),
-            ],
+            &conds(&["node.status == 'open'", "node.priority == 'high'"]),
             &node,
             &event,
             None,
@@ -672,10 +681,7 @@ mod tests {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
-            &[
-                "node.status == 'done'".to_string(),
-                "node.nonexistent == true".to_string(),
-            ],
+            &conds(&["node.status == 'done'", "node.nonexistent == true"]),
             &node,
             &event,
             None,
@@ -689,7 +695,7 @@ mod tests {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         let result = evaluate_conditions(
-            &["node.nonexistent_field == 'something'".to_string()],
+            &conds(&["node.nonexistent_field == 'something'"]),
             &node,
             &event,
             None,
@@ -698,24 +704,11 @@ mod tests {
     }
 
     #[test]
-    fn compile_error_in_condition() {
-        let node = test_node("task", json!({}));
-        let event = node_created_event("task");
-        let result = evaluate_conditions(&["invalid @@@ syntax".to_string()], &node, &event, None);
-        match result {
-            ConditionResult::CompileError {
-                condition_index: 0, ..
-            } => {} // OK
-            other => panic!("expected CompileError, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn non_boolean_result_treated_as_failure() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
         // Expression returns a string, not a boolean
-        let result = evaluate_conditions(&["node.status".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.status"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
@@ -734,7 +727,7 @@ mod tests {
         );
 
         let result = evaluate_conditions(
-            &["trigger.property.old_value == 'open'".to_string()],
+            &conds(&["trigger.property.old_value == 'open'"]),
             &node,
             &event,
             None,
@@ -742,7 +735,7 @@ mod tests {
         assert_eq!(result, ConditionResult::Pass);
 
         let result = evaluate_conditions(
-            &["trigger.property.new_value == 'done'".to_string()],
+            &conds(&["trigger.property.new_value == 'done'"]),
             &node,
             &event,
             None,
@@ -757,7 +750,7 @@ mod tests {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // today() should return a string matching YYYY-MM-DD pattern
-        let result = evaluate_conditions(&["size(today()) == 10".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["size(today()) == 10"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Pass);
     }
 
@@ -767,7 +760,7 @@ mod tests {
         let event = node_created_event("task");
         // A date far in the past should have days_since > 0
         let result = evaluate_conditions(
-            &["days_since('2020-01-01') > 0".to_string()],
+            &conds(&["days_since('2020-01-01') > 0"]),
             &node,
             &event,
             None,
@@ -781,7 +774,7 @@ mod tests {
         let event = node_created_event("task");
         // A date far in the future should have days_until > 0
         let result = evaluate_conditions(
-            &["days_until('2099-12-31') > 0".to_string()],
+            &conds(&["days_until('2099-12-31') > 0"]),
             &node,
             &event,
             None,
@@ -795,7 +788,7 @@ mod tests {
         let event = node_created_event("task");
         // Invalid date string should cause function error → condition fails
         let result = evaluate_conditions(
-            &["days_since('not-a-date') > 0".to_string()],
+            &conds(&["days_since('not-a-date') > 0"]),
             &node,
             &event,
             None,
@@ -809,7 +802,7 @@ mod tests {
     fn numeric_property_comparison() {
         let node = test_node("invoice", json!({"amount": 1500}));
         let event = node_created_event("invoice");
-        let result = evaluate_conditions(&["node.amount > 1000".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.amount > 1000"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Pass);
     }
 
@@ -819,8 +812,7 @@ mod tests {
     fn boolean_property_evaluation() {
         let node = test_node("task", json!({"archived": false}));
         let event = node_created_event("task");
-        let result =
-            evaluate_conditions(&["node.archived == false".to_string()], &node, &event, None);
+        let result = evaluate_conditions(&conds(&["node.archived == false"]), &node, &event, None);
         assert_eq!(result, ConditionResult::Pass);
     }
 

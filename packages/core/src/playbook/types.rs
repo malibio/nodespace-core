@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::playbook::cel::CompiledCondition;
+
 // ---------------------------------------------------------------------------
 // Trigger types
 // ---------------------------------------------------------------------------
@@ -122,7 +124,7 @@ pub enum PlaybookStatus {
 pub struct ParsedRule {
     pub name: String,
     pub trigger: ParsedTrigger,
-    pub conditions: Vec<String>,
+    pub conditions: Vec<CompiledCondition>,
     pub actions: Vec<ParsedAction>,
 }
 
@@ -271,6 +273,7 @@ pub enum PlaybookParseError {
     InvalidActionType(String),
     MissingField(String),
     InvalidJson(String),
+    InvalidCondition(crate::playbook::cel::CelCompileError),
 }
 
 impl std::fmt::Display for PlaybookParseError {
@@ -281,11 +284,15 @@ impl std::fmt::Display for PlaybookParseError {
             Self::InvalidActionType(t) => write!(f, "invalid action type: {}", t),
             Self::MissingField(t) => write!(f, "missing required field: {}", t),
             Self::InvalidJson(t) => write!(f, "invalid JSON: {}", t),
+            Self::InvalidCondition(e) => write!(f, "{}", e),
         }
     }
 }
 
 /// Parse a `RuleDefinition` (from JSON) into a `ParsedRule`.
+///
+/// CEL conditions are compiled here, once, and the resulting `Program`s are
+/// cached on the rule for reuse across every future evaluation.
 pub fn parse_rule(def: &RuleDefinition) -> Result<ParsedRule, PlaybookParseError> {
     let trigger = parse_trigger(&def.trigger)?;
     let actions = def
@@ -293,11 +300,16 @@ pub fn parse_rule(def: &RuleDefinition) -> Result<ParsedRule, PlaybookParseError
         .iter()
         .map(parse_action)
         .collect::<Result<Vec<_>, _>>()?;
+    let conditions = def
+        .conditions
+        .iter()
+        .map(|expr| CompiledCondition::compile(expr).map_err(PlaybookParseError::InvalidCondition))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(ParsedRule {
         name: def.name.clone(),
         trigger,
-        conditions: def.conditions.clone(),
+        conditions,
         actions,
     })
 }

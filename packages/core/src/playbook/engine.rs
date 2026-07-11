@@ -612,34 +612,6 @@ pub(crate) async fn rule_processor_loop(
                     );
                     continue;
                 }
-                crate::playbook::cel::ConditionResult::CompileError {
-                    condition_index,
-                    message,
-                } => {
-                    warn!(
-                        "Rule '{}' (playbook {}) has compile error in condition[{}]: {}",
-                        rule_ref.rule.name, rule_ref.playbook_id, condition_index, message,
-                    );
-                    // Compile errors indicate a structural issue — disable the playbook
-                    {
-                        let mut lm = lifecycle.write().expect("lifecycle lock poisoned");
-                        lm.disable_playbook(&rule_ref.playbook_id);
-                    }
-                    let _ = create_or_update_log_node(
-                        &node_service,
-                        &rule_ref.playbook_id,
-                        &rule_ref.rule.name,
-                        rule_ref.rule_index,
-                        PlaybookErrorType::CompileError,
-                        &format!(
-                            "CEL compile error in condition[{}]: {}",
-                            condition_index, message
-                        ),
-                        &work_item.trigger_node.id,
-                    )
-                    .await;
-                    continue;
-                }
             }
 
             // Build execution context for cycle detection.
