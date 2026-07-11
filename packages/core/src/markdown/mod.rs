@@ -1578,7 +1578,6 @@ async fn parse_markdown(
             &node.node_type,
             &node.content,
             actual_parent_id,
-            context.root_id.clone(),
             position,
             Some(node.properties.clone()),
         )
@@ -1603,7 +1602,6 @@ async fn create_node(
     node_type: &str,
     content: &str,
     parent_id: Option<String>,
-    _root_node_id: Option<String>, // Deprecated - kept for backward compat but ignored (root auto-derived from parent)
     position: crate::services::InsertPositionOwned,
     custom_properties: Option<Value>, // Custom properties from markdown parsing (e.g., task status)
 ) -> Result<String, MarkdownError> {
@@ -2015,22 +2013,11 @@ pub struct UpdateRootFromMarkdownParams {
 /// **For production use**: Consider implementing transaction support if atomicity
 /// guarantees are required for your use case.
 ///
-/// # Backward Compatibility
-///
-/// This function accepts both `root_id` (preferred) and `container_id` (deprecated).
-/// If both are provided, `root_id` takes precedence.
-///
 /// # Example
 ///
 /// ```ignore
-/// // New style (preferred)
 /// let params = json!({
 ///     "root_id": "root-123",
-///     "markdown": "# Updated Plan\n- New task 1\n- New task 2"
-/// });
-/// // Or deprecated style (still works)
-/// let params = json!({
-///     "container_id": "root-123",
 ///     "markdown": "# Updated Plan\n- New task 1\n- New task 2"
 /// });
 /// let result = handle_update_root_from_markdown(&operations, params).await?;
