@@ -62,41 +62,98 @@ impl SqliteStore {
         .context("Failed to delete existing embeddings")?;
 
         let now = Utc::now().to_rfc3339();
-        for emb in embeddings {
-            let id = uuid::Uuid::new_v4().to_string();
-            let dimension = emb.vector.len() as i64;
-            let vector_blob: Vec<u8> = emb.vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-            let model_name = emb
-                .model_name
-                .unwrap_or_else(|| "nomic-embed-text-v1.5".to_string());
+        let rows: Vec<(String, Vec<u8>, Vec<libsql::Value>)> = embeddings
+            .into_iter()
+            .map(|emb| {
+                let id = uuid::Uuid::new_v4().to_string();
+                let dimension = emb.vector.len() as i64;
+                let vector_blob: Vec<u8> =
+                    emb.vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let model_name = emb
+                    .model_name
+                    .unwrap_or_else(|| "nomic-embed-text-v1.5".to_string());
 
-            tx.execute(
-                "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, origin, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, NULL, ?12, ?13, ?14)",
-                libsql::params![
-                    id.clone(),
-                    emb.node_id.clone(),
-                    vector_blob.clone(),
-                    dimension,
-                    model_name,
-                    emb.chunk_index as i64,
-                    emb.chunk_start as i64,
-                    emb.chunk_end as i64,
-                    emb.total_chunks as i64,
-                    emb.content_hash,
-                    emb.token_count as i64,
-                    origin.to_string(),
-                    now.clone(),
-                    now.clone(),
-                ],
-            ).await.context("Failed to insert embedding")?;
+                let params = vec![
+                    libsql::Value::Text(id.clone()),
+                    libsql::Value::Text(emb.node_id.clone()),
+                    libsql::Value::Blob(vector_blob.clone()),
+                    libsql::Value::Integer(dimension),
+                    libsql::Value::Text(model_name),
+                    libsql::Value::Integer(emb.chunk_index as i64),
+                    libsql::Value::Integer(emb.chunk_start as i64),
+                    libsql::Value::Integer(emb.chunk_end as i64),
+                    libsql::Value::Integer(emb.total_chunks as i64),
+                    libsql::Value::Text(emb.content_hash),
+                    libsql::Value::Integer(emb.token_count as i64),
+                    libsql::Value::Text(origin.to_string()),
+                    libsql::Value::Text(now.clone()),
+                    libsql::Value::Text(now.clone()),
+                ];
 
-            // Mirror the (non-stale) vector into vec0 for KNN search, using the same id.
-            tx.execute(
-                "INSERT INTO vec_embeddings (embedding_id, vector) VALUES (?1, ?2)",
-                libsql::params![id, vector_blob],
-            )
-            .await
-            .context("Failed to insert into vec_embeddings")?;
+                (id, vector_blob, params)
+            })
+            .collect();
+
+        // Batch into multi-row INSERTs, chunked so each statement's bound
+        // parameter count stays under SQLite's ~999 ceiling.
+        const EMBEDDING_CHUNK: usize = 60; // 14 params/row
+        for chunk in rows.chunks(EMBEDDING_CHUNK) {
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 14;
+                    format!(
+                        "(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, 0, 0, NULL, ?{}, ?{}, ?{})",
+                        base + 1,
+                        base + 2,
+                        base + 3,
+                        base + 4,
+                        base + 5,
+                        base + 6,
+                        base + 7,
+                        base + 8,
+                        base + 9,
+                        base + 10,
+                        base + 11,
+                        base + 12,
+                        base + 13,
+                        base + 14
+                    )
+                })
+                .collect();
+            let sql = format!(
+                "INSERT INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, origin, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk.iter().flat_map(|(_, _, p)| p.clone()).collect();
+
+            tx.execute(&sql, params)
+                .await
+                .context("Failed to insert embeddings batch")?;
+        }
+
+        // Mirror the (non-stale) vectors into vec0 for KNN search, using the same ids.
+        const VEC_CHUNK: usize = 400; // 2 params/row
+        for chunk in rows.chunks(VEC_CHUNK) {
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| format!("(?{}, ?{})", i * 2 + 1, i * 2 + 2))
+                .collect();
+            let sql = format!(
+                "INSERT INTO vec_embeddings (embedding_id, vector) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .flat_map(|(id, vector_blob, _)| {
+                    vec![
+                        libsql::Value::Text(id.clone()),
+                        libsql::Value::Blob(vector_blob.clone()),
+                    ]
+                })
+                .collect();
+
+            tx.execute(&sql, params)
+                .await
+                .context("Failed to insert into vec_embeddings batch")?;
         }
 
         tx.commit()
@@ -665,12 +722,41 @@ impl SqliteStore {
             .transaction()
             .await
             .context("Failed to begin markers transaction")?;
-        for node_id in node_ids {
-            let id = uuid::Uuid::new_v4().to_string();
-            tx.execute(
-                "INSERT OR IGNORE INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, 768, 'nomic-embed-text-v1.5', 0, 0, NULL, 1, NULL, NULL, 1, 0, NULL, ?4, ?5)",
-                libsql::params![id, node_id.clone(), vector_bytes.clone(), now.clone(), now.clone()],
-            ).await.context("Failed to insert stale embedding marker")?;
+
+        // Batch into multi-row INSERTs, chunked so each statement's bound
+        // parameter count stays under SQLite's ~999 ceiling (5 params/row).
+        const ID_CHUNK: usize = 180;
+        for chunk in node_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 5;
+                    format!(
+                        "(?{}, ?{}, ?{}, 768, 'nomic-embed-text-v1.5', 0, 0, NULL, 1, NULL, NULL, 1, 0, NULL, ?{}, ?{})",
+                        base + 1,
+                        base + 2,
+                        base + 3,
+                        base + 4,
+                        base + 5
+                    )
+                })
+                .collect();
+            let sql = format!(
+                "INSERT OR IGNORE INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+
+            let mut params: Vec<libsql::Value> = Vec::with_capacity(chunk.len() * 5);
+            for node_id in chunk {
+                params.push(libsql::Value::Text(uuid::Uuid::new_v4().to_string()));
+                params.push(libsql::Value::Text(node_id.clone()));
+                params.push(libsql::Value::Blob(vector_bytes.clone()));
+                params.push(libsql::Value::Text(now.clone()));
+                params.push(libsql::Value::Text(now.clone()));
+            }
+
+            tx.execute(&sql, params)
+                .await
+                .context("Failed to insert stale embedding markers batch")?;
         }
         tx.commit()
             .await
