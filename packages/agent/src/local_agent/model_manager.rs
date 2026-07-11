@@ -1162,6 +1162,270 @@ mod tests {
         (mgr, tmp)
     }
 
+    // -- Model-download terminal-state coverage ------------------------------
+    //
+    // `download()`/`cancel_download()` only ever resolve against the
+    // hardcoded, real, multi-GB HuggingFace `CATALOG` entries — there is no
+    // seam to point them at fake bytes. `perform_download` is where the actual
+    // HTTP-download-and-verify logic lives, fully parameterized by
+    // `DownloadParams` (including `url`), so tests below drive it directly
+    // against a tiny in-process HTTP server instead of the network.
+
+    /// Spawn a minimal one-shot HTTP/1.1 server that serves `body` for every
+    /// accepted connection, ignoring the request entirely (no request
+    /// parsing needed — these tests never send a Range header). Returns the
+    /// `http://127.0.0.1:<port>/...` base URL. The listener task is detached
+    /// and serves connections until the test process exits.
+    async fn spawn_fake_model_server(body: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake model server");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = body.clone();
+                tokio::spawn(async move {
+                    // Drain the request line/headers; content is irrelevant.
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.try_read(&mut buf);
+
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes()).await;
+                    let _ = stream.write_all(&body).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// Spawn a fake server that trickles `body` out a few bytes at a time with
+    /// a delay between chunks, so a test has a window to cancel mid-stream.
+    async fn spawn_slow_fake_model_server(
+        body: Vec<u8>,
+        chunk_delay: std::time::Duration,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind slow fake model server");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = body.clone();
+                let chunk_delay = chunk_delay;
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.try_read(&mut buf);
+
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    if stream.write_all(header.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    for chunk in body.chunks(16) {
+                        if stream.write_all(chunk).await.is_err() {
+                            return;
+                        }
+                        let _ = stream.flush().await;
+                        tokio::time::sleep(chunk_delay).await;
+                    }
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn test_download_params(
+        url: String,
+        partial_path: PathBuf,
+        final_path: PathBuf,
+        total_size: u64,
+        expected_sha256: String,
+        cancel_token: CancellationToken,
+        on_progress: ProgressCallback,
+    ) -> DownloadParams {
+        DownloadParams {
+            client: reqwest::Client::new(),
+            url,
+            partial_path,
+            final_path,
+            total_size,
+            expected_sha256,
+            model_id: "fake-test-model".to_string(),
+            cancel_token,
+            statuses: Arc::new(RwLock::new(HashMap::new())),
+            on_progress,
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_download_completes_and_verifies_sha256() {
+        let tmp = TempDir::new().unwrap();
+        let body = b"fake gguf model bytes for testing".to_vec();
+        let expected_hash = format!("{:x}", Sha256::digest(&body));
+        let url = spawn_fake_model_server(body.clone()).await;
+
+        let partial_path = tmp.path().join("model.gguf.partial");
+        let final_path = tmp.path().join("model.gguf");
+        let on_progress: ProgressCallback = Arc::new(RwLock::new(HashMap::new()));
+
+        let result = perform_download(test_download_params(
+            format!("{url}/model.gguf"),
+            partial_path.clone(),
+            final_path.clone(),
+            body.len() as u64,
+            expected_hash,
+            CancellationToken::new(),
+            on_progress,
+        ))
+        .await;
+
+        assert!(result.is_ok(), "download should succeed: {:?}", result);
+        assert!(!partial_path.exists(), "partial file must be renamed away");
+        assert!(final_path.exists(), "final file must exist");
+        let written = tokio::fs::read(&final_path).await.unwrap();
+        assert_eq!(written, body);
+    }
+
+    #[tokio::test]
+    async fn perform_download_reports_progress_events() {
+        let tmp = TempDir::new().unwrap();
+        // `perform_download` throttles progress reports to once per 250ms, so
+        // only the delay between the first and second chunk needs to exceed
+        // that — two small chunks is enough to observe >=1 event without a
+        // slow test. (16 bytes/chunk in `spawn_slow_fake_model_server`.)
+        let body = vec![0xABu8; 32];
+        let expected_hash = format!("{:x}", Sha256::digest(&body));
+        let url =
+            spawn_slow_fake_model_server(body.clone(), std::time::Duration::from_millis(260)).await;
+
+        let partial_path = tmp.path().join("model.gguf.partial");
+        let final_path = tmp.path().join("model.gguf");
+
+        let events: Arc<std::sync::Mutex<Vec<DownloadEvent>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_cb = events.clone();
+        let on_progress: ProgressCallback = Arc::new(RwLock::new(HashMap::new()));
+        on_progress.write().await.insert(
+            "fake-test-model".to_string(),
+            Box::new(move |evt: DownloadEvent| {
+                events_cb.lock().unwrap().push(evt);
+            }),
+        );
+
+        let result = perform_download(test_download_params(
+            format!("{url}/model.gguf"),
+            partial_path,
+            final_path,
+            body.len() as u64,
+            expected_hash,
+            CancellationToken::new(),
+            on_progress,
+        ))
+        .await;
+
+        assert!(result.is_ok(), "download should succeed: {:?}", result);
+        let captured = events.lock().unwrap();
+        assert!(
+            !captured.is_empty(),
+            "at least one progress event must be reported for a multi-chunk download"
+        );
+        assert_eq!(captured[0].bytes_total, body.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn perform_download_sha256_mismatch_is_verification_failed() {
+        let tmp = TempDir::new().unwrap();
+        let body = b"real bytes that will not match the expected hash".to_vec();
+        let url = spawn_fake_model_server(body.clone()).await;
+
+        let partial_path = tmp.path().join("model.gguf.partial");
+        let final_path = tmp.path().join("model.gguf");
+        let on_progress: ProgressCallback = Arc::new(RwLock::new(HashMap::new()));
+
+        let result = perform_download(test_download_params(
+            format!("{url}/model.gguf"),
+            partial_path.clone(),
+            final_path.clone(),
+            body.len() as u64,
+            "0".repeat(64), // deliberately wrong hash
+            CancellationToken::new(),
+            on_progress,
+        ))
+        .await;
+
+        assert!(matches!(result, Err(ModelError::VerificationFailed(_))));
+        assert!(
+            !partial_path.exists(),
+            "corrupted/mismatched partial file must be deleted, not left on disk"
+        );
+        assert!(
+            !final_path.exists(),
+            "final file must never be created on verification failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_download_cancellation_removes_partial_and_terminates() {
+        let tmp = TempDir::new().unwrap();
+        let body = vec![0xCDu8; 4096];
+        let expected_hash = format!("{:x}", Sha256::digest(&body));
+        let url =
+            spawn_slow_fake_model_server(body.clone(), std::time::Duration::from_millis(100)).await;
+
+        let partial_path = tmp.path().join("model.gguf.partial");
+        let final_path = tmp.path().join("model.gguf");
+        let on_progress: ProgressCallback = Arc::new(RwLock::new(HashMap::new()));
+        let cancel_token = CancellationToken::new();
+
+        // Cancel shortly after the download starts, while the slow server is
+        // still trickling bytes — a real mid-stream cancellation, not a
+        // pre-cancelled no-op.
+        let cancel_clone = cancel_token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            cancel_clone.cancel();
+        });
+
+        let result = perform_download(test_download_params(
+            format!("{url}/model.gguf"),
+            partial_path.clone(),
+            final_path.clone(),
+            body.len() as u64,
+            expected_hash,
+            cancel_token,
+            on_progress,
+        ))
+        .await;
+
+        assert!(
+            matches!(&result, Err(ModelError::DownloadFailed(msg)) if msg.contains("cancelled")),
+            "expected a cancellation error, got: {:?}",
+            result
+        );
+        assert!(
+            !partial_path.exists(),
+            "cancel must leave no lingering partial file on disk"
+        );
+        assert!(!final_path.exists());
+    }
+
     // -- Catalog tests -------------------------------------------------------
 
     #[tokio::test]
