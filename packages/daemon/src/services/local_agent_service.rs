@@ -1399,6 +1399,291 @@ mod tests {
             .expect("create ai-chat")
     }
 
+    /// Create an ai-chat node already sitting in `status: "processing"` with a
+    /// trailing user message — the exact shape the frontend produces via
+    /// batch-update before triggering a turn (mirrors `scripts/aichat.ts`).
+    async fn create_processing_node_with_user_message(
+        node_service: &Arc<NodeService>,
+        user_text: &str,
+    ) -> String {
+        let node_id = create_ai_chat_node(node_service).await;
+        let node = node_service
+            .get_node(&node_id)
+            .await
+            .expect("get node")
+            .expect("node exists");
+        let version = node.version;
+        let mut ai_chat = AiChatNode::from_node(node).expect("from_node");
+        ai_chat.status = "processing".to_string();
+        ai_chat.messages.push(AiChatMessage {
+            role: "user".to_string(),
+            content: user_text.to_string(),
+            timestamp: Some(chrono::Utc::now().to_rfc3339()),
+            reasoning: None,
+        });
+        let mut props = serde_json::json!({});
+        props["ai-chat"] = ai_chat.to_properties_value();
+        node_service
+            .update_node(&node_id, version, NodeUpdate::new().with_properties(props))
+            .await
+            .expect("set processing + user message");
+        node_id
+    }
+
+    async fn get_ai_chat(node_service: &Arc<NodeService>, node_id: &str) -> AiChatNode {
+        let node = node_service
+            .get_node(node_id)
+            .await
+            .expect("get node")
+            .expect("node exists");
+        AiChatNode::from_node(node).expect("from_node")
+    }
+
+    // -- Stub inference engine -------------------------------------------
+
+    /// Canned engine returning a fixed text reply with no tool calls — mirrors
+    /// `agent_loop.rs`'s `MockEngine::single_text` pattern, one level up at the
+    /// daemon-service seam. Counts constructions/generations so tests can
+    /// assert engine-reuse ("second message reuses the loaded engine").
+    struct StubEngine {
+        reply: String,
+        generate_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl StubEngine {
+        fn new(reply: &str) -> Self {
+            Self {
+                reply: reply.to_string(),
+                generate_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ChatInferenceEngine for StubEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            self.generate_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            on_chunk(StreamingChunk::Token {
+                text: self.reply.clone(),
+            });
+            on_chunk(StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                },
+            });
+            Ok(InferenceUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+            })
+        }
+
+        async fn model_info(
+            &self,
+        ) -> Result<Option<nodespace_agent::agent_types::ChatModelSpec>, InferenceError> {
+            Ok(None)
+        }
+
+        async fn token_count(&self, text: &str) -> Result<u32, InferenceError> {
+            Ok((text.len() as f32 / 4.0).ceil() as u32)
+        }
+    }
+
+    /// An engine whose `generate` blocks until the test releases it, so a
+    /// turn can be cancelled mid-flight deterministically.
+    struct BlockingEngine {
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    impl BlockingEngine {
+        fn new(release: tokio::sync::oneshot::Receiver<()>) -> Self {
+            Self {
+                release: tokio::sync::Mutex::new(Some(release)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ChatInferenceEngine for BlockingEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            let rx = self.release.lock().await.take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+            Err(InferenceError::Engine("should not complete".into()))
+        }
+
+        async fn model_info(
+            &self,
+        ) -> Result<Option<nodespace_agent::agent_types::ChatModelSpec>, InferenceError> {
+            Ok(None)
+        }
+
+        async fn token_count(&self, _text: &str) -> Result<u32, InferenceError> {
+            Ok(0)
+        }
+    }
+
+    // -- Issue #1526: agent-flow (stuck-state) coverage with a stub model ---
+
+    #[tokio::test]
+    async fn send_message_reaches_idle_with_stub_engine() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        svc.replace_engine(Arc::new(StubEngine::new("Hello back!")))
+            .await;
+
+        let node_id = create_processing_node_with_user_message(&node_service, "Hi there").await;
+
+        svc.maybe_handle_ai_chat_node(&node_id).await;
+
+        let ai_chat = get_ai_chat(&node_service, &node_id).await;
+        assert_eq!(
+            ai_chat.status, "idle",
+            "turn must terminate, never stuck processing"
+        );
+        let assistant = ai_chat
+            .messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant reply appended");
+        assert_eq!(assistant.content, "Hello back!");
+        assert!(
+            svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
+            "no lingering turn token after completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn stuck_processing_node_recovered_on_watcher_restart() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        svc.replace_engine(Arc::new(StubEngine::new("Recovered reply.")))
+            .await;
+
+        // Simulate a daemon crash mid-turn: node left in `processing` with a
+        // trailing user message, no in-memory turn_tokens entry (fresh process).
+        let node_id =
+            create_processing_node_with_user_message(&node_service, "Are you there?").await;
+
+        svc.recover_stuck_turns().await;
+
+        // recover_stuck_turns spawns the retry; poll briefly for completion.
+        let mut ai_chat = get_ai_chat(&node_service, &node_id).await;
+        for _ in 0..50 {
+            if ai_chat.status == "idle" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            ai_chat = get_ai_chat(&node_service, &node_id).await;
+        }
+
+        assert_eq!(
+            ai_chat.status, "idle",
+            "a node stuck in processing at startup must recover to idle, not stay stuck"
+        );
+        assert!(ai_chat.messages.iter().any(|m| m.role == "assistant"));
+    }
+
+    #[tokio::test]
+    async fn turn_cancelled_via_cancel_turn_resets_to_idle() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let (_release_tx, release_rx) = tokio::sync::oneshot::channel();
+        svc.replace_engine(Arc::new(BlockingEngine::new(release_rx)))
+            .await;
+
+        let node_id =
+            create_processing_node_with_user_message(&node_service, "Take your time").await;
+
+        // Trigger the turn in the background (it will block inside BlockingEngine).
+        let svc2 = svc.clone();
+        let node_id2 = node_id.clone();
+        let handle = tokio::spawn(async move {
+            svc2.maybe_handle_ai_chat_node(&node_id2).await;
+        });
+
+        // Wait until the turn has actually registered its cancellation token.
+        for _ in 0..50 {
+            if svc.inner.turn_tokens.lock().await.contains_key(&node_id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            svc.inner.turn_tokens.lock().await.contains_key(&node_id),
+            "turn should be registered before cancelling"
+        );
+
+        // Cancel via the same path the gRPC CancelTurn handler uses.
+        {
+            let tokens = svc.inner.turn_tokens.lock().await;
+            if let Some(token) = tokens.get(&node_id) {
+                token.cancel();
+            }
+        }
+        handle.await.expect("turn task joins");
+
+        let ai_chat = get_ai_chat(&node_service, &node_id).await;
+        assert_eq!(
+            ai_chat.status, "idle",
+            "cancelled turn must reset to idle, not stay stuck"
+        );
+        assert!(
+            !ai_chat.messages.iter().any(|m| m.role == "assistant"),
+            "a cancelled turn must not append an assistant message"
+        );
+        assert!(
+            svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
+            "no stray cancellation-token entry left behind after cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn second_message_reuses_loaded_engine() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let swapped_first = svc
+            .replace_engine_if_changed("stub-model", Arc::new(StubEngine::new("first reply")))
+            .await;
+        assert!(swapped_first, "first load must swap the engine in");
+
+        let node_id_1 =
+            create_processing_node_with_user_message(&node_service, "First message").await;
+        svc.maybe_handle_ai_chat_node(&node_id_1).await;
+        assert_eq!(get_ai_chat(&node_service, &node_id_1).await.status, "idle");
+
+        // A second "load" of the same model_id must be a no-op swap — this is
+        // the literal "second message reuses the loaded engine" criterion.
+        let swapped_second = svc
+            .replace_engine_if_changed("stub-model", Arc::new(StubEngine::new("second reply")))
+            .await;
+        assert!(
+            !swapped_second,
+            "loading the same model_id again must not swap the engine"
+        );
+
+        let node_id_2 =
+            create_processing_node_with_user_message(&node_service, "Second message").await;
+        svc.maybe_handle_ai_chat_node(&node_id_2).await;
+
+        let ai_chat_2 = get_ai_chat(&node_service, &node_id_2).await;
+        assert_eq!(ai_chat_2.status, "idle");
+        // Because the swap was skipped, the ORIGINAL engine (first reply) is
+        // still the one wired in and answers the second turn too.
+        let assistant = ai_chat_2
+            .messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant reply appended");
+        assert_eq!(assistant.content, "first reply");
+    }
+
     #[tokio::test]
     async fn reasoning_round_trips_through_persist_and_reload() {
         let (svc, node_service, _tempdir) = test_service().await;
