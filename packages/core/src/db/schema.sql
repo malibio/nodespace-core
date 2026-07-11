@@ -1,3 +1,12 @@
+-- Human-readable reference of the CURRENT schema (all migrations applied).
+-- NOT executed directly — the database is built by running the numbered
+-- migrations in db/migrations/ in order. Update this file alongside any new
+-- migration so it stays an accurate snapshot; never apply it as-is to a DB.
+--
+-- The PRAGMAs below are set on every connection in
+-- SqliteStore::apply_connection_pragmas (per-connection session settings, not
+-- migrated schema state) — shown here for a complete picture of DB behavior.
+
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
