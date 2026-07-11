@@ -81,7 +81,9 @@ pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
 /// Register the statically-linked `sqlite-vec` extension as a SQLite auto-extension so
 /// every connection opened afterwards has the `vec0` virtual-table module available.
 /// Runs exactly once per process and must complete before any real store connection is
-/// opened — `SqliteStore::new` awaits it first.
+/// opened — `SqliteStore::new` awaits it first. `pub` so tests/tooling that open a raw
+/// libsql connection (bypassing `SqliteStore::new`) to exercise the migration runner
+/// directly can register `vec0` too, since migration 1 creates a vec0 table.
 ///
 /// Ordering is critical: libsql lazily calls `sqlite3_config(SQLITE_CONFIG_SERIALIZED)`
 /// on its first `connect()` (via a process-global `Once`), and `sqlite3_config` fails
@@ -90,7 +92,7 @@ pub type StoreNotifier = Arc<dyn Fn(StoreChange) + Send + Sync>;
 /// libsql's config, THEN register. Doing this in a single async `OnceCell` keeps the two
 /// steps atomic so concurrent `new()` calls can't interleave the warm-up and the
 /// registration.
-async fn ensure_sqlite_vec_registered() {
+pub async fn ensure_sqlite_vec_registered() {
     /// The libsql FFI signature for a SQLite extension entry point.
     type EntryPoint = unsafe extern "C" fn(
         *mut libsql::ffi::sqlite3,
@@ -141,6 +143,7 @@ impl SqliteStore {
             .connect()
             .context("Failed to connect to libsql database")?;
 
+        Self::apply_connection_pragmas(&conn).await?;
         Self::initialize_schema(&conn).await?;
 
         let valid_node_types = Self::build_schema_caches(&conn).await?;
@@ -154,130 +157,41 @@ impl SqliteStore {
         })
     }
 
-    async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
-        let schema_sql = include_str!("../schema.sql");
-        for stmt in schema_sql.split(';') {
-            let stmt = stmt.trim();
-            if stmt.is_empty() {
-                continue;
-            }
-            // PRAGMAs that return rows (e.g. journal_mode) must be queried, not executed
-            if stmt.to_uppercase().starts_with("PRAGMA") && stmt.contains('=') {
-                conn.query(stmt, ()).await.with_context(|| {
-                    format!("Failed to execute PRAGMA: {}", &stmt[..stmt.len().min(80)])
-                })?;
-            } else {
-                conn.execute(stmt, ()).await.with_context(|| {
-                    format!("Failed to execute DDL: {}", &stmt[..stmt.len().min(80)])
-                })?;
-            }
-        }
-
-        // FTS5 virtual table for BM25 full-text search
-        conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(id UNINDEXED, content, content='node', content_rowid='rowid')",
-            ()
-        ).await.context("Failed to create FTS5 table")?;
-
-        conn.execute(
-            r#"CREATE TRIGGER IF NOT EXISTS node_fts_insert AFTER INSERT ON node BEGIN
-                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
-            END"#,
-            (),
-        )
-        .await
-        .context("Failed to create FTS5 insert trigger")?;
-
-        conn.execute(
-            r#"CREATE TRIGGER IF NOT EXISTS node_fts_update AFTER UPDATE ON node BEGIN
-                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
-                INSERT INTO node_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
-            END"#,
-            ()
-        ).await.context("Failed to create FTS5 update trigger")?;
-
-        conn.execute(
-            r#"CREATE TRIGGER IF NOT EXISTS node_fts_delete AFTER DELETE ON node BEGIN
-                INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
-            END"#,
-            ()
-        ).await.context("Failed to create FTS5 delete trigger")?;
-
-        Self::backfill_fts_if_stale(conn).await?;
-
-        // sqlite-vec virtual table for embedding KNN search. Keyed by `embedding.id`
-        // (the per-chunk UUID); holds ONLY real, non-stale vectors (see upsert/delete/
-        // mark-stale paths). vec0 is a fast brute-force SIMD scan, not an ANN index.
-        conn.execute(
-            &format!(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(\
-                    embedding_id TEXT PRIMARY KEY, \
-                    vector FLOAT[{}] distance_metric=cosine\
-                )",
-                crate::models::embedding::DEFAULT_EMBEDDING_DIMENSION
-            ),
-            (),
-        )
-        .await
-        .context("Failed to create vec0 embeddings table")?;
-
-        Self::migrate_embedding_origin(conn).await?;
-
+    /// Per-connection session settings. Unlike the tables/indexes in
+    /// `db::migrations`, these are NOT persisted schema state — `journal_mode` is
+    /// durable in the DB file but re-asserting it is harmless, while
+    /// `foreign_keys`, `synchronous`, and `busy_timeout` reset to SQLite defaults
+    /// on every new connection and must be set every time. Must run outside any
+    /// transaction: SQLite forbids changing `synchronous` inside one.
+    async fn apply_connection_pragmas(conn: &libsql::Connection) -> Result<()> {
+        conn.query("PRAGMA journal_mode = WAL", ())
+            .await
+            .context("Failed to set journal_mode")?;
+        conn.query("PRAGMA foreign_keys = ON", ())
+            .await
+            .context("Failed to set foreign_keys")?;
+        conn.query("PRAGMA synchronous = NORMAL", ())
+            .await
+            .context("Failed to set synchronous")?;
+        conn.query("PRAGMA busy_timeout = 5000", ())
+            .await
+            .context("Failed to set busy_timeout")?;
         Ok(())
     }
 
-    /// Idempotent DDL migration for the embedding `origin` column (#182/#183).
-    ///
-    /// `schema.sql` is applied with `CREATE TABLE/INDEX IF NOT EXISTS`, which
-    /// CANNOT alter a pre-existing `embedding` table — and `packages/core` ships
-    /// in the community desktop app, whose user DBs are never reset (lazy
-    /// node-migration design). On such a DB the new column + reshaped index would
-    /// be silently absent, so every embedding write and the push sweep's
-    /// `WHERE origin = 'local'` would fail with `no such column: origin`. Add the
-    /// column and rebuild the index here when missing. No-op on fresh DBs (the
-    /// column already exists) and on re-runs.
-    async fn migrate_embedding_origin(conn: &libsql::Connection) -> Result<()> {
-        let mut cols = conn
-            .query("PRAGMA table_info(embedding)", ())
+    async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
+        crate::db::migrations::run(conn)
             .await
-            .context("read embedding table_info")?;
-        let mut has_origin = false;
-        while let Some(row) = cols.next().await? {
-            // table_info columns: (cid, name, type, notnull, dflt_value, pk)
-            let name: String = row.get(1)?;
-            if name == "origin" {
-                has_origin = true;
-                break;
-            }
-        }
-        if has_origin {
-            return Ok(());
-        }
+            .context("Failed to run schema migrations")?;
 
-        conn.execute(
-            "ALTER TABLE embedding ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'",
-            (),
-        )
-        .await
-        .context("add embedding.origin column")?;
-        // `idx_emb_modified` already exists under its old (originless) definition,
-        // so CREATE INDEX IF NOT EXISTS in schema.sql was skipped — drop it and
-        // rebuild with `origin` leading so the filtered push sweep stays covered.
-        conn.execute("DROP INDEX IF EXISTS idx_emb_modified", ())
-            .await
-            .context("drop legacy idx_emb_modified")?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_emb_modified ON embedding (origin, modified_at, node_id, chunk_index)",
-            (),
-        )
-        .await
-        .context("rebuild idx_emb_modified with origin")?;
+        Self::backfill_fts_if_stale(conn).await?;
+
         Ok(())
     }
 
     /// One-time FTS5 backfill (#1428). The external-content `node_fts` triggers
     /// only index FUTURE writes, so any node predating the FTS table (user DBs are
-    /// never reset — same reason `migrate_embedding_origin` exists) is absent from
+    /// never reset — same reason the migration runner exists) is absent from
     /// the index and never returned by `bm25_search_roots`. Rebuild the index from
     /// `node`, but ONLY when it is out of sync, so a healthy DB does not re-index
     /// its whole corpus on every startup.
@@ -808,67 +722,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_migrate_embedding_origin_upgrades_legacy_db() -> Result<()> {
-        // A pre-#182 DB: `embedding` table WITHOUT `origin`, old index shape, with
-        // a row already present (community desktop DBs aren't reset). The migration
-        // must add the column (default 'local' for existing rows) and rebuild the
-        // index, idempotently — otherwise embedding writes / the push sweep would
-        // hit `no such column: origin`.
-        let tmp = TempDir::new().unwrap();
-        let db = libsql::Builder::new_local(tmp.path().join("legacy.db"))
-            .build()
-            .await?;
-        let conn = db.connect()?;
-        conn.execute(
-            "CREATE TABLE embedding (id TEXT PRIMARY KEY, node_id TEXT NOT NULL, vector BLOB NOT NULL, \
-             dimension INTEGER NOT NULL DEFAULT 768, model_name TEXT NOT NULL DEFAULT 'm', \
-             chunk_index INTEGER NOT NULL DEFAULT 0, chunk_start INTEGER NOT NULL DEFAULT 0, \
-             chunk_end INTEGER, total_chunks INTEGER NOT NULL DEFAULT 1, content_hash TEXT, \
-             token_count INTEGER, stale INTEGER NOT NULL DEFAULT 1, error_count INTEGER NOT NULL DEFAULT 0, \
-             last_error TEXT, created_at TEXT NOT NULL, modified_at TEXT NOT NULL)",
-            (),
-        )
-        .await?;
-        conn.execute(
-            "CREATE INDEX idx_emb_modified ON embedding (modified_at, node_id, chunk_index)",
-            (),
-        )
-        .await?;
-        conn.execute(
-            "INSERT INTO embedding (id, node_id, vector, created_at, modified_at) \
-             VALUES ('e1', 'n1', x'00', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
-            (),
-        )
-        .await?;
-
-        SqliteStore::migrate_embedding_origin(&conn).await?;
-
-        // Column added; the existing row defaulted to 'local'.
-        let mut rows = conn
-            .query("SELECT origin FROM embedding WHERE id = 'e1'", ())
-            .await?;
-        let origin: String = rows.next().await?.unwrap().get(0)?;
-        assert_eq!(origin, "local");
-
-        // Index rebuilt to lead with `origin`.
-        let mut idx = conn
-            .query(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_emb_modified'",
-                (),
-            )
-            .await?;
-        let sql: String = idx.next().await?.unwrap().get(0)?;
-        assert!(
-            sql.contains("origin"),
-            "index must include origin; was: {sql}"
-        );
-
-        // Idempotent: a second run is a no-op.
-        SqliteStore::migrate_embedding_origin(&conn).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_get_embeddings_roundtrip_and_modified_since() -> Result<()> {
         // #97 read-API: vectors must round-trip out of the le-f32 blob, both
         // chunks come back in order, and the modified-since cursor filters.
@@ -1289,7 +1142,7 @@ mod tests {
 
     /// #1483: two `SqliteStore`s opened against the same file (simulating a dev +
     /// production daemon both holding the DB) must not surface SQLITE_BUSY as a
-    /// hard error on the loser of a write race. `busy_timeout` (set in schema.sql,
+    /// hard error on the loser of a write race. `busy_timeout` (set by migration 1,
     /// applied per-connection in `initialize_schema`) makes the second writer retry
     /// until the first releases its lock, instead of failing immediately.
     ///
