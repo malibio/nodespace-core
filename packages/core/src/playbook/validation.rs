@@ -3,18 +3,21 @@
 //! Validates playbook rule definitions before persisting. Reuses the CEL parser
 //! from `cel.rs` — no divergence between what validates and what executes.
 //!
+//! CEL condition syntax is validated earlier, by `parse_rule` — a `ParsedRule`
+//! cannot exist with an uncompiled condition. This module validates everything
+//! that depends on knowing the schema graph.
+//!
 //! # Checks performed
 //!
 //! 1. All referenced `node_type` values must exist as schema nodes
 //! 2. All referenced `version` values in action params must match the schema's `schema_version`
-//! 3. All property paths in conditions parse successfully via the CEL compiler
+//! 3. All property paths in conditions resolve against the schema graph
 //! 4. All relationship types in actions must exist on the referenced schemas
 //!
 //! If any check fails, the playbook is not saved. All errors are collected
 //! (not short-circuited) so the caller can present every issue at once.
 
 use crate::models::SchemaNode;
-use crate::playbook::cel::compile_condition;
 use crate::playbook::path_extractor;
 use crate::playbook::types::{ActionType, ParsedAction, ParsedRule, ParsedTrigger};
 use crate::services::NodeService;
@@ -146,8 +149,9 @@ pub type ValidationResult = Result<(), Vec<PlaybookValidationError>>;
 /// Validate a set of parsed rules before saving a playbook.
 ///
 /// Queries schema nodes via `NodeService` to verify node_type existence,
-/// schema_version matching, and relationship type existence. Also compiles
-/// all CEL conditions to catch syntax errors.
+/// schema_version matching, and relationship type existence. CEL condition
+/// syntax is already guaranteed valid — `rules` are `ParsedRule`s, which can
+/// only be constructed with successfully compiled conditions.
 ///
 /// Returns `Ok(())` if all checks pass, or `Err(Vec<...>)` with all errors found.
 pub async fn validate_playbook(
@@ -187,22 +191,18 @@ pub async fn validate_playbook(
             }
         }
 
-        // -- Validate CEL conditions --
+        // -- Validate CEL condition paths --
+        //
+        // Conditions are already compiled (and guaranteed valid) by `parse_rule`
+        // before a `ParsedRule` can exist, so only schema-aware path validation
+        // remains to do here.
         for (cond_idx, condition) in rule.conditions.iter().enumerate() {
             let location = format!("rule[{}].condition[{}]", rule_idx, cond_idx);
-            if let Err(e) = compile_condition(condition) {
-                errors.push(PlaybookValidationError::InvalidCondition {
-                    expression: e.expression,
-                    message: e.message,
-                    location,
-                });
-                continue; // Can't extract paths from unparseable conditions
-            }
 
             // Schema-aware path validation (#1010): extract dot-paths and
             // verify each segment resolves to a field or relationship on the schema graph
             if let Some(nt) = &trigger_node_type {
-                if let Ok(extraction) = path_extractor::extract_paths(condition) {
+                if let Ok(extraction) = path_extractor::extract_paths(&condition.source) {
                     for path in &extraction.paths {
                         if path.root == "node" && path.segments.len() > 2 {
                             validate_schema_path(
@@ -624,7 +624,7 @@ pub async fn check_schema_change_impact(
 
             // Check condition paths
             for condition in &parsed.conditions {
-                if let Ok(extraction) = path_extractor::extract_paths(condition) {
+                if let Ok(extraction) = path_extractor::extract_paths(&condition.source) {
                     for path in &extraction.paths {
                         if path.segments.iter().any(|s| s == schema_node_type) {
                             broken_paths.push(path.segments.join("."));
@@ -702,11 +702,19 @@ pub async fn check_schema_change_impact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::playbook::cel::compile_condition;
     use crate::playbook::types::{
         ActionType, GraphEventType, ParsedAction, ParsedRule, ParsedTrigger,
     };
 
     // -- CEL condition validation tests (no NodeService needed) --
+
+    fn compile_conditions(conditions: Vec<&str>) -> Vec<crate::playbook::cel::CompiledCondition> {
+        conditions
+            .into_iter()
+            .map(|s| crate::playbook::cel::CompiledCondition::compile(s).expect("valid CEL"))
+            .collect()
+    }
 
     fn make_rule(
         node_type: &str,
@@ -720,7 +728,7 @@ mod tests {
                 node_type: node_type.to_string(),
                 property_key: None,
             },
-            conditions: conditions.into_iter().map(|s| s.to_string()).collect(),
+            conditions: compile_conditions(conditions),
             actions,
         })
     }
@@ -732,7 +740,7 @@ mod tests {
                 cron: cron.to_string(),
                 node_type: node_type.to_string(),
             },
-            conditions: conditions.into_iter().map(|s| s.to_string()).collect(),
+            conditions: compile_conditions(conditions),
             actions: vec![],
         })
     }
@@ -1056,28 +1064,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_invalid_cel_condition_fails() {
-            let (svc, _tmp) = create_test_service().await;
-            create_schema(&svc, "vt_item", 1, json!([])).await;
-
-            let rules = vec![make_rule(
-                "vt_item",
-                vec!["1 + + 2", "node.status == 'open'"],
-                vec![],
-            )];
-            let result = validate_playbook(&rules, &svc).await;
-            assert!(result.is_err());
-            let errors = result.unwrap_err();
-            assert_eq!(errors.len(), 1);
-            match &errors[0] {
-                PlaybookValidationError::InvalidCondition { location, .. } => {
-                    assert_eq!(location, "rule[0].condition[0]");
-                }
-                other => panic!("expected InvalidCondition, got {:?}", other),
-            }
-        }
-
-        #[tokio::test]
         async fn test_unknown_relationship_type_fails() {
             let (svc, _tmp) = create_test_service().await;
             // Create schema with a known relationship
@@ -1141,20 +1127,23 @@ mod tests {
         #[tokio::test]
         async fn test_multiple_errors_collected() {
             let (svc, _tmp) = create_test_service().await;
-            // No custom schemas — multiple errors expected
-
+            // No custom schemas — multiple errors expected.
+            //
+            // CEL syntax errors are now caught earlier, by `parse_rule` (a
+            // `ParsedRule` can't exist with an uncompiled condition), so this
+            // exercises the remaining schema-level checks collected together:
+            // unknown trigger node_type + unknown action node_type.
             let rules = vec![make_rule(
                 "nonexistent_aaa",
-                vec!["1 + + 2"],
+                vec![],
                 vec![make_create_action("nonexistent_bbb", None)],
             )];
             let result = validate_playbook(&rules, &svc).await;
             assert!(result.is_err());
             let errors = result.unwrap_err();
-            // Should have at least: unknown trigger node_type + bad CEL + unknown action node_type
             assert!(
-                errors.len() >= 3,
-                "expected >= 3 errors, got {}",
+                errors.len() >= 2,
+                "expected >= 2 errors, got {}",
                 errors.len()
             );
         }

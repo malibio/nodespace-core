@@ -889,18 +889,17 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
     };
 
     // Benchmark: simple property condition (no graph traversal)
+    //
+    // Conditions are compiled once, outside the timed loop — matching real
+    // usage, where a rule's CEL programs are compiled at parse/save time.
     {
         let node = root_node.clone();
         let evt = event.clone();
+        let conditions = vec![cel::CompiledCondition::compile("node.status == 'active'").unwrap()];
 
         group.bench_function("simple_property_no_resolver", |b| {
             b.iter(|| {
-                black_box(cel::evaluate_conditions(
-                    &["node.status == 'active'".to_string()],
-                    &node,
-                    &evt,
-                    None,
-                ));
+                black_box(cel::evaluate_conditions(&conditions, &node, &evt, None));
             });
         });
     }
@@ -910,6 +909,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
         let svc_clone = Arc::clone(&svc);
         let node = root_node.clone();
         let evt = event.clone();
+        let conditions = vec![cel::CompiledCondition::compile(
+            "node.bench_type_1.bench_type_2.status == 'active'",
+        )
+        .unwrap()];
 
         group.bench_function("2_hop_with_resolver", |b| {
             b.iter_custom(|iters| {
@@ -919,7 +922,7 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
                         black_box(cel::evaluate_conditions(
-                            &["node.bench_type_1.bench_type_2.status == 'active'".to_string()],
+                            &conditions,
                             &node,
                             &evt,
                             Some(&mut resolver),
@@ -937,6 +940,10 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
         let svc_clone = Arc::clone(&svc);
         let node = root_node.clone();
         let evt = event.clone();
+        let conditions = vec![
+            cel::CompiledCondition::compile("node.status == 'active'").unwrap(),
+            cel::CompiledCondition::compile("node.bench_type_1.status == 'active'").unwrap(),
+        ];
 
         group.bench_function("mixed_conditions_with_resolver", |b| {
             b.iter_custom(|iters| {
@@ -946,10 +953,7 @@ fn bench_cel_evaluation_e2e(c: &mut Criterion) {
                         let mut resolver = GraphResolver::new(Arc::clone(&svc_clone));
                         let start = std::time::Instant::now();
                         black_box(cel::evaluate_conditions(
-                            &[
-                                "node.status == 'active'".to_string(),
-                                "node.bench_type_1.status == 'active'".to_string(),
-                            ],
+                            &conditions,
                             &node,
                             &evt,
                             Some(&mut resolver),

@@ -215,6 +215,46 @@ mod playbook_tests {
     }
 
     #[test]
+    fn test_parse_invalid_cel_condition() {
+        let def = RuleDefinition {
+            name: "bad condition".to_string(),
+            trigger: TriggerDefinition {
+                trigger_type: "graph_event".to_string(),
+                on: Some("node_created".to_string()),
+                node_type: Some("invoice".to_string()),
+                property_key: None,
+                cron: None,
+            },
+            conditions: vec!["1 + + 2".to_string()],
+            actions: vec![],
+        };
+
+        assert!(matches!(
+            parse_rule(&def),
+            Err(PlaybookParseError::InvalidCondition(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_condition_compiles_program_once() {
+        let def = RuleDefinition {
+            name: "compiled rule".to_string(),
+            trigger: TriggerDefinition {
+                trigger_type: "graph_event".to_string(),
+                on: Some("node_created".to_string()),
+                node_type: Some("invoice".to_string()),
+                property_key: None,
+                cron: None,
+            },
+            conditions: vec!["node.status == 'draft'".to_string()],
+            actions: vec![],
+        };
+
+        let parsed = parse_rule(&def).unwrap();
+        assert_eq!(parsed.conditions[0].source, "node.status == 'draft'");
+    }
+
+    #[test]
     fn test_parse_all_action_types() {
         for (input, expected) in [
             ("create_node", ActionType::CreateNode),
