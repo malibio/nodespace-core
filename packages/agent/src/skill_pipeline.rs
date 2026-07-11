@@ -17,7 +17,205 @@
 //! deterministic Rust handlers. Each tool is seeded as a node carrying its
 //! handler key, typed parameter schema, description, and `source` provenance.
 
+use crate::skill_rules::{
+    AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, EDIT_DONT_RECREATE, ENUM_FORMAT,
+    FIND_THEN_ACT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST,
+    ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS,
+    SINGLE_ITEM_PER_CALL, SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
+    TITLE_TEMPLATE_PLACEHOLDERS,
+};
 use nodespace_core::markdown::NodeTemplate;
+
+/// Builds the Schema Creation skill's markdown_content, interpolating the
+/// shared rules from [`crate::skill_rules`] (imperative form) so this text
+/// cannot silently drift from the "Schema inspection and management" section
+/// of `packages/skill/SKILL.md`, which renders the same rules in prose form
+/// via `bin/gen_skill_md.rs`. Only the worked EXAMPLE blocks and structural
+/// headers are unique to this LLM-prompt rendering.
+fn schema_creation_guidance() -> String {
+    format!(
+        r#"# Schema Creation & Editing Guidance
+
+CREATING A SCHEMA — call create_schema:
+
+{one_schema_per_request}
+
+{schema_already_exists}
+
+EDITING A SCHEMA — call update_schema:
+
+{edit_dont_recreate}
+
+FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholder_exception} A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
+
+{enum_format}
+
+{relationship_vs_field} {target_type_must_exist}
+
+{title_template_placeholders} Examples:
+- Customer with fields [first_name, last_name]: title_template = "{{first_name}} {{last_name}}"
+- Invoice with fields [invoice_number, ...]: title_template = "Invoice #{{invoice_number}}"
+- Project with fields [name, status, ...]: title_template = "{{name}} ({{status}})"
+
+EXAMPLE — Invoice schema (references existing 'customer' type):
+{{
+  "name": "Invoice",
+  "description": "A billing invoice linked to a customer",
+  "title_template": "Invoice #{{invoice_number}}",
+  "fields": [
+    {{"name": "invoice_number", "type": "text", "required": true}},
+    {{"name": "issue_date", "type": "date", "required": true}},
+    {{"name": "due_date", "type": "date"}},
+    {{"name": "amount", "type": "number", "required": true}},
+    {{"name": "status", "type": "enum", "required": true, "coreValues": [
+      {{"value": "draft", "label": "Draft"}},
+      {{"value": "sent", "label": "Sent"}},
+      {{"value": "paid", "label": "Paid"}},
+      {{"value": "overdue", "label": "Overdue"}}
+    ]}}
+  ],
+  "relationships": [
+    {{"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}}
+  ]
+}}
+
+EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH are in fields):
+{{
+  "name": "Project",
+  "description": "A tracked project with status and timeline",
+  "title_template": "{{name}} ({{status}})",
+  "fields": [
+    {{"name": "name", "type": "text", "required": true}},
+    {{"name": "status", "type": "enum", "required": true, "coreValues": [
+      {{"value": "planning", "label": "Planning"}},
+      {{"value": "active", "label": "Active"}},
+      {{"value": "on_hold", "label": "On Hold"}},
+      {{"value": "completed", "label": "Completed"}}
+    ]}},
+    {{"name": "start_date", "type": "date"}},
+    {{"name": "due_date", "type": "date"}},
+    {{"name": "budget", "type": "number"}},
+    {{"name": "owner", "type": "text"}}
+  ],
+  "relationships": [
+    {{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}}
+  ]
+}}"#,
+        one_schema_per_request = ONE_SCHEMA_PER_REQUEST.imperative,
+        schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
+        edit_dont_recreate = EDIT_DONT_RECREATE.imperative,
+        no_name_title_field = NO_NAME_TITLE_FIELD.imperative,
+        name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.imperative,
+        enum_format = ENUM_FORMAT.imperative,
+        relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
+        target_type_must_exist = TARGET_TYPE_MUST_EXIST.imperative,
+        title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.imperative,
+    )
+}
+
+/// Builds the Graph Editing skill's markdown_content, interpolating shared
+/// interaction rules from [`crate::skill_rules`] (find-then-act, ambiguity
+/// clarification, dedicated task-status verb, success-means-stop).
+fn graph_editing_guidance() -> String {
+    format!(
+        r#"# Graph Editing Guidance
+
+When updating an existing node:
+
+FIND THEN UPDATE: {find_then_act}
+
+AMBIGUITY: {ambiguity_clarify} Examples:
+- 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
+- Multiple results: "I found 3 invoices — which one did you mean: Invoice #001 ($500), Invoice #002 ($750), or Invoice #003 ($500 overdue)?"
+
+{task_status_dedicated_verb}
+
+update_node FIELDS: Pass only the properties that need to change. Omit properties that should stay the same. Use the exact property key from the node's schema.
+
+CONTENT vs PROPERTIES: Use the content field to update the node's title/main text. Use properties for typed fields (status, due_date, amount, etc.).
+
+SUCCESS: {success_no_reverify}"#,
+        find_then_act = FIND_THEN_ACT.imperative,
+        ambiguity_clarify = AMBIGUITY_CLARIFY.imperative,
+        task_status_dedicated_verb = TASK_STATUS_DEDICATED_VERB.imperative,
+        success_no_reverify = SUCCESS_NO_REVERIFY.imperative,
+    )
+}
+
+/// Builds the Relationship Management skill's markdown_content, interpolating
+/// the shared find-then-act and success-means-stop rules.
+fn relationship_management_guidance() -> String {
+    format!(
+        r#"# Relationship Management Guidance
+
+When linking nodes or exploring connections:
+
+CREATING A RELATIONSHIP: Call create_relationship with the source node ID, target node ID, and a relation_type label (e.g. "has_task", "billed_to", "related_to"). Both node IDs must exist — search for them first if you don't have them.
+
+TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relation_type to narrow results.
+
+FIND BEFORE LINK: If the user says "link X to Y" and you don't have both IDs, call search_semantic or search_nodes once per entity to resolve them, then call create_relationship.
+
+SUCCESS: {success_no_reverify}"#,
+        success_no_reverify = SUCCESS_NO_REVERIFY.imperative,
+    )
+}
+
+/// Builds the Node Deletion skill's markdown_content, interpolating the
+/// shared find-then-act, single-item-per-call, and success-means-stop rules.
+fn node_deletion_guidance() -> String {
+    format!(
+        r#"# Node Deletion Guidance
+
+When deleting a node:
+
+FIND THEN DELETE: {find_then_act} Confirm the title matches what the user described, then call delete_node with the ID.
+
+{single_item_per_call}
+
+SUCCESS: {success_no_reverify}"#,
+        find_then_act = FIND_THEN_ACT.imperative,
+        single_item_per_call = SINGLE_ITEM_PER_CALL.imperative,
+        success_no_reverify = SUCCESS_NO_REVERIFY.imperative,
+    )
+}
+
+/// Builds the Bulk Import skill's markdown_content, interpolating the shared
+/// no-followup-search success rule.
+fn bulk_import_guidance() -> String {
+    format!(
+        r#"# Bulk Import Guidance
+
+When importing a document or creating multiple nodes from markdown:
+
+CALL create_nodes_from_markdown ONCE: Pass the markdown content directly. The tool parses headings into a node hierarchy — top-level headings become root nodes, sub-headings become children.
+
+COLLECTION: If the user specifies a collection or folder name, pass it as the collection parameter.
+
+NODE TYPE: Default to node_type="text" for general documents. Use a specific type if the user names one.
+
+SUCCESS: {bulk_import_no_followup_search}"#,
+        bulk_import_no_followup_search = BULK_IMPORT_NO_FOLLOWUP_SEARCH.imperative,
+    )
+}
+
+/// Builds the Organization skill's markdown_content, interpolating the shared
+/// find-then-act, collection-must-preexist, and success-means-stop rules.
+fn organization_guidance() -> String {
+    format!(
+        r#"# Organization Guidance
+
+When organizing nodes into collections or categories:
+
+FIND THE NODE: {find_then_act}
+
+ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". {org_needs_existing_collection}
+
+SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#,
+        find_then_act = FIND_THEN_ACT.imperative,
+        org_needs_existing_collection = ORG_NEEDS_EXISTING_COLLECTION.imperative,
+    )
+}
 
 /// Default skill node templates seeded on first run.
 ///
@@ -129,76 +327,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Schema Creation & Editing Guidance
-
-CREATING A SCHEMA — call create_schema:
-
-ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "Invoice", do not also create "Customer" or "Product"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.
-
-SUCCESS: After create_schema returns a schema object (with fields, type_id, etc.), the schema was created. Respond to the user immediately — do NOT call create_schema again. If create_schema returns an error saying the schema already exists, stop and tell the user the type already exists and they can create instances with create_node.
-
-EDITING A SCHEMA — call update_schema:
-
-When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.
-
-FIELDS: Only define type-specific fields. Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field. EXCEPTION: if you use a 'name' placeholder in title_template (e.g. "{name} ({status})"), you MUST define 'name' as a text field so title generation works. A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
-
-ENUMS: Use lowercase values with readable labels, e.g. {"value": "in_progress", "label": "In Progress"}.
-
-RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the ENTITY TYPES list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
-- Invoice billed_to customer (one): {"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}
-- Project has_task task (many): {"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}
-
-TITLE TEMPLATE: Set title_template when a node's identity comes from its fields rather than free-form content. Use {field_name} placeholders. CRITICAL: every placeholder in title_template MUST be defined as a field in the fields array. Examples:
-- Customer with fields [first_name, last_name]: title_template = "{first_name} {last_name}"
-- Invoice with fields [invoice_number, ...]: title_template = "Invoice #{invoice_number}"
-- Project with fields [name, status, ...]: title_template = "{name} ({status})"
-Omit title_template if the content/title field alone identifies the node.
-
-EXAMPLE — Invoice schema (references existing 'customer' type):
-{
-  "name": "Invoice",
-  "description": "A billing invoice linked to a customer",
-  "title_template": "Invoice #{invoice_number}",
-  "fields": [
-    {"name": "invoice_number", "type": "text", "required": true},
-    {"name": "issue_date", "type": "date", "required": true},
-    {"name": "due_date", "type": "date"},
-    {"name": "amount", "type": "number", "required": true},
-    {"name": "status", "type": "enum", "required": true, "coreValues": [
-      {"value": "draft", "label": "Draft"},
-      {"value": "sent", "label": "Sent"},
-      {"value": "paid", "label": "Paid"},
-      {"value": "overdue", "label": "Overdue"}
-    ]}
-  ],
-  "relationships": [
-    {"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}
-  ]
-}
-
-EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are in fields):
-{
-  "name": "Project",
-  "description": "A tracked project with status and timeline",
-  "title_template": "{name} ({status})",
-  "fields": [
-    {"name": "name", "type": "text", "required": true},
-    {"name": "status", "type": "enum", "required": true, "coreValues": [
-      {"value": "planning", "label": "Planning"},
-      {"value": "active", "label": "Active"},
-      {"value": "on_hold", "label": "On Hold"},
-      {"value": "completed", "label": "Completed"}
-    ]},
-    {"name": "start_date", "type": "date"},
-    {"name": "due_date", "type": "date"},
-    {"name": "budget", "type": "number"},
-    {"name": "owner", "type": "text"}
-  ],
-  "relationships": [
-    {"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}
-  ]
-}"#.to_string(),
+            markdown_content: schema_creation_guidance(),
         },
         NodeTemplate {
             title: "Graph Editing".to_string(),
@@ -211,23 +340,7 @@ EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Graph Editing Guidance
-
-When updating an existing node:
-
-FIND THEN UPDATE: If you don't have the node's ID, call search_semantic or search_nodes first to locate it. Then call update_node with the ID and only the fields that need changing.
-
-AMBIGUITY: If search returns 0 results or multiple results that don't clearly match what the user described, ask one specific clarifying question rather than retrying. Examples:
-- 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
-- Multiple results: "I found 3 invoices — which one did you mean: Invoice #001 ($500), Invoice #002 ($750), or Invoice #003 ($500 overdue)?"
-
-TASK STATUS: To change a task's status (open, in_progress, done, cancelled), call update_task_status with the task ID and the new status string. Do NOT use update_node for task status changes.
-
-update_node FIELDS: Pass only the properties that need to change. Omit properties that should stay the same. Use the exact property key from the node's schema.
-
-CONTENT vs PROPERTIES: Use the content field to update the node's title/main text. Use properties for typed fields (status, due_date, amount, etc.).
-
-SUCCESS: After update_node or update_task_status returns, confirm the change to the user. Do NOT re-fetch the node to confirm — the update response confirms success."#.to_string(),
+            markdown_content: graph_editing_guidance(),
         },
         NodeTemplate {
             title: "Relationship Management".to_string(),
@@ -240,17 +353,7 @@ SUCCESS: After update_node or update_task_status returns, confirm the change to 
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Relationship Management Guidance
-
-When linking nodes or exploring connections:
-
-CREATING A RELATIONSHIP: Call create_relationship with the source node ID, target node ID, and a relation_type label (e.g. "has_task", "billed_to", "related_to"). Both node IDs must exist — search for them first if you don't have them.
-
-TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relation_type to narrow results.
-
-FIND BEFORE LINK: If the user says "link X to Y" and you don't have both IDs, call search_semantic or search_nodes once per entity to resolve them, then call create_relationship.
-
-SUCCESS: After create_relationship returns, confirm the link to the user. Do NOT call get_related_nodes to verify — the create response confirms success."#.to_string(),
+            markdown_content: relationship_management_guidance(),
         },
         NodeTemplate {
             title: "Node Deletion".to_string(),
@@ -263,15 +366,7 @@ SUCCESS: After create_relationship returns, confirm the link to the user. Do NOT
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Node Deletion Guidance
-
-When deleting a node:
-
-FIND THEN DELETE: If you don't have the node's ID, call search_semantic or search_nodes to locate it. Confirm the title matches what the user described, then call delete_node with the ID.
-
-SINGLE DELETE: Call delete_node once per node. Confirm each deletion before proceeding to the next.
-
-SUCCESS: After delete_node returns, confirm to the user what was deleted. Do NOT search again to verify deletion."#.to_string(),
+            markdown_content: node_deletion_guidance(),
         },
         NodeTemplate {
             title: "Bulk Import".to_string(),
@@ -284,17 +379,7 @@ SUCCESS: After delete_node returns, confirm to the user what was deleted. Do NOT
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Bulk Import Guidance
-
-When importing a document or creating multiple nodes from markdown:
-
-CALL create_nodes_from_markdown ONCE: Pass the markdown content directly. The tool parses headings into a node hierarchy — top-level headings become root nodes, sub-headings become children.
-
-COLLECTION: If the user specifies a collection or folder name, pass it as the collection parameter.
-
-NODE TYPE: Default to node_type="text" for general documents. Use a specific type if the user names one.
-
-SUCCESS: After create_nodes_from_markdown returns, report the number of nodes created. Do NOT follow up with search calls."#.to_string(),
+            markdown_content: bulk_import_guidance(),
         },
         NodeTemplate {
             title: "Organization".to_string(),
@@ -307,15 +392,7 @@ SUCCESS: After create_nodes_from_markdown returns, report the number of nodes cr
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
-            markdown_content: r#"# Organization Guidance
-
-When organizing nodes into collections or categories:
-
-FIND THE NODE: If you don't have the node's ID, call search_semantic to locate it.
-
-ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". If the collection doesn't exist as a node yet, ask the user to create it first using the Node Creation skill.
-
-SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#.to_string(),
+            markdown_content: organization_guidance(),
         },
     ]
 }
