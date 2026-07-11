@@ -1,8 +1,8 @@
 /**
  * Unit tests for assertExpectation() in scripts/aichat-matrix.ts.
  *
- * scripts/ sits outside the desktop-app Vitest project (no Svelte/DOM
- * dependency here), so this uses Bun's native test runner directly:
+ * scripts/ isn't part of any Vitest project's file glob, so this uses
+ * Bun's native test runner directly:
  *
  *   bun test scripts/aichat-matrix.test.ts
  *
