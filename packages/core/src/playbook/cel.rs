@@ -653,8 +653,8 @@ mod tests {
     async fn simple_true_condition_passes() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result = evaluate_conditions(&conds(&["node.status == 'open'"]), &node, &event, None)
-            .await;
+        let result =
+            evaluate_conditions(&conds(&["node.status == 'open'"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
@@ -662,8 +662,8 @@ mod tests {
     async fn simple_false_condition_fails() {
         let node = test_node("task", json!({"status": "open"}));
         let event = node_created_event("task");
-        let result = evaluate_conditions(&conds(&["node.status == 'done'"]), &node, &event, None)
-            .await;
+        let result =
+            evaluate_conditions(&conds(&["node.status == 'done'"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Fail { condition_index: 0 });
     }
 
@@ -759,8 +759,8 @@ mod tests {
         let node = test_node("task", json!({}));
         let event = node_created_event("task");
         // today() should return a string matching YYYY-MM-DD pattern
-        let result = evaluate_conditions(&conds(&["size(today()) == 10"]), &node, &event, None)
-            .await;
+        let result =
+            evaluate_conditions(&conds(&["size(today()) == 10"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
@@ -815,8 +815,8 @@ mod tests {
     async fn numeric_property_comparison() {
         let node = test_node("invoice", json!({"amount": 1500}));
         let event = node_created_event("invoice");
-        let result = evaluate_conditions(&conds(&["node.amount > 1000"]), &node, &event, None)
-            .await;
+        let result =
+            evaluate_conditions(&conds(&["node.amount > 1000"]), &node, &event, None).await;
         assert_eq!(result, ConditionResult::Pass);
     }
 
