@@ -40,18 +40,14 @@ fn grpc_err(msg: impl std::fmt::Display) -> CommandError {
 /// GGUF catalog IDs exposed to the frontend model picker.
 ///
 /// Deliberately curated, not the full Rust catalog — models are added here
-/// only after evaluation. Gemma 4 was previously exposed but pulled after
-/// issues; the remaining lineup is the RAM-tier-appropriate set considered
-/// stable today.
-///
-/// Ornith 1.0 9B (`ornith-1-9b-q4km`) is intentionally NOT included here yet,
-/// despite being fully wired up (catalog entry, download, tool-call parsing,
-/// response-leak fix — see #1465). Live testing found its recurrent (SSM)
-/// layers can't do partial KV-cache reuse, so multi-step tool-calling turns
-/// get progressively slower with each retry (an upstream llama.cpp
-/// limitation — see the `ORNITH_1_9B` catalog entry's doc comment in
-/// `model_manager.rs` for details). Re-add it here once #1477 is resolved.
-const EXPOSED_GGUF_MODEL_IDS: &[&str] = &["ministral-8b-q4km"];
+/// only after evaluation. Per ADR-056, Gemma 4 E4B is the locked native
+/// model (superseding the prior Ministral 8B lock); Gemma 4 12B/31B remain
+/// parked (unresolved tool-call defects — see the `GEMMA_4_12B` catalog
+/// entry's doc comment in `model_manager.rs`) and are intentionally not
+/// exposed here. The Qwen-family catalog entries (Qwen3, Qwen3.5, Qwen3.6,
+/// and the Qwen3.5-based Ornith 1.0 9B) have been removed from the catalog
+/// entirely, not just withheld here.
+const EXPOSED_GGUF_MODEL_IDS: &[&str] = &["gemma-4-e4b-q4km"];
 
 /// List models in the catalog with their current status.
 ///

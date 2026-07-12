@@ -42,11 +42,7 @@ function toModelStatus(s: ChatModelStatus): ModelStatus {
 function chatEntryToModelInfo(entry: ChatModelEntry): ModelInfo {
   // GGUF family isn't carried by the catalog row; infer from the id where known,
   // defaulting to the predominant built-in family.
-  const family: ModelFamily = entry.id.startsWith('gemma')
-    ? 'gemma4'
-    : entry.id.startsWith('ornith') || entry.id.startsWith('qwen35')
-      ? 'qwen35'
-      : 'ministral';
+  const family: ModelFamily = entry.id.startsWith('gemma') ? 'gemma4' : 'ministral';
   return {
     id: entry.id,
     family,

@@ -245,12 +245,6 @@ pub enum ModelFamily {
     Ministral,
     /// Gemma 4 -- Google's multimodal model series (E4B, 31B).
     Gemma4,
-    /// Qwen3 -- Alibaba's Qwen3 model series (strong tool calling, 0.6B–8B+).
-    Qwen3,
-    /// Qwen3.5 -- Alibaba's Qwen3.5 model series (Feb 2026, improved over Qwen3).
-    Qwen35,
-    /// Qwen3.6 -- Alibaba's Qwen3.6 MoE series (35B-A3B: 35B total, 3B active).
-    Qwen36,
     /// MistralSmall -- Mistral AI's Small series (24B dense, strong reasoning).
     MistralSmall,
     /// Model served via Ollama (family determined by Ollama).

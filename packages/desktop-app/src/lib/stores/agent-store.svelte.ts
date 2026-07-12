@@ -3,9 +3,9 @@
  *
  * Merges two agent sources into a unified dropdown:
  * 1. ACP agents (Claude Code, Gemini CLI, etc.) — external subprocesses
- * 2. Local model agents (Ministral 3B/8B) — in-process llama.cpp inference
+ * 2. Local model agents (Gemma 4 E4B, etc.) — in-process llama.cpp inference
  *
- * Local model agents use IDs prefixed with "local:" (e.g., "local:ministral-3b-q4km").
+ * Local model agents use IDs prefixed with "local:" (e.g., "local:gemma-4-e4b-q4km").
  * This prefix routes messages to the correct backend.
  */
 
@@ -24,7 +24,7 @@ export function isLocalAgent(agentId: string | null): boolean {
   return agentId !== null && agentId.startsWith(LOCAL_AGENT_PREFIX);
 }
 
-/** Extract the model ID from a local agent ID (e.g., "local:ministral-3b-q4km" → "ministral-3b-q4km"). */
+/** Extract the model ID from a local agent ID (e.g., "local:gemma-4-e4b-q4km" → "gemma-4-e4b-q4km"). */
 export function localAgentModelId(agentId: string): string {
   return agentId.replace(LOCAL_AGENT_PREFIX, '');
 }
@@ -39,8 +39,8 @@ function isTauri(): boolean {
 
 /** Mock local agent for non-Tauri environments and error fallback. */
 const MOCK_LOCAL_AGENT: AcpAgentInfo = {
-  id: `${LOCAL_AGENT_PREFIX}ministral-3b-q4km`,
-  name: 'Ministral 3B Instruct Q4_K_M',
+  id: `${LOCAL_AGENT_PREFIX}gemma-4-e4b-q4km`,
+  name: 'Gemma 4 E4B Instruct Q4_K_M',
   binary: 'local',
   args: [],
   auth_method: { method: 'agent_managed' },

@@ -59,12 +59,6 @@ fn stray_channel_marker_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"<\|channel>|<channel\|>").unwrap())
 }
 
-/// Matches a complete Ornith `<tool_call>…</tool_call>` XML block.
-fn ornith_tool_call_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)<tool_call>.*?</tool_call>").unwrap())
-}
-
 /// Normalize LLM response text for consistent formatting.
 ///
 /// Delegates to [`normalize_response_traced`] and discards the stripper list.
@@ -101,12 +95,6 @@ pub fn normalize_response_traced(text: &str) -> (String, Vec<&'static str>) {
         "strip_channel_blocks",
         strip_channel_blocks,
         text.to_owned(),
-        &mut fired,
-    );
-    let result = apply(
-        "strip_ornith_tool_call_leak",
-        strip_ornith_tool_call_leak,
-        result,
         &mut fired,
     );
     let result = apply(
@@ -298,33 +286,6 @@ fn strip_channel_blocks(text: &str) -> String {
     stray_channel_marker_re()
         .replace_all(&result, "")
         .into_owned()
-}
-
-/// Strip leaked Ornith `<tool_call>` XML and stray special tokens.
-///
-/// This normalizer only runs on text-only ("tail") inferences made with
-/// `tools: None` (e.g. the final answer synthesized after the duplicate-call
-/// guard breaks out of the ReAct loop). Ornith can still emit its `<tool_call>`
-/// envelope syntax in that mode, and separately emit `<|mask_end|>` — a raw
-/// special token unrelated to tool calls — either of which is internal
-/// plumbing and must never reach the user. Since no tools are offered on this
-/// path, any `<tool_call>` seen here is always a leak, never a real routed
-/// call (that interception happens earlier in `emit_oai_delta`, before text
-/// ever reaches this stripper).
-fn strip_ornith_tool_call_leak(text: &str) -> String {
-    if !text.contains("<tool_call>") && !text.contains("<|mask_end|>") {
-        return text.to_string();
-    }
-    let result = ornith_tool_call_re().replace_all(text, "").into_owned();
-    // Drop a dangling, never-closed tool-call block (truncated mid-generation).
-    // Assumes a dangling opener is always trailing: truncation happens at the
-    // end of generation (token cap or stream cutoff), so there is never
-    // legitimate prose after an unclosed <tool_call> to preserve.
-    let result = match result.find("<tool_call>") {
-        Some(idx) => result[..idx].to_string(),
-        None => result,
-    };
-    result.replace("<|mask_end|>", "")
 }
 
 /// Strip leaked Gemma tool-call/response prose (`call:foo{...}response:foo{...}`).
@@ -662,32 +623,6 @@ mod tests {
         let input = "All set.<channel|>";
         let result = normalize_response(input);
         assert_eq!(result, "All set.");
-    }
-
-    #[test]
-    fn strips_ornith_tool_call_leak_whole_response() {
-        // Reproduces a real Ornith tail-inference leak: the entire response was
-        // a <tool_call> block (no separate prose), so normalization must reduce
-        // it to empty, letting the caller synthesize a tool-summary fallback.
-        let input = "<tool_call>\n<function=search_nodes>\n</function>\n</tool_call>";
-        let result = normalize_response(input);
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn strips_ornith_dangling_tool_call_and_mask_end_token() {
-        // Reproduces a real Ornith leak: a truncated <tool_call> block with no
-        // closing tag, followed by a stray <|mask_end|> special token.
-        let input = "<tool_call>\n<function=search_nodes>\n</parameter><|mask_end|>";
-        let result = normalize_response(input);
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn strips_ornith_tool_call_leak_keeping_surrounding_text() {
-        let input = "Sure, let me check.<tool_call>\n<function=search_nodes>\n<parameter=query>\ntasks\n</parameter>\n</function>\n</tool_call>";
-        let result = normalize_response(input);
-        assert_eq!(result, "Sure, let me check.");
     }
 
     // normalize_response_traced: strippers_fired correctness
