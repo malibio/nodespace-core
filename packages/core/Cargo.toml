@@ -60,6 +60,7 @@ http-body-util = "0.1"
 criterion = { workspace = true }
 tempfile = "3.0"
 serial_test = "3.2"
+proptest = { workspace = true }
 
 [[bench]]
 name = "performance"

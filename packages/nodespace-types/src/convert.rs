@@ -272,3 +272,150 @@ mod wire_contract {
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
     }
 }
+
+/// Property tests for the Node → wire-JSON promotion contract.
+///
+/// The wire conversion is intentionally one-directional (a `Node` becomes a flat,
+/// top-level JSON shape for the frontend), so these assert the property that
+/// *matters* for silent data loss: **every field a typed node stores under its
+/// `properties.<type>` namespace is promoted to a top-level key in the output**.
+///
+/// If someone adds a field to the stored shape but forgets to model it on the
+/// wire struct (`TaskNode` / `AiChatNode`), the promoted field vanishes from the
+/// output and the corresponding proptest fails — turning a silent data-drop into
+/// a test failure, which is the whole point of issue #1502.
+#[cfg(test)]
+mod promotion_proptests {
+    use super::*;
+    use crate::node::Node;
+    use proptest::prelude::*;
+
+    /// Arbitrary task `status` string (both core and user-defined values).
+    fn task_status() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("open".to_string()),
+            Just("in_progress".to_string()),
+            Just("done".to_string()),
+            Just("cancelled".to_string()),
+            "[a-z][a-z_]{0,15}".prop_map(|s| s),
+        ]
+    }
+
+    /// Arbitrary task `priority` string (core and user-defined values).
+    fn task_priority() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("low".to_string()),
+            Just("medium".to_string()),
+            Just("high".to_string()),
+            "[a-z][a-z_]{0,15}".prop_map(|s| s),
+        ]
+    }
+
+    /// Arbitrary date-only string (`YYYY-MM-DD`) that `normalize_date_field`
+    /// passes through unchanged.
+    fn date_string() -> impl Strategy<Value = String> {
+        (2000u32..2100, 1u32..=12, 1u32..=28)
+            .prop_map(|(y, m, d)| format!("{:04}-{:02}-{:02}", y, m, d))
+    }
+
+    proptest! {
+        /// Every task field stored under `properties.task` is promoted to a
+        /// top-level key, and the `nodespace://` uri is injected.
+        #[test]
+        fn task_promotes_all_stored_fields(
+            status in task_status(),
+            priority in task_priority(),
+            due_date in date_string(),
+            assignee in "[a-zA-Z0-9_-]{1,20}",
+            started_at in date_string(),
+            completed_at in date_string(),
+        ) {
+            let node = Node::new(
+                "task".to_string(),
+                "Some task".to_string(),
+                serde_json::json!({
+                    "task": {
+                        "status": status,
+                        "priority": priority,
+                        "dueDate": due_date,
+                        "assignee": assignee,
+                        "startedAt": started_at,
+                        "completedAt": completed_at,
+                    }
+                }),
+            );
+
+            let out = node_to_typed_value(node).unwrap();
+
+            // Each stored field promoted to the top level, verbatim.
+            prop_assert_eq!(&out["status"], &serde_json::json!(status));
+            prop_assert_eq!(&out["priority"], &serde_json::json!(priority));
+            prop_assert_eq!(&out["dueDate"], &serde_json::json!(due_date));
+            prop_assert_eq!(&out["assignee"], &serde_json::json!(assignee));
+            prop_assert_eq!(&out["startedAt"], &serde_json::json!(started_at));
+            prop_assert_eq!(&out["completedAt"], &serde_json::json!(completed_at));
+            // Namespace flattened away, uri injected.
+            prop_assert!(out["properties"].get("task").is_none());
+            prop_assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+        }
+
+        /// Every ai-chat field stored under `properties.ai-chat` is promoted to a
+        /// top-level key, and the `nodespace://` uri is injected.
+        #[test]
+        fn ai_chat_promotes_all_stored_fields(
+            status in "[a-z][a-z_]{0,15}",
+            provider in "[a-z][a-z0-9_-]{0,15}",
+            model in "[a-zA-Z0-9._:-]{1,25}",
+            message in "[ -~]{0,40}",
+        ) {
+            let node = Node::new(
+                "ai-chat".to_string(),
+                "A chat".to_string(),
+                serde_json::json!({
+                    "ai-chat": {
+                        "status": status,
+                        "provider": provider,
+                        "model": model,
+                        "messages": [{ "role": "user", "content": message }],
+                    }
+                }),
+            );
+
+            let out = node_to_typed_value(node).unwrap();
+
+            prop_assert_eq!(&out["status"], &serde_json::json!(status));
+            prop_assert_eq!(&out["provider"], &serde_json::json!(provider));
+            prop_assert_eq!(&out["model"], &serde_json::json!(model));
+            prop_assert_eq!(&out["messages"][0]["content"], &serde_json::json!(message));
+            prop_assert!(out["properties"].get("ai-chat").is_none());
+            prop_assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+        }
+
+        /// Every schema field stored in the schema node's flat properties is
+        /// promoted to a top-level key, and the `nodespace://` uri is injected.
+        #[test]
+        fn schema_promotes_all_stored_fields(
+            is_core in any::<bool>(),
+            schema_version in 1u32..100,
+            description in "[ -~]{0,40}",
+        ) {
+            let node = Node::new(
+                "schema".to_string(),
+                "A schema".to_string(),
+                serde_json::json!({
+                    "isCore": is_core,
+                    "schemaVersion": schema_version,
+                    "description": description,
+                    "fields": [],
+                }),
+            );
+
+            let out = node_to_typed_value(node).unwrap();
+
+            prop_assert_eq!(&out["isCore"], &serde_json::json!(is_core));
+            prop_assert_eq!(&out["schemaVersion"], &serde_json::json!(schema_version));
+            prop_assert_eq!(&out["description"], &serde_json::json!(description));
+            prop_assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+        }
+    }
+}
