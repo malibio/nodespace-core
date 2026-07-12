@@ -7,8 +7,9 @@
 //! The session lifecycle is:
 //!
 //! 1. Create a persistent session directory at `~/.nodespace/agent-sessions/<uuid>/`.
-//! 2. Write the context file ([`GraphContextAssembler::write_context_file`])
-//!    so the agent picks up its `CLAUDE.md` / `AGENTS.md` on launch.
+//! 2. Write the context file ([`GraphContextAssembler::write_context_file`]) so the
+//!    agent picks up its `CLAUDE.md` / `AGENTS.md` on launch, and copy `SKILL.md`
+//!    into the same directory so the agent drives NodeSpace via the `nodespace` CLI.
 //! 3. Spawn the agent binary inside a freshly opened PTY rooted at the session dir.
 //! 4. Stream stdout/stderr bytes through a `broadcast::Sender<OutputChunk>`.
 //! 5. Accept stdin via [`PtySession::write_input`] and resize via [`PtySession::resize`].

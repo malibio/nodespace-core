@@ -148,8 +148,8 @@ impl PtySession {
     ///
     /// 1. Generate a session UUID and create a persistent directory at
     ///    `~/.nodespace/agent-sessions/<uuid>/`.
-    /// 2. Have `assembler` write the context file (`CLAUDE.md` / `AGENTS.md`)
-    ///    into the session directory.
+    /// 2. Have `assembler` write the context file (`CLAUDE.md` / `AGENTS.md`) and
+    ///    `SKILL.md` into the session directory.
     /// 3. Resolve the agent binary on `PATH` via [`which::which`].
     /// 4. Open a PTY pair and spawn the binary with `cwd` set to the session dir.
     /// 5. Start the reader and exit-watcher tasks.
