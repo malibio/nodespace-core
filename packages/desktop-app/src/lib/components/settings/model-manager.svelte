@@ -31,7 +31,7 @@
   // Settings shows the curated set already filtered at the Tauri layer
   // (see EXPOSED_GGUF_MODEL_IDS in chat_models.rs); families listed here must
   // match whatever that allowlist currently exposes.
-  const LOCAL_FAMILIES: ModelFamily[] = ['ministral', 'qwen35'];
+  const LOCAL_FAMILIES: ModelFamily[] = ['gemma4'];
   const localModels = $derived(models.filter((m) => LOCAL_FAMILIES.includes(m.family)));
 
   // --- Ollama state ---
@@ -264,14 +264,6 @@
               {getStatusLabel(m.status.status)}
             </span>
           </div>
-
-          {#if m.family === 'qwen35'}
-            <p class="mm-notice mm-notice--warn">
-              Multi-step tool-calling turns get progressively slower with each retry — this
-              model's architecture can't reuse prior turns' work, so longer agent
-              conversations may feel slow. Best for simple, single-step requests.
-            </p>
-          {/if}
 
           {#if progress !== undefined}
             <div class="progress-row">

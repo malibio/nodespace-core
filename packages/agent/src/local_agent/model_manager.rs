@@ -115,103 +115,6 @@ const MINISTRAL_14B: CatalogEntry = CatalogEntry {
     min_memory_gb: 16,
 };
 
-/// Qwen3 8B -- Alibaba's Qwen3 dense 8B; strong tool-calling training,
-/// competitive with Ministral 8B at similar footprint (16GB+ Apple Silicon).
-const QWEN3_8B: CatalogEntry = CatalogEntry {
-    id: "qwen3-8b-q4km",
-    family: ModelFamily::Qwen3,
-    name: "Qwen3 8B Instruct Q4_K_M",
-    filename: "Qwen3-8B-Q4_K_M.gguf",
-    size_bytes: 5_027_783_872, // ~4.7 GB
-    quantization: "Q4_K_M",
-    url: "https://huggingface.co/ggml-org/Qwen3-8B-GGUF/resolve/2473489dc243ccaffb4ce569c55bf1df66b2088f/Qwen3-8B-Q4_K_M.gguf",
-    sha256: "a67d87633b5f5f191a5bd11e6d37cab18b9ce3d4a6af6861561e8a767352080b",
-    context_window: 32_768,
-    default_temperature: 0.6,
-    type_k: None,
-    type_v: None,
-    min_memory_gb: 16,
-};
-
-/// Qwen3.5 9B (Unsloth) -- Feb 2026 step-up from Qwen3-8B; same weight class
-/// (~5.3 GB Q4_K_M), newer training. Unsloth GGUF for llama.cpp compatibility.
-const QWEN35_9B: CatalogEntry = CatalogEntry {
-    id: "qwen35-9b-q4km",
-    family: ModelFamily::Qwen35,
-    name: "Qwen3.5 9B Instruct Q4_K_M",
-    filename: "Qwen3.5-9B-Q4_K_M.gguf",
-    size_bytes: 5_680_522_464, // ~5.3 GB
-    quantization: "Q4_K_M",
-    url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
-    sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
-    context_window: 32_768,
-    default_temperature: 0.6,
-    type_k: None,
-    type_v: None,
-    min_memory_gb: 16,
-};
-
-/// Ornith 1.0 9B -- DeepReinforce (June 2026), MIT licensed. Hybrid SSM/attention
-/// (`qwen35` arch in llama.cpp): 24 of 32 layers are Gated Delta Net (recurrent),
-/// 8 are full attention. Uses `ModelFamily::Qwen35` (same OAI-compat Jinja path);
-/// no dedicated variant needed unless behavior diverges from Qwen3.5 in practice.
-///
-/// KNOWN LIMITATION -- NOT auto-recommended, user-selectable only: recurrent
-/// (SSM) layers cannot do partial KV-cache reuse (`llama_memory_seq_rm` returns
-/// `false` on a partial range for this architecture -- confirmed both in our own
-/// logs, "KV cache partial trim returned false, falling back to full decode",
-/// and upstream: ggml-org/llama.cpp issues #19858, #20003, #20153, #20225,
-/// #21912 all report the same full-reprocess behavior for Qwen 3.5-based hybrid
-/// models). This means every ReAct loop iteration re-decodes the ENTIRE growing
-/// prompt from scratch, not just the new turn -- unlike Ministral/Gemma, which
-/// reuse the cached prefix. Single-shot decode speed is genuinely flat across
-/// context depths (validated in #1464, 12.0 t/s at 1k, 11.9 t/s at 8k), but that
-/// finding does NOT extend to multi-iteration tool-calling turns as originally
-/// assumed -- a turn requiring N ReAct iterations pays a full-prompt decode cost
-/// N times, compounding with conversation length. A 4-iteration turn (e.g. a
-/// failed tool call requiring 3 retries) took ~108s in practice. This is an
-/// upstream llama.cpp limitation for recurrent/hybrid architectures, open as
-/// of the issues linked above at the time this was written (2026-07-01) --
-/// not something fixable in this codebase. Re-check those issues before
-/// assuming this limitation still applies to a newer vendored llama.cpp.
-const ORNITH_1_9B: CatalogEntry = CatalogEntry {
-    id: "ornith-1-9b-q4km",
-    family: ModelFamily::Qwen35,
-    name: "Ornith 1.0 9B Instruct Q4_K_M",
-    filename: "ornith-1.0-9b-Q4_K_M.gguf",
-    size_bytes: 5_629_108_704, // verified via HEAD request, 5.24 GiB
-    quantization: "Q4_K_M",
-    // NOTE: org is "deepreinforce-ai" (lowercase, hyphenated) -- NOT "DeepReinforce".
-    // The original URL used the wrong casing/org name and 404/401'd; verified this
-    // one resolves via `curl -sIL` before committing.
-    url: "https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF/resolve/3296bc7a404871a72ac3f1903f561459c09b5c17/ornith-1.0-9b-Q4_K_M.gguf",
-    sha256: "5720d1f671b4996481274fffe01868c3c36e87c135cc8538471cc7bd6087b106",
-    context_window: 32_768,
-    default_temperature: 0.6,
-    type_k: None, // F16 — recurrent SSM layers keep KV cache small at this size
-    type_v: None,
-    min_memory_gb: 16,
-};
-
-/// Qwen3.6 35B-A3B -- MoE: 35B total parameters, 3B active. Fast inference
-/// (similar speed to a 3B dense model) with large-model capacity.
-/// ~22 GB on disk; fits on 48 GB Apple Silicon. Trial only.
-const QWEN36_35B_A3B: CatalogEntry = CatalogEntry {
-    id: "qwen36-35b-a3b-q4km",
-    family: ModelFamily::Qwen36,
-    name: "Qwen3.6 35B-A3B Instruct Q4_K_M (MoE)",
-    filename: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-    size_bytes: 22_134_528_992, // ~22.1 GB
-    quantization: "Q4_K_M",
-    url: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-    sha256: "ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61",
-    context_window: 32_768,
-    default_temperature: 0.6,
-    type_k: None,
-    type_v: None,
-    min_memory_gb: 48,
-};
-
 /// Mistral NeMo 12B -- Mistral+NVIDIA collaboration (July 2024); native
 /// [TOOL_CALLS] handler in llama.cpp (grammar-constrained). ~7.5 GB Q4_K_M;
 /// fits on 16GB Apple Silicon. The only Mistral-family model with a confirmed
@@ -337,10 +240,6 @@ const CATALOG: &[&CatalogEntry] = &[
     &MINISTRAL_14B,
     &MISTRAL_NEMO_12B,
     &MISTRAL_SMALL_3_2,
-    &QWEN3_8B,
-    &QWEN35_9B,
-    &QWEN36_35B_A3B,
-    &ORNITH_1_9B,
     &GEMMA_4_E4B,
     &GEMMA_4_12B,
     &GEMMA_4_12B_UNSLOTH,
@@ -495,9 +394,6 @@ impl GgufModelManager {
                     GEMMA_4_E4B.id
                 }
             }
-            ModelFamily::Qwen3 => QWEN3_8B.id,
-            ModelFamily::Qwen35 => QWEN35_9B.id,
-            ModelFamily::Qwen36 => QWEN36_35B_A3B.id,
             ModelFamily::MistralSmall => MISTRAL_SMALL_3_2.id,
             ModelFamily::Ollama | ModelFamily::OpenAiCompat => {
                 if medium {
@@ -1439,13 +1335,12 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 13);
+        assert_eq!(models.len(), 9);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-12b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-31b-q4km"));
-        assert!(models.iter().any(|m| m.id == "ornith-1-9b-q4km"));
     }
 
     #[tokio::test]
