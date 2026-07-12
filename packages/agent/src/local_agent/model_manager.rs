@@ -460,6 +460,9 @@ impl GgufModelManager {
     /// within-family recommendation should use
     /// [`Self::recommended_model_id_for`] directly.
     fn recommended_model_id() -> &'static str {
+        // NOT recommended_model_id_for(ModelFamily::Gemma4) -- that RAM-tiers
+        // into 12B/31B, which are parked per ADR-046/ADR-056. Do not "simplify"
+        // this to the _for() call without re-checking that parking status.
         GEMMA_4_E4B.id
     }
 
