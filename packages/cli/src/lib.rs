@@ -115,6 +115,8 @@ pub enum Command {
     },
     /// Semantic search across the knowledge graph.
     Search(commands::search::SearchArgs),
+    /// Structured property query with comparison operators (equals/contains/gt/lt/gte/lte/in/exists).
+    Query(commands::query::QueryArgs),
     /// Developer diagnostics: database path, size, node counts, schema count.
     Diagnostics(commands::diagnostics::DiagnosticsArgs),
     /// Import markdown files into NodeSpace.
@@ -127,10 +129,15 @@ pub enum Command {
         #[command(subcommand)]
         action: commands::mention::MentionAction,
     },
-    /// Inspect node type schema definitions.
+    /// Inspect and manage node type schema definitions.
     Schema {
         #[command(subcommand)]
         action: commands::schema::SchemaAction,
+    },
+    /// Manage typed relationship edges between nodes (distinct from mentions).
+    Relationship {
+        #[command(subcommand)]
+        action: commands::relationship::RelationshipAction,
     },
     /// Manage PTY agent sessions (launch, attach, list, kill).
     Session {
@@ -303,6 +310,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             let mut client = connect(&sock, interceptor).await?;
             commands::search::run(&mut client, args, json).await
         }
+        Command::Query(args) => {
+            let (interceptor, _) = resolve_routing(&sock, selection).await?;
+            let mut client = connect(&sock, interceptor).await?;
+            commands::query::run(&mut client, args, json).await
+        }
         Command::Diagnostics(args) => {
             let (interceptor, target_id) = resolve_routing(&sock, selection).await?;
             let mut node_client = connect(&sock, interceptor).await?;
@@ -330,6 +342,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             let (interceptor, _) = resolve_routing(&sock, selection).await?;
             let mut client = connect(&sock, interceptor).await?;
             commands::schema::run(&mut client, action, json).await
+        }
+        Command::Relationship { action } => {
+            let (interceptor, _) = resolve_routing(&sock, selection).await?;
+            let mut client = connect(&sock, interceptor).await?;
+            commands::relationship::run(&mut client, action, json).await
         }
         Command::Session { action } => {
             let (interceptor, _) = resolve_routing(&sock, selection).await?;

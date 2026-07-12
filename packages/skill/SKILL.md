@@ -13,6 +13,8 @@ NodeSpace is a local-first knowledge graph that stores notes, tasks, and structu
 
 **Hierarchy is first-class edges, not nesting.** A node has one parent edge. Children are ordered via fractional ordering — siblings have a stable position without gap-numbering. Moving or reordering a node is an edge operation (change the parent or sibling position), not a recreate-and-delete.
 
+**Relationships are distinct from hierarchy and mentions.** A relationship is a named, schema-defined edge between two nodes (e.g. `billed_to`, `has_task`) — different from the one parent edge and from inline `mention` links captured from markdown content. Relationships must be defined on a schema (via `nodespace schema create`/`nodespace schema update`) before they can be used; `nodespace relationship create` on a node whose schema has no matching relationship name fails.
+
 **Content is markdown.** Store prose, code blocks, lists — whatever fits the note. The export commands render it back as clean markdown.
 
 ## When to Use NodeSpace (Session Judgment)
@@ -52,32 +54,38 @@ Start the daemon: `nodespaced` (or it starts automatically on login if installed
 
 ## Tool Decision Guide
 
-Use this to pick the right tool when querying or searching:
+Use this to pick the right command for the task at hand.
 
-| Goal | Tool |
-|------|------|
-| Find nodes by keywords or meaning | `search_semantic` |
-| List all nodes of a type | `search_nodes(query="", node_type="...")` |
-| Filter by property values (status, due_date, priority, etc.) | `execute_query` |
-| Filter with comparison operators (gt, lt, gte, lte, in) | `execute_query` |
-| Get a specific node by ID | `get_node` |
+### Finding things
 
-**`search_nodes` is for keyword/title search only.** Do not pass `filters={}` to filter by property values — use `execute_query` instead.
+| Goal | Command |
+|------|---------|
+| Find nodes by keywords or meaning | `nodespace search "<query>"` |
+| List all nodes of a type | `nodespace search "" --type <type>` |
+| Filter by property values (status, due_date, priority, etc.) | `nodespace query --type <type> --filters '<json>'` |
+| Filter with comparison operators (gt, lt, gte, lte, in) | `nodespace query --type <type> --filters '<json>'` |
+| Exact substring match on content or title | `nodespace node query --content-contains "..."` / `--title-contains "..."` |
+| Get a specific node by ID | `nodespace node get <id>` |
 
-**`execute_query` is the primary tool for structured property queries.** Examples:
-- "find all my open tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])`
-- "tasks due tomorrow" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])`
-- "tasks due this week" → `execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<YYYY-MM-DD start>"},{"type":"property","operator":"lte","property":"due_date","value":"<YYYY-MM-DD end>"}])`
-- "high priority tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"priority","value":"high"}])`
-- "cancelled tasks" → `execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"cancelled"}])`
+**`nodespace node query` is for exact substring/type matching only** (`--content-contains`, `--title-contains`, `--mentioned-by`, `--type`). It has no property-filter flags.
 
-Date format for all date properties: **YYYY-MM-DD**. Available operators: `equals`, `contains`, `gt`, `lt`, `gte`, `lte`, `in`, `exists`.
+**`nodespace query` is the command for structured property queries** — status, due_date, priority, or any comparison operator. Examples:
+- "find all my open tasks" → `nodespace query --type task --filters '[{"type":"property","operator":"equals","property":"status","value":"open"}]'`
+- "tasks due tomorrow" → `nodespace query --type task --filters '[{"type":"property","operator":"equals","property":"due_date","value":"<YYYY-MM-DD>"}]' --sorting '[{"field":"due_date","direction":"asc"}]'`
+- "tasks due this week" → `nodespace query --type task --filters '[{"type":"property","operator":"gte","property":"due_date","value":"<week start>"},{"type":"property","operator":"lte","property":"due_date","value":"<week end>"}]'`
+- "high priority tasks" → `nodespace query --type task --filters '[{"type":"property","operator":"equals","property":"priority","value":"high"}]'`
+
+Date format for all date properties: **YYYY-MM-DD**. Available operators: `equals`, `contains`, `gt`, `lt`, `gte`, `lte`, `in`, `exists`. Filter types: `property`, `content`, `relationship`, `metadata`.
+
+**`nodespace search` is semantic** (embedding-based similarity), ranked by relevance. Pass `--type` to narrow to one or more node types, `--limit` to cap results (default 20). It does not currently expose graph-boost, cross-collection exclusion, or edge-inclusion — for those, fall back to `nodespace query` plus a follow-up `nodespace relationship get` if you need connected nodes.
+
+**Multiple topics:** run `nodespace search` once per topic rather than one broad search plus per-result fetches.
 
 ## CLI Reference
 
 All commands accept `--json` for machine-readable output.
 
-**Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `search`, `mention`, `schema`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).
+**Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `query`, `search`, `mention`, `schema`, `relationship`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).
 
 ```bash
 nodespace --database work node create --type text --content "work note"
@@ -99,6 +107,12 @@ nodespace node create --type text --content "Meeting notes" --parent <parent-id>
 
 **Output:** JSON with `id`, `node_type`, `content`, `parent_id`, `created_at`
 
+**Creating an instance of a custom type:** read the schema first (`nodespace schema get <type>`) so you know its fields. Use the field name exactly as it appears in the schema's `fields[].name` — do not add namespace prefixes when setting properties on instances (namespace prefixing, where it applies, is a schema-authoring concern — see Schema fields below). If the schema has a `title_template`, `--content` only needs a brief descriptive label — the display title is generated from properties. If there's no `title_template`, set `--content` to the best human-readable name available.
+
+Only include properties the schema actually defines as required, plus any optional ones the user gave a value for. Don't invent fields.
+
+**Success semantics:** once `node create` returns an ID, the node exists — confirm what was created to the user and stop. Don't immediately `node get` the same ID to verify; the create response is the confirmation.
+
 ### Get a node
 
 ```bash
@@ -111,15 +125,38 @@ nodespace node get <node-id>
 
 ```bash
 nodespace node update <node-id> --content "Updated content"
+nodespace node update <node-id> --property status=in_progress --property priority=high
 ```
 
-**Output:** Updated node JSON
+**Options:**
+- `--content <text>` — replaces the node's content/title. Omit to leave content unchanged.
+- `--property key=value` — repeatable; sets one property, deep-merged into existing properties (properties you don't mention are left untouched). Values are parsed as JSON when possible (numbers, booleans, arrays, objects), otherwise treated as a plain string.
+
+At least one of `--content` or `--property` is required.
+
+**Find then update:** if you don't already have the node's ID, run `nodespace search` or `nodespace node query` first to locate it, then update by ID. If the search comes back with zero matches or several equally plausible matches, ask the user one specific clarifying question rather than retrying — e.g. "I found 3 invoices — which one: #001 ($500), #002 ($750), or #003 ($500, overdue)?"
+
+**Do NOT use `node update --property status=...` for task status changes** — use `nodespace node set-status` instead (below); it validates against the allowed status values before writing.
+
+**Output:** Updated node JSON. Confirm the change to the user from this response — don't re-fetch the node afterward to double-check.
+
+### Set a task's status
+
+```bash
+nodespace node set-status <task-id> in_progress
+```
+
+Dedicated verb for task status transitions. Status must be one of: `open`, `in_progress`, `done`, `cancelled` — invalid values are rejected before the update is sent.
+
+**Output:** Updated node JSON.
 
 ### Delete a node
 
 ```bash
 nodespace node delete <node-id>
 ```
+
+**Find then delete:** locate the node via `nodespace search` or `nodespace node query` if you don't have its ID, and confirm the title matches what the user described before deleting. Delete one node per call; confirm each deletion before moving to the next. Don't search again afterward to verify the deletion — the delete response confirms it.
 
 **Output:** Confirmation JSON
 
@@ -131,7 +168,7 @@ nodespace node children <parent-id>
 
 **Output:** JSON array of child nodes
 
-### Query nodes (structured filter)
+### Query nodes (exact-match filter)
 
 ```bash
 nodespace node query --type task
@@ -148,7 +185,24 @@ nodespace node query --mentioned-by <node-id>
 - `--limit <n>` — max results
 - `--offset <n>` — pagination offset
 
-**Note:** For property-level filtering (status, due_date, priority, etc.), use `execute_query` via the daemon API — the CLI `query` command does not support property filters.
+**Note:** for property-level filtering (status, due_date, priority, etc.) or comparison operators, use `nodespace query` (below) — this command only does exact substring/type matching.
+
+**Output:** JSON array of matching nodes
+
+### Structured property query
+
+```bash
+nodespace query --type task --filters '[{"type":"property","operator":"equals","property":"status","value":"open"}]'
+nodespace query --type task --filters '[{"type":"property","operator":"gte","property":"due_date","value":"2026-07-11"}]' --sorting '[{"field":"due_date","direction":"asc"}]' --limit 20
+```
+
+**Options:**
+- `--type <type>` — target node type, or `*` for all types
+- `--filters <json>` — array of filter conditions: `{"type":"property"|"content"|"relationship"|"metadata","operator":"equals"|"contains"|"gt"|"lt"|"gte"|"lte"|"in"|"exists","property":"...","value":...}`
+- `--sorting <json>` — array of `{"field":"...","direction":"asc"|"desc"}`
+- `--limit <n>` — max results (0 = server default of 50; server caps at 500 regardless of the value passed)
+
+See the Tool Decision Guide above for worked examples. This is the CLI counterpart of the local agent's `execute_query` tool.
 
 **Output:** JSON array of matching nodes
 
@@ -191,10 +245,14 @@ Each object in the array: `node_id` (required), `version` (optional — omit to 
 ```bash
 nodespace search "meeting notes from last week"
 nodespace search "rust async" --type text --limit 10
+nodespace search "" --type task    # list all nodes of a type (empty query)
 ```
 
 **Options:**
 - `--type <type>` — filter by node type (repeatable)
+- `--collection <path>` / `--collection-id <id>` — narrow to a collection (mutually exclusive)
+- `--filters <json>` — array of `{field, operator, value}` filter objects
+- `--threshold <0.0-1.0>` — similarity cutoff (0.0 = server default of 0.7); lower it (e.g. 0.1-0.2) for broader recall when results are sparse
 - `--limit <n>` — max results (default: 20)
 
 **Output:** JSON array of matching nodes
@@ -215,7 +273,38 @@ nodespace mention outgoing <node-id>
 nodespace mention incoming <node-id>
 ```
 
-### Schema inspection
+Mentions are inline references captured from markdown content — distinct from schema-defined relationships (below), which are named, typed edges.
+
+### Typed relationships
+
+```bash
+# Create a relationship edge (relationship name must exist on the source node's schema)
+nodespace relationship create --from <source-id> --type has_task --to <target-id>
+nodespace relationship create --from <source-id> --type billed_to --to <target-id> --edge-data '{"note":"..."}'
+
+# Traverse relationships from a node
+nodespace relationship get <node-id> --type has_task --direction out
+nodespace relationship get <node-id> --type billed_to --direction in
+```
+
+**Options (`create`):**
+- `--from <id>` — source node ID
+- `--type <name>` — relationship name, as defined on the source node's schema (e.g. `has_task`, `billed_to`) — not an arbitrary label
+- `--to <id>` — target node ID
+- `--edge-data <json>` — optional JSON-encoded edge properties
+
+**Options (`get`):**
+- `<id>` — node ID to query relationships for
+- `--type <name>` — relationship name to filter by
+- `--direction <out|in>` — traversal direction (default: `out`)
+
+Both node IDs must already exist, and the relationship name must be defined on the source node's schema — search for missing IDs first (`nodespace search` / `nodespace node query`), and define the relationship on the schema first (`nodespace schema create`/`update`) if it isn't there yet. `relationship create` on a node whose schema doesn't define that relationship name fails with an error naming the undefined relationship.
+
+**Success semantics:** after `relationship create` returns, confirm the link to the user — don't call `relationship get` afterward just to verify it landed.
+
+**Output:** confirmation of the created edge, or the list of related nodes with `count`/`direction`/`relationship_name`.
+
+### Schema inspection and management
 
 ```bash
 # List all registered schemas
@@ -224,7 +313,33 @@ nodespace schema list
 # Get a specific schema definition
 nodespace schema get task
 nodespace schema get person
+
+# Create a new schema
+nodespace schema create --params '{"name":"Invoice","description":"A billing invoice linked to a customer","title_template":"Invoice #{invoice_number}","fields":[{"name":"invoice_number","type":"text","required":true},{"name":"amount","type":"number","required":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"draft","label":"Draft"},{"value":"paid","label":"Paid"}]}],"relationships":[{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}]}'
+
+# Update an existing schema — add/remove/rename fields, without re-creating it
+nodespace schema update --params '{"schema_id":"invoice","add_fields":[{"name":"notes","type":"text"}]}'
 ```
+
+`create`/`update` take a single JSON `--params` blob (or `--params-file <path>` for a file) rather than per-field flags — the params shape mirrors `CreateSchemaParams`/`UpdateSchemaParams` in the daemon.
+
+<!-- BEGIN GENERATED: schema-rules (see packages/agent/src/skill_rules.rs, packages/agent/src/bin/gen_skill_md.rs) -->
+**One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for "Invoice" — don't also create "Customer" or "Product"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.
+
+If `create` reports the schema already exists, stop and tell the user — they can create instances with `node create` against the existing type.
+
+**Editing:** to add, remove, or rename a field, or change a relationship on an existing schema, use `schema update` with only the fields that need changing (`add_fields`/`remove_fields`/`rename_fields`, or an updated `description`/`title_template`). Don't re-create the whole schema for a small change.
+
+**Schema fields:** define only type-specific fields — don't add a `name` or `title` field; every node already has a built-in content/title field. Exception: if `title_template` uses a `{name}` placeholder, `name` must be defined as a field (any placeholder in `title_template` must have a matching field).
+
+**Enums:** lowercase values with readable labels — `{"value":"in_progress","label":"In Progress"}`.
+
+**Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Examples: `{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`.
+
+**Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.
+<!-- END GENERATED: schema-rules -->
+
+A `description` field is fine when it adds value beyond the title. Field names are alphanumeric-and-underscore only — the CLAUDE.md-documented `custom:` namespace prefix convention applies to natural-language schema authoring in the local agent, not to explicit `fields` arrays passed here; don't prefix field names when calling `schema create`/`update` directly.
 
 **Output:** Schema nodes as JSON (same shape as regular nodes; `node_type="schema"`)
 
@@ -263,21 +378,6 @@ A database is addressed by **name or id**. When a name is ambiguous (shared by m
 
 **Output:** `list` prints a table (or the full list with `--json`); the other commands print the affected database record (`--json` emits the full `DatabaseInfo`).
 
-## Skills Reference
-
-NodeSpace agents route tasks through named skills. Each skill has a focused set of tools and guidance for a specific class of operation:
-
-| Skill | Description |
-|-------|-------------|
-| **Research & Search** | Search and explore the knowledge graph to find relevant information, discover connections, and answer questions about stored knowledge. |
-| **Node Creation** | Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type. |
-| **Schema Creation** | Define a new entity type or schema with custom fields, enums, and relationships, or modify an existing schema. Use when user says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice. |
-| **Graph Editing** | Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use `update_task_status` to change status. |
-| **Relationship Management** | Create connections between nodes, explore relationships, and traverse the knowledge graph. |
-| **Node Deletion** | Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record. |
-| **Bulk Import** | Import documents and create node hierarchies from markdown. Use when user wants to import, bulk create, or create nodes from a markdown document. |
-| **Organization** | Organize nodes into collections and categories. Use when user wants to add to a collection, categorize, or group nodes. |
-
 ## Common Agent Tasks
 
 ### Save a note for later
@@ -296,6 +396,12 @@ nodespace search "authentication token refresh"
 
 ```bash
 nodespace node create --type task --content "Implement rate limiting on the API gateway"
+```
+
+### Change a task's status
+
+```bash
+nodespace node set-status <task-id> done
 ```
 
 ### Organize under a parent
@@ -320,6 +426,41 @@ nodespace node create --type text --content "Discovered: rate limiter uses fixed
 # To retrieve an existing date node directly
 nodespace node get "2026-05-30"
 ```
+
+### Define a new entity type, then create an instance
+
+```bash
+# 1. Create the schema (one schema per request — see Schema inspection and management above)
+nodespace schema create --params '{"name":"Project","description":"A tracked project with status and timeline","title_template":"{name} ({status})","fields":[{"name":"name","type":"text","required":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"planning","label":"Planning"},{"value":"active","label":"Active"},{"value":"on_hold","label":"On Hold"},{"value":"completed","label":"Completed"}]},{"name":"due_date","type":"date"}]}'
+
+# 2. Create an instance
+nodespace node create --type project --content "API Redesign" --parent <parent-id>
+nodespace node update <the-new-id> --property name="API Redesign" --property status=active
+```
+
+### Link two nodes with a typed relationship
+
+```bash
+# Relationship must already be defined on the source's schema (e.g. Project.has_task)
+nodespace relationship create --from <project-id> --type has_task --to <task-id>
+```
+
+### Organize a node into a collection
+
+Use a relationship with `--type member_of` against the collection node. If the collection doesn't exist as a node yet, ask the user to create it first.
+
+```bash
+nodespace relationship create --from <node-id> --type member_of --to <collection-id>
+```
+
+### Bulk import from markdown
+
+```bash
+nodespace import file ./notes.md
+nodespace import dir ./docs --auto-collection-routing
+```
+
+Top-level headings become root nodes, sub-headings become children. Report the number of nodes created; don't follow up with search calls to verify.
 
 ### Export a document for AI context
 

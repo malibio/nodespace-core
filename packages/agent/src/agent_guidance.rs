@@ -1,11 +1,14 @@
-//! Single source of truth for agent guidance rules.
+//! Single source of truth for the local in-app agent's guidance rules.
 //!
-//! These constants define the shared rules injected into both the local
-//! agent's seeded prompt nodes ([`crate::prompt_assembler`]) and the context
-//! files produced for external agent sessions ([`crate::acp::context_assembly`]).
-//! Changing a rule here propagates to every code path that composes agent
-//! guidance — including the local Ollama agent (next time prompt nodes are
-//! reseeded) and the `CLAUDE.md` / `AGENTS.md` files written under ADR-032.
+//! These constants define the rules injected into the local agent's seeded
+//! prompt nodes ([`crate::prompt_assembler`]). Changing a rule here propagates
+//! to every code path that composes local-agent guidance — including the
+//! local Ollama agent, next time prompt nodes are reseeded.
+//!
+//! External PTY-spawned agent sessions ([`crate::acp::context_assembly`]) do
+//! not use these constants — they get all tool/capability guidance from
+//! `packages/skill/SKILL.md`, the CLI-vocabulary companion doc, not from this
+//! module's tool-call-vocabulary prose.
 //!
 //! Issue #1089.
 

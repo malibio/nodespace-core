@@ -25,6 +25,11 @@ pub mod prompt_assembler;
 // (issue #1130) — there is no longer a pre-turn intent pipeline.
 pub mod skill_pipeline;
 
+// Shared source of truth for core-type rules referenced by both
+// seed_skill_nodes() and the generated sections of packages/skill/SKILL.md
+// (bin/gen_skill_md.rs). See module docs for the drift this prevents.
+pub mod skill_rules;
+
 // Property access helpers for namespaced node properties
 pub mod props;
 
