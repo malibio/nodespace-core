@@ -489,7 +489,9 @@ impl TaskNode {
     /// Convert to universal Node (for backward compatibility with existing APIs)
     ///
     /// This creates a Node with properties populated from the strongly-typed fields.
-    /// Uses camelCase keys per naming conventions (snake_case in DB, camelCase in JSON API).
+    /// Uses snake_case property keys — the canonical on-disk storage form that the
+    /// persistence layer writes and that [`TaskNode::from_node`] reads back, so the
+    /// domain→Node→domain round trip is lossless.
     pub fn into_node(self) -> Node {
         let mut properties = serde_json::Map::new();
         properties.insert("status".to_string(), json!(self.status.as_str()));
@@ -499,7 +501,7 @@ impl TaskNode {
         }
 
         if let Some(due_date) = self.due_date {
-            properties.insert("dueDate".to_string(), json!(due_date));
+            properties.insert("due_date".to_string(), json!(due_date));
         }
 
         if let Some(assignee) = self.assignee {
@@ -507,11 +509,11 @@ impl TaskNode {
         }
 
         if let Some(started_at) = self.started_at {
-            properties.insert("startedAt".to_string(), json!(started_at));
+            properties.insert("started_at".to_string(), json!(started_at));
         }
 
         if let Some(completed_at) = self.completed_at {
-            properties.insert("completedAt".to_string(), json!(completed_at));
+            properties.insert("completed_at".to_string(), json!(completed_at));
         }
 
         Node {
@@ -856,5 +858,94 @@ mod tests {
             update.is_empty(),
             "Empty JSON should result in empty update"
         );
+    }
+}
+
+/// Round-trip property test for the `TaskNode` domain type.
+///
+/// `TaskNode` is the authoritative in-memory model for `task` nodes: it owns the
+/// `from_node` (parse) and `into_node` (serialize) conversions the daemon relies
+/// on. If a field is added to the struct but forgotten in either direction — or
+/// the two directions disagree on a property key — the field is silently dropped
+/// on the next write. This proptest turns that silent drop into a test failure by
+/// asserting `from_node(task.into_node())` recovers every typed field: the
+/// domain→storage→domain round trip issue #1502 asks for.
+#[cfg(test)]
+mod roundtrip_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn task_status() -> impl Strategy<Value = TaskStatus> {
+        prop_oneof![
+            Just(TaskStatus::Open),
+            Just(TaskStatus::InProgress),
+            Just(TaskStatus::Done),
+            Just(TaskStatus::Cancelled),
+            "[a-z][a-z_]{0,15}".prop_map(TaskStatus::User),
+        ]
+    }
+
+    fn task_priority() -> impl Strategy<Value = Option<TaskPriority>> {
+        prop_oneof![
+            Just(None),
+            Just(Some(TaskPriority::Low)),
+            Just(Some(TaskPriority::Medium)),
+            Just(Some(TaskPriority::High)),
+            "[a-z][a-z_]{0,15}".prop_map(|s| Some(TaskPriority::User(s))),
+        ]
+    }
+
+    /// Optional `YYYY-MM-DD` date string — the normalized on-disk form.
+    fn opt_date() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
+            Just(None),
+            (2000u32..2100, 1u32..=12, 1u32..=28)
+                .prop_map(|(y, m, d)| Some(format!("{:04}-{:02}-{:02}", y, m, d))),
+        ]
+    }
+
+    fn opt_assignee() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![Just(None), "[a-zA-Z0-9_-]{1,20}".prop_map(Some)]
+    }
+
+    proptest! {
+        /// `from_node(task.into_node())` recovers every typed field.
+        #[test]
+        fn task_node_survives_node_round_trip(
+            content in "[ -~]{0,40}",
+            status in task_status(),
+            priority in task_priority(),
+            due_date in opt_date(),
+            assignee in opt_assignee(),
+            started_at in opt_date(),
+            completed_at in opt_date(),
+        ) {
+            let original = TaskNode {
+                id: "task-roundtrip".to_string(),
+                node_type: "task".to_string(),
+                content: content.clone(),
+                version: 1,
+                created_at: Utc::now(),
+                modified_at: Utc::now(),
+                properties: serde_json::json!({}),
+                status: status.clone(),
+                priority: priority.clone(),
+                due_date: due_date.clone(),
+                assignee: assignee.clone(),
+                started_at: started_at.clone(),
+                completed_at: completed_at.clone(),
+            };
+
+            let recovered = TaskNode::from_node(original.clone().into_node())
+                .expect("round trip through Node should re-parse as a task");
+
+            prop_assert_eq!(&recovered.content, &content);
+            prop_assert_eq!(&recovered.status, &status);
+            prop_assert_eq!(&recovered.priority, &priority);
+            prop_assert_eq!(&recovered.due_date, &due_date);
+            prop_assert_eq!(&recovered.assignee, &assignee);
+            prop_assert_eq!(&recovered.started_at, &started_at);
+            prop_assert_eq!(&recovered.completed_at, &completed_at);
+        }
     }
 }

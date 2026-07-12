@@ -42,6 +42,7 @@ prost = "0.13"
 # Dev dependencies (shared via workspace inheritance)
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.5"
 
 [profile.release]
 panic = "unwind"
