@@ -451,12 +451,16 @@ impl GgufModelManager {
 
     /// Get the recommended model based on system RAM.
     ///
-    /// Returns Ministral 8B as the primary llama.cpp default. Ministral 8B
-    /// requires at least 16 GB RAM; on lower-RAM machines the 3B variant is
-    /// returned instead. Callers that already know the user's preferred family
-    /// should use [`Self::recommended_model_id_for`].
+    /// Returns Gemma 4 E4B as the primary llama.cpp default, per ADR-056.
+    /// Unlike [`Self::recommended_model_id_for`]'s general three-tier Gemma4
+    /// behavior, this always recommends E4B regardless of RAM: the 12B and
+    /// 31B tiers remain parked per ADR-046 (unresolved tool-call defects,
+    /// #1346 / #1365 / #1348) and must not become the default recommendation
+    /// on higher-RAM machines. Callers that want the full RAM-tiered
+    /// within-family recommendation should use
+    /// [`Self::recommended_model_id_for`] directly.
     fn recommended_model_id() -> &'static str {
-        Self::recommended_model_id_for(ModelFamily::Ministral)
+        GEMMA_4_E4B.id
     }
 
     /// Recommend the appropriately-sized model within a given family for the
@@ -1595,8 +1599,8 @@ mod tests {
     async fn recommended_model_returns_valid_id() {
         let (mgr, _tmp) = test_manager();
         let rec = mgr.recommended_model().await.unwrap();
-        assert!(
-            rec == "ministral-3b-q4km" || rec == "ministral-8b-q4km",
+        assert_eq!(
+            rec, "gemma-4-e4b-q4km",
             "unexpected recommendation: {}",
             rec
         );
@@ -1605,8 +1609,8 @@ mod tests {
     #[test]
     fn recommended_spec_has_valid_fields() {
         let spec = GgufModelManager::recommended_model_spec();
-        assert!(spec.model_id == "ministral-3b-q4km" || spec.model_id == "ministral-8b-q4km");
-        assert_eq!(spec.family, ModelFamily::Ministral);
+        assert_eq!(spec.model_id, "gemma-4-e4b-q4km");
+        assert_eq!(spec.family, ModelFamily::Gemma4);
         assert!(spec.context_window > 0);
         assert!(spec.default_temperature > 0.0);
     }
