@@ -13,8 +13,8 @@
 //!   cargo run -p nodespace-agent --bin gen_skill_md -- --write   # regenerate and overwrite SKILL.md
 
 use nodespace_agent::skill_rules::{
-    ENUM_FORMAT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST,
-    RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS, TARGET_TYPE_MUST_EXIST,
+    EDIT_DONT_RECREATE, ENUM_FORMAT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD,
+    ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS, TARGET_TYPE_MUST_EXIST,
     TITLE_TEMPLATE_PLACEHOLDERS,
 };
 use std::env;
@@ -35,13 +35,14 @@ fn render_schema_rules_block() -> String {
     // NAME_PLACEHOLDER_EXCEPTION share the "**Schema fields:**" paragraph.
     format!(
         "{one_schema_per_request}\n\n{schema_already_exists}\n\n\
-         **Editing:** to add, remove, or rename a field, or change a relationship on an existing schema, use `schema update` with only the fields that need changing (`add_fields`/`remove_fields`/`rename_fields`, or an updated `description`/`title_template`). Don't re-create the whole schema for a small change.\n\n\
+         {edit_dont_recreate}\n\n\
          **Schema fields:** {no_name_title_field} {name_placeholder_exception}\n\n\
          {enum_format}\n\n\
          {relationship_vs_field} {target_type_must_exist}\n\n\
          {title_template_placeholders}",
         one_schema_per_request = ONE_SCHEMA_PER_REQUEST.prose,
         schema_already_exists = SCHEMA_ALREADY_EXISTS.prose,
+        edit_dont_recreate = EDIT_DONT_RECREATE.prose,
         no_name_title_field = NO_NAME_TITLE_FIELD.prose,
         name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.prose,
         enum_format = ENUM_FORMAT.prose,
@@ -52,18 +53,31 @@ fn render_schema_rules_block() -> String {
 }
 
 /// Splices `block` between the markers in `source`, replacing whatever was
-/// there before. Panics if the markers aren't found or are malformed — that
-/// indicates SKILL.md itself was edited in a way that broke the generation
-/// contract and needs a human to look at it, not a silent no-op.
+/// there before. Panics if the markers aren't found, are duplicated, or are
+/// malformed — that indicates SKILL.md itself was edited in a way that broke
+/// the generation contract and needs a human to look at it, not a silent
+/// no-op or a splice into the wrong occurrence.
 fn splice_generated_block(source: &str, block: &str) -> String {
     let begin_idx = source
         .find(BEGIN_MARKER)
         .unwrap_or_else(|| panic!("SKILL.md is missing the marker: {BEGIN_MARKER}"));
+    assert!(
+        source[begin_idx + BEGIN_MARKER.len()..]
+            .find(BEGIN_MARKER)
+            .is_none(),
+        "SKILL.md has more than one occurrence of the begin marker: {BEGIN_MARKER}"
+    );
     let after_begin = begin_idx + BEGIN_MARKER.len();
     let end_idx = source[after_begin..]
         .find(END_MARKER)
         .unwrap_or_else(|| panic!("SKILL.md is missing the marker: {END_MARKER}"))
         + after_begin;
+    assert!(
+        source[end_idx + END_MARKER.len()..]
+            .find(END_MARKER)
+            .is_none(),
+        "SKILL.md has more than one occurrence of the end marker: {END_MARKER}"
+    );
 
     format!(
         "{prefix}{begin}\n{block}\n{end}{suffix}",

@@ -122,7 +122,7 @@ fn graph_editing_guidance() -> String {
 
 When updating an existing node:
 
-FIND THEN UPDATE: {find_then_act}
+FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing.
 
 AMBIGUITY: {ambiguity_clarify} Examples:
 - 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
