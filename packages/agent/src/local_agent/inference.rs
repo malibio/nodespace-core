@@ -129,14 +129,20 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
     }
 
     async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+        // Report the *effective* context window the engine actually allocated
+        // (sized to available memory at load time), not the configured ceiling.
+        // Callers that budget conversation history against this must see the
+        // real window, or they pack more tokens than the model can hold. Falls
+        // back to the configured value if the model is not loaded yet.
+        let loaded = self.engine.model_info();
+        let context_window = loaded
+            .as_ref()
+            .map(|info| info.context_size)
+            .unwrap_or(self.context_window);
         Ok(Some(ChatModelSpec {
-            model_id: self
-                .engine
-                .model_info()
-                .map(|info| info.model_path.clone())
-                .unwrap_or_default(),
+            model_id: loaded.map(|info| info.model_path).unwrap_or_default(),
             family: self.family,
-            context_window: self.context_window,
+            context_window,
             default_temperature: self.default_temperature,
             type_k: None,
             type_v: None,

@@ -116,6 +116,9 @@ impl ChatLlamaState {
     /// mode and has a fixed batch size matching the context window.
     fn get_or_create_context(&mut self) -> Result<&mut LlamaContext<'static>> {
         if self.context.is_none() {
+            // `context_size` was already sized to available memory at load time
+            // (see `load_model`), so the KV cache below allocates exactly the
+            // window `model_info` reports and the overflow/stop guards measure.
             tracing::info!(
                 "Creating chat LlamaContext (n_ctx={}, n_threads={}, type_k={:?}, type_v={:?})",
                 self.context_size,
@@ -205,10 +208,22 @@ impl ChatEngine {
                 model.n_ctx_train(),
             );
 
+            // Decide the effective context window now, while the model geometry
+            // and free memory are both known, so it is reported by `model_info`
+            // immediately after load — the agent's history-budgeting layer reads
+            // it to size summarization. The context itself is still created
+            // lazily on first generation, but from this same fixed value.
+            let effective_n_ctx = compute_effective_n_ctx(
+                &model,
+                self.config.n_ctx,
+                self.config.type_k,
+                self.config.type_v,
+            );
+
             let state = ChatLlamaState::new(
                 model,
                 model_path.to_string(),
-                self.config.n_ctx,
+                effective_n_ctx,
                 self.config.n_threads,
                 self.config.type_k,
                 self.config.type_v,
@@ -259,20 +274,14 @@ impl ChatEngine {
             // Serialize inference requests
             let _lock = self.inference_lock.lock().await;
 
-            // Run the blocking llama.cpp inference on a blocking thread
+            // Run the blocking llama.cpp inference on a blocking thread.
+            // The effective context window is decided inside `generate_blocking`
+            // when the context is created (sized to available memory), not from
+            // the configured ceiling here.
             let state = Arc::clone(&self.state);
-            let config_n_ctx = self.config.n_ctx;
 
             tokio::task::spawn_blocking(move || {
-                Self::generate_blocking(
-                    &state,
-                    messages,
-                    tools,
-                    temperature,
-                    max_tokens,
-                    config_n_ctx,
-                    &on_chunk,
-                )
+                Self::generate_blocking(&state, messages, tools, temperature, max_tokens, &on_chunk)
             })
             .await
             .map_err(|e| ChatError::InferenceError(format!("Task join error: {}", e)))?
@@ -298,7 +307,6 @@ impl ChatEngine {
         tools: Option<Vec<ToolSpec>>,
         temperature: f32,
         max_tokens: u32,
-        config_n_ctx: u32,
         on_chunk: &(impl Fn(ChatChunk) + Send),
     ) -> Result<ChatUsage> {
         let mut state_guard = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -342,13 +350,6 @@ impl ChatEngine {
 
         let prompt_tokens = tokens.len() as u32;
 
-        if prompt_tokens >= config_n_ctx {
-            return Err(ChatError::ContextOverflow(format!(
-                "Prompt uses {} tokens but context window is {}",
-                prompt_tokens, config_n_ctx
-            )));
-        }
-
         tracing::debug!("Prompt tokenized: {} tokens", prompt_tokens);
 
         // --- Extract model info before taking mutable borrow for context ---
@@ -376,7 +377,25 @@ impl ChatEngine {
             .count();
         let has_reusable_prefix = prefix_len > 0 && prefix_len < tokens.len();
 
-        let ctx = llama.get_or_create_context()?;
+        // Ensure the context exists (this sizes the KV cache to available memory
+        // and stores the effective window back into `llama.context_size`), then
+        // read the effective window for the guards below. Done as its own
+        // statement so the `&mut` borrow ends before we read `context_size`.
+        llama.get_or_create_context()?;
+        let effective_n_ctx = llama.context_size;
+
+        // Reject a prompt that cannot fit in the (possibly reduced) window.
+        if prompt_tokens >= effective_n_ctx {
+            return Err(ChatError::ContextOverflow(format!(
+                "Prompt uses {} tokens but context window is {}",
+                prompt_tokens, effective_n_ctx
+            )));
+        }
+
+        let ctx = llama
+            .context
+            .as_mut()
+            .expect("context was just created by get_or_create_context");
 
         // Determine how many tokens to skip in the batch.  If the KV trim
         // succeeds we decode only the delta; if it fails we fall back to a
@@ -411,7 +430,7 @@ impl ChatEngine {
             0
         };
 
-        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(config_n_ctx as usize, 1);
+        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(effective_n_ctx as usize, 1);
         let last_idx = tokens.len() - 1;
         for (i, &token) in tokens[decode_from..].iter().enumerate() {
             let pos = (decode_from + i) as i32;
@@ -475,7 +494,7 @@ impl ChatEngine {
                 break;
             }
 
-            if n_cur as u32 >= config_n_ctx {
+            if n_cur as u32 >= effective_n_ctx {
                 on_chunk(ChatChunk::Error("Context window full".to_string()));
                 context_overflowed = true;
                 break;
@@ -1098,6 +1117,152 @@ fn kv_quant_to_llama(q: crate::chat::types::KvCacheQuantType) -> KvCacheType {
     }
 }
 
+/// Bytes per KV-cache element for a given quantization.
+///
+/// `None` = F16 (llama.cpp default) at 2 bytes. `Q4_0` is ~0.5 bytes of raw
+/// data per element, but its block layout carries scale/overhead; we round up
+/// to 1 byte so the memory budget stays a conservative *upper* bound (never
+/// under-reserves and OOMs).
+#[cfg(any(feature = "chat-service", test))]
+fn kv_bytes_per_element(q: Option<crate::chat::types::KvCacheQuantType>) -> u64 {
+    match q {
+        None => 2,                                             // F16
+        Some(crate::chat::types::KvCacheQuantType::Q8_0) => 1, // 8-bit
+        Some(crate::chat::types::KvCacheQuantType::Q4_0) => 1, // 4-bit, rounded up
+    }
+}
+
+/// Compute a memory-fitted `n_ctx` from raw model geometry and a memory budget.
+///
+/// The KV cache reserves, for the full context window, one key + one value
+/// tensor per layer sized by the GQA-reduced embedding width:
+///
+/// ```text
+/// bytes_per_token = 2 (K+V) × n_layer × n_embd_kv × kv_bytes_per_element
+/// n_embd_kv       = n_embd × n_head_kv / n_head        (GQA-aware)
+/// ```
+///
+/// `available_bytes` is the memory free *after* the weights are resident. The
+/// KV-cache budget is the smaller of two reserves: a fixed [`KV_HEADROOM_BYTES`]
+/// held back for OS/other apps, and [`KV_BUDGET_PERCENT`]% of available memory
+/// held back for the batch compute buffer (which scales with the window). The
+/// budget divided by the per-token cost gives the token count, clamped to
+/// `[N_CTX_FLOOR, configured]` and rounded down to a 256-token multiple for
+/// clean batch/KV alignment.
+///
+/// Pure arithmetic (no model or memory probe) so it is unit-testable in
+/// isolation. Falls back to `configured` on degenerate geometry (`n_head == 0`).
+#[cfg(any(feature = "chat-service", test))]
+fn fit_n_ctx_to_budget(
+    n_layer: u32,
+    n_embd: u32,
+    n_head: u32,
+    n_head_kv: u32,
+    kv_bytes_per_elem: u64,
+    available_bytes: u64,
+    configured: u32,
+) -> u32 {
+    if n_head == 0 || n_layer == 0 || n_embd == 0 {
+        return configured;
+    }
+
+    let n_embd_kv = (n_embd as u64) * (n_head_kv as u64) / (n_head as u64);
+    let bytes_per_token = 2 * (n_layer as u64) * n_embd_kv * kv_bytes_per_elem;
+    if bytes_per_token == 0 {
+        return configured;
+    }
+
+    // The KV cache is not the only allocation that scales with the context
+    // window: llama.cpp also sizes a compute/command buffer to the batch
+    // (n_batch == n_ctx here). Empirically, budgeting the KV cache as
+    // "available minus a fixed headroom" still OOMs on a 16GB machine because
+    // the large-batch compute buffer eats the remainder. So we cap the KV
+    // cache at the *smaller* of two budgets:
+    //   1. available − KV_HEADROOM_BYTES   (fixed floor for OS/other apps)
+    //   2. available × KV_BUDGET_PERCENT%  (leaves proportional room for the
+    //      compute buffer, which grows with the window we pick)
+    let headroom_budget = available_bytes.saturating_sub(KV_HEADROOM_BYTES);
+    let fraction_budget = ((available_bytes as u128 * KV_BUDGET_PERCENT as u128) / 100) as u64;
+    let budget = headroom_budget.min(fraction_budget);
+    let fit_tokens = budget / bytes_per_token;
+
+    // Round down to a 256-token multiple, then clamp into [floor, configured].
+    let fit_aligned = (fit_tokens / 256) * 256;
+    (fit_aligned as u32).clamp(N_CTX_FLOOR, configured)
+}
+
+/// Reserve for compute buffers, Metal command buffers, and OS memory pressure,
+/// held back from the KV-cache budget. Sized from the observed 16GB-machine
+/// OOM signature where the fixed 32K allocation left no room for the
+/// per-generation command buffers.
+#[cfg(any(feature = "chat-service", test))]
+const KV_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Cap the KV cache at this percentage of memory available after weights load.
+/// The remainder covers the batch compute buffer (which scales with the window)
+/// plus OS/other-app pressure. Chosen empirically: budgeting KV as
+/// "available − 2GiB headroom" alone still OOM'd a 12B model at a 27K window on
+/// a 16GB machine, because the large-batch compute buffer consumed the rest.
+#[cfg(any(feature = "chat-service", test))]
+const KV_BUDGET_PERCENT: u64 = 40;
+
+/// Smallest context we will ever allocate. Below this a conversation is too
+/// cramped to be useful, so we prefer a small context (and a clear warning)
+/// over silently shrinking to nothing.
+#[cfg(any(feature = "chat-service", test))]
+const N_CTX_FLOOR: u32 = 4096;
+
+/// Compute the effective `n_ctx` for a loaded model given the memory currently
+/// available, using the configured context window as a ceiling.
+///
+/// Reads GQA geometry from the loaded model and probes free memory via
+/// `sysinfo` (measured after weights are resident, so it reflects them), then
+/// delegates the arithmetic to [`fit_n_ctx_to_budget`]. Warns when the result
+/// is below the configured ceiling so the reduction is visible in release logs.
+#[cfg(feature = "chat-service")]
+fn compute_effective_n_ctx(
+    model: &LlamaModel,
+    configured: u32,
+    type_k: Option<crate::chat::types::KvCacheQuantType>,
+    type_v: Option<crate::chat::types::KvCacheQuantType>,
+) -> u32 {
+    // K and V may in principle differ; budget on the larger per-element cost.
+    let kv_bytes = kv_bytes_per_element(type_k).max(kv_bytes_per_element(type_v));
+
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available = sys.available_memory();
+
+    let effective = fit_n_ctx_to_budget(
+        model.n_layer(),
+        model.n_embd() as u32,
+        model.n_head(),
+        model.n_head_kv(),
+        kv_bytes,
+        available,
+        configured,
+    );
+
+    if effective < configured {
+        tracing::warn!(
+            "Reducing chat context to fit memory: configured={} effective={} \
+             available={:.1}GB (KV {} B/elem) — large model on constrained memory",
+            configured,
+            effective,
+            available as f64 / 1024.0 / 1024.0 / 1024.0,
+            kv_bytes,
+        );
+    } else {
+        tracing::info!(
+            "Chat context fits configured window: n_ctx={} available={:.1}GB",
+            effective,
+            available as f64 / 1024.0 / 1024.0 / 1024.0,
+        );
+    }
+
+    effective
+}
+
 /// Generate a simple UUID-like string for tool call IDs.
 /// Not cryptographically random — just unique enough for local use.
 #[cfg(feature = "chat-service")]
@@ -1510,5 +1675,112 @@ mod tests {
         assert!(stops.is_empty(), "must not add stops for non-Gemma4 format");
         augment_gemma4_stops(1, &mut stops);
         assert!(stops.is_empty(), "must not add stops for non-Gemma4 format");
+    }
+
+    // --- Memory-aware n_ctx sizing (fit_n_ctx_to_budget) ---
+
+    use crate::chat::types::KvCacheQuantType;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn kv_bytes_per_element_maps_quant_to_upper_bound() {
+        assert_eq!(kv_bytes_per_element(None), 2); // F16
+        assert_eq!(kv_bytes_per_element(Some(KvCacheQuantType::Q8_0)), 1);
+        // Q4_0 rounds up to 1 so the budget stays a conservative upper bound.
+        assert_eq!(kv_bytes_per_element(Some(KvCacheQuantType::Q4_0)), 1);
+    }
+
+    #[test]
+    fn fit_reduces_window_for_12b_on_tight_memory() {
+        // Gemma 4 12B geometry (approx): 48 layers, n_embd 3840, GQA 24/8 heads,
+        // Q8_0 KV cache. ~6GB free after the ~7.4GB weights are resident on a
+        // 16GB machine. The full 32K must not fit; we expect a reduced window.
+        let n = fit_n_ctx_to_budget(
+            48,   // n_layer
+            3840, // n_embd
+            24,   // n_head
+            8,    // n_head_kv (GQA)
+            kv_bytes_per_element(Some(KvCacheQuantType::Q8_0)),
+            // ~3GB free after the ~7.4GB weights + OS + other apps on a loaded
+            // 16GB machine — the real reproduction condition. With the 2GB
+            // headroom this leaves ~1GB for the KV cache, far under the ~4GB a
+            // full 32K Q8_0 cache needs, so the window must shrink.
+            3 * GIB,
+            32_768,
+        );
+        assert!(
+            n < 32_768,
+            "12B on tight memory must shrink the window, got {n}"
+        );
+        assert!(n >= N_CTX_FLOOR, "must not drop below the floor, got {n}");
+        assert_eq!(n % 256, 0, "must align to 256 tokens, got {n}");
+    }
+
+    #[test]
+    fn fit_leaves_compute_headroom_at_real_repro_memory() {
+        // Real Gemma 4 12B geometry (from the GGUF: 48 layers, n_embd 3840,
+        // 16 heads, 8 KV heads) at the ~6.7GB free the daemon actually reported
+        // when the fixed-headroom-only budget still OOM'd at a 27K window. The
+        // fraction cap must pull the KV cache well below that so the batch
+        // compute buffer fits: expect a window whose Q8_0 KV cache stays under
+        // ~45% of available memory.
+        let available: u64 = 6_700 * 1024 * 1024; // ~6.7 GB
+        let kv_bytes = kv_bytes_per_element(Some(KvCacheQuantType::Q8_0));
+        let n = fit_n_ctx_to_budget(48, 3840, 16, 8, kv_bytes, available, 32_768);
+
+        let n_embd_kv = 3840u64 * 8 / 16;
+        let kv_cache_bytes = 2 * 48 * n_embd_kv * kv_bytes * n as u64;
+        assert!(
+            kv_cache_bytes * 100 <= available * 45,
+            "KV cache ({kv_cache_bytes}) must stay under ~45% of {available}; n={n}"
+        );
+        assert!(
+            n < 27_136,
+            "must be more conservative than the OOMing 27K window, got {n}"
+        );
+        assert!(n >= N_CTX_FLOOR);
+    }
+
+    #[test]
+    fn fit_keeps_full_window_for_small_model_with_headroom() {
+        // E4B-like small geometry with plenty of free memory: the full configured
+        // 32K comfortably fits, so no reduction (regression guard).
+        let n = fit_n_ctx_to_budget(
+            30,                         // n_layer
+            2048,                       // n_embd
+            16,                         // n_head
+            8,                          // n_head_kv
+            kv_bytes_per_element(None), // F16
+            32 * GIB,
+            32_768,
+        );
+        assert_eq!(n, 32_768, "small model with headroom keeps full window");
+    }
+
+    #[test]
+    fn fit_clamps_to_floor_when_memory_below_headroom() {
+        // Available memory at/below the headroom leaves a zero budget; the result
+        // must clamp up to the floor, never 0 and never a divide-by-zero panic.
+        let n = fit_n_ctx_to_budget(
+            48,
+            3840,
+            24,
+            8,
+            kv_bytes_per_element(Some(KvCacheQuantType::Q8_0)),
+            KV_HEADROOM_BYTES, // budget == 0 after headroom
+            32_768,
+        );
+        assert_eq!(n, N_CTX_FLOOR, "zero budget clamps to the floor, got {n}");
+    }
+
+    #[test]
+    fn fit_falls_back_to_configured_on_degenerate_geometry() {
+        // n_head == 0 would divide by zero; must fall back to the configured value.
+        let n = fit_n_ctx_to_budget(48, 3840, 0, 8, 1, 6 * GIB, 32_768);
+        assert_eq!(n, 32_768, "n_head==0 must fall back to configured");
+        // n_layer == 0 likewise.
+        let n = fit_n_ctx_to_budget(0, 3840, 24, 8, 1, 6 * GIB, 32_768);
+        assert_eq!(n, 32_768, "n_layer==0 must fall back to configured");
     }
 }
