@@ -19,6 +19,10 @@ llama-cpp-2 = { version = ">=0.1.146", optional = true }
 # UTF-8 decoder for token_to_piece API (llama-cpp-2 >= 0.1.140)
 encoding_rs = { version = "0.8", optional = true }
 
+# System memory probe for sizing the chat KV cache to available memory at load
+# time (avoids a fixed 32K allocation OOMing large models on constrained RAM).
+sysinfo = { version = "0.33", optional = true }
+
 # Caching layer
 lru = "0.12"
 
@@ -47,7 +51,7 @@ futures = "0.3"
 [features]
 default = ["embedding-service", "chat-service"]
 embedding-service = ["llama-cpp-2"]
-chat-service = ["llama-cpp-2", "encoding_rs"]
+chat-service = ["llama-cpp-2", "encoding_rs", "sysinfo"]
 
 # GPU acceleration features
 cuda = ["llama-cpp-2/cuda"]
