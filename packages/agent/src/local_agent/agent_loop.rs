@@ -1085,11 +1085,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         let history_tokens = self.engine.token_count(&history_text).await?;
         let system_tokens = self.engine.token_count(system_content).await?;
 
-        if history_tokens + system_tokens <= TOTAL_TOKEN_BUDGET {
+        // Budget against the model's *effective* context window, which the
+        // native path sizes to available memory at load time (a large model on
+        // a constrained machine may get far less than 32K). Reserve room for the
+        // reply so summarization triggers before the prompt fills the window and
+        // the engine rejects it with ContextOverflow. Fall back to the static
+        // budget when the window is unknown (model not loaded / remote backend).
+        let (total_budget, history_budget) = match self.engine.model_info().await {
+            Ok(Some(spec)) if spec.context_window > 0 => {
+                let total = spec
+                    .context_window
+                    .saturating_sub(MAX_RESPONSE_TOKENS)
+                    .max(SYSTEM_PROMPT_BUDGET + 1);
+                (total, total.saturating_sub(SYSTEM_PROMPT_BUDGET))
+            }
+            _ => (TOTAL_TOKEN_BUDGET, HISTORY_TOKEN_BUDGET),
+        };
+
+        if history_tokens + system_tokens <= total_budget {
             return Ok(());
         }
 
-        if history_tokens <= HISTORY_TOKEN_BUDGET {
+        if history_tokens <= history_budget {
             return Ok(());
         }
 
@@ -1408,6 +1425,9 @@ mod tests {
         /// Each entry is a list of chunks to emit.
         responses: tokio::sync::Mutex<Vec<Vec<StreamingChunk>>>,
         generate_count: AtomicUsize,
+        /// Effective context window reported by `model_info` — the summarization
+        /// gate budgets against this, so tests can exercise a reduced window.
+        context_window: u32,
     }
 
     impl MockEngine {
@@ -1415,6 +1435,16 @@ mod tests {
             Self {
                 responses: tokio::sync::Mutex::new(responses),
                 generate_count: AtomicUsize::new(0),
+                context_window: 8192,
+            }
+        }
+
+        /// Same as `new` but with an explicit effective context window.
+        fn with_context_window(responses: Vec<Vec<StreamingChunk>>, context_window: u32) -> Self {
+            Self {
+                responses: tokio::sync::Mutex::new(responses),
+                generate_count: AtomicUsize::new(0),
+                context_window,
             }
         }
 
@@ -1511,7 +1541,7 @@ mod tests {
             Ok(Some(ChatModelSpec {
                 model_id: "test-model".into(),
                 family: ModelFamily::Ministral,
-                context_window: 8192,
+                context_window: self.context_window,
                 default_temperature: 0.1,
                 type_k: None,
                 type_v: None,
@@ -2296,6 +2326,89 @@ mod tests {
         );
 
         assert_eq!(result.response, "Here is your answer.");
+    }
+
+    /// A model whose effective context window was reduced to fit memory (issue
+    /// #1638) must summarize when history exceeds *that* window — not the old
+    /// hardcoded 32K budget. Here history is ~10K tokens: comfortably under the
+    /// former 32K constant, but well over a 4096-token effective window. Before
+    /// budgeting against the effective window, this history would sail past the
+    /// gate and then be rejected by the engine as ContextOverflow.
+    #[tokio::test]
+    async fn summarization_triggers_on_reduced_effective_window() {
+        let engine = Arc::new(MockEngine::with_context_window(
+            vec![
+                // Summarization call
+                vec![
+                    StreamingChunk::Token {
+                        text: "Summary: earlier discussion condensed.".to_string(),
+                    },
+                    StreamingChunk::Done {
+                        usage: InferenceUsage {
+                            prompt_tokens: 40,
+                            completion_tokens: 10,
+                        },
+                    },
+                ],
+                // Final answer
+                vec![
+                    StreamingChunk::Token {
+                        text: "Done.".to_string(),
+                    },
+                    StreamingChunk::Done {
+                        usage: InferenceUsage {
+                            prompt_tokens: 30,
+                            completion_tokens: 10,
+                        },
+                    },
+                ],
+            ],
+            4096, // effective window reduced to fit memory
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+
+        // ~10K tokens (@ ~4 chars/token): under the old 32K constant, over 4096.
+        // 20 messages * 2000 chars = 40000 chars = ~10000 tokens.
+        for i in 0..20 {
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
+            session.messages.push(ChatMessage::text(
+                role,
+                format!("Msg {}: {}", i, "y".repeat(2000)),
+            ));
+        }
+        let messages_before = session.messages.len();
+
+        agent_loop
+            .run_turn(
+                &mut session,
+                "Continue the conversation",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            session.messages.len() < messages_before,
+            "Reduced effective window must trigger summarization. Before: {}, After: {}",
+            messages_before,
+            session.messages.len()
+        );
+        assert!(
+            session.messages[0]
+                .content
+                .contains("[Conversation summary]"),
+            "First message should be the summary, got: {}",
+            session.messages[0].content
+        );
     }
 
     #[tokio::test]

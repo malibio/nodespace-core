@@ -116,13 +116,9 @@ impl ChatLlamaState {
     /// mode and has a fixed batch size matching the context window.
     fn get_or_create_context(&mut self) -> Result<&mut LlamaContext<'static>> {
         if self.context.is_none() {
-            // Size the KV cache to the memory actually free right now, using the
-            // configured window as a ceiling. Store the result back into
-            // `context_size` so the overflow/stop guards downstream measure the
-            // *real* allocation, not the configured ceiling.
-            self.context_size =
-                compute_effective_n_ctx(&self.model, self.context_size, self.type_k, self.type_v);
-
+            // `context_size` was already sized to available memory at load time
+            // (see `load_model`), so the KV cache below allocates exactly the
+            // window `model_info` reports and the overflow/stop guards measure.
             tracing::info!(
                 "Creating chat LlamaContext (n_ctx={}, n_threads={}, type_k={:?}, type_v={:?})",
                 self.context_size,
@@ -212,10 +208,22 @@ impl ChatEngine {
                 model.n_ctx_train(),
             );
 
+            // Decide the effective context window now, while the model geometry
+            // and free memory are both known, so it is reported by `model_info`
+            // immediately after load — the agent's history-budgeting layer reads
+            // it to size summarization. The context itself is still created
+            // lazily on first generation, but from this same fixed value.
+            let effective_n_ctx = compute_effective_n_ctx(
+                &model,
+                self.config.n_ctx,
+                self.config.type_k,
+                self.config.type_v,
+            );
+
             let state = ChatLlamaState::new(
                 model,
                 model_path.to_string(),
-                self.config.n_ctx,
+                effective_n_ctx,
                 self.config.n_threads,
                 self.config.type_k,
                 self.config.type_v,
