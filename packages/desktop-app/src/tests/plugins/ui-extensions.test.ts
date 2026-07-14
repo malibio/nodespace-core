@@ -60,9 +60,9 @@ describe('UI-extension registry', () => {
   describe('registry registration', () => {
     it('registers the built-in pro-sync extension with all contributions', () => {
       expect(uiExtensionRegistry.has('pro-sync')).toBe(true);
-      // 4 overlay pill variants + 2 modal (sign-in/connected).
+      // 4 overlay pill variants + 3 modal (enable-prompt consent / sign-in / connected).
       expect(uiExtensionRegistry.chromeFor('app-shell-overlay')).toHaveLength(4);
-      expect(uiExtensionRegistry.chromeFor('app-shell-modal')).toHaveLength(2);
+      expect(uiExtensionRegistry.chromeFor('app-shell-modal')).toHaveLength(3);
       // 3 collaboration viewer extensions (enable-prompt/sign-in/connected).
       expect(uiExtensionRegistry.viewersFor('collection')).toHaveLength(3);
       expect(uiExtensionRegistry.viewersFor('text')).toEqual([]);
@@ -125,13 +125,15 @@ describe('UI-extension registry', () => {
       expect(getActiveViewerExtensions('collection')).toEqual([]);
     });
 
-    it('enable-prompt: enable-sync pill + a locked collab tab, no modal', () => {
+    it('enable-prompt: enable-sync pill + the consent modal + a locked collab tab', () => {
       proSync.tier = 'pro';
       seedSettings({ sync_enabled: false, auth_status: 'local' });
       const overlay = getActiveChromeContributions('app-shell-overlay');
       expect(overlay).toHaveLength(1);
       expect(overlay[0].variant).toBe('enable-prompt');
-      expect(getActiveChromeContributions('app-shell-modal')).toEqual([]);
+      const modal = getActiveChromeContributions('app-shell-modal');
+      expect(modal).toHaveLength(1);
+      expect(modal[0].variant).toBe('enable-prompt');
       const viewers = getActiveViewerExtensions('collection');
       expect(viewers).toHaveLength(1);
       expect(viewers[0].variant).toBe('enable-prompt');

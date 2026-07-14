@@ -12,10 +12,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::services::pro_client::pb::cloud_sync_service_client::CloudSyncServiceClient;
 use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{
-    AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, GetIdentityRequest,
-    InitiateOAuthRequest, JoinCollectionRequest, LeaveCollectionRequest, ListInvitesRequest,
-    ListJoinableCollectionsRequest, ListMembersRequest, ListRequestsRequest, RemoveMemberRequest,
-    RequestJoinRequest, RevokeInviteRequest, SetMemberRequest, SignOutRequest,
+    AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, EnableSyncRequest,
+    GetIdentityRequest, InitiateOAuthRequest, JoinCollectionRequest, LeaveCollectionRequest,
+    ListInvitesRequest, ListJoinableCollectionsRequest, ListMembersRequest, ListRequestsRequest,
+    RemoveMemberRequest, RequestJoinRequest, RevokeInviteRequest, SetMemberRequest, SignOutRequest,
     WatchSyncStatusRequest,
 };
 use crate::services::{ProClient, ProTier};
@@ -184,6 +184,25 @@ pub async fn pro_signout(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("SignOut failed: {e}"))?;
     tracing::info!("Pro: SignOut");
+    Ok(())
+}
+
+/// Enable per-database cloud sync after the user's first-Pro consent. Tells the
+/// daemon to flip the active database's `sync_enabled` flag, which unlocks the
+/// collaboration UI and lets the Pro-UI variant advance from the enable prompt
+/// to sign-in. No-ops in community mode (no `ProClient`), matching the other Pro
+/// commands' side-effect-free contract.
+#[tauri::command]
+pub async fn pro_enable_sync(app: AppHandle) -> Result<(), String> {
+    let Some(pro) = app.try_state::<ProClient>() else {
+        return Ok(());
+    };
+    let mut client = pro.client().await;
+    client
+        .enable_sync(EnableSyncRequest {})
+        .await
+        .map_err(|e| format!("EnableSync failed: {e}"))?;
+    tracing::info!("Pro: EnableSync");
     Ok(())
 }
 

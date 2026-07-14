@@ -101,6 +101,15 @@ class ProSyncStore {
   signedInEpisode = $state(0);
 
   /**
+   * Whether the first-Pro data-sharing consent modal is open. Set true when the
+   * user clicks the enable-sync affordance; the consent slot renders the modal
+   * off this flag and clears it on either choice. Held here (rather than inside a
+   * component) so the enable-sync pill and the modal slot — separate registry
+   * contributions — share one source of truth.
+   */
+  consentPromptOpen = $state(false);
+
+  /**
    * Axis 1 only: "this daemon binary CAN sync" (the capability probe found
    * a Pro daemon). This is NOT "sync is active" — whether sync is enabled and
    * authenticated for the *active database* is axis 2, held on that database's
