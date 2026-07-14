@@ -1095,6 +1095,76 @@ impl NodeService {
         Ok(())
     }
 
+    /// Merge fields into the DatabaseSettingsNode singleton's `database-settings`
+    /// namespace, preserving every sibling field (tenant binding, sync state,
+    /// auth status). The singleton is seeded on database open, so a missing one
+    /// is an error rather than a silent no-op.
+    async fn merge_database_settings(
+        &self,
+        fields: &[(&str, serde_json::Value)],
+    ) -> Result<(), NodeServiceError> {
+        let node = self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                NodeServiceError::InitializationError(
+                    "cannot update database settings: DatabaseSettingsNode singleton not found"
+                        .to_string(),
+                )
+            })?;
+
+        let mut properties = node.properties.clone();
+        let root = properties.as_object_mut().ok_or_else(|| {
+            NodeServiceError::InitializationError(
+                "DatabaseSettingsNode properties are not a JSON object".to_string(),
+            )
+        })?;
+        let settings = root
+            .entry("database-settings")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                NodeServiceError::InitializationError(
+                    "DatabaseSettingsNode `database-settings` is not a JSON object".to_string(),
+                )
+            })?;
+        for (key, value) in fields {
+            settings.insert((*key).to_string(), value.clone());
+        }
+
+        self.update_node(
+            &node.id,
+            node.version,
+            NodeUpdate::new().with_properties(properties),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Enable (or disable) per-database cloud sync by writing `sync_enabled` on
+    /// the DatabaseSettingsNode singleton (ADR-053). This is the field the
+    /// registry-driven Pro UI gates its collaboration surfaces on; nothing else
+    /// advances it, so this is the authoritative writer the first-Pro consent
+    /// flow calls once the user opts in.
+    pub async fn set_sync_enabled(&self, enabled: bool) -> Result<(), NodeServiceError> {
+        self.merge_database_settings(&[("sync_enabled", serde_json::Value::Bool(enabled))])
+            .await
+    }
+
+    /// Set the per-database cloud auth status (`local` or `connected`) on the
+    /// DatabaseSettingsNode singleton (ADR-053). The Pro daemon advances this to
+    /// `connected` once identity is bound and back to `local` on sign-out, which
+    /// drives the Pro UI from the sign-in variant to the connected variant.
+    pub async fn set_auth_status(&self, status: &str) -> Result<(), NodeServiceError> {
+        self.merge_database_settings(&[(
+            "auth_status",
+            serde_json::Value::String(status.to_string()),
+        )])
+        .await
+    }
+
     /// Seed core schema definitions if database is fresh
     ///
     /// Checks if schema nodes exist. If not, creates all core schemas
@@ -3199,6 +3269,63 @@ mod tests {
         // Empty schema or collection is treated as unbound.
         service.set_bound_tenant("", "").await.unwrap();
         assert_eq!(service.get_bound_tenant().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_set_sync_enabled_and_auth_status_roundtrip() {
+        let (service, _temp) = create_test_service().await;
+        const COLL: &str = "c0000000-0000-0000-0000-000000000001";
+
+        // Fresh install defaults.
+        let node = &service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap()[0];
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], false);
+        assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+
+        // Enabling sync flips only sync_enabled; auth_status is preserved.
+        service.set_sync_enabled(true).await.unwrap();
+        let node = &service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap()[0];
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], true);
+        assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+
+        // Advancing auth_status preserves sync_enabled.
+        service.set_auth_status("connected").await.unwrap();
+        let node = &service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap()[0];
+        assert_eq!(
+            node.properties["database-settings"]["auth_status"],
+            "connected"
+        );
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], true);
+
+        // A later tenant binding does not clobber the sync state (cross-field merge).
+        service
+            .set_bound_tenant("tenant_public", COLL)
+            .await
+            .unwrap();
+        let node = &service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap()[0];
+        assert_eq!(node.properties["database-settings"]["sync_enabled"], true);
+        assert_eq!(
+            node.properties["database-settings"]["auth_status"],
+            "connected"
+        );
+
+        // And enabling sync again preserves the tenant binding.
+        service.set_sync_enabled(true).await.unwrap();
+        assert_eq!(
+            service.get_bound_tenant().await.unwrap(),
+            Some(("tenant_public".to_string(), COLL.to_string()))
+        );
     }
 
     #[tokio::test]

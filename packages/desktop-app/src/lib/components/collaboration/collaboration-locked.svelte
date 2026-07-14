@@ -9,7 +9,13 @@
   signature (surfaced as a data attribute for debugging).
 -->
 <script lang="ts">
+  import { proSync } from '$lib/stores/pro-sync.svelte';
+
   let { nodeId }: { nodeId: string } = $props();
+
+  function openConsent() {
+    proSync.consentPromptOpen = true;
+  }
 </script>
 
 <div class="collab-locked" data-collection-id={nodeId}>
@@ -19,6 +25,7 @@
     Enable cloud sync for this database to invite people, manage roles, and share
     collections.
   </p>
+  <button class="enable-btn" type="button" onclick={openConsent}> Enable sync </button>
 </div>
 
 <style>
@@ -49,5 +56,21 @@
     max-width: 360px;
     font-size: 13px;
     line-height: 1.5;
+  }
+
+  .enable-btn {
+    margin-top: 8px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background-color: #2563eb;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .enable-btn:hover {
+    background-color: #1d4ed8;
   }
 </style>

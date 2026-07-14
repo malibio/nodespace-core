@@ -39,6 +39,12 @@ service CloudSyncService {
   // the orchestrator loop then reports AUTH_REQUIRED. Idempotent.
   rpc SignOut (SignOutRequest) returns (SignOutResponse);
 
+  // Enable per-database cloud sync after the user's first-Pro consent. Flips
+  // the active database's DatabaseSettingsNode sync_enabled to true — the field
+  // the registry-driven Pro UI gates its collaboration surfaces on — so the UI
+  // can advance from the enable prompt to sign-in. Idempotent.
+  rpc EnableSync (EnableSyncRequest) returns (EnableSyncResponse);
+
   // --- Team membership (M5, #147). Thin adapters over the cloud
   // membership RPCs; the daemon forwards the signed-in user's JWT, so
   // the same admin / last-admin / open-vs-restricted gates apply
@@ -152,6 +158,9 @@ message TriggerSyncResponse {}
 
 message SignOutRequest {}
 message SignOutResponse {}
+
+message EnableSyncRequest {}
+message EnableSyncResponse {}
 
 // --- Team membership (M5, #147) ----------------------------------
 // permission is "admin" | "modify" | "readOnly". collection_id / person_id are

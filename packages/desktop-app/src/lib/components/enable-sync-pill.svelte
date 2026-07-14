@@ -2,38 +2,20 @@
   Enable-sync prompt.
 
   Rendered in the app-shell overlay slot for the `enable-prompt` variant — a Pro
-  daemon whose active database has `sync_enabled: false`. Offers to turn cloud sync
-  on for this database.
+  daemon whose active database has `sync_enabled: false`. Clicking opens the
+  first-Pro data-sharing consent modal (rendered by `first-pro-consent-slot` in
+  the app-shell modal slot for the same variant), which is where the user makes
+  the informed, irreversible choice to merge into the public workspace. Nothing
+  leaves the device until they opt in there.
 
-  The concrete "turn sync on" action available today is starting the interactive
-  sign-in (`pro_initiate_oauth`): a Pro user opts a database into sync by signing
-  in to the cloud, after which the daemon binds the tenant and flips
-  `sync_enabled` / `auth_status` on the DatabaseSettingsNode, advancing the variant.
-  (A dedicated per-database "enable sync" intent command is backend follow-up.)
-
-  Never rendered in the community build (that resolves to `teaser`), so invoking a
-  Pro command here is safe.
+  Never rendered in the community build (that resolves to `teaser`), so touching
+  Pro state here is safe.
 -->
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
-  import { createLogger } from '$lib/utils/logger';
+  import { proSync } from '$lib/stores/pro-sync.svelte';
 
-  const log = createLogger('EnableSyncPill');
-
-  let pending = $state(false);
-
-  async function enableSync() {
-    if (pending) return;
-    pending = true;
-    try {
-      // Starting sign-in is how a Pro user enables sync for a database today.
-      await invoke('pro_initiate_oauth');
-      log.info('enable-sync: sign-in started');
-    } catch (e) {
-      log.warn('enable-sync: pro_initiate_oauth failed', { error: e });
-    } finally {
-      pending = false;
-    }
+  function openConsent() {
+    proSync.consentPromptOpen = true;
   }
 </script>
 
@@ -42,11 +24,10 @@
   type="button"
   title="Turn on cloud sync for this database"
   aria-label="Enable cloud sync for this database"
-  disabled={pending}
-  onclick={enableSync}
+  onclick={openConsent}
 >
   <span class="dot" aria-hidden="true"></span>
-  <span class="label">{pending ? 'Enabling…' : 'Enable sync'}</span>
+  <span class="label">Enable sync</span>
 </button>
 
 <style>
@@ -65,13 +46,8 @@
     cursor: pointer;
   }
 
-  .enable-sync-pill:hover:not(:disabled) {
+  .enable-sync-pill:hover {
     background: hsl(var(--muted));
-  }
-
-  .enable-sync-pill:disabled {
-    cursor: default;
-    opacity: 0.85;
   }
 
   .dot {

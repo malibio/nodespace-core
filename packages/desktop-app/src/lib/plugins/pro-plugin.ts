@@ -9,7 +9,7 @@
  *   | variant        | overlay pill              | modal              | collection tab              |
  *   |----------------|---------------------------|--------------------|-----------------------------|
  *   | teaser         | pro-teaser-pill (upsell)  | —                  | — (none)                    |
- *   | enable-prompt  | enable-sync-pill          | —                  | collaboration-locked        |
+ *   | enable-prompt  | enable-sync-pill          | first-pro-consent  | collaboration-locked        |
  *   | sign-in        | pro-sync-pill (existing)  | pro-relogin-slot   | collaboration-tab           |
  *   | connected      | pro-sync-pill (existing)  | pro-relogin-slot   | collaboration-tab           |
  *
@@ -53,6 +53,15 @@ export const proSyncUiExtension: UiExtensionDefinition = {
       slot: 'app-shell-overlay',
       variant: 'connected',
       lazyLoad: () => import('$lib/components/pro-sync-pill.svelte')
+    },
+    // First-Pro data-sharing consent modal — shown for a Pro daemon whose active
+    // database has sync disabled, when the user opts to enable it. The gate that
+    // keeps local data from reaching the public workspace without an explicit,
+    // irreversible choice.
+    {
+      slot: 'app-shell-modal',
+      variant: 'enable-prompt',
+      lazyLoad: () => import('$lib/components/first-pro-consent-slot.svelte')
     },
     // Re-login modal — only meaningful once sync is enabled for the database; the
     // wrapper itself only shows the modal on an AUTH_REQUIRED transition.
