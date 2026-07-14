@@ -481,8 +481,15 @@ async fn run_batch_import(
     let store = Arc::clone(node_service.store());
     let node_service_clone = (*node_service).clone();
     let tx_bg = tx.clone();
+    let tx_guard = tx.clone();
 
-    tokio::spawn(async move {
+    let phase2 = tokio::spawn(async move {
+        // First failure seen in phase 2. When set, the import did NOT fully
+        // succeed (nodes may exist but be unlinked from collections, or mentions
+        // may be missing), so every file result is marked failed rather than
+        // reporting a false "complete".
+        let mut phase2_error: Option<String> = None;
+
         send_progress(
             &tx_bg,
             5,
@@ -502,6 +509,7 @@ async fn run_batch_import(
             Ok(map) => map,
             Err(e) => {
                 tracing::error!("Failed to bulk resolve collections: {:?}", e);
+                phase2_error.get_or_insert_with(|| format!("Collection resolution failed: {e}"));
                 HashMap::new()
             }
         };
@@ -573,18 +581,12 @@ async fn run_batch_import(
             }
             Err(e) => {
                 tracing::error!("Failed to bulk create nodes: {:?}", e);
+                phase2_error.get_or_insert_with(|| {
+                    "Bulk node insertion failed; see daemon logs".to_string()
+                });
                 true
             }
         };
-
-        // When the bulk insert fails, surface it to the caller rather than
-        // silently reporting success — mark all phase1 results as failed.
-        if bulk_insert_failed {
-            for r in &mut phase1_results {
-                r.success = false;
-                r.error = Some("Bulk node insertion failed; see daemon logs".to_string());
-            }
-        }
 
         send_progress(
             &tx_bg,
@@ -600,7 +602,11 @@ async fn run_batch_import(
         if !bulk_insert_failed && !collection_assignments.is_empty() {
             match store.bulk_add_to_collections(&collection_assignments).await {
                 Ok(count) => tracing::info!("Bulk assigned {} collection memberships", count),
-                Err(e) => tracing::error!("Failed to bulk add to collections: {:?}", e),
+                Err(e) => {
+                    tracing::error!("Failed to bulk add to collections: {:?}", e);
+                    phase2_error
+                        .get_or_insert_with(|| format!("Collection assignment failed: {e}"));
+                }
             }
         }
 
@@ -618,7 +624,10 @@ async fn run_batch_import(
         if !bulk_insert_failed && !all_mentions.is_empty() {
             match store.bulk_create_mentions(&all_mentions).await {
                 Ok(count) => tracing::info!("Bulk created {} mentions", count),
-                Err(e) => tracing::error!("Failed to bulk create mentions: {:?}", e),
+                Err(e) => {
+                    tracing::error!("Failed to bulk create mentions: {:?}", e);
+                    phase2_error.get_or_insert_with(|| format!("Reference creation failed: {e}"));
+                }
             }
         }
 
@@ -639,25 +648,63 @@ async fn run_batch_import(
             }
         }
 
+        // Fold any phase-2 failure into the per-file results so the caller sees a
+        // non-success outcome instead of a false "complete" — the disease behind
+        // "nodes land with zero member_of edges while the CLI reports success".
+        apply_phase2_error(&mut phase1_results, &phase2_error);
+
         let mut all_results: Vec<LocalFileImportResult> = failed_results;
         all_results.append(&mut phase1_results);
         let proto_results: Vec<FileImportResult> =
             all_results.into_iter().map(proto_file_result).collect();
 
+        let message = match &phase2_error {
+            Some(err) => format!("Import completed with errors: {err}"),
+            None => format!(
+                "Imported {} files ({} nodes)",
+                successful_files_count, total_nodes_count
+            ),
+        };
         send_progress(
             &tx_bg,
             9,
             "complete",
-            &format!(
-                "Imported {} files ({} nodes)",
-                successful_files_count, total_nodes_count
-            ),
+            &message,
             total_files,
             total_files,
             proto_results,
         )
         .await;
     });
+
+    // A panic or cancellation in phase 2 aborts the task before it can send its
+    // terminal event, which would otherwise leave the stream to simply end after
+    // the last progress message — indistinguishable from success to the CLI.
+    // Await the handle and, on abnormal termination, close the stream with an
+    // error so the failure is never silent.
+    tokio::spawn(async move {
+        if let Err(join_err) = phase2.await {
+            tracing::error!("Import phase 2 aborted: {join_err}");
+            let _ = tx_guard
+                .send(Err(Status::internal(format!(
+                    "import phase 2 aborted unexpectedly: {join_err}"
+                ))))
+                .await;
+        }
+    });
+}
+
+/// Fold a phase-2 failure into every per-file result. When phase 2 fails partway
+/// (collections unresolved, membership or mention writes rejected, or the bulk
+/// node insert failed), the files are not fully imported — so their results must
+/// report failure rather than a false success. No-op when `error` is `None`.
+fn apply_phase2_error(results: &mut [LocalFileImportResult], error: &Option<String>) {
+    if let Some(err) = error {
+        for r in results {
+            r.success = false;
+            r.error = Some(err.clone());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1094,38 @@ mod tests {
             has_model: false,
             scheduler: Arc::new(EmbeddingScheduler::new()),
         }
+    }
+
+    fn ok_result(file: &str) -> LocalFileImportResult {
+        LocalFileImportResult {
+            file_path: file.to_string(),
+            root_id: Some(format!("root-{file}")),
+            nodes_created: 3,
+            success: true,
+            error: None,
+            collection: Some("docs".to_string()),
+            archived: false,
+        }
+    }
+
+    /// A phase-2 failure must mark every file result failed so the CLI cannot
+    /// report a false "complete" while nodes are left unlinked from collections
+    /// (the "searchable but unbrowsable" state). No error → results untouched.
+    #[test]
+    fn phase2_error_marks_all_results_failed() {
+        let mut results = vec![ok_result("a.md"), ok_result("b.md")];
+
+        apply_phase2_error(&mut results, &None);
+        assert!(results.iter().all(|r| r.success && r.error.is_none()));
+
+        apply_phase2_error(
+            &mut results,
+            &Some("Collection assignment failed: boom".to_string()),
+        );
+        assert!(results.iter().all(|r| !r.success));
+        assert!(results
+            .iter()
+            .all(|r| r.error.as_deref() == Some("Collection assignment failed: boom")));
     }
 
     /// A request naming an unregistered database is rejected at the routing
