@@ -81,6 +81,14 @@ impl ProClient {
         self.inner.read().await.last_status.clone()
     }
 
+    /// Cache the daemon's most recent status. Called from the `WatchSyncStatus`
+    /// forwarding task so `last_status` tracks the live state rather than only
+    /// the probe-time snapshot — this is what lets the frontend re-hydrate the
+    /// signed-in state after a webview reload (the daemon only pushes on change).
+    pub async fn set_last_status(&self, status: SyncStatusEvent) {
+        self.inner.write().await.last_status = Some(status);
+    }
+
     pub async fn client(&self) -> CloudSyncServiceClient<Channel> {
         self.inner.read().await.client.clone()
     }
