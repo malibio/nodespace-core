@@ -200,6 +200,34 @@ pub struct DatabaseManager {
     context: SharedContext,
 }
 
+/// True if `path` lives under a system temporary directory. macOS purges
+/// `$TMPDIR` (`/var/folders/**`) and `/tmp` periodically, so any database file
+/// stored there is doomed. Used to catch a registry whose default database was
+/// seeded with a throwaway path by a temp-DB run (ADR-053).
+fn is_under_system_temp(path: &Path) -> bool {
+    // `std::env::temp_dir()` is this process's `$TMPDIR`; also cover the
+    // well-known temp roots directly (and their macOS `/private` twins) so the
+    // check holds regardless of the daemon's own `$TMPDIR`.
+    let mut roots: Vec<PathBuf> = vec![std::env::temp_dir()];
+    for extra in [
+        "/tmp",
+        "/private/tmp",
+        "/var/folders",
+        "/private/var/folders",
+    ] {
+        roots.push(PathBuf::from(extra));
+    }
+    roots.iter().any(|root| path.starts_with(root))
+}
+
+/// Decide whether the registry's default database is doomed: its file lives
+/// under a system temp directory while the registry itself does not. A registry
+/// that itself lives under a temp dir is an intentionally isolated test/dev
+/// environment, where a temp default is expected and must be left alone.
+fn default_is_doomed(registry_path: &Path, default_path: &Path) -> bool {
+    !is_under_system_temp(registry_path) && is_under_system_temp(default_path)
+}
+
 impl DatabaseManager {
     /// Load the manager, reading any existing registry from `registry_path`.
     /// `context` is the process-global build context used to assemble each
@@ -215,15 +243,14 @@ impl DatabaseManager {
         })
     }
 
-    /// Default registry path `~/.nodespace/databases.toml`.
+    /// Default registry path `<nodespace_dir>/databases.toml`.
+    ///
+    /// Resolved through [`crate::nodespace_dir`] so it follows `NODESPACE_HOME`
+    /// in lockstep with the database path — redirecting one without the other is
+    /// exactly what let a temp-DB test run poison the real user's registry
+    /// (ADR-053).
     pub fn default_registry_path() -> Result<PathBuf> {
-        Ok(Self::nodespace_dir()?.join("databases.toml"))
-    }
-
-    fn nodespace_dir() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .context("cannot determine the database registry path: home directory is unknown")?;
-        Ok(home.join(".nodespace"))
+        Ok(crate::nodespace_dir()?.join("databases.toml"))
     }
 
     /// Snapshot every registered database with its current status.
@@ -265,7 +292,7 @@ impl DatabaseManager {
         let id = DatabaseId::generate();
         let path = match path {
             Some(path) => path,
-            None => Self::nodespace_dir()?
+            None => crate::nodespace_dir()?
                 .join("database")
                 .join(format!("{id}.db")),
         };
@@ -389,6 +416,74 @@ impl DatabaseManager {
             id: id.clone(),
             name,
             path,
+            created_at: Utc::now(),
+            last_opened_at: None,
+            bound_tenant_schema: None,
+            bound_tenant_collection: None,
+        });
+        registry.default_database = Some(id.clone());
+        registry.save(&self.registry_path).await?;
+        Ok(id)
+    }
+
+    /// The on-disk path of the default database, if a default is set.
+    ///
+    /// This is the path the daemon actually serves for header-less requests —
+    /// resolved from the registry, not the `NODESPACED_DB_PATH`/default the
+    /// caller passed at boot — so callers can log the truth rather than a value
+    /// the registry may override.
+    pub async fn default_database_path(&self) -> Option<PathBuf> {
+        let registry = self.registry.read().await;
+        let id = registry.default_database.as_ref()?;
+        registry.find(id).map(|entry| entry.path.clone())
+    }
+
+    /// Guard against silent data loss (ADR-053): if the registry's default
+    /// database points under a system temp directory — which the OS periodically
+    /// purges — replace it with a fresh default at `standard_path` so the daemon
+    /// never serves a disappearing database as the user's "Default".
+    ///
+    /// A no-op when there is no default, when the default already lives at a
+    /// durable path, or when the registry itself lives under a temp directory
+    /// (an intentionally isolated test/dev environment). Returns the new default
+    /// id when a repair occurred.
+    pub async fn repair_doomed_default(&self, standard_path: &Path) -> Result<Option<DatabaseId>> {
+        let doomed = {
+            let registry = self.registry.read().await;
+            match registry
+                .default_database
+                .as_ref()
+                .and_then(|id| registry.find(id))
+            {
+                Some(entry) if default_is_doomed(&self.registry_path, &entry.path) => {
+                    entry.path.clone()
+                }
+                _ => return Ok(None),
+            }
+        };
+        let new_id = self.set_standard_default(standard_path).await?;
+        tracing::warn!(
+            doomed_path = %doomed.display(),
+            repaired_to = %standard_path.display(),
+            "registry default database pointed under a system temp directory (the OS purges these); re-pointed the default to the standard location to prevent silent data loss"
+        );
+        Ok(Some(new_id))
+    }
+
+    /// Drop the current default entry (if any) and register a fresh "Default"
+    /// at `standard_path`, marking it the default. Persists the registry and
+    /// returns the new id. The doomed file itself is never touched — only the
+    /// registry entry is replaced.
+    async fn set_standard_default(&self, standard_path: &Path) -> Result<DatabaseId> {
+        let mut registry = self.registry.write().await;
+        if let Some(prev) = registry.default_database.take() {
+            registry.databases.retain(|entry| entry.id != prev);
+        }
+        let id = DatabaseId::generate();
+        registry.databases.push(DatabaseEntry {
+            id: id.clone(),
+            name: "Default".to_string(),
+            path: standard_path.to_path_buf(),
             created_at: Utc::now(),
             last_opened_at: None,
             bound_tenant_schema: None,
@@ -692,6 +787,63 @@ mod tests {
         let snap = mgr.list().await;
         assert_eq!(snap.databases.len(), 1);
         assert_eq!(snap.databases[0].entry.name, "Default");
+    }
+
+    #[test]
+    fn default_is_doomed_flags_temp_default_under_a_durable_registry() {
+        let temp_default = std::env::temp_dir().join("throwaway").join("db");
+        let durable_registry = PathBuf::from("/durable-home/.nodespace/databases.toml");
+        let durable_default = PathBuf::from("/durable-home/.nodespace/database/nodespace.db");
+
+        // Durable registry + temp default → doomed (the poisoning we repair).
+        assert!(default_is_doomed(&durable_registry, &temp_default));
+        // Durable registry + durable default → healthy.
+        assert!(!default_is_doomed(&durable_registry, &durable_default));
+        // Isolated registry (itself under temp) → never doomed; a temp default
+        // is intentional there, and repairing it would clobber test fixtures.
+        let temp_registry = std::env::temp_dir().join("iso").join("databases.toml");
+        assert!(!default_is_doomed(&temp_registry, &temp_default));
+    }
+
+    #[tokio::test]
+    async fn repair_doomed_default_is_noop_for_isolated_registry() {
+        // temp_manager's registry lives under a temp dir → isolated env, so even
+        // a temp default must be left alone. This is what keeps the daemon's own
+        // test suites from "repairing" (and clobbering) their own fixtures.
+        let (mgr, _dir) = temp_manager().await;
+        let temp_db = std::env::temp_dir().join("iso-db").join("nodespace.db");
+        mgr.ensure_default_registered("Default".into(), temp_db.clone())
+            .await
+            .unwrap();
+
+        let repaired = mgr
+            .repair_doomed_default(&PathBuf::from(
+                "/durable-home/.nodespace/database/nodespace.db",
+            ))
+            .await
+            .unwrap();
+
+        assert!(repaired.is_none());
+        assert_eq!(mgr.default_database_path().await.as_ref(), Some(&temp_db));
+    }
+
+    #[tokio::test]
+    async fn set_standard_default_replaces_the_previous_default() {
+        let (mgr, _dir) = temp_manager().await;
+        let doomed = std::env::temp_dir().join("old").join("db");
+        mgr.ensure_default_registered("Default".into(), doomed)
+            .await
+            .unwrap();
+
+        let standard = PathBuf::from("/durable-home/.nodespace/database/nodespace.db");
+        let new_id = mgr.set_standard_default(&standard).await.unwrap();
+
+        // Exactly one entry — the doomed one is gone, replaced by the standard
+        // default the registry now serves.
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.default_database.as_ref(), Some(&new_id));
+        assert_eq!(mgr.default_database_path().await.as_ref(), Some(&standard));
     }
 
     #[tokio::test]

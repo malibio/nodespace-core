@@ -141,6 +141,10 @@ async function spawnDaemonAndProxy(): Promise<SpawnedProcesses> {
     ...process.env,
     NODESPACED_SOCKET: socketPath,
     NODESPACED_DB_PATH: dbPath,
+    // Isolate the whole `.nodespace` home under the temp dir so a spawned
+    // daemon never seeds the real user's `~/.nodespace/databases.toml` with
+    // this throwaway db path (ADR-053).
+    NODESPACE_HOME: tmpDir,
     NODESPACED_HEADLESS: '1',
     RUST_LOG: 'warn'
   };
