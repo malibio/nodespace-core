@@ -83,6 +83,11 @@ impl SpawnedDaemon {
         let mut child = Command::new(&binary)
             .env("NODESPACED_SOCKET", &socket_path)
             .env("NODESPACED_DB_PATH", &db_path)
+            // Isolate the whole `.nodespace` home under the temp dir so the
+            // real user's database registry is never touched by a spawned
+            // daemon (ADR-053): without this, the daemon inherits the real HOME
+            // and seeds `~/.nodespace/databases.toml` with this temp db path.
+            .env("NODESPACE_HOME", tmp_dir.path())
             .env("NODESPACED_HEADLESS", "1")
             .env("RUST_LOG", "warn")
             .stdin(Stdio::null())

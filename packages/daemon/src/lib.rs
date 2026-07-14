@@ -14,24 +14,44 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+/// Resolve NodeSpace's home directory — the parent of the `.nodespace/` state
+/// directory that holds the database registry (`databases.toml`) and the
+/// managed database files.
+///
+/// Honors `NODESPACE_HOME` so a test harness or alternate deployment can
+/// redirect *all* NodeSpace state — registry and databases together — with a
+/// single override. This is what keeps a redirected database from poisoning the
+/// real user's registry: without it, pointing only the database elsewhere (via
+/// `NODESPACED_DB_PATH`) while inheriting the real home dir would seed the real
+/// `~/.nodespace/databases.toml` with a throwaway path (ADR-053). Falls back to
+/// the user's home directory.
+pub fn nodespace_home() -> Result<PathBuf> {
+    if let Ok(custom) = std::env::var("NODESPACE_HOME") {
+        return Ok(PathBuf::from(custom));
+    }
+    dirs::home_dir().context(
+        "Cannot determine the NodeSpace home directory: home directory is unknown and NODESPACE_HOME not set",
+    )
+}
+
+/// The `.nodespace/` state directory under [`nodespace_home`].
+pub fn nodespace_dir() -> Result<PathBuf> {
+    Ok(nodespace_home()?.join(".nodespace"))
+}
+
 /// Resolve the on-disk database path the daemon (and any in-process clients
 /// such as the CLI's `diagnostics` subcommand) should consult.
 ///
 /// Honors `NODESPACED_DB_PATH` if set so integration tests and alternate
-/// deployments can redirect storage without recompiling; otherwise defaults
-/// to `$HOME/.nodespace/database/nodespace.db`.
+/// deployments can redirect a single database file without recompiling;
+/// otherwise defaults to `<nodespace_dir>/database/nodespace.db` (which itself
+/// follows `NODESPACE_HOME`).
 pub fn resolve_db_path() -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("NODESPACED_DB_PATH") {
         return Ok(PathBuf::from(custom));
     }
 
-    let home = dirs::home_dir().context(
-        "Cannot determine database path: home directory is unknown and NODESPACED_DB_PATH not provided",
-    )?;
-    Ok(home
-        .join(".nodespace")
-        .join("database")
-        .join("nodespace.db"))
+    Ok(nodespace_dir()?.join("database").join("nodespace.db"))
 }
 
 // Re-export proto types from the lightweight nodespace-proto crate so existing

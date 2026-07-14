@@ -28,10 +28,12 @@ run_matrix() {
   # Clean DB
   rm -f "$DB" "${DB}-wal" "${DB}-shm"
 
-  # Start daemon
+  # Start daemon. NODESPACE_HOME keeps the registry under the temp dir so this
+  # benchmark run never seeds the real ~/.nodespace/databases.toml (ADR-053).
   NODESPACE_PROMPT_DUMP="$dump" \
   NODESPACED_SOCKET="$SOCK" \
   NODESPACED_DB_PATH="$DB" \
+  NODESPACE_HOME="$(dirname "$DB")" \
     "$NODESPACED" \
     > "$log" 2>&1 &
   local daemon_pid=$!

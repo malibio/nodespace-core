@@ -61,10 +61,20 @@ async fn open_default_database(
 ) -> Result<(Arc<DatabaseManager>, Arc<DatabaseServices>)> {
     let manager =
         Arc::new(DatabaseManager::load(DatabaseManager::default_registry_path()?, context).await?);
+    // Guard against a registry whose default was seeded with a throwaway temp
+    // path (e.g. a test/dev run that redirected the database but not the home
+    // dir): the OS purges temp dirs, so serving one silently loses user data.
+    // Re-points the default to the standard path before we open it.
+    manager.repair_doomed_default(db_path).await?;
     let default_id = manager
         .ensure_default_registered("Default".to_string(), db_path.to_path_buf())
         .await?;
     let bundle = manager.get_or_open(&default_id).await?;
+    // Log the path the registry actually resolved the default to — not the
+    // boot-time `db_path`, which the registry can and does override.
+    if let Some(served) = manager.default_database_path().await {
+        tracing::info!(served_db_path = %served.display(), "serving default database");
+    }
     Ok((manager, bundle))
 }
 
@@ -205,7 +215,7 @@ async fn serve_headless() -> Result<()> {
     let sock = socket_path();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
+    tracing::info!(requested_db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (headless)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
@@ -261,7 +271,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let sock = socket_path();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (tray)");
+    tracing::info!(requested_db_path = %db_path.display(), sock = %sock.display(), "Starting nodespaced (tray)");
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
@@ -373,7 +383,7 @@ async fn serve_headless() -> Result<()> {
     let name = pipe_name();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), pipe = %name, "Starting nodespaced (headless, Windows)");
+    tracing::info!(requested_db_path = %db_path.display(), pipe = %name, "Starting nodespaced (headless, Windows)");
 
     let shutdown = install_shutdown_handler().context("Failed to install signal handlers")?;
     // _model_task: dropping a JoinHandle does not cancel the task in tokio — it detaches.
@@ -457,7 +467,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let name = pipe_name();
     let db_path = resolve_db_path()?;
 
-    tracing::info!(db_path = %db_path.display(), pipe = %name, "Starting nodespaced (tray, Windows)");
+    tracing::info!(requested_db_path = %db_path.display(), pipe = %name, "Starting nodespaced (tray, Windows)");
 
     let signal_shutdown =
         install_shutdown_handler().context("Failed to install signal handlers")?;
