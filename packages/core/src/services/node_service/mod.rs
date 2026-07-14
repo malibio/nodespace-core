@@ -1165,6 +1165,53 @@ impl NodeService {
         .await
     }
 
+    /// Read whether per-database cloud sync is enabled, from the DatabaseSettingsNode
+    /// singleton (ADR-053). Returns `false` when the field is absent or the singleton
+    /// has not been seeded yet — a fresh install defaults to sync disabled until the
+    /// first-Pro consent flow opts in. This is the authoritative gate the Pro daemon
+    /// reads before pushing local changes to the cloud, so an un-opted-in database
+    /// never leaves the device.
+    pub async fn get_sync_enabled(&self) -> Result<bool, NodeServiceError> {
+        let Some(node) = self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            return Ok(false);
+        };
+        Ok(node
+            .properties
+            .get("database-settings")
+            .and_then(|s| s.get("sync_enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
+    }
+
+    /// Read the per-database cloud auth status (`local` or `connected`) from the
+    /// DatabaseSettingsNode singleton (ADR-053). Returns `local` when the field is
+    /// absent or the singleton has not been seeded yet — the pre-sign-in default the
+    /// Pro UI's sign-in variant expects. Complements `set_auth_status`, which the Pro
+    /// daemon uses to advance this to `connected` on bind and back to `local` on
+    /// sign-out.
+    pub async fn get_auth_status(&self) -> Result<String, NodeServiceError> {
+        let Some(node) = self
+            .query_nodes_by_type("database-settings", None)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            return Ok("local".to_string());
+        };
+        Ok(node
+            .properties
+            .get("database-settings")
+            .and_then(|s| s.get("auth_status"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("local")
+            .to_string())
+    }
+
     /// Seed core schema definitions if database is fresh
     ///
     /// Checks if schema nodes exist. If not, creates all core schemas
@@ -3276,13 +3323,15 @@ mod tests {
         let (service, _temp) = create_test_service().await;
         const COLL: &str = "c0000000-0000-0000-0000-000000000001";
 
-        // Fresh install defaults.
+        // Fresh install defaults, read through the accessors the Pro daemon uses.
         let node = &service
             .query_nodes_by_type("database-settings", None)
             .await
             .unwrap()[0];
         assert_eq!(node.properties["database-settings"]["sync_enabled"], false);
         assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+        assert!(!service.get_sync_enabled().await.unwrap());
+        assert_eq!(service.get_auth_status().await.unwrap(), "local");
 
         // Enabling sync flips only sync_enabled; auth_status is preserved.
         service.set_sync_enabled(true).await.unwrap();
@@ -3292,6 +3341,8 @@ mod tests {
             .unwrap()[0];
         assert_eq!(node.properties["database-settings"]["sync_enabled"], true);
         assert_eq!(node.properties["database-settings"]["auth_status"], "local");
+        assert!(service.get_sync_enabled().await.unwrap());
+        assert_eq!(service.get_auth_status().await.unwrap(), "local");
 
         // Advancing auth_status preserves sync_enabled.
         service.set_auth_status("connected").await.unwrap();
@@ -3304,6 +3355,8 @@ mod tests {
             "connected"
         );
         assert_eq!(node.properties["database-settings"]["sync_enabled"], true);
+        assert!(service.get_sync_enabled().await.unwrap());
+        assert_eq!(service.get_auth_status().await.unwrap(), "connected");
 
         // A later tenant binding does not clobber the sync state (cross-field merge).
         service
