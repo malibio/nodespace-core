@@ -24,6 +24,7 @@ import {
 } from '$lib/stores/navigation.svelte';
 import { TabPersistenceService } from '$lib/services/tab-persistence-service';
 import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
+import { computeTabTitle } from '$lib/utils/tab-title';
 
 describe('Navigation Store - Pane Management', () => {
   beforeEach(() => {
@@ -1629,5 +1630,66 @@ describe('Navigation Store - Tab Management', () => {
       expect(mockGetExpandedNodeIds).toHaveBeenCalledWith('test-tab-2');
       expect(mockGetExpandedNodeIds).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+describe('Navigation Store - Search tab', () => {
+  beforeEach(() => {
+    resetTabState();
+    localStorage.clear();
+  });
+
+  // Mirrors navigation-sidebar's openSearchTab: Search is a singleton non-node
+  // tab, opened or focused the same way Settings is.
+  function openSearch() {
+    const existing = navigationStore.state.tabs.find((t) => t.type === 'search');
+    if (existing) {
+      setActiveTab(existing.id, existing.paneId);
+    } else {
+      addTab(
+        { id: 'search', title: 'Search', type: 'search', closeable: true, paneId: DEFAULT_PANE_ID },
+        true
+      );
+    }
+  }
+
+  it('opens a singleton search tab and reuses it on a second open', () => {
+    openSearch();
+    const searchTabs = navigationStore.state.tabs.filter((t) => t.type === 'search');
+    expect(searchTabs).toHaveLength(1);
+    expect(searchTabs[0].id).toBe('search');
+    expect(navigationStore.state.activeTabIds[DEFAULT_PANE_ID]).toBe('search');
+
+    // A second open focuses the existing tab rather than creating a duplicate.
+    openSearch();
+    expect(navigationStore.state.tabs.filter((t) => t.type === 'search')).toHaveLength(1);
+  });
+
+  it('titles a search tab "Search" (non-node tabs keep their static title)', () => {
+    const searchTab: Tab = {
+      id: 'search',
+      title: 'Search',
+      type: 'search',
+      closeable: true,
+      paneId: DEFAULT_PANE_ID
+    };
+    expect(computeTabTitle(searchTab, () => undefined)).toBe('Search');
+  });
+
+  it('a persisted search tab survives state validation on reload', () => {
+    // Guards the persistence allowlist: if 'search' were not accepted, the whole
+    // persisted state would be discarded on reload and every tab would be lost.
+    const persisted = {
+      version: 1,
+      tabs: [{ id: 'search', title: 'Search', type: 'search', closeable: true, paneId: 'pane-1' }],
+      panes: [{ id: 'pane-1', width: 100, tabIds: ['search'] }],
+      activePaneId: 'pane-1',
+      activeTabIds: { 'pane-1': 'search' }
+    };
+    localStorage.setItem('nodespace:tab-state', JSON.stringify(persisted));
+
+    const loaded = TabPersistenceService.load();
+    expect(loaded).not.toBeNull();
+    expect(loaded?.tabs.some((t) => t.type === 'search')).toBe(true);
   });
 });

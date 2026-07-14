@@ -216,6 +216,31 @@
     }
   }
 
+  /**
+   * Open (or focus) the Search view. Search is not a node, so it opens a
+   * singleton non-node tab — mirroring how Settings is opened from the menu —
+   * rather than the daily-journal node-tab path.
+   */
+  function openSearchTab() {
+    const currentState = navigationStore.state;
+    const existingTab = currentState.tabs.find((tab) => tab.type === 'search');
+
+    if (existingTab) {
+      setActiveTab(existingTab.id, existingTab.paneId);
+    } else {
+      addTab(
+        {
+          id: 'search',
+          title: 'Search',
+          type: 'search',
+          closeable: true,
+          paneId: getTargetPaneId()
+        },
+        true
+      );
+    }
+  }
+
   // Handle navigation item clicks
   function handleNavItemClick(itemId: string) {
     // Close sub-panels when clicking non-collection nav items
@@ -223,11 +248,12 @@
       collectionsState.clearSelection();
     }
 
-    // Special handling for Daily Journal
+    // Each nav item opens its own view (Favorites is not implemented yet).
     if (itemId === 'daily-journal') {
       handleDailyJournalClick();
+    } else if (itemId === 'search') {
+      openSearchTab();
     }
-
 
     // Update active state in navigation items
     layoutStore.setActiveNavItem(itemId);

@@ -139,7 +139,10 @@ export class TabPersistenceService {
         return (
           typeof t.id === 'string' &&
           typeof t.title === 'string' &&
-          (t.type === 'node' || t.type === 'placeholder' || t.type === 'settings') &&
+          (t.type === 'node' ||
+            t.type === 'placeholder' ||
+            t.type === 'settings' ||
+            t.type === 'search') &&
           typeof t.closeable === 'boolean' &&
           typeof t.paneId === 'string'
         );
