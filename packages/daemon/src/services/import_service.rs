@@ -513,7 +513,6 @@ async fn run_batch_import(
     // ========================================================================
 
     let unique_collections_count = unique_collections.len();
-    let successful_files_count = prepared_files.len();
     let all_mentions_count = all_mentions.len();
     let replace = opts.replace;
     let store = Arc::clone(node_service.store());
@@ -578,8 +577,20 @@ async fn run_batch_import(
         let mut collection_assignments: Vec<(String, String)> = Vec::new();
         let mut replaced_roots: Vec<String> = Vec::new();
         let mut skipped_roots: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut new_docs: usize = 0;
+        // Old child ids of replaced docs, pruned only AFTER the fresh subtree is
+        // inserted so a failed insert never destroys the previous content (the
+        // bulk insert is not transactional). See the prune step below.
+        let mut prune_after_insert: Vec<String> = Vec::new();
+        // Same deterministic root id can appear twice in one batch (a duplicated
+        // or symlinked file); handle each document once so we never double-insert
+        // or double-prune.
+        let mut seen_roots: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for prepared in &prepared_files {
+            if !seen_roots.insert(prepared.root_id.clone()) {
+                continue;
+            }
             let exists = existing_roots.contains(&prepared.root_id);
 
             if exists && !replace {
@@ -589,17 +600,9 @@ async fn run_batch_import(
                 // doc that lost its edge in a prior partial import self-heals.
                 skipped_roots.insert(prepared.root_id.clone());
             } else if exists && replace {
-                // Refresh in place: drop the stale child subtree, then keep and
-                // update the root node so inbound links/mentions survive. The
-                // fresh children are (re)created via the bulk insert below.
-                if let Err(e) = store
-                    .delete_children_subtree_unchecked(&prepared.root_id)
-                    .await
-                {
-                    tracing::error!("Failed to clear subtree for {}: {:?}", prepared.root_id, e);
-                    phase2_error
-                        .get_or_insert_with(|| format!("Subtree replace failed: {e}"));
-                }
+                // Refresh in place. Update the root now (non-destructive) so its
+                // id and inbound links/mentions survive, and capture its current
+                // children to prune only after the fresh subtree is inserted.
                 let update = nodespace_core::NodeUpdate::new()
                     .with_content(prepared.root_content.clone());
                 if let Err(e) = store
@@ -607,6 +610,18 @@ async fn run_batch_import(
                     .await
                 {
                     tracing::warn!("Failed to refresh root {}: {}", prepared.root_id, e);
+                }
+                match node_service_clone.get_descendants(&prepared.root_id).await {
+                    Ok(desc) => prune_after_insert.extend(desc.into_iter().map(|n| n.id)),
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to read existing subtree for {}: {:?}",
+                            prepared.root_id,
+                            e
+                        );
+                        phase2_error
+                            .get_or_insert_with(|| format!("Subtree replace failed: {e}"));
+                    }
                 }
                 replaced_roots.push(prepared.root_id.clone());
             } else {
@@ -623,6 +638,7 @@ async fn run_batch_import(
                     1.0,
                     root_props,
                 ));
+                new_docs += 1;
             }
 
             // Children are (re)created for new and replaced roots. Skipped roots
@@ -743,6 +759,21 @@ async fn run_batch_import(
             }
         }
 
+        // Now that the fresh subtrees are inserted, prune each replaced doc's
+        // OLD children. Deferring the delete to here (rather than before the
+        // insert) means a failed bulk insert leaves the previous content intact
+        // instead of truncating it — re-import is never destructive on error.
+        if !bulk_insert_failed && !prune_after_insert.is_empty() {
+            if let Err(e) = store.delete_nodes_by_ids_unchecked(&prune_after_insert).await {
+                tracing::error!(
+                    "Failed to prune {} stale node(s) after replace: {}",
+                    prune_after_insert.len(),
+                    e
+                );
+                phase2_error.get_or_insert_with(|| format!("Stale subtree prune failed: {e}"));
+            }
+        }
+
         // A replaced root keeps its id but gets a fresh child subtree, so its
         // content effectively changed — re-mark it stale so it re-embeds. New
         // roots already get their markers inside bulk_create_hierarchy_trusted.
@@ -779,9 +810,7 @@ async fn run_batch_import(
         let message = match &phase2_error {
             Some(err) => format!("Import completed with errors: {err}"),
             None => {
-                let new_files =
-                    successful_files_count - replaced_roots.len() - skipped_roots.len();
-                let mut summary = format!("Imported {new_files} files ({nodes_written} nodes)");
+                let mut summary = format!("Imported {new_docs} files ({nodes_written} nodes)");
                 if !replaced_roots.is_empty() {
                     summary.push_str(&format!(", {} refreshed", replaced_roots.len()));
                 }
@@ -1153,20 +1182,25 @@ async fn import_markdown_content(
 
     let mut nodes_created = 0;
 
+    // Old child ids captured before insert; pruned only after the fresh subtree
+    // lands, so a failed insert leaves the previous content intact.
+    let mut prune_after_insert: Vec<String> = Vec::new();
+
     if exists {
-        // Refresh in place: drop the stale child subtree, keep + update the root
-        // so inbound links/mentions survive.
-        node_service
-            .store()
-            .delete_children_subtree_unchecked(root_id)
-            .await
-            .map_err(|e| format!("Failed to clear existing subtree: {}", e))?;
+        // Refresh in place: keep + update the root (non-destructive) so inbound
+        // links/mentions survive, and capture its current children to prune only
+        // after the fresh subtree is inserted below.
         let update = nodespace_core::NodeUpdate::new().with_content(clean_title);
         node_service
             .store()
             .update_node(root_id, update, Some("import".to_string()))
             .await
             .map_err(|e| format!("Failed to refresh root node: {}", e))?;
+        let descendants = node_service
+            .get_descendants(root_id)
+            .await
+            .map_err(|e| format!("Failed to read existing subtree: {}", e))?;
+        prune_after_insert.extend(descendants.into_iter().map(|n| n.id));
     } else {
         let mut properties = serde_json::json!({});
         if is_archived {
@@ -1231,9 +1265,14 @@ async fn import_markdown_content(
         nodes_created += created_ids.len();
     }
 
-    // On replace, the root kept its id but got a fresh subtree — re-mark it
-    // stale so it re-embeds with the new content.
+    // On replace, prune the OLD children now that the fresh subtree is in place,
+    // and re-mark the (kept) root stale so it re-embeds with the new content.
     if exists {
+        node_service
+            .store()
+            .delete_nodes_by_ids_unchecked(&prune_after_insert)
+            .await
+            .map_err(|e| format!("Failed to prune stale subtree: {}", e))?;
         if let Err(e) = node_service
             .store()
             .create_stale_embedding_markers_bulk(&[root_id.to_string()])

@@ -174,26 +174,33 @@ impl SqliteStore {
             return Ok(HashMap::new());
         }
 
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
-        let sql = format!(
-            "SELECT * FROM node WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-
-        let params: Vec<libsql::Value> = ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        let mut rows = self
-            .db
-            .query(&sql, params)
-            .await
-            .context("Failed to batch query nodes")?;
-
+        // Chunk under SQLite's ~999 bound-parameter ceiling; a large `IN (...)`
+        // would otherwise fail outright (a directory import can list thousands
+        // of files). Mirrors the chunking in the other bulk store queries.
+        const ID_CHUNK: usize = 900;
         let mut result = HashMap::new();
-        while let Some(row) = rows.next().await? {
-            let node = Self::row_to_node(&row)?;
-            result.insert(node.id.clone(), node);
+        for chunk in ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT * FROM node WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to batch query nodes")?;
+
+            while let Some(row) = rows.next().await? {
+                let node = Self::row_to_node(&row)?;
+                result.insert(node.id.clone(), node);
+            }
         }
         Ok(result)
     }
@@ -642,6 +649,33 @@ impl SqliteStore {
             )
             .await
             .context("Failed to delete children subtree")?;
+        Ok(())
+    }
+
+    /// Delete exactly the given node ids (and, via FK CASCADE, their
+    /// relationship/embedding rows). No OCC check — for internal system
+    /// operations. Used to prune a document's *previous* subtree during an
+    /// idempotent re-import only after the fresh subtree has been inserted, so
+    /// a failed insert never destroys the old content.
+    pub async fn delete_nodes_by_ids_unchecked(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Chunk under SQLite's ~999 bound-parameter ceiling.
+        const ID_CHUNK: usize = 900;
+        for chunk in ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            self.db
+                .execute(&sql, params)
+                .await
+                .context("Failed to delete nodes by id")?;
+        }
         Ok(())
     }
 
