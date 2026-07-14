@@ -37,6 +37,13 @@ message ImportOptions {
   // Base directory for relative path calculation in auto-routing.
   // Empty string = use the import directory.
   string base_directory = 5;
+  // Re-import behavior. Each document's root id is derived deterministically
+  // from its base-directory-relative path, so a re-import addresses the same
+  // root. When true, an already-imported document has its child subtree
+  // replaced from the fresh parse while the root node is kept, so inbound
+  // links/mentions to the doc root survive and nothing is duplicated. When
+  // false (default), an already-imported document is left untouched (skipped).
+  bool replace = 6;
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ pub struct ImportOptions {
     #[serde(default)]
     pub exclude_patterns: Vec<String>,
     pub base_directory: Option<String>,
+    #[serde(default)]
+    pub replace: bool,
 }
 
 impl ImportOptions {
@@ -36,6 +38,7 @@ impl ImportOptions {
             auto_collection_routing: self.auto_collection_routing,
             exclude_patterns: self.exclude_patterns,
             base_directory: self.base_directory.unwrap_or_default(),
+            replace: self.replace,
         }
     }
 }

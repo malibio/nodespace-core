@@ -28,6 +28,22 @@ use crate::services::database_manager::DatabaseManager;
 
 const CHANNEL_BUFFER: usize = 64;
 
+/// Stable namespace for deriving deterministic import root ids from a document's
+/// identity key (its base-directory-relative path). Re-importing the same file
+/// therefore addresses the same root node, which is what makes re-import
+/// idempotent (no duplicate documents, no orphan "ghost" roots). This UUID is
+/// arbitrary but MUST stay fixed — changing it re-keys every imported document.
+const IMPORT_ROOT_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x9a, 0x1d, 0x2b, 0x7c, 0x4e, 0x63, 0x5f, 0x81, 0xa2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29,
+]);
+
+/// Derive a document's root node id deterministically from its identity key.
+/// The key is the file's base-directory-relative path, so the same file yields
+/// the same root id across imports regardless of the absolute checkout path.
+fn deterministic_root_id(key: &str) -> String {
+    uuid::Uuid::new_v5(&IMPORT_ROOT_NAMESPACE, key.as_bytes()).to_string()
+}
+
 #[derive(Clone)]
 pub struct ImportServiceImpl {
     node_service: Arc<CoreNodeService>,
@@ -206,7 +222,29 @@ async fn import_single_file(
             .unwrap_or_else(|| "Untitled".to_string())
     };
 
-    match import_markdown_content(node_service, &title, &content, is_archived).await {
+    // Deterministic root id from the file's identity key (base-dir-relative
+    // path when a base is set, else the file path), so a re-import addresses
+    // the same document root.
+    let import_key = if opts.base_directory.is_empty() {
+        path.to_string_lossy().to_string()
+    } else {
+        path.strip_prefix(&opts.base_directory)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string()
+    };
+    let root_id = deterministic_root_id(&import_key);
+
+    match import_markdown_content(
+        node_service,
+        &root_id,
+        &title,
+        &content,
+        is_archived,
+        opts.replace,
+    )
+    .await
+    {
         Ok((root_id, nodes_created)) => {
             if let Some(ref coll) = collection {
                 let collection_service = CollectionService::new(node_service.store(), node_service);
@@ -381,7 +419,7 @@ async fn run_batch_import(
                 .unwrap_or_else(|| "Untitled".to_string())
         };
 
-        let root_id = uuid::Uuid::new_v4().to_string();
+        let root_id = deterministic_root_id(&file_read.relative_path);
 
         let root_content = if title.starts_with('#') {
             title.clone()
@@ -476,8 +514,8 @@ async fn run_batch_import(
 
     let unique_collections_count = unique_collections.len();
     let successful_files_count = prepared_files.len();
-    let total_nodes_count: usize = prepared_files.iter().map(|f| 1 + f.children.len()).sum();
     let all_mentions_count = all_mentions.len();
+    let replace = opts.replace;
     let store = Arc::clone(node_service.store());
     let node_service_clone = (*node_service).clone();
     let tx_bg = tx.clone();
@@ -514,6 +552,21 @@ async fn run_batch_import(
             }
         };
 
+        // Idempotent re-import: a document's root id is deterministic, so a
+        // matching id already in the store means this file was imported before.
+        // `--replace` refreshes it in place; without it, the existing document
+        // is left untouched (skipped) so a plain re-import never duplicates.
+        let root_ids: Vec<String> = prepared_files.iter().map(|p| p.root_id.clone()).collect();
+        let existing_roots: std::collections::HashSet<String> =
+            match store.get_nodes_by_ids(&root_ids).await {
+                Ok(map) => map.into_keys().collect(),
+                Err(e) => {
+                    tracing::error!("Failed to check for existing roots: {:?}", e);
+                    phase2_error.get_or_insert_with(|| format!("Existing-root check failed: {e}"));
+                    std::collections::HashSet::new()
+                }
+            };
+
         let mut all_nodes: Vec<(
             String,
             String,
@@ -523,36 +576,77 @@ async fn run_batch_import(
             serde_json::Value,
         )> = Vec::new();
         let mut collection_assignments: Vec<(String, String)> = Vec::new();
+        let mut replaced_roots: Vec<String> = Vec::new();
+        let mut skipped_roots: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for prepared in &prepared_files {
-            let mut root_props = serde_json::json!({});
-            if prepared.is_archived {
-                root_props["lifecycle_status"] = serde_json::json!("archived");
-            }
-            all_nodes.push((
-                prepared.root_id.clone(),
-                "header".to_string(),
-                prepared.root_content.clone(),
-                None,
-                1.0,
-                root_props,
-            ));
+            let exists = existing_roots.contains(&prepared.root_id);
 
-            for child in &prepared.children {
-                let parent = child
-                    .parent_id
-                    .clone()
-                    .or_else(|| Some(prepared.root_id.clone()));
+            if exists && !replace {
+                // Already imported and not refreshing: skip creating anything.
+                // The root stays a valid link target for other docs; only its
+                // (idempotent) collection membership is re-asserted below so a
+                // doc that lost its edge in a prior partial import self-heals.
+                skipped_roots.insert(prepared.root_id.clone());
+            } else if exists && replace {
+                // Refresh in place: drop the stale child subtree, then keep and
+                // update the root node so inbound links/mentions survive. The
+                // fresh children are (re)created via the bulk insert below.
+                if let Err(e) = store
+                    .delete_children_subtree_unchecked(&prepared.root_id)
+                    .await
+                {
+                    tracing::error!("Failed to clear subtree for {}: {:?}", prepared.root_id, e);
+                    phase2_error
+                        .get_or_insert_with(|| format!("Subtree replace failed: {e}"));
+                }
+                let update = nodespace_core::NodeUpdate::new()
+                    .with_content(prepared.root_content.clone());
+                if let Err(e) = store
+                    .update_node(&prepared.root_id, update, Some("import".to_string()))
+                    .await
+                {
+                    tracing::warn!("Failed to refresh root {}: {}", prepared.root_id, e);
+                }
+                replaced_roots.push(prepared.root_id.clone());
+            } else {
+                // New document: create the root node.
+                let mut root_props = serde_json::json!({});
+                if prepared.is_archived {
+                    root_props["lifecycle_status"] = serde_json::json!("archived");
+                }
                 all_nodes.push((
-                    child.id.clone(),
-                    child.node_type.clone(),
-                    child.content.clone(),
-                    parent,
-                    child.order,
-                    child.properties.clone(),
+                    prepared.root_id.clone(),
+                    "header".to_string(),
+                    prepared.root_content.clone(),
+                    None,
+                    1.0,
+                    root_props,
                 ));
             }
 
+            // Children are (re)created for new and replaced roots. Skipped roots
+            // keep their existing subtree, so contribute no children here.
+            if !(exists && !replace) {
+                for child in &prepared.children {
+                    let parent = child
+                        .parent_id
+                        .clone()
+                        .or_else(|| Some(prepared.root_id.clone()));
+                    all_nodes.push((
+                        child.id.clone(),
+                        child.node_type.clone(),
+                        child.content.clone(),
+                        parent,
+                        child.order,
+                        child.properties.clone(),
+                    ));
+                }
+            }
+
+            // Collection membership is idempotent (existing edges are skipped),
+            // so re-asserting it for every file — new, replaced, or skipped —
+            // both wires up new docs and repairs any that lost their edge.
             if let Some(ref coll_path) = prepared.collection_path {
                 if let Some(coll_id) = collection_map.get(coll_path) {
                     collection_assignments.push((prepared.root_id.clone(), coll_id.clone()));
@@ -571,6 +665,7 @@ async fn run_batch_import(
         )
         .await;
 
+        let nodes_written = all_nodes.len();
         let bulk_insert_failed = match node_service_clone
             .bulk_create_hierarchy_trusted(all_nodes)
             .await
@@ -648,6 +743,29 @@ async fn run_batch_import(
             }
         }
 
+        // A replaced root keeps its id but gets a fresh child subtree, so its
+        // content effectively changed — re-mark it stale so it re-embeds. New
+        // roots already get their markers inside bulk_create_hierarchy_trusted.
+        if !bulk_insert_failed && !replaced_roots.is_empty() {
+            if let Err(e) = store.create_stale_embedding_markers_bulk(&replaced_roots).await {
+                tracing::warn!(
+                    "Failed to re-mark {} replaced root(s) stale: {}",
+                    replaced_roots.len(),
+                    e
+                );
+            }
+        }
+
+        // Skipped documents (already present, no --replace) created no nodes.
+        // Reflect that in their per-file result so the count is honest.
+        for r in phase1_results.iter_mut() {
+            if let Some(ref rid) = r.root_id {
+                if skipped_roots.contains(rid) {
+                    r.nodes_created = 0;
+                }
+            }
+        }
+
         // Fold any phase-2 failure into the per-file results so the caller sees a
         // non-success outcome instead of a false "complete" — the disease behind
         // "nodes land with zero member_of edges while the CLI reports success".
@@ -660,10 +778,18 @@ async fn run_batch_import(
 
         let message = match &phase2_error {
             Some(err) => format!("Import completed with errors: {err}"),
-            None => format!(
-                "Imported {} files ({} nodes)",
-                successful_files_count, total_nodes_count
-            ),
+            None => {
+                let new_files =
+                    successful_files_count - replaced_roots.len() - skipped_roots.len();
+                let mut summary = format!("Imported {new_files} files ({nodes_written} nodes)");
+                if !replaced_roots.is_empty() {
+                    summary.push_str(&format!(", {} refreshed", replaced_roots.len()));
+                }
+                if !skipped_roots.is_empty() {
+                    summary.push_str(&format!(", {} already present", skipped_roots.len()));
+                }
+                summary
+            }
         };
         send_progress(
             &tx_bg,
@@ -984,16 +1110,18 @@ impl LocalFileImportResult {
 
 async fn import_markdown_content(
     node_service: &CoreNodeService,
+    root_id: &str,
     title: &str,
     content: &str,
     is_archived: bool,
+    replace: bool,
 ) -> Result<(String, usize), String> {
     use nodespace_core::services::CreateNodeParams;
 
-    let (_, clean_title) = if title.starts_with('#') {
-        ("header", title.to_string())
+    let clean_title = if title.starts_with('#') {
+        title.to_string()
     } else {
-        ("header", format!("# {}", title))
+        format!("# {}", title)
     };
 
     let content_for_children = {
@@ -1010,27 +1138,58 @@ async fn import_markdown_content(
     let prepared_nodes = prepare_nodes_from_markdown(&content_for_children, None)
         .map_err(|e| format!("Failed to parse markdown: {:?}", e))?;
 
-    let mut properties = serde_json::json!({});
-    if is_archived {
-        properties["lifecycle_status"] = serde_json::json!("archived");
+    // Idempotent re-import: the root id is deterministic, so an existing node
+    // means this document was imported before. `--replace` refreshes it;
+    // otherwise leave it untouched so a plain re-import never duplicates.
+    let exists = node_service
+        .get_node(root_id)
+        .await
+        .map_err(|e| format!("Failed to check existing document: {}", e))?
+        .is_some();
+
+    if exists && !replace {
+        return Ok((root_id.to_string(), 0));
     }
 
-    let root_id = node_service
-        .create_node_with_parent(CreateNodeParams {
-            id: None,
-            node_type: "header".to_string(),
-            content: clean_title,
-            parent_id: None,
-            position: nodespace_core::services::InsertPositionOwned::End,
-            properties,
-        })
-        .await
-        .map_err(|e| format!("Failed to create root node: {}", e))?;
+    let mut nodes_created = 0;
+
+    if exists {
+        // Refresh in place: drop the stale child subtree, keep + update the root
+        // so inbound links/mentions survive.
+        node_service
+            .store()
+            .delete_children_subtree_unchecked(root_id)
+            .await
+            .map_err(|e| format!("Failed to clear existing subtree: {}", e))?;
+        let update = nodespace_core::NodeUpdate::new().with_content(clean_title);
+        node_service
+            .store()
+            .update_node(root_id, update, Some("import".to_string()))
+            .await
+            .map_err(|e| format!("Failed to refresh root node: {}", e))?;
+    } else {
+        let mut properties = serde_json::json!({});
+        if is_archived {
+            properties["lifecycle_status"] = serde_json::json!("archived");
+        }
+        node_service
+            .create_node_with_parent(CreateNodeParams {
+                id: Some(root_id.to_string()),
+                node_type: "header".to_string(),
+                content: clean_title,
+                parent_id: None,
+                position: nodespace_core::services::InsertPositionOwned::End,
+                properties,
+            })
+            .await
+            .map_err(|e| format!("Failed to create root node: {}", e))?;
+        nodes_created += 1;
+    }
 
     if is_archived {
         if let Err(e) = node_service
             .store()
-            .update_lifecycle_status(&root_id, "archived")
+            .update_lifecycle_status(root_id, "archived")
             .await
         {
             tracing::warn!(
@@ -1040,8 +1199,6 @@ async fn import_markdown_content(
             );
         }
     }
-
-    let mut nodes_created = 1;
 
     if !prepared_nodes.is_empty() {
         let nodes_for_bulk: Vec<(
@@ -1054,7 +1211,7 @@ async fn import_markdown_content(
         )> = prepared_nodes
             .iter()
             .map(|n| {
-                let parent = n.parent_id.clone().or_else(|| Some(root_id.clone()));
+                let parent = n.parent_id.clone().or_else(|| Some(root_id.to_string()));
                 (
                     n.id.clone(),
                     n.node_type.clone(),
@@ -1074,7 +1231,19 @@ async fn import_markdown_content(
         nodes_created += created_ids.len();
     }
 
-    Ok((root_id, nodes_created))
+    // On replace, the root kept its id but got a fresh subtree — re-mark it
+    // stale so it re-embeds with the new content.
+    if exists {
+        if let Err(e) = node_service
+            .store()
+            .create_stale_embedding_markers_bulk(&[root_id.to_string()])
+            .await
+        {
+            tracing::warn!("Failed to re-mark replaced root {} stale: {}", root_id, e);
+        }
+    }
+
+    Ok((root_id.to_string(), nodes_created))
 }
 
 #[cfg(test)]
@@ -1083,8 +1252,37 @@ mod tests {
     use crate::services::SharedContext;
     use nodespace_agent::pty::PtySessionManager;
     use nodespace_core::services::EmbeddingScheduler;
+    use nodespace_core::SqliteStore;
     use nodespace_nlp_engine::EmbeddingService;
     use tokio::sync::watch;
+
+    /// Build a bare `NodeService` over a fresh on-disk store. The returned
+    /// `TempDir` owns the database file and must be kept alive for the test.
+    async fn new_service_and_dir() -> (CoreNodeService, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Arc::new(SqliteStore::new(dir.path().join("db")).await.unwrap());
+        let node_service = CoreNodeService::new(&mut store).await.unwrap();
+        (node_service, dir)
+    }
+
+    /// Drive `run_batch_import` to completion, draining its progress stream
+    /// until the terminal step-9 event (which the daemon sends only after every
+    /// phase-2 DB write has committed).
+    async fn run_batch_and_wait(
+        node_service: Arc<CoreNodeService>,
+        files: Vec<String>,
+        opts: ImportOptions,
+    ) {
+        let (tx, mut rx) = mpsc::channel::<Result<ImportProgressEvent, Status>>(CHANNEL_BUFFER);
+        run_batch_import(node_service, files, opts, tx).await;
+        while let Some(event) = rx.recv().await {
+            if let Ok(e) = event {
+                if e.step == 9 {
+                    break;
+                }
+            }
+        }
+    }
 
     fn test_context() -> SharedContext {
         let (_tx, model) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
@@ -1159,6 +1357,157 @@ mod tests {
         assert_eq!(
             svc.import_markdown(req).await.unwrap_err().code(),
             tonic::Code::NotFound
+        );
+    }
+
+    /// A document's root id is a pure function of its base-directory-relative
+    /// path: the same path always yields the same (valid) id, different paths
+    /// yield different ids. This determinism is what makes re-import idempotent.
+    #[test]
+    fn deterministic_root_id_is_stable_and_path_sensitive() {
+        assert_eq!(
+            deterministic_root_id("architecture/system-overview.md"),
+            deterministic_root_id("architecture/system-overview.md"),
+        );
+        assert_ne!(
+            deterministic_root_id("architecture/system-overview.md"),
+            deterministic_root_id("architecture/data-layer.md"),
+        );
+        assert!(uuid::Uuid::parse_str(&deterministic_root_id("any/path.md")).is_ok());
+    }
+
+    /// Single-file path: a plain re-import of an unchanged file is a no-op (the
+    /// deterministic root id resolves to the same document, nothing is created,
+    /// nothing duplicates); `--replace` keeps that root id while refreshing its
+    /// child subtree from the fresh parse.
+    #[tokio::test]
+    async fn reimport_single_file_is_idempotent_and_replace_refreshes() {
+        let (ns, dir) = new_service_and_dir().await;
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let path = src.join("guide.md");
+        std::fs::write(&path, "# Guide\n\nAlpha.\n\n## Section\n\nBeta.\n").unwrap();
+
+        let opts = ImportOptions {
+            base_directory: src.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+
+        // First import creates the document.
+        let r1 = import_single_file(&ns, &path, &opts).await;
+        assert!(r1.success, "first import failed: {:?}", r1.error);
+        assert!(r1.nodes_created > 0);
+        let root_id = r1.root_id.clone().expect("root id");
+        let headers_after_first = ns.store().count_nodes_by_type("header").await.unwrap();
+        let subtree_after_first = ns.get_descendants(&root_id).await.unwrap().len();
+        assert!(subtree_after_first > 0);
+
+        // Plain re-import: same root id, nothing created, no duplication.
+        let r2 = import_single_file(&ns, &path, &opts).await;
+        assert!(r2.success);
+        assert_eq!(r2.nodes_created, 0, "a plain re-import must create nothing");
+        assert_eq!(r2.root_id.as_deref(), Some(root_id.as_str()));
+        assert_eq!(
+            ns.store().count_nodes_by_type("header").await.unwrap(),
+            headers_after_first,
+            "a plain re-import must not duplicate any node",
+        );
+
+        // Edit the file (drop the section), re-import with --replace: the root
+        // id is kept (inbound links survive) and the subtree is refreshed.
+        std::fs::write(&path, "# Guide\n\nAlpha revised.\n").unwrap();
+        let opts_replace = ImportOptions {
+            replace: true,
+            ..opts.clone()
+        };
+        let r3 = import_single_file(&ns, &path, &opts_replace).await;
+        assert!(r3.success, "replace import failed: {:?}", r3.error);
+        assert_eq!(
+            r3.root_id.as_deref(),
+            Some(root_id.as_str()),
+            "replace keeps the root id",
+        );
+        assert!(
+            ns.get_node(&root_id).await.unwrap().is_some(),
+            "root node survives replace",
+        );
+        let subtree_after_replace = ns.get_descendants(&root_id).await.unwrap().len();
+        assert!(
+            subtree_after_replace < subtree_after_first,
+            "replace pruned the removed section (was {subtree_after_first}, now {subtree_after_replace})",
+        );
+        assert!(
+            ns.store().count_nodes_by_type("header").await.unwrap() <= headers_after_first,
+            "replace refreshes in place — it must never grow the document set",
+        );
+    }
+
+    /// Batch path (the `import dir` pipeline used for the docs corpus): a plain
+    /// re-import never duplicates, and `--replace` keeps each document's root id
+    /// (so an inbound `[[link]]` survives) and its collection membership.
+    #[tokio::test]
+    async fn batch_reimport_does_not_duplicate_and_replace_keeps_roots() {
+        let (ns, dir) = new_service_and_dir().await;
+        let ns = Arc::new(ns);
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.md"), "# Doc A\n\nSee [[Doc B]] for more.\n").unwrap();
+        std::fs::write(src.join("b.md"), "# Doc B\n\nBody of B.\n").unwrap();
+        let files = vec![
+            src.join("a.md").to_str().unwrap().to_string(),
+            src.join("b.md").to_str().unwrap().to_string(),
+        ];
+        let opts = ImportOptions {
+            base_directory: src.to_str().unwrap().to_string(),
+            auto_collection_routing: true,
+            ..Default::default()
+        };
+
+        // First import: both roots exist and are assigned to a collection.
+        run_batch_and_wait(Arc::clone(&ns), files.clone(), opts.clone()).await;
+        let id_a = deterministic_root_id("a.md");
+        let id_b = deterministic_root_id("b.md");
+        assert!(ns.get_node(&id_a).await.unwrap().is_some(), "Doc A created");
+        assert!(ns.get_node(&id_b).await.unwrap().is_some(), "Doc B created");
+        let headers_after_first = ns.store().count_nodes_by_type("header").await.unwrap();
+        assert!(
+            !ns.store().get_node_memberships(&id_a).await.unwrap().is_empty(),
+            "Doc A is assigned to a collection",
+        );
+
+        // Plain batch re-import: no duplication.
+        run_batch_and_wait(Arc::clone(&ns), files.clone(), opts.clone()).await;
+        assert_eq!(
+            ns.store().count_nodes_by_type("header").await.unwrap(),
+            headers_after_first,
+            "a plain batch re-import must not duplicate",
+        );
+        assert!(ns.get_node(&id_a).await.unwrap().is_some());
+        assert!(ns.get_node(&id_b).await.unwrap().is_some());
+
+        // Batch re-import with --replace: roots keep their ids, still no
+        // duplication, membership intact.
+        let opts_replace = ImportOptions {
+            replace: true,
+            ..opts.clone()
+        };
+        run_batch_and_wait(Arc::clone(&ns), files.clone(), opts_replace).await;
+        assert_eq!(
+            ns.store().count_nodes_by_type("header").await.unwrap(),
+            headers_after_first,
+            "replacing unchanged docs must keep the node count stable",
+        );
+        assert!(
+            ns.get_node(&id_a).await.unwrap().is_some(),
+            "Doc A root kept across replace",
+        );
+        assert!(
+            ns.get_node(&id_b).await.unwrap().is_some(),
+            "Doc B root kept across replace",
+        );
+        assert!(
+            !ns.store().get_node_memberships(&id_a).await.unwrap().is_empty(),
+            "collection membership survives replace",
         );
     }
 }

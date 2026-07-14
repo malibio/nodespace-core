@@ -34,6 +34,12 @@ pub struct ImportFileArgs {
     /// Route files to collections based on directory structure.
     #[arg(long)]
     pub auto_collection_routing: bool,
+
+    /// Refresh an already-imported document in place: replace its child subtree
+    /// from the fresh parse, keeping the root node so inbound links survive.
+    /// Without this, an already-imported document is left untouched.
+    #[arg(long)]
+    pub replace: bool,
 }
 
 #[derive(Args, Debug)]
@@ -56,6 +62,13 @@ pub struct ImportDirArgs {
     /// Directory names to exclude (repeatable, e.g. --exclude node_modules).
     #[arg(long = "exclude")]
     pub exclude_patterns: Vec<String>,
+
+    /// Refresh already-imported documents in place: replace each existing
+    /// document's child subtree from the fresh parse, keeping its root node so
+    /// inbound links survive. Without this, already-imported documents are
+    /// skipped (a plain re-import never duplicates).
+    #[arg(long)]
+    pub replace: bool,
 }
 
 pub async fn run(client: &mut ImportClient, action: ImportAction, json: bool) -> Result<()> {
@@ -91,6 +104,7 @@ async fn run_file(client: &mut ImportClient, args: ImportFileArgs, json: bool) -
         auto_collection_routing: args.auto_collection_routing,
         exclude_patterns: vec![],
         base_directory: String::new(),
+        replace: args.replace,
     };
 
     let mut stream = client
@@ -152,6 +166,7 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
         auto_collection_routing: args.auto_collection_routing,
         exclude_patterns: args.exclude_patterns,
         base_directory: args.directory,
+        replace: args.replace,
     };
 
     let mut stream = client
@@ -174,13 +189,13 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
         } else {
             eprintln!("[{}/9] {}: {}", event.step, event.step_name, event.message);
             if event.step == 9 {
-                let successful = event.results.iter().filter(|r| r.success).count();
-                let failed = event.results.len().saturating_sub(successful);
-                println!("Imported {}/{} files", successful, event.results.len());
-                if failed > 0 {
-                    for r in event.results.iter().filter(|r| !r.success) {
-                        println!("  ✗ {}: {}", r.file_path, r.error);
-                    }
+                // The daemon's summary is the source of truth — it distinguishes
+                // newly imported, refreshed (--replace), and already-present
+                // (skipped) documents, so a plain re-import reads honestly
+                // instead of claiming to have re-imported everything.
+                println!("{}", event.message);
+                for r in event.results.iter().filter(|r| !r.success) {
+                    println!("  ✗ {}: {}", r.file_path, r.error);
                 }
             }
         }
