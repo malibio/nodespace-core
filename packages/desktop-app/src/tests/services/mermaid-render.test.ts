@@ -70,7 +70,8 @@ describe('sanitizeSvg', () => {
   });
 
   it('preserves legitimate SVG content', () => {
-    const svg = '<svg viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80"/><text>Hello</text></svg>';
+    const svg =
+      '<svg viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80"/><text>Hello</text></svg>';
     const result = sanitizeSvg(svg);
     expect(result).toContain('<rect');
     expect(result).toContain('<text>');
@@ -90,14 +91,29 @@ describe('sanitizeSvg', () => {
     expect(result).toContain('cy="50"');
     expect(result).toContain('r="40"');
   });
+
+  it('strips foreignObject HTML labels but preserves native <text> labels', () => {
+    // Root cause of the wordless-diagram bug: mermaid's default htmlLabels:true
+    // wraps every node label in <foreignObject> (arbitrary HTML), which the SVG
+    // profile removes — so the labels vanish. Native <text> labels (emitted when
+    // htmlLabels:false) must survive sanitization. This is why renderMermaid
+    // initializes with flowchart/class htmlLabels disabled.
+    const withForeignObject =
+      '<svg><g class="node"><foreignObject width="80" height="20"><div xmlns="http://www.w3.org/1999/xhtml">Label A</div></foreignObject></g></svg>';
+    const foResult = sanitizeSvg(withForeignObject);
+    expect(foResult).not.toContain('foreignObject');
+
+    const withText = '<svg><g class="node"><text>Label A</text></g></svg>';
+    const textResult = sanitizeSvg(withText);
+    expect(textResult).toContain('<text>');
+    expect(textResult).toContain('Label A');
+  });
 });
 
 describe('renderMermaid', () => {
   it('returns null on render failure', async () => {
     const { default: mermaid } = await import('mermaid');
-    (mermaid.render as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('Invalid syntax')
-    );
+    (mermaid.render as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Invalid syntax'));
 
     const { renderMermaid } = await import('../../lib/services/mermaid-render.js');
     const result = await renderMermaid('invalid mermaid syntax %%%', 'test-id');
@@ -115,5 +131,27 @@ describe('renderMermaid', () => {
     expect(result).not.toBeNull();
     expect(result).toContain('<svg>');
     expect(result).toContain('flowchart');
+  });
+
+  it('initializes mermaid with HTML labels disabled (labels survive sanitization)', async () => {
+    const { default: mermaid } = await import('mermaid');
+    (mermaid.initialize as ReturnType<typeof vi.fn>).mockClear();
+    (mermaid.render as ReturnType<typeof vi.fn>).mockResolvedValue({
+      svg: '<svg><text>x</text></svg>'
+    });
+
+    const { renderMermaid } = await import('../../lib/services/mermaid-render.js');
+    // Toggle the theme across two renders so an initialize() call is guaranteed
+    // regardless of the module-level theme cache's prior state.
+    await renderMermaid('graph TD; A-->B;', 'init-light', false);
+    await renderMermaid('graph TD; A-->B;', 'init-dark', true);
+
+    expect(mermaid.initialize).toHaveBeenCalled();
+    const cfg = (mermaid.initialize as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as {
+      flowchart?: { htmlLabels?: boolean };
+      class?: { htmlLabels?: boolean };
+    };
+    expect(cfg.flowchart?.htmlLabels).toBe(false);
+    expect(cfg.class?.htmlLabels).toBe(false);
   });
 });

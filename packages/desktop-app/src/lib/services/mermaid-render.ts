@@ -106,7 +106,9 @@ function getDOMPurify() {
   // executing in any modern webview — revisit if that CSP is ever relaxed.
   purify.addHook('uponSanitizeAttribute', (_node, data) => {
     if (data.attrName === 'style') {
-      data.attrValue = data.attrValue.replace(/(?:javascript|vbscript):/gi, '').replace(/expression\s*\(/gi, '');
+      data.attrValue = data.attrValue
+        .replace(/(?:javascript|vbscript):/gi, '')
+        .replace(/expression\s*\(/gi, '');
     }
   });
   return purify;
@@ -130,7 +132,15 @@ export async function renderMermaid(
         startOnLoad: false,
         securityLevel: 'strict',
         theme: 'base',
-        themeVariables: buildThemeVariables(isDark)
+        themeVariables: buildThemeVariables(isDark),
+        // Emit node labels as native SVG <text>, not HTML inside <foreignObject>.
+        // sanitizeSvg() runs DOMPurify's `svg` profile, which drops <foreignObject>
+        // (it can host arbitrary HTML) — so with mermaid's default htmlLabels:true
+        // every label is stripped and diagrams render as empty, wordless boxes.
+        // flowchart and class are the diagram types that use foreignObject labels;
+        // sequence/state/er emit <text> natively and need no flag.
+        flowchart: { htmlLabels: false },
+        class: { htmlLabels: false }
       });
       lastThemeKey = themeKey;
     }
