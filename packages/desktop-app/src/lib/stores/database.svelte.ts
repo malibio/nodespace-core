@@ -37,6 +37,34 @@ interface DatabaseListing {
 }
 
 /**
+ * Whether the Tauri IPC bridge is present. Absent under `dev:browser`, where the
+ * app runs in a plain browser against the dev-proxy — which forwards NodeService
+ * but has no DatabaseService, so calling the `list_databases` invoke throws
+ * `Cannot read properties of undefined (reading 'invoke')`. Same probe the model,
+ * agent, and external-link surfaces use.
+ */
+function isTauriBridgePresent(): boolean {
+  return (
+    typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+  );
+}
+
+/**
+ * The single implicit database presented in browser dev mode: the dev-proxy is
+ * bound to one daemon/database and exposes no registry, so the switcher shows one
+ * concrete, non-switchable entry instead of erroring at boot.
+ */
+const IMPLICIT_BROWSER_DATABASE: DatabaseInfo = {
+  id: 'default',
+  name: 'Default',
+  path: '',
+  isDefault: true,
+  status: 'open',
+  createdAt: '',
+  lastOpenedAt: null
+};
+
+/**
  * Manages the daemon's registry of local databases and the desktop-local
  * "which database am I viewing" selection.
  *
@@ -77,6 +105,22 @@ class DatabaseStore {
   async load(): Promise<void> {
     this.loading = true;
     this.error = null;
+
+    // Browser dev mode (dev:browser): no Tauri bridge, so there is no database
+    // registry to query. Present a single implicit database rather than logging a
+    // boot error and rendering the switcher's failure fallback. The Tauri app,
+    // where the bridge is present, is unaffected.
+    if (!isTauriBridgePresent()) {
+      this.databases = [IMPLICIT_BROWSER_DATABASE];
+      this.defaultDatabaseId = IMPLICIT_BROWSER_DATABASE.id;
+      if (this.activeDatabaseId === null) {
+        this.activeDatabaseId = IMPLICIT_BROWSER_DATABASE.id;
+        this.hydrateDatabaseSettings();
+      }
+      this.loading = false;
+      return;
+    }
+
     try {
       const listing = await invoke<DatabaseListing>('list_databases');
       this.databases = listing.databases;
@@ -85,8 +129,7 @@ class DatabaseStore {
       if (this.activeDatabaseId === null) {
         // Prefer the daemon default; fall back to the first registered database
         // so the switcher always shows a concrete selection.
-        this.activeDatabaseId =
-          this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
+        this.activeDatabaseId = this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
         // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
         // variant machine can read sync_enabled/auth_status.
         this.hydrateDatabaseSettings();
@@ -177,9 +220,7 @@ class DatabaseStore {
    * Returns the new entry so callers can switch to it.
    */
   async create(name: string, path?: string): Promise<DatabaseInfo | null> {
-    return this.mutate(() =>
-      invoke<DatabaseInfo>('create_database', { name, path: path ?? null })
-    );
+    return this.mutate(() => invoke<DatabaseInfo>('create_database', { name, path: path ?? null }));
   }
 
   /** Register an existing database file already on disk, then refresh the list. */
@@ -221,9 +262,7 @@ class DatabaseStore {
   }
 
   /** Run a registry mutation, refresh the list, and return the mutation result. */
-  private async mutate(
-    op: () => Promise<DatabaseInfo>
-  ): Promise<DatabaseInfo | null> {
+  private async mutate(op: () => Promise<DatabaseInfo>): Promise<DatabaseInfo | null> {
     this.error = null;
     try {
       const result = await op();

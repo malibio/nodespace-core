@@ -77,6 +77,9 @@ function db(id: string, overrides: Partial<DatabaseInfo> = {}): DatabaseInfo {
 describe('Database Store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The store gates `load()` on the Tauri bridge; present it so these tests
+    // exercise the invoke path. The browser-mode describe removes it.
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     databaseStore.databases = [];
     databaseStore.activeDatabaseId = null;
     databaseStore.defaultDatabaseId = null;
@@ -125,6 +128,23 @@ describe('Database Store', () => {
       mockInvoke.mockRejectedValueOnce(new Error('boom'));
       await databaseStore.load();
       expect(databaseStore.error).toContain('boom');
+    });
+  });
+
+  describe('load in browser dev mode (no Tauri bridge)', () => {
+    beforeEach(() => {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    });
+
+    it('presents a single implicit database without erroring or invoking', async () => {
+      await databaseStore.load();
+
+      // No registry query is attempted (the bridge, hence DatabaseService, is absent).
+      expect(mockInvoke).not.toHaveBeenCalledWith('list_databases');
+      expect(databaseStore.error).toBeNull();
+      expect(databaseStore.databases).toHaveLength(1);
+      expect(databaseStore.activeDatabaseId).toBe(databaseStore.databases[0].id);
+      expect(databaseStore.activeDatabase).not.toBeNull();
     });
   });
 
