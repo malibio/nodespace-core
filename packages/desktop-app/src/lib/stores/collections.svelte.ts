@@ -2,6 +2,7 @@ import { collectionService, type CollectionInfo } from '$lib/services/collection
 import type { Node } from '$lib/types';
 import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
+import { stripMarkdown } from '$lib/services/markdown-utils';
 
 const log = createLogger('CollectionsStore');
 
@@ -211,8 +212,10 @@ class CollectionsStore {
           .filter((node) => node.nodeType !== 'collection')
           .map((node) => ({
             id: node.id,
-            // Prefer title field (cleaned text without markdown) over raw content
-            name: node.title || node.content,
+            // Prefer the cleaned title; fall back to the node content with its
+            // markdown stripped so an imported header root shows "ACP Integration
+            // Architecture", not the raw "# ACP Integration Architecture".
+            name: node.title || stripMarkdown(node.content),
             nodeType: node.nodeType,
           }))
       );

@@ -123,6 +123,35 @@ describe('Collections Store', () => {
       expect(members[0].name).toBe('AI-Powered Note Taking');
     });
 
+    it('strips the markdown heading marker from an untitled member (imported doc root)', () => {
+      // Imported header roots carry their heading in `content` ("# ACP...") and
+      // have no separate `title`, so the member list must strip the marker.
+      const untitledMembers = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            {
+              id: 'imported-root',
+              content: '# ACP Integration Architecture',
+              title: '',
+              nodeType: 'header',
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
+              version: 1,
+              properties: {}
+            }
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), untitledMembers);
+
+      collectionsState.selectCollection('col-1');
+
+      const members = collectionsState.selectedCollectionMembers;
+      expect(members).toHaveLength(1);
+      expect(members[0].name).toBe('ACP Integration Architecture');
+    });
+
     it('selecting a different collection replaces the selection', () => {
       // Set up test data
       collectionsData._setTestData(flattenCollections(mockCollections), createTestMembers());
