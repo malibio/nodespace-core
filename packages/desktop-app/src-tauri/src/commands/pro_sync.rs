@@ -46,6 +46,32 @@ pub async fn pro_tier(app: AppHandle) -> Result<ProTier, String> {
     }
 }
 
+/// The daemon's most recent sync status (state, detail, signed-in email), cached
+/// from the `WatchSyncStatus` stream. Lets the frontend re-hydrate the signed-in
+/// state on demand — on a webview reload the one-shot `pro:tier-detected` event
+/// (which carries the initial status) does not re-fire, and `sync:status` only
+/// pushes on change, so without this a signed-in Pro user appears signed out.
+/// `None` in community mode or before any status is known.
+#[tauri::command]
+pub async fn pro_current_status(app: AppHandle) -> Result<Option<SyncStatusSnapshot>, String> {
+    let Some(pro) = app.try_state::<ProClient>() else {
+        return Ok(None);
+    };
+    Ok(pro.last_status().await.map(|s| SyncStatusSnapshot {
+        state: s.state,
+        detail: s.detail,
+        user_email: s.user_email,
+    }))
+}
+
+/// Serializable snapshot of `SyncStatusEvent` for [`pro_current_status`].
+#[derive(serde::Serialize)]
+pub struct SyncStatusSnapshot {
+    pub state: i32,
+    pub detail: String,
+    pub user_email: String,
+}
+
 /// Start a long-lived `WatchSyncStatus` subscription on the daemon
 /// and forward each event to the frontend as a Tauri event named
 /// `sync:status`.
@@ -68,6 +94,9 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
     // connection alive for the stream's lifetime — no explicit
     // keep-alive binding is required.
     let mut client = pro.client().await;
+    // Owned handle (Arc-backed) so the forwarding task can keep the cached
+    // status current for `pro_current_status` re-hydration on reload.
+    let pro_client = pro.inner().clone();
     let app_handle = app.clone();
 
     tokio::spawn(async move {
@@ -86,6 +115,9 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
         while let Some(item) = stream.next().await {
             match item {
                 Ok(evt) => {
+                    // Cache the latest status so a reloaded webview can re-hydrate
+                    // deterministically instead of appearing signed out.
+                    pro_client.set_last_status(evt.clone()).await;
                     let payload = serde_json::json!({
                         "state": evt.state,
                         "detail": evt.detail,

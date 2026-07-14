@@ -207,3 +207,48 @@ describe('ProSync store — onProConfirmed (#1566)', () => {
     expect(() => unregister()).not.toThrow();
   });
 });
+
+describe('ProSync store — reload re-hydration (#1647)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reset the idempotent-start latch so start() re-runs its hydration, as it
+    // does on a fresh page load / webview reload. Clear carry-over identity from
+    // earlier tests (proSync is a module singleton).
+    proSync.stop();
+    proSync.userEmail = '';
+    proSync.state = 'unspecified';
+  });
+
+  it('re-hydrates signed-in identity from the current-status snapshot on start', async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pro_tier') return 'pro';
+      if (cmd === 'pro_current_status') {
+        return { state: 6, detail: 'live', user_email: 'mayank@nodespace.dev' };
+      }
+      return undefined;
+    });
+
+    await proSync.start();
+
+    // The reload path: neither `pro:tier-detected` nor `sync:status` fires, yet
+    // the signed-in state is restored deterministically from the snapshot.
+    expect(mockInvoke).toHaveBeenCalledWith('pro_current_status');
+    expect(proSync.tier).toBe('pro');
+    expect(proSync.state).toBe('connected');
+    expect(proSync.userEmail).toBe('mayank@nodespace.dev');
+  });
+
+  it('leaves the snapshot alone when the daemon has no status yet (null)', async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pro_tier') return 'pro';
+      if (cmd === 'pro_current_status') return null;
+      return undefined;
+    });
+
+    await proSync.start();
+
+    expect(proSync.tier).toBe('pro');
+    // No snapshot → userEmail is not populated (stays signed-out).
+    expect(proSync.userEmail).toBe('');
+  });
+});

@@ -437,6 +437,7 @@ pub fn run() {
             frontend_log,
             check_daemon_status,
             commands::pro_sync::pro_tier,
+            commands::pro_sync::pro_current_status,
             commands::pro_sync::pro_subscribe_sync_status,
             commands::pro_sync::pro_initiate_oauth,
             commands::pro_sync::pro_signout,

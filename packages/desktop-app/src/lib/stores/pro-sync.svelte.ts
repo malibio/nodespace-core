@@ -187,6 +187,26 @@ class ProSyncStore {
       log.warn('pro_tier invoke failed', { error: e });
     }
 
+    // Re-hydrate the current status snapshot. On a webview reload the one-shot
+    // `pro:tier-detected` event (which carries the initial status) does not
+    // re-fire, and `sync:status` only pushes on change — so without this a
+    // signed-in Pro user would appear signed out until the next daemon
+    // transition. The daemon session is intact; this reflects it deterministically.
+    try {
+      const snapshot = await invoke<{
+        state: number;
+        detail: string;
+        user_email?: string;
+      } | null>('pro_current_status');
+      if (snapshot) {
+        this.setState(decodeState(snapshot.state));
+        this.detail = snapshot.detail;
+        this.setUserEmail(snapshot.user_email ?? '');
+      }
+    } catch (e) {
+      log.warn('pro_current_status invoke failed', { error: e });
+    }
+
     this.unlistenTier = await listen<{
       tier: ProTier;
       initial_status: { state: number; detail: string; user_email?: string } | null;
