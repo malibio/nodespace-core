@@ -27,6 +27,26 @@ Use NodeSpace as a working memory across sessions:
 
 Date nodes make temporal retrieval reliable: if a finding is time-bound, attach it under today's date node so future searches can scope by day.
 
+## Shared Workspaces (Multi-User)
+
+A NodeSpace collection can be **synced and shared** with a teammate through NodeSpace Pro. When the daemon is bound to a shared collection, another engineer — or their agent — reads and writes the same graph, so you share context across sessions and across people. It is opt-in and private to its members. When you are working in a shared workspace, adjust how you use NodeSpace:
+
+**You share the whole workspace, not a per-command target.** You do not pick the shared collection per write — the daemon is launched already bound to it, so nodes you create sync into it automatically. Everything you save here is visible to your teammate. Keep private scratch notes in a separate, unshared database (`nodespace database create`/`--database`) if you need them.
+
+**You are not the only writer.** A node here may have been created or last edited by your teammate. Don't assume a node is yours or that its content is stable across your session. Search at session start to pull what your teammate has already saved.
+
+**Attribute what you save.** Put the provenance in the content — who wrote it and when — so a teammate can tell where a note came from (e.g. begin a session summary with your name and the date). NodeSpace records a creator per node, but a human-readable marker helps a teammate scan.
+
+**Prefer additive writes over editing a teammate's node.** Add a new node (a child, or a fresh note) rather than rewriting one your teammate authored. When you must update a shared node, pass the `version` you read via `nodespace node batch-update`, so a concurrent edit surfaces as an OCC conflict instead of silently overwriting it. (`node update` without a version bypasses that check — avoid it for shared nodes.)
+
+**Recall is eventually consistent, and semantic search lags.** A teammate's write appears after sync latency, not instantly. Two caveats are specific to shared sync:
+- **For immediate cross-engineer recall, use structured queries** — `nodespace query` or `nodespace node query --content-contains "..."`. A peer's node is queryable as soon as it syncs.
+- **Semantic `nodespace search` over a teammate's node works only after your machine has embedded it.** Embeddings are generated locally, not synced, so there is a lag and it needs the local inference model loaded. If a recent teammate note isn't in `search` yet, fall back to `nodespace query`.
+
+**Don't file shared memory under date nodes.** The single-user pattern of attaching findings under `--parent "YYYY-MM-DD"` does **not** round-trip through sync yet — date-container nodes stay local. In a shared workspace, save findings as regular nodes (optionally organized under a shared project or collection node), not under a date node, or your teammate won't see them.
+
+**It's private and opt-in.** The shared collection is readable only by its members and syncs only after each engineer has signed in and enabled sync. Don't move sensitive or unrelated notes into it without intent.
+
 ## Preflight Check
 
 **Before starting any multi-step NodeSpace operation**, run these two commands to confirm the tooling is present and healthy:
