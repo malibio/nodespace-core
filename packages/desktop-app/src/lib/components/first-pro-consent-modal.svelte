@@ -16,7 +16,8 @@
   interface Props {
     /** Whether the modal is visible. */
     open?: boolean;
-    /** True while the enable-sync / sign-in calls are in flight — disables the buttons. */
+    /** True while the enable-sync call is in flight — disables the merge button
+     * (Keep local stays actionable so a decline is never a no-op). */
     pending?: boolean;
     /** Opt in: merge this database into the public workspace (irreversible). */
     onMerge: () => void;
@@ -72,7 +73,9 @@
       </label>
 
       <div class="consent-actions">
-        <button class="btn btn-secondary" type="button" onclick={handleKeepLocal} disabled={pending}>
+        <!-- Never disabled: declining must always register, even mid-merge, so a
+             click can't be swallowed into a silent no-op. -->
+        <button class="btn btn-secondary" type="button" onclick={handleKeepLocal}>
           Keep this database local-only
         </button>
         <button

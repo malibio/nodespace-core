@@ -6,17 +6,23 @@
  * variant of the two-signal state machine (see `ui-extensions.svelte.ts`) to the
  * component that renders it:
  *
- *   | variant        | overlay pill              | modal              | collection tab              |
- *   |----------------|---------------------------|--------------------|-----------------------------|
- *   | teaser         | pro-teaser-pill (upsell)  | —                  | — (none)                    |
- *   | enable-prompt  | enable-sync-pill          | first-pro-consent  | collaboration-locked        |
- *   | sign-in        | pro-sync-pill (existing)  | pro-relogin-slot   | collaboration-tab           |
- *   | connected      | pro-sync-pill (existing)  | pro-relogin-slot   | collaboration-tab           |
+ *   | variant     | overlay pill              | modal              | collection tab       |
+ *   |-------------|---------------------------|--------------------|----------------------|
+ *   | teaser      | pro-teaser-pill (upsell)  | —                  | — (none)             |
+ *   | sign-in     | pro-sync-pill (OAuth)     | —                  | collaboration-locked |
+ *   | consent     | enable-sync-pill          | first-pro-consent  | collaboration-locked |
+ *   | relogin     | pro-sync-pill             | pro-relogin-slot   | collaboration-tab    |
+ *   | connected   | pro-sync-pill             | pro-relogin-slot   | collaboration-tab    |
+ *
+ * The flow is sign-in-first: `sign-in` starts OAuth from the pill; once
+ * authenticated the database becomes `consent`, where the first-Pro modal asks
+ * for the public-workspace publish decision (merge flips `sync_enabled`); after
+ * that it is `connected` (or `relogin` if the session later lapses).
  *
  * Every component is referenced only through `() => import(...)`, so nothing Pro
  * is imported eagerly — the shared shell stays free of Pro component imports.
  * Existing Pro components (`pro-sync-pill`, `pro-relogin-modal`,
- * `collaboration-view`) are mounted unchanged; the new small wrappers
+ * `collaboration-view`) are mounted unchanged; the small wrappers
  * (`pro-relogin-slot`, `collaboration-tab`) exist only to move their mounting
  * behind the registry.
  *
@@ -39,14 +45,22 @@ export const proSyncUiExtension: UiExtensionDefinition = {
       variant: 'teaser',
       lazyLoad: () => import('$lib/components/pro-teaser-pill.svelte')
     },
+    // Not signed in yet: the sync pill drives OAuth (sign-in-first).
     {
       slot: 'app-shell-overlay',
-      variant: 'enable-prompt',
+      variant: 'sign-in',
+      lazyLoad: () => import('$lib/components/pro-sync-pill.svelte')
+    },
+    // Signed in, publish decision pending: the enable-sync pill re-opens the
+    // consent modal if the user dismissed it.
+    {
+      slot: 'app-shell-overlay',
+      variant: 'consent',
       lazyLoad: () => import('$lib/components/enable-sync-pill.svelte')
     },
     {
       slot: 'app-shell-overlay',
-      variant: 'sign-in',
+      variant: 'relogin',
       lazyLoad: () => import('$lib/components/pro-sync-pill.svelte')
     },
     {
@@ -54,20 +68,19 @@ export const proSyncUiExtension: UiExtensionDefinition = {
       variant: 'connected',
       lazyLoad: () => import('$lib/components/pro-sync-pill.svelte')
     },
-    // First-Pro data-sharing consent modal — shown for a Pro daemon whose active
-    // database has sync disabled, when the user opts to enable it. The gate that
-    // keeps local data from reaching the public workspace without an explicit,
-    // irreversible choice.
+    // First-Pro data-sharing consent modal — shown once the user has signed in but
+    // not yet opted into sync. The gate that keeps local data from reaching the
+    // public workspace without an explicit, irreversible choice.
     {
       slot: 'app-shell-modal',
-      variant: 'enable-prompt',
+      variant: 'consent',
       lazyLoad: () => import('$lib/components/first-pro-consent-slot.svelte')
     },
     // Re-login modal — only meaningful once sync is enabled for the database; the
     // wrapper itself only shows the modal on an AUTH_REQUIRED transition.
     {
       slot: 'app-shell-modal',
-      variant: 'sign-in',
+      variant: 'relogin',
       lazyLoad: () => import('$lib/components/pro-relogin-slot.svelte')
     },
     {
@@ -78,15 +91,21 @@ export const proSyncUiExtension: UiExtensionDefinition = {
   ],
   viewerExtensions: [
     // Collaboration tab. Locked placeholder while sync is disabled for this
-    // database (Pro daemon, sync_enabled: false); the live view once enabled.
+    // database (Pro daemon, sync_enabled: false — whether or not signed in); the
+    // live view once enabled.
     {
       tab: COLLABORATION_TAB,
-      variant: 'enable-prompt',
+      variant: 'sign-in',
       lazyLoad: () => import('$lib/components/collaboration/collaboration-locked.svelte')
     },
     {
       tab: COLLABORATION_TAB,
-      variant: 'sign-in',
+      variant: 'consent',
+      lazyLoad: () => import('$lib/components/collaboration/collaboration-locked.svelte')
+    },
+    {
+      tab: COLLABORATION_TAB,
+      variant: 'relogin',
       lazyLoad: () => import('$lib/components/collaboration/collaboration-tab.svelte')
     },
     {

@@ -153,8 +153,9 @@ describe('Free-user guardrail: Pro features stay inert in the community build', 
   // -------------------------------------------------------------------------
   // Pro-UI registry — in community the only surface contributed is the
   // static upgrade teaser (ADR-039). Every daemon-backed Pro surface (the live
-  // sync pill, the enable-sync prompt, the re-login modal, the collaboration
-  // tab) resolves out, so nothing that talks to a Pro daemon can render.
+  // sync pill, the turn-on-sync prompt, the consent/re-login modals, the
+  // collaboration tab) resolves out, so nothing that talks to a Pro daemon can
+  // render.
   // -------------------------------------------------------------------------
   describe('Pro-UI registry resolves to only the static upgrade teaser', () => {
     it("community tier resolves the variant to 'teaser' and sync is inactive", () => {
@@ -167,7 +168,7 @@ describe('Free-user guardrail: Pro features stay inert in the community build', 
       expect(overlay).toHaveLength(1);
       expect(overlay[0].variant).toBe('teaser');
       // None of the daemon-backed pill variants are active.
-      for (const v of ['enable-prompt', 'sign-in', 'connected'] as const) {
+      for (const v of ['sign-in', 'consent', 'relogin', 'connected'] as const) {
         expect(overlay.some((c) => c.variant === v)).toBe(false);
       }
     });
