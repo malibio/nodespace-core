@@ -786,7 +786,7 @@ mod tests {
         session.terminate().await.expect("terminate cat");
     }
 
-    // ---- Regression: env allowlist (issue #1521) ------------------------
+    // ---- Regression: env allowlist ------------------------
 
     /// A secret-shaped var present in the daemon's own environment must NOT
     /// reach the PTY child — only `BASE_ENV_ALLOWLIST` entries and explicitly

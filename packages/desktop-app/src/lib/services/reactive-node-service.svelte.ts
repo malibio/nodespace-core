@@ -31,7 +31,7 @@ import { waitForPendingMoveOperations, trackMoveOperation } from './pending-oper
 import { confirmNodeDeletion } from './delete-confirmation.svelte';
 
 const log = createLogger('ReactiveNodeService');
-// Schema defaults extraction removed in Issue #690 simplification
+// Schema defaults extraction removed in a simplification
 // TODO: Re-add schema defaults if needed via backendAdapter.getSchema() + SchemaNodeHelpers
 import { backendAdapter } from './backend-adapter';
 import type { InsertPosition } from '$lib/services/backend-adapter';
@@ -223,7 +223,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const shouldFocusNewNode = focusNewNode !== undefined ? focusNewNode : !insertAtBeginning;
     const isPlaceholder = initialContent.trim() === '' || /^#{1,6}\s*$/.test(initialContent.trim());
 
-    // Calculate insertPosition for backend ordering (Issue #657, #1216)
+    // Calculate insertPosition for backend ordering
     // - insertAtBeginning: Beginning (insert before all siblings)
     // - afterNodeId defined: After(afterNodeId)
     // - otherwise: End
@@ -371,7 +371,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
               );
             }
           } catch (error) {
-            // ROLLBACK: Revert optimistic UI changes on failure (preserves #656 notification).
+            // ROLLBACK: Revert optimistic UI changes on failure (preserves the move-rejected notification).
             log.error('[createNode] Failed to transfer children to database, rolling back:', error);
             for (const child of children) {
               structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
@@ -467,7 +467,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const headerLevel = contentProcessor.parseHeaderLevel(content);
     const isPlaceholder = content.trim() === '';
 
-    // Issue #424 FIX: Always include nodeType to preserve slash command conversions
+    // Always include nodeType to preserve slash command conversions
     // Pattern conversions work correctly because they call updateNodeType() separately
     // BEFORE the content update, so both the pattern-detected type and content persist together
     sharedNodeStore.updateNode(nodeId, { content, nodeType: node.nodeType }, viewerSource);
@@ -810,8 +810,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     setExpanded(targetParentId, true);
 
-    // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via domain events
-    // Sibling positioning removed (Issue #557) - Backend handles ordering via fractional IDs
+    // NOTE: Cache management removed - ReactiveStructureTree handles hierarchy via domain events
+    // Sibling positioning removed - Backend handles ordering via fractional IDs
 
     // Update ReactiveStructureTree (single source of truth for hierarchy)
     // In Tauri mode, domain events update the tree, but in browser mode we must do it manually
@@ -904,7 +904,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           // Non-ignorable error: rollback optimistic update
           _uiState[nodeId] = originalUIState;
           _rootNodeIds = originalRootNodeIds;
-          // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles rollback via domain events
+          // NOTE: Cache management removed - ReactiveStructureTree handles rollback via domain events
           updateDescendantDepths(nodeId);
           if (currentParentId) {
             structureTree.moveInMemoryRelationship(targetParentId, currentParentId, nodeId);
@@ -947,7 +947,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       ];
     }
 
-    // NOTE: Cache management removed (Issue #557) - ReactiveStructureTree handles hierarchy via domain events
+    // NOTE: Cache management removed - ReactiveStructureTree handles hierarchy via domain events
 
     // Check if node has been persisted to database yet
     const isNodePersisted = sharedNodeStore.isNodePersisted(nodeId);
@@ -1563,7 +1563,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           expanded: defaults.expanded,
           autoFocus: defaults.autoFocus,
           inheritHeaderLevel: defaults.inheritHeaderLevel,
-          // Issue #479: Mark as placeholder if it's the initial viewer placeholder
+          // Mark as placeholder if it's the initial viewer placeholder
           // This prevents the content watcher from persisting viewer-local placeholders
           isPlaceholder: skipPersistence && isPlaceholder
         });

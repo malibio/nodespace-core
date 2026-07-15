@@ -152,7 +152,7 @@ impl PlaybookLifecycleManager {
     /// affected schema's node_type (either directly as a trigger or via dot-path
     /// traversal in conditions) and need to be disabled.
     ///
-    /// Uses path extraction (#1010) to find playbooks whose conditions traverse
+    /// Uses path extraction to find playbooks whose conditions traverse
     /// through the changed schema, not just those that trigger on it directly.
     ///
     /// Returns the list of playbook IDs that were disabled due to schema drift.
@@ -378,14 +378,14 @@ pub fn trigger_keys_for_event(event: &crate::db::events::DomainEvent) -> Vec<Tri
             vec![]
         }
         DomainEvent::RelationshipCreated { .. } => {
-            // TODO(#995-phase2): Relationship events don't carry source_node_type.
+            // TODO(phase2): Relationship events don't carry source_node_type.
             // The EventSubscriber will need to fetch the source node to determine its
             // type, then perform TriggerKey::RelationshipEvent lookup. Until then,
             // relationship_added/relationship_removed triggers are indexed but not matched.
             vec![]
         }
         DomainEvent::RelationshipUpdated { .. } => vec![], // No playbook triggers for updates
-        DomainEvent::RelationshipDeleted { .. } => vec![], // TODO(#995-phase2): same as RelationshipCreated above
+        DomainEvent::RelationshipDeleted { .. } => vec![], // TODO(phase2): same as RelationshipCreated above
     }
 }
 
@@ -532,7 +532,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // handle_schema_update — path-aware drift detection (#1010)
+    // handle_schema_update — path-aware drift detection
     // -----------------------------------------------------------------------
 
     #[test]

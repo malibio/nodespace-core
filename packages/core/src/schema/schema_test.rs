@@ -506,7 +506,7 @@ async fn test_rename_field_migrates_node_data() {
 }
 
 // ============================================================================
-// Issue #1351: Description subtree tests
+// Description subtree tests
 // ============================================================================
 
 #[tokio::test]

@@ -74,7 +74,7 @@ impl TrayController {
 
 /// Tray runtime state. Constructed inside the event loop's `Init` callback
 /// because creating the icon before the loop is actually running produces
-/// stale icons on macOS (upstream issue tauri-apps/tray-icon#90).
+/// stale icons on macOS (a known upstream tauri-apps/tray-icon bug).
 ///
 /// Not `Send` — `TrayIcon` holds platform handles (`NSStatusItem` on macOS,
 /// HWND on Windows) that are tied to the thread that created them.

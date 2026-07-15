@@ -2,7 +2,7 @@
  * MCP Integration Tests (Phase 3)
  *
  * These tests simulate MCP server behavior to validate the architecture
- * is ready for MCP integration (Issue #112). Tests use SharedNodeStore
+ * is ready for MCP integration. Tests use SharedNodeStore
  * directly with domain events architecture for real-time sync.
  */
 

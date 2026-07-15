@@ -2,8 +2,8 @@
  * PatternState Unit Tests
  *
  * Tests for the PatternState class that manages pattern detection lifecycle.
- * Issue #664: Replace scattered nodeTypeSetViaPattern flag with explicit state machine.
- * Issue #667: Plugin-owned pattern behavior (canRevert, revert regex).
+ * Replace scattered nodeTypeSetViaPattern flag with explicit state machine.
+ * Plugin-owned pattern behavior (canRevert, revert regex).
  */
 
 import { describe, it, expect } from 'vitest';

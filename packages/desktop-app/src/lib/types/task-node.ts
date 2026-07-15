@@ -1,7 +1,7 @@
 /**
  * Type-Safe Task Node Interface
  *
- * Flat structure matching Rust backend serialization (Issue #673, #700).
+ * Flat structure matching Rust backend serialization.
  *
  * The Rust backend serializes TaskNode as a flat JSON structure with type-specific fields
  * at the top level, not nested under properties.task. This interface matches that output.
@@ -37,7 +37,7 @@ export type TaskStatus = CoreTaskStatus | string;
 
 /**
  * Core task priority values (user-extensible)
- * Rust backend now uses string enum format (Issue #709)
+ * Rust backend now uses string enum format
  */
 export type CoreTaskPriority = 'low' | 'medium' | 'high';
 

@@ -117,7 +117,7 @@
     }
   });
 
-  // Cleanup subscriptions on unmount to prevent memory leaks (Issue #640)
+  // Cleanup subscriptions on unmount to prevent memory leaks
   onDestroy(() => {
     if (servicesContainer.services?.nodeManager) {
       servicesContainer.services.nodeManager.destroy();

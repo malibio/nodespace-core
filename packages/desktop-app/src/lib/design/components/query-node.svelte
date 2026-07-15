@@ -4,7 +4,7 @@
   Displays query nodes with their description and filter criteria.
   Query nodes are primarily created by AI/MCP, not manually.
 
-  Full query execution and visualization will be implemented in Issue #443.
+  Full query execution and visualization is not yet implemented.
   This component provides the foundation with navigation support via "open" button.
 -->
 

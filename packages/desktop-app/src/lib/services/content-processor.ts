@@ -2,7 +2,7 @@
  * Enhanced ContentProcessor Service
  *
  * Implements Logseq-inspired dual-representation pattern (Source ↔ AST ↔ Display)
- * as the foundation for Issue #70 (Phase 1.1 of Epic #69: Text Editor Architecture Enhancement).
+ * as the foundation for the Text Editor Architecture Enhancement.
  *
  * Key Features:
  * - Lossless conversions between source markdown, AST, and display HTML

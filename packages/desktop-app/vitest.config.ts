@@ -185,7 +185,7 @@ export default defineConfig({
       }
     },
 
-    // Coverage configuration - targeting 90% for testable business logic (Issue #735)
+    // Coverage configuration - targeting 90% for testable business logic
     // We focus on logic that is practically testable without complex mocking
     coverage: {
       provider: 'v8', // Use V8 coverage provider (fast and accurate)
@@ -201,7 +201,7 @@ export default defineConfig({
         '.svelte-kit/**', // SvelteKit generated files
         'scripts/**', // Build/dev scripts
         'eslint-rules/**', // Custom eslint rules
-        // Excluded from coverage targets (Issue #735)
+        // Excluded from coverage targets
         'src/lib/components/ui/**', // Third-party shadcn-svelte wrappers
         'src/lib/design/**', // Svelte components - tested via browser-mode tests
         'src/lib/components/**', // Svelte UI components - require browser testing
@@ -239,7 +239,7 @@ export default defineConfig({
     testTimeout: 5000,
     hookTimeout: 5000,
 
-    // CRITICAL: Run tests sequentially to prevent SharedNodeStore interference (Issue #228, #255)
+    // CRITICAL: Run tests sequentially to prevent SharedNodeStore interference
     // SharedNodeStore is a singleton, so parallel tests within a file share state.
     // Even though singleFork: true runs test FILES sequentially, individual tests
     // within a file can run concurrently, causing state corruption.
@@ -248,7 +248,7 @@ export default defineConfig({
       shuffle: false // Don't randomize test order
     },
 
-    // Run integration tests sequentially to prevent database race conditions (Issue #255)
+    // Run integration tests sequentially to prevent database race conditions
     // Each test swaps the dev-server's database path, so parallel execution causes
     // "no such table" errors when operations read the wrong database
     pool: 'forks',

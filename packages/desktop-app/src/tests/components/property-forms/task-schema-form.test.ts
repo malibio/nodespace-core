@@ -1,5 +1,5 @@
 /**
- * Tests for TaskSchemaForm Component Logic (Issue #709)
+ * Tests for TaskSchemaForm Component Logic
  *
  * Tests the utility functions, data transformations, and business logic
  * used by TaskSchemaForm. UI rendering tests would require browser context.

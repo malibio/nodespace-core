@@ -507,7 +507,7 @@ describe('ReactiveStructureTree', () => {
       // The one-parent invariant is preserved by MOVING, not by rejecting: a
       // has_child edge under a new parent (an indent synced from another window)
       // means the node moved. Rejecting it left the node stranded under its old
-      // parent across windows (nodespace-sync#162).
+      // parent across windows.
       structureTree.children.clear();
 
       structureTree.__testOnly_addChild({ parentId: 'parent1', childId: 'child1', order: 1.0 });
@@ -831,7 +831,7 @@ describe('ReactiveStructureTree', () => {
       // window): the daemon reparents in one step, so only a relationship:created
       // for the new parent is delivered — possibly before any old-edge delete.
       // It must MOVE the node, not be rejected as an "invariant violation"
-      // (nodespace-sync#162: indent not reflected across windows).
+      // (indent not reflected across windows).
       structureTree.addChild({ parentId: 'p1', childId: 'n', order: 1 });
 
       expect(structureTree.getChildren('p1')).toEqual(['n']);

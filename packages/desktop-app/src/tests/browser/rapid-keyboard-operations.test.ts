@@ -1,11 +1,11 @@
 /**
- * Browser Tests: Rapid Keyboard Operations (Issue #870 Part 2A)
+ * Browser Tests: Rapid Keyboard Operations
  *
  * These tests run in a real browser (Chromium via Playwright) to test
  * rapid keyboard sequences that could expose race conditions between
  * UI updates and backend persistence.
  *
- * These tests would have caught the PR #861 race conditions where:
+ * These tests would have caught the race conditions where:
  * - Enter→Tab (create node then immediately indent) could use stale parent data
  * - Tab→Shift+Tab (indent then immediate outdent) could corrupt hierarchy
  *
@@ -39,7 +39,7 @@ describe('Rapid Keyboard Operations - Browser Mode (Issue #870)', () => {
         receivedEvents.push(`up:${e.key}`);
       });
 
-      // Simulate rapid Enter→Tab sequence (the PR #861 race condition)
+      // Simulate rapid Enter→Tab sequence (the race condition)
       const events = [
         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
         new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }),

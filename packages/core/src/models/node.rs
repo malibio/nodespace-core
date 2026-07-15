@@ -23,7 +23,7 @@
 //!     json!({}),
 //! );
 //!
-//! // Create a task node with properties (status uses lowercase format per Issue #670)
+//! // Create a task node with properties (status uses lowercase format)
 //! let task_node = Node::new(
 //!     "task".to_string(),
 //!     "Implement Pure JSON schema".to_string(),
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_node_validation_accepts_blank_content() {
-        // Issue #484: Blank content is now allowed (supports ephemeral node elimination from #479)
+        // Blank content is now allowed (supports ephemeral node elimination)
         let mut node = Node::new("text".to_string(), "Valid content".to_string(), json!({}));
         node.content = String::new();
 
@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn test_task_node_with_properties() {
-        // Status/priority values use lowercase format (Issue #670)
+        // Status/priority values use lowercase format
         let task = Node::new(
             "task".to_string(),
             "Implement feature".to_string(),
@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(task.properties["priority"], "high");
     }
 
-    // Lifecycle Status Tests (Issue #755)
+    // Lifecycle Status Tests
 
     #[test]
     fn test_node_lifecycle_status_default() {

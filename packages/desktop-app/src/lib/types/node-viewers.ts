@@ -13,7 +13,7 @@ import type { Component, Snippet } from 'svelte';
  * onTitleChange/title-push callback: tab titles are always derived from tab content
  * (see computeTabTitle in tab-title.ts), never pushed by a viewer as a side effect of
  * rendering — pushing a computed title during mount/render is what caused a
- * state_unsafe_mutation bug (issue #1564).
+ * state_unsafe_mutation bug.
  */
 export interface NodeViewerProps {
   nodeId: string; // The node to display (date string "2025-10-20", UUID, etc.)

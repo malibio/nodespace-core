@@ -1,6 +1,6 @@
 /**
  * Membership service — thin, typed wrappers over the Pro `pro_*` membership
- * Tauri commands (collection-membership-UI epic #237, slice S1 #238).
+ * Tauri commands.
  *
  * The daemon forwards the signed-in user's JWT to the matching cloud RPC, so the
  * admin / last-admin / open-vs-restricted gates are enforced *server-side*; these
@@ -191,7 +191,7 @@ export class MembershipService {
 		await invoke<void>('pro_approve_request', { requestId, permission });
 	}
 
-	/** List a collection's pending invites (admin only, server-gated). #239. */
+	/** List a collection's pending invites (admin only, server-gated). */
 	async listInvites(collectionId: string): Promise<Invite[]> {
 		log.debug('listInvites', { collectionId });
 		const rows = await invoke<RawInvite[]>('pro_list_invites', { collectionId });
@@ -204,14 +204,14 @@ export class MembershipService {
 		}));
 	}
 
-	/** List a collection's pending join requests (admin only, server-gated). #239. */
+	/** List a collection's pending join requests (admin only, server-gated). */
 	async listRequests(collectionId: string): Promise<JoinRequest[]> {
 		log.debug('listRequests', { collectionId });
 		const rows = await invoke<RawRequest[]>('pro_list_requests', { collectionId });
 		return rows.map((r) => ({ id: r.id, requestedBy: r.requested_by, createdAt: r.created_at }));
 	}
 
-	/** Revoke a pending invite OR join request by id (admin only, server-gated). #239. */
+	/** Revoke a pending invite OR join request by id (admin only, server-gated). */
 	async revokeInvite(inviteId: string): Promise<void> {
 		log.debug('revokeInvite', { inviteId });
 		await invoke<void>('pro_revoke_invite', { inviteId });
@@ -220,7 +220,7 @@ export class MembershipService {
 	/**
 	 * The caller's own identity (bound PersonNode id + email), so the UI can tell
 	 * which roster row is "me" and gate admin controls on the caller's own
-	 * per-collection role. `personId` is `''` on an un-bound device. #239.
+	 * per-collection role. `personId` is `''` on an un-bound device.
 	 */
 	async currentPerson(): Promise<Person> {
 		const p = await invoke<RawPerson>('pro_current_person');

@@ -63,7 +63,7 @@
   let menuOpen = $state(false);
   let signingOut = $state(false);
 
-  // Invitations inbox (onboarding, #199 S5). Opened from the account menu and,
+  // Invitations inbox (onboarding). Opened from the account menu and,
   // once per device, automatically on the first sign-in.
   //
   // `inboxOpenedManually` tracks explicit opens (account menu). The first-run
@@ -89,7 +89,7 @@
     }
   }
 
-  // Signed in = the daemon surfaced an identity (#199 S6). When set, clicking the
+  // Signed in = the daemon surfaced an identity. When set, clicking the
   // pill opens the account menu ("signed in as <email>" + Sign out) instead of
   // starting a new sign-in.
   let signedIn = $derived(proSync.userEmail !== '');
@@ -97,7 +97,7 @@
   // While the daemon catches up in the background (state 'syncing'), the app is
   // fully usable on the local cache — so the tooltip surfaces that progress even
   // when signed in, rather than only "Signed in as <email>". Never a blocking gate;
-  // the pill is purely a status indicator (#249).
+  // the pill is purely a status indicator.
   let pillTitle = $derived(
     signedIn
       ? proSync.state === 'syncing'
@@ -172,7 +172,7 @@
     try {
       await proSync.signOut();
       // Drop cached membership state so the next user doesn't inherit this
-      // session's roster/identity (#199 S5; identity is per-session).
+      // session's roster/identity (identity is per-session).
       membership.reset();
       log.info('signed out');
     } finally {
@@ -322,7 +322,7 @@
     box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
   }
 
-  /* Account menu (#199 S6) — shown when signed in. */
+  /* Account menu — shown when signed in. */
   .menu-backdrop {
     position: fixed;
     inset: 0;

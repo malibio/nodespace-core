@@ -12,7 +12,7 @@
  * NOTE: These are simplified tests focusing on browser-specific APIs.
  * Business logic (command registry, filtering, execution) is tested in Happy-DOM unit tests.
  *
- * Related: Issue #282 (Vitest Browser Mode), Issue #187 (Slash command callback wiring bug)
+ * Related: Vitest Browser Mode; Slash command callback wiring bug
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

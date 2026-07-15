@@ -1,11 +1,11 @@
 /**
- * BacklinksPanel Component Tests (Issue #882, #1384)
+ * BacklinksPanel Component Tests
  *
  * Tests the BacklinksPanel component's business logic and utility functions.
  * Since the component uses bits-ui which has module resolution issues in tests,
  * we test the underlying logic patterns directly.
  *
- * After Issue #1384 refactor: BacklinksPanel is now props-driven — it accepts
+ * After the props-driven refactor: BacklinksPanel now accepts
  * `backlinks: NodeReference[]` as a prop instead of reading from sharedNodeStore.
  *
  * Test Coverage:

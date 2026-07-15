@@ -525,7 +525,7 @@ describe('TextareaController', () => {
       // Replace the navigateArrow handler with our spy
       mockEvents.navigateArrow = navigateArrowSpy;
 
-      // Create controller with multiline enabled (config as getter - Issue #695)
+      // Create controller with multiline enabled (config as getter)
       controller = new TextareaController(
         element,
         'test-node',
@@ -602,7 +602,7 @@ describe('TextareaController', () => {
         controller.destroy();
       }
 
-      // Create controller with multiline enabled (config as getter - Issue #695)
+      // Create controller with multiline enabled (config as getter)
       controller = new TextareaController(
         element,
         'test-node',
@@ -642,7 +642,7 @@ describe('TextareaController', () => {
         controller.destroy();
       }
 
-      // Create controller with multiline disabled (config as getter - Issue #695)
+      // Create controller with multiline disabled (config as getter)
       controller = new TextareaController(
         element,
         'task-node',

@@ -1,5 +1,5 @@
 /**
- * ProSync store — signed-in identity + manual sign-out (#199 S6).
+ * ProSync store — signed-in identity + manual sign-out.
  *
  * Asserts the store surfaces `SyncStatusEvent.user_email` (the "signed in as
  * <email>" affordance) from the `sync:status` stream and clears it on sign-out,

@@ -291,7 +291,7 @@
     transform: translate(-50%, -50%) rotate(90deg);
   }
 
-  /* Inherit font-size, line-height, and icon positioning from HeaderNode wrapper classes (Issue #311) */
+  /* Inherit font-size, line-height, and icon positioning from HeaderNode wrapper classes */
   .node-content-wrapper:has(:global(.header-h1)) {
     --font-size: 2rem;
     --line-height: 1.2;

@@ -191,7 +191,7 @@ impl SqliteStore {
             .await
             .context("Failed to get last order for relationship")?;
 
-        // #1431: presence-not-sign — append after the max sibling even when its
+        // presence-not-sign — append after the max sibling even when its
         // order is <= 0 (a `> 0.0` sentinel misreads a lone child at 0.0 as none).
         let last_order: Option<f64> = if let Some(row) = rows.next().await? {
             Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
@@ -243,7 +243,7 @@ impl SqliteStore {
             .await
             .context("Failed to get last member order")?;
 
-        // #1431: presence-not-sign — append after the max member even at order <= 0.
+        // presence-not-sign — append after the max member even at order <= 0.
         let last_order: Option<f64> = if let Some(row) = order_rows.next().await? {
             Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
         } else {
@@ -392,7 +392,7 @@ impl SqliteStore {
     ) -> Result<Vec<String>> {
         // Get all collections in the subtree using WITH RECURSIVE.
         //
-        // #1426: collection hierarchy is built from `member_of` edges (a
+        // collection hierarchy is built from `member_of` edges (a
         // sub-collection is a member_of its parent), NOT `has_child` — the old
         // recursive arm followed `has_child` and so matched nothing, leaving
         // `coll_subtree` as just the seed and silently dropping every
@@ -400,7 +400,7 @@ impl SqliteStore {
         // out_node = collection/parent, so we descend parent→child by joining on
         // `r.out_node = cs.node_id` and taking `r.in_node`, restricted to
         // collection children (a content member isn't a sub-collection). A depth
-        // cap bounds traversal in case a cycle slips in (see #1427).
+        // cap bounds traversal in case a cycle slips in.
         let mut rows = self
             .db
             .query(
@@ -577,7 +577,7 @@ impl SqliteStore {
             return Ok(0);
         }
 
-        // #1462: a mention edge is FK-constrained — `relationship.in_node` /
+        // a mention edge is FK-constrained — `relationship.in_node` /
         // `out_node` are `NOT NULL REFERENCES node(id)` with `PRAGMA foreign_keys
         // = ON` — so a mention to a NON-EXISTENT node (a dangling `[[link]]` to a
         // doc that wasn't imported, a typo, or an external ref) is an FK violation

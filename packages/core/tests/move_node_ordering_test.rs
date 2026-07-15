@@ -1,4 +1,4 @@
-//! C3a: move_node ordering contract tests (Issue #1259)
+//! C3a: move_node ordering contract tests
 //!
 //! Regression-locks the contract that the frontend depends on after removing
 //! client-side fractional order math:

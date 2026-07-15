@@ -25,7 +25,7 @@
  *
  * Why GFM is enabled despite NodeSpace's semantic node types:
  * - Provides robust inline formatting parsing (bold, italic, strikethrough, code)
- * - Handles edge cases better than custom regex parsers (see Issue #350)
+ * - Handles edge cases better than custom regex parsers
  * - Table rendering aligns with user expectations from GitHub/Discord
  * - List rendering is overridden (see list() renderer) to fit NodeSpace's architecture
  */

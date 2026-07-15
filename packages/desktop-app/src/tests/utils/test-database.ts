@@ -1,7 +1,7 @@
 /**
  * Test Database Utilities - DEPRECATED
  *
- * NOTE: Issue #558 deleted the backend-adapter service that this module depended on.
+ * NOTE: The backend-adapter service that this module depended on was deleted.
  * HTTP dev server testing is no longer supported. Tests should use in-memory mode
  * or be rewritten to use Tauri commands directly (when running in Tauri context).
  *
@@ -45,7 +45,7 @@ export async function cleanupTestDatabase(dbPath: string): Promise<void> {
 
 /**
  * Initialize a test database - NO LONGER FUNCTIONAL
- * @deprecated HTTP dev server and backend-adapter were deleted in Issue #558
+ * @deprecated HTTP dev server and backend-adapter were deleted
  * @throws Error indicating the function is deprecated
  */
 export async function initializeTestDatabase(
@@ -71,7 +71,7 @@ export interface CleanDatabaseResult {
 
 /**
  * Clean database - NO LONGER FUNCTIONAL
- * @deprecated HTTP dev server and backend-adapter were deleted in Issue #558
+ * @deprecated HTTP dev server and backend-adapter were deleted
  */
 export async function cleanDatabase(_backend: unknown): Promise<CleanDatabaseResult> {
   console.warn('[DEPRECATED] cleanDatabase is no longer functional.');

@@ -15,8 +15,6 @@
 //! 3. Updates the "Node Creation" skill node's `description` property.
 //! 4. The embedding pipeline then re-embeds the skill automatically (triggered by
 //!    the `NodeUpdated` event the update emits).
-//!
-//! Issue #1061.
 
 use crate::db::events::{DomainEvent, EventEnvelope};
 use crate::models::{NodeQuery, NodeUpdate};

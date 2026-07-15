@@ -1,4 +1,4 @@
-//! First-launch skill installer (Issue #1199).
+//! First-launch skill installer.
 //!
 //! Invokes `npx @nodespaceai/skill install` to copy SKILL.md and agent shims
 //! into detected agents' directories. Persists completion state to

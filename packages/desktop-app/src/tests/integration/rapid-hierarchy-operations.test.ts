@@ -1,9 +1,9 @@
 /**
- * Stress Tests: Rapid Hierarchy Operations (Issue #870 Part 2B)
+ * Stress Tests: Rapid Hierarchy Operations
  *
  * These tests validate the robustness of indent/outdent operations under
  * rapid sequential execution. They would have caught the race conditions
- * discovered in PR #861 (Optimistic operations vs database writes).
+ * discovered when optimistic operations raced database writes.
  *
  * Key scenarios tested:
  * - Rapid Enter→Tab sequences (create node then indent)
@@ -131,7 +131,7 @@ describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
   describe('Rapid Sequential Operations', () => {
     it('should handle alternating indent/outdent pattern', () => {
       // Simulate rapid Tab, Shift+Tab, Tab, Shift+Tab pattern
-      // This is the exact pattern that exposed race conditions in PR #861
+      // This is the exact pattern that exposed race conditions
 
       // Track operation order to verify consistency
       const operationSequence: string[] = [];

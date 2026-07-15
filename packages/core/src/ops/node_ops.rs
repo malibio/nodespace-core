@@ -416,7 +416,7 @@ pub async fn query_nodes(
         );
     }
 
-    // #1430: pagination differs for a collection-scoped query. Pushing offset/limit
+    // pagination differs for a collection-scoped query. Pushing offset/limit
     // to SQL paginated the WRONG set (membership is filtered after the query), and
     // the old fixed 1000 over-fetch silently dropped any member outside the newest
     // 1000 rows. Instead SCOPE the SQL to the collection's members via `with_ids` —
@@ -489,7 +489,7 @@ pub async fn query_nodes(
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to query nodes: {}", e)))?;
 
-    // Paginate IN MEMORY (#1430). The SQL is already id-scoped to members (the
+    // Paginate IN MEMORY. The SQL is already id-scoped to members (the
     // `id IN (…)` from `with_ids`), so this `member_ids.contains` is a genuine
     // defensive double-check, not the thing producing correctness. Apply offset +
     // limit over the membership set (CreatedDesc-ordered) so `offset>0` and `limit`

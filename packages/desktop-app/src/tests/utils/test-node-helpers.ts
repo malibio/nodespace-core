@@ -1,7 +1,7 @@
 /**
  * Test Node Helper Utilities - DEPRECATED
  *
- * NOTE: Issue #558 deleted the backend-adapter service that this module depended on.
+ * NOTE: The backend-adapter service that this module depended on was deleted.
  * HTTP dev server testing is no longer supported. Tests should use in-memory mode
  * or be rewritten to use Tauri commands directly (when running in Tauri context).
  */
@@ -50,7 +50,7 @@ export async function retryOperation<T>(
 
 /**
  * Creates a node via HttpAdapter and fetches it back - NO LONGER FUNCTIONAL
- * @deprecated HTTP dev server and backend-adapter were deleted in Issue #558
+ * @deprecated HTTP dev server and backend-adapter were deleted
  */
 export async function createAndFetchNode(
   _adapter: HttpAdapter,
@@ -70,7 +70,7 @@ export async function createAndFetchNode(
 
 /**
  * Checks if the HTTP dev server is running - NO LONGER FUNCTIONAL
- * @deprecated HTTP dev server testing was removed in Issue #558
+ * @deprecated HTTP dev server testing was removed
  */
 export async function checkServerHealth(_adapter: HttpAdapter): Promise<void> {
   if (shouldUseDatabase()) {

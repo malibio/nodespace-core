@@ -5,7 +5,7 @@
  * - TextareaController CLASS: Pure TypeScript, works in tests without Svelte context
  * - createTextareaController FACTORY: Wraps class with reactive effects for components
  *
- * Key Design Decisions (Issue #695):
+ * Key Design Decisions:
  * - Dual usage: Class can be instantiated directly in tests, or via factory in components
  * - Content sync effect: KEPT - necessary for external content changes (SSE, undo/redo)
  * - Config sync effect: ELIMINATED - controller stores getter, reads on-demand
@@ -188,7 +188,7 @@ export class TextareaController {
     private nodeType: string;
     private paneId: string;
     /**
-     * Config getter - reads current config on-demand (Issue #695)
+     * Config getter - reads current config on-demand
      * Eliminates the need for config sync $effect by reading from getter
      * Tests can pass simple functions: () => ({ allowMultiline: true })
      */
@@ -198,7 +198,7 @@ export class TextareaController {
     private isInitialized: boolean = false;
     /**
      * Pattern state machine - manages pattern detection lifecycle
-     * Replaces the old nodeTypeSetViaPattern boolean flag (Issue #664)
+     * Replaces the old nodeTypeSetViaPattern boolean flag
      */
     private patternState: PatternState;
     private lastKnownPixelOffset: number = 0;
@@ -228,13 +228,13 @@ export class TextareaController {
       paneId: string,
       events: TextareaControllerEvents,
       /**
-       * Config getter - reads current config on-demand (Issue #695)
+       * Config getter - reads current config on-demand
        * Pass a function that returns the config object
        * Factory passes reactive getter, tests pass simple functions
        */
       getConfig: () => TextareaControllerConfig = () => ({}),
       /**
-       * Creation source for pattern state (Issue #664)
+       * Creation source for pattern state
        * - 'user': User created node (patterns can be detected)
        * - 'pattern': Node created via pattern detection (can revert to text)
        * - 'inherited': Node inherits type from parent (cannot revert)
@@ -247,10 +247,10 @@ export class TextareaController {
       this.nodeType = nodeType;
       this.paneId = paneId;
       this.events = events;
-      // Store config getter - reads on-demand instead of via $effect (Issue #695)
+      // Store config getter - reads on-demand instead of via $effect
       this.getConfig = getConfig;
 
-      // Initialize pattern state (Issue #664)
+      // Initialize pattern state
       // If creationSource not provided, infer from focusManager for backward compatibility
       const cursorType = focusManager.cursorPosition?.type;
       const isTypeConversion = cursorType === 'node-type-conversion';
@@ -290,7 +290,7 @@ export class TextareaController {
     }
 
     /**
-     * Config getter - reads from getConfig() on-demand (Issue #695)
+     * Config getter - reads from getConfig() on-demand
      * This eliminates the config sync $effect by reading reactively
      */
     private get config(): TextareaControllerConfig {
@@ -320,7 +320,7 @@ export class TextareaController {
       keyboardCommandsRegistered = true;
     }
 
-    // NOTE: updateConfig() REMOVED (Issue #695)
+    // NOTE: updateConfig() REMOVED
     // Config is now read on-demand via the config getter, which calls getConfig()
     // The $effect that previously synced config changes is eliminated
     // Config updates now automatically reflect when getConfig() returns new values
@@ -333,7 +333,7 @@ export class TextareaController {
       this.element.value = content;
 
       // Check if FocusManager has a pending cursor position
-      // Issue #669: ANY cursor position type should skip the default setCursorAtBeginningOfLine
+      // ANY cursor position type should skip the default setCursorAtBeginningOfLine
       // because the positionCursor action handles all cursor positioning cases.
       // Previously only checked for 'node-type-conversion', but 'absolute', 'default', etc.
       // also need to be handled by the action, not overridden here.
@@ -344,7 +344,7 @@ export class TextareaController {
       // The positionCursor action will handle cursor positioning
       // This must happen here (not in the action) to avoid a race condition where
       // RAF runs before initialize() and clears the position before we can check it
-      // Issue #669: Clear for ALL position types, not just node-type-conversion
+      // Clear for ALL position types, not just node-type-conversion
       if (hasPendingCursorPosition) {
         // Use RAF to ensure positionCursor action has a chance to read and process the position
         requestAnimationFrame(() => {
@@ -352,7 +352,7 @@ export class TextareaController {
         });
       }
 
-      // Initialize pattern state for non-text types (Issue #664)
+      // Initialize pattern state for non-text types
       // This enables reversion to text type when the pattern is deleted
       if (this.nodeType !== 'text') {
         // If this component is being created due to a type conversion (via pattern detection),
@@ -361,7 +361,7 @@ export class TextareaController {
           // For non-conversion cases (e.g., page load), check if content matches pattern
           const detection = pluginRegistry.detectPatternInContent(content);
           if (detection && detection.config.targetNodeType === this.nodeType) {
-            // Content matches pattern - enable reversion capability (Issue #667)
+            // Content matches pattern - enable reversion capability
             this.patternState.setPluginPatternExists(detection.plugin);
           }
         }
@@ -373,7 +373,7 @@ export class TextareaController {
           this.justCreated = false;
         }, 50);
 
-        // Issue #669: Skip cursor positioning here if FocusManager has a pending position
+        // Skip cursor positioning here if FocusManager has a pending position
         // The positionCursor action will handle ALL cursor positioning types
         // This prevents the cursor from being positioned at 0 before the action can apply
         // the correct position (e.g., 'absolute' position from Enter key node creation)
@@ -908,7 +908,7 @@ export class TextareaController {
         const { plugin, config, match } = detection;
 
         if (this.nodeType === config.targetNodeType) {
-          // Node type already matches - record pattern for reversion capability (Issue #667)
+          // Node type already matches - record pattern for reversion capability
           this.patternState.setPluginPatternExists(plugin);
           return;
         }
@@ -936,7 +936,7 @@ export class TextareaController {
           });
 
           this.nodeType = config.targetNodeType;
-          // Record pattern match for reversion capability (Issue #667)
+          // Record pattern match for reversion capability
           this.patternState.recordPluginPatternMatch(plugin);
         });
       } else if (this.nodeType !== 'text' && this.patternState.canRevert) {
@@ -1109,7 +1109,7 @@ export function createTextareaController(
   // Events and config
   events: TextareaControllerEvents,
   /**
-   * Pattern state creation source (Issue #664)
+   * Pattern state creation source
    * Controls how pattern detection behaves for this node:
    * - 'user': User-created node, patterns can be detected and can revert
    * - 'pattern': Created via pattern detection, can revert to text
@@ -1131,7 +1131,7 @@ export function createTextareaController(
     untrack(() => {
       if (element && !controller) {
         // Pass getEditableConfig directly - controller stores getter and reads on-demand
-        // This eliminates the need for config sync $effect (Issue #695)
+        // This eliminates the need for config sync $effect
         controller = new TextareaController(
           element,
           nodeId,

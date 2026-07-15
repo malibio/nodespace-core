@@ -51,7 +51,7 @@
     hierarchy?: string[];
   }
 
-  // Stub interface - NodeReferenceService was deleted in #558
+  // Stub interface - NodeReferenceService was deleted
   // These methods are stubbed to prevent TypeScript errors
   // The autocomplete-modal needs refactoring to use a different service
   export interface NodeReferenceService {

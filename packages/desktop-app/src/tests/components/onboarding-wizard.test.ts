@@ -1,5 +1,5 @@
 /**
- * OnboardingWizard focus-trap tests (#1414)
+ * OnboardingWizard focus-trap tests
  *
  * The first-launch wizard was migrated from a hand-rolled overlay (Escape on the
  * backdrop, no focus management) to the shared `focusTrap` action. Because it is

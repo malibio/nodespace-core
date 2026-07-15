@@ -76,7 +76,7 @@ export interface NodeUpdater {
  * making it trivial to add new node types with pattern detection.
  * Each plugin fully owns its pattern detection, reversion, and inheritance behavior.
  *
- * Issue #667: Plugin-Owned Pattern Definitions for Extensibility
+ * Plugin-Owned Pattern Definitions for Extensibility
  */
 export interface PluginPattern {
   /** Regular expression to detect in content */
@@ -204,14 +204,14 @@ export interface PluginDefinition {
   description: string;
   version: string;
   config: NodeTypeConfig;
-  /** Plugin-owned pattern behavior (Issue #667) */
+  /** Plugin-owned pattern behavior */
   pattern?: PluginPattern;
   node?: NodeRegistration; // Individual node component (TaskNode, TextNode, etc.)
   viewer?: ViewerRegistration; // Rich viewer component (TaskNodeViewer, DateNodeViewer, etc.)
   reference?: ReferenceRegistration;
 
   /**
-   * Type-specific schema form for editing type-specific properties (Issue #709)
+   * Type-specific schema form for editing type-specific properties
    *
    * Core node types with type-specific properties (task, date, entity) should provide
    * hardcoded schema forms for full TypeScript type safety.
@@ -226,7 +226,7 @@ export interface PluginDefinition {
   schemaForm?: SchemaFormRegistration;
 
   /**
-   * Type-specific updater for node properties (Issue #709)
+   * Type-specific updater for node properties
    *
    * Provides type-safe update operations that route to the correct
    * backend method (e.g., updateTaskNode instead of generic updateNode).
@@ -245,7 +245,7 @@ export interface PluginDefinition {
    * Extract and transform node properties into component-compatible metadata
    * Used to handle type-specific property transformations without hardcoding in BaseNodeViewer
    *
-   * Issue #838: Backend returns typed nodes (e.g., TaskNode) with type-specific fields at top level.
+   * Backend returns typed nodes (e.g., TaskNode) with type-specific fields at top level.
    * The function receives node with optional top-level type-specific fields AND properties.
    *
    * @param node - Node with optional top-level type-specific fields and properties from database

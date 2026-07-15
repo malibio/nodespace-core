@@ -1,5 +1,5 @@
 /**
- * Unit Tests: Atomic Move Node Operations (Issue #552)
+ * Unit Tests: Atomic Move Node Operations
  *
  * Tests the fractional ordering algorithm used by move_node() to atomically move
  * nodes in the hierarchy with support for insert_after_sibling positioning.

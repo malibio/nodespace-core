@@ -1,4 +1,4 @@
-//! Collection Membership Tests (Issue #756)
+//! Collection Membership Tests
 //!
 //! Integration tests for the collection system's membership operations.
 //!
@@ -299,7 +299,7 @@ mod collection_service_tests {
     use tempfile::TempDir;
 
     /// Helper to create test database with SqliteStore and NodeService
-    /// Issue #813: CollectionService now requires both store and node_service
+    /// CollectionService now requires both store and node_service
     async fn create_test_services() -> Result<(Arc<SqliteStore>, NodeService, TempDir)> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
@@ -747,7 +747,7 @@ mod collection_service_tests {
 
     #[tokio::test]
     async fn test_collection_hierarchy_via_member_of() -> Result<()> {
-        // Issue #808: Collection path resolution creates hierarchy between collections
+        // Collection path resolution creates hierarchy between collections
         // using member_of relationships in universal relationship table, not has_child edges.
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
@@ -779,7 +779,7 @@ mod collection_service_tests {
             "Collections should NOT use has_child - 'parent' should have no has_child children"
         );
 
-        // Issue #808: Verify hierarchy exists via member_of relationships
+        // Verify hierarchy exists via member_of relationships
         // child should be a member_of parent
         let child_memberships = collection_service.get_node_collections(&child.id).await?;
         assert_eq!(
@@ -797,7 +797,7 @@ mod collection_service_tests {
 
     #[tokio::test]
     async fn test_collection_hierarchy_three_levels() -> Result<()> {
-        // Issue #808: Test deeper hierarchy creation
+        // Test deeper hierarchy creation
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
 
@@ -844,7 +844,7 @@ mod collection_service_tests {
 
     #[tokio::test]
     async fn test_collection_multi_parent_dag() -> Result<()> {
-        // Issue #808: Collections can have multiple parents (DAG structure)
+        // Collections can have multiple parents (DAG structure)
         // Example: "berlin" can be reached via multiple paths
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
@@ -898,7 +898,7 @@ mod collection_service_tests {
 
     #[tokio::test]
     async fn test_collection_hierarchy_idempotent() -> Result<()> {
-        // Issue #808: Resolving the same path multiple times should not create duplicate relationships
+        // Resolving the same path multiple times should not create duplicate relationships
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
 
@@ -1000,7 +1000,7 @@ mod collection_service_tests {
 
     /// Test that collection membership operations emit unified relationship events
     ///
-    /// **Issue #813**: CollectionService now delegates to NodeService for event emission.
+    /// CollectionService now delegates to NodeService for event emission.
     /// This test verifies that events are properly emitted via NodeService.
     #[tokio::test]
     async fn test_collection_membership_events_emitted() -> Result<()> {
@@ -1010,7 +1010,7 @@ mod collection_service_tests {
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
 
-        // Subscribe to NodeService events (Issue #813: events come from NodeService)
+        // Subscribe to NodeService events (events come from NodeService)
         let mut event_rx = node_service.subscribe_to_events();
 
         // Create a collection
@@ -1029,7 +1029,7 @@ mod collection_service_tests {
             .add_to_collection("event-doc", &collection_id)
             .await?;
 
-        // Check for RelationshipCreated event (unified format from NodeService, Issue #995: EventEnvelope)
+        // Check for RelationshipCreated event (unified format from NodeService, EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), event_rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
@@ -1048,7 +1048,7 @@ mod collection_service_tests {
             .remove_from_collection("event-doc", &collection_id)
             .await?;
 
-        // Check for RelationshipDeleted event (unified format from NodeService, Issue #995: EventEnvelope)
+        // Check for RelationshipDeleted event (unified format from NodeService, EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), event_rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
@@ -1067,7 +1067,7 @@ mod collection_service_tests {
 
     /// Test that collection membership operations work correctly end-to-end
     ///
-    /// Issue #813: This test verifies basic add/remove membership operations
+    /// This test verifies basic add/remove membership operations
     /// work through the CollectionService -> NodeService delegation pattern.
     #[tokio::test]
     async fn test_collection_membership_add_remove_operations() -> Result<()> {
@@ -1109,7 +1109,7 @@ mod collection_service_tests {
         Ok(())
     }
 
-    /// Test get_all_collections_with_member_counts (Issue #817)
+    /// Test get_all_collections_with_member_counts
     ///
     /// This test validates that the optimized single-query method for fetching
     /// all collections with their member counts works correctly.

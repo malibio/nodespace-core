@@ -33,7 +33,7 @@ export type CursorPositionType =
   | 'arrow-navigation'
   | 'line-column'
   | 'node-type-conversion'
-  | 'inherited-type'; // Issue #664: For nodes created via Enter key that inherit parent type
+  | 'inherited-type'; // For nodes created via Enter key that inherit parent type
 
 export interface CursorPositionDefault {
   type: 'default';
@@ -63,7 +63,7 @@ export interface CursorPositionNodeTypeConversion {
 }
 
 /**
- * Issue #664: For nodes created via Enter key that inherit parent type
+ * For nodes created via Enter key that inherit parent type
  * These nodes have a type-locked pattern state (cannot revert to text)
  */
 export interface CursorPositionInheritedType {
@@ -166,7 +166,7 @@ export function positionCursor(
           break;
 
         case 'inherited-type':
-          // Issue #664: Position cursor for inherited type nodes (Enter key on typed node)
+          // Position cursor for inherited type nodes (Enter key on typed node)
           // Same positioning as node-type-conversion, but controller will use 'inherited' source
           controller.focus();
           controller.setCursorPosition(data.position);

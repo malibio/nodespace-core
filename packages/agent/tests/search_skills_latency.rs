@@ -7,7 +7,7 @@
 //!      without schema_metadata from search_skills response)
 //!   3. Multi-skill turn — cross-type request spanning search and creation
 //!
-//! Architecture note (#1283): entity types are no longer injected into the
+//! Architecture note: entity types are no longer injected into the
 //! system prompt. The model discovers type metadata on-demand via `search_skills`,
 //! which returns `schema_metadata` (type IDs, field names, enum values) per match.
 //!
@@ -27,8 +27,6 @@
 //!
 //! Gracefully skips if no inference backend is available (Ollama not running and
 //! no local GGUF model downloaded).
-//!
-//! Issues #1152, #1283
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
@@ -228,7 +226,7 @@ impl AgentToolExecutor for BenchToolExecutor {
             "search_skills" => {
                 // Return realistic schema metadata for the matched skill so the model
                 // can construct correct create_node / search_nodes calls without a
-                // global entity-type list in the system prompt (#1283).
+                // global entity-type list in the system prompt.
                 let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
                 if query.to_lowercase().contains("invoice")
                     || query.to_lowercase().contains("overdue")
@@ -769,7 +767,7 @@ async fn bench_search_skills_e2e_latency() {
 }
 
 // ---------------------------------------------------------------------------
-// Schema metadata infrastructure check (#1283)
+// Schema metadata infrastructure check
 //
 // Verifies that `BenchToolExecutor` returns `schema_metadata` in search_skills
 // responses — confirming the on-demand discovery pattern works correctly.

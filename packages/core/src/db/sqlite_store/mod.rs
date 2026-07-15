@@ -189,7 +189,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// One-time FTS5 backfill (#1428). The external-content `node_fts` triggers
+    /// One-time FTS5 backfill. The external-content `node_fts` triggers
     /// only index FUTURE writes, so any node predating the FTS table (user DBs are
     /// never reset — same reason the migration runner exists) is absent from
     /// the index and never returned by `bm25_search_roots`. Rebuild the index from
@@ -381,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_collection_members_recursive_includes_subcollection_members() -> Result<()> {
-        // #1426: members of a SUB-collection must be returned for the parent.
+        // members of a SUB-collection must be returned for the parent.
         // member_of stores in_node = member/child, out_node = collection/parent;
         // add_to_collection(member, collection) creates that edge.
         let (store, _t) = create_test_store().await?;
@@ -420,7 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulk_create_mentions_skips_dangling_links() -> Result<()> {
-        // #1462: a `[[link]]` to a node that wasn't imported (or a typo) is an FK
+        // a `[[link]]` to a node that wasn't imported (or a typo) is an FK
         // violation (relationship.out_node REFERENCES node(id), foreign_keys ON).
         // The whole-batch transaction used to roll back on the first dangling link
         // — losing EVERY mention. Now dangling pairs are skipped and the valid ones
@@ -469,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_member_of_cycle_is_rejected() -> Result<()> {
-        // #1427: collection hierarchy is a DAG. With `B member_of A`, adding
+        // collection hierarchy is a DAG. With `B member_of A`, adding
         // `A member_of B` would close a cycle and must be rejected.
         let (store, _t) = create_test_store().await?;
 
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_backfill_fts_reindexes_unindexed_nodes() -> Result<()> {
-        // #1428: a node present in `node` but missing from `node_fts` (the pre-FTS
+        // a node present in `node` but missing from `node_fts` (the pre-FTS
         // corpus) must be re-indexed by the one-time backfill.
         let (store, _t) = create_test_store().await?;
 
@@ -568,7 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_order_uses_negative_sibling_not_default() -> Result<()> {
-        // #1431: appending after a sibling whose order is <= 0 must compute from
+        // appending after a sibling whose order is <= 0 must compute from
         // that real max, not fall back to the first-item default. A sibling at
         // -1.0 (a legitimate prepend result) → next order 0.0 (= -1.0 + 1.0), NOT
         // the buggy 1.0 the `last_order > 0.0` sentinel produced.
@@ -601,7 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_persisted_version_distinguishes_missing_from_present() -> Result<()> {
-        // #1432: the primitive that disambiguates a no-op version-checked update —
+        // the primitive that disambiguates a no-op version-checked update —
         // a real row reports Some(version); a missing row (incl. a date-format id
         // that get_node would virtualize) reports None, NOT a phantom version.
         let (store, _t) = create_test_store().await?;
@@ -619,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulk_delete_removes_all_in_one_transaction() -> Result<()> {
-        // #1433: bulk_delete deletes every existing target (all-or-nothing) and
+        // bulk_delete deletes every existing target (all-or-nothing) and
         // returns the deleted nodes; a missing id is simply skipped.
         let (store, _t) = create_test_store().await?;
 
@@ -686,7 +686,7 @@ mod tests {
         Ok(())
     }
 
-    // ---- sqlite-vec (#1221) ----
+    // ---- sqlite-vec ----
 
     /// One 768-dim embedding whose only nonzero component is `axis` (a unit vector).
     /// Two such vectors are identical iff they share an axis (cosine sim 1.0) and
@@ -723,7 +723,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_embeddings_roundtrip_and_modified_since() -> Result<()> {
-        // #97 read-API: vectors must round-trip out of the le-f32 blob, both
+        // read-API: vectors must round-trip out of the le-f32 blob, both
         // chunks come back in order, and the modified-since cursor filters.
         let (store, _tmp) = create_test_store().await?;
         let node = store
@@ -757,7 +757,7 @@ mod tests {
         let future = Utc::now() + chrono::Duration::days(1);
         assert!(store.embeddings_modified_since(future).await?.is_empty());
 
-        // Provenance (#182/#183): a node's REMOTE (pulled) embedding must NOT show
+        // Provenance: a node's REMOTE (pulled) embedding must NOT show
         // up in the push sweep, so a received vector is never re-pushed.
         let other = store
             .create_node(
@@ -779,7 +779,7 @@ mod tests {
         );
 
         // The recurring sweep must ride idx_emb_modified, not full-scan + filesort
-        // (the #1416 review concern): assert the query plan uses the index and the
+        // (review concern): assert the query plan uses the index and the
         // ORDER BY is index-covered.
         let mut plan = store
             .db
@@ -919,7 +919,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_embeddings_batches_across_chunk_boundary() -> Result<()> {
-        // #1524: embedding/vec_embeddings inserts are now batched into multi-row
+        // embedding/vec_embeddings inserts are now batched into multi-row
         // statements chunked under SQLite's bound-parameter ceiling. Exercise a
         // chunk count large enough to span more than one batch statement.
         let (store, _tmp) = create_test_store().await?;
@@ -953,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_stale_embedding_markers_bulk_across_chunk_boundary() -> Result<()> {
-        // #1524: marker inserts are now batched multi-row statements. Exercise a
+        // marker inserts are now batched multi-row statements. Exercise a
         // node count large enough to span more than one batch (ID_CHUNK = 180),
         // plus a duplicate node_id to confirm INSERT OR IGNORE still dedupes via
         // idx_emb_unique(node_id, model_name, chunk_index).
@@ -1111,7 +1111,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_move_node_cross_parent_leaves_exactly_one_edge() -> Result<()> {
-        // #1429: the cross-parent move deletes the old has_child edge and inserts
+        // the cross-parent move deletes the old has_child edge and inserts
         // the new one in ONE transaction. After a successful move the node must
         // have EXACTLY ONE has_child edge, pointing at the new parent — never zero
         // (orphaned root, the bug when a non-transactional INSERT failed after the
@@ -1210,7 +1210,7 @@ mod tests {
         Ok(())
     }
 
-    /// #1483: two `SqliteStore`s opened against the same file (simulating a dev +
+    /// two `SqliteStore`s opened against the same file (simulating a dev +
     /// production daemon both holding the DB) must not surface SQLITE_BUSY as a
     /// hard error on the loser of a write race. `busy_timeout` (set by migration 1,
     /// applied per-connection in `initialize_schema`) makes the second writer retry

@@ -1,5 +1,5 @@
 /**
- * focusTrap - Svelte action for accessible modal dialogs (#1414)
+ * focusTrap - Svelte action for accessible modal dialogs
  *
  * The app's hand-rolled modals (overlay + content + `stopPropagation`) never
  * moved focus into the dialog on open and never trapped Tab, so under real

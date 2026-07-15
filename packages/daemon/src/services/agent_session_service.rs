@@ -287,7 +287,7 @@ impl AgentSessionService for AgentSessionHandler {
                         // stream down — losing a render frame is preferable
                         // to losing the whole session view.
                         //
-                        // TODO(#1119 review): Lag is invisible to the client
+                        // TODO(review): Lag is invisible to the client
                         // today (only a server-side tracing::warn). Options
                         // for surfacing it: a sentinel OutputChunk with an
                         // in-band "[N bytes dropped]" notice, or a session-
@@ -330,7 +330,7 @@ impl AgentSessionService for AgentSessionHandler {
 
         // PtySession::write_input writes the entire buffer atomically and
         // flushes, so on success bytes_written always equals the input length.
-        // The proto field is int64 (widened from int32 during PR #1119 review)
+        // The proto field is int64 (widened from int32 during review)
         // so a 64-bit `usize` cannot truncate — fits the full `data.len()`
         // range on every realistic platform.
         Ok(Response::new(WriteInputResponse {
@@ -517,8 +517,8 @@ mod tests {
 
     #[test]
     fn parse_agent_type_rejects_snake_case() {
-        // Snake-case is the proto-comment form from the original #1111 spec
-        // but was dropped in the #1119 review per CLAUDE.md's no-backwards-
+        // Snake-case is the proto-comment form from the original spec
+        // but was dropped in review per CLAUDE.md's no-backwards-
         // compat directive. Pin the rejection so a future refactor can't
         // silently restore the dual-accept path.
         for snake in ["claude_code", "gemini_cli", "open_code"] {

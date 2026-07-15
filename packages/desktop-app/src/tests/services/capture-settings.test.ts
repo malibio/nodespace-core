@@ -1,5 +1,5 @@
 /**
- * Session Capture Settings Tests (Issue #1125)
+ * Session Capture Settings Tests
  *
  * Tests the getCaptureSettings and updateCaptureSettings tauri-commands API surface.
  * In non-Tauri environment these return mock defaults.

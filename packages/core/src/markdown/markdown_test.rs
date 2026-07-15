@@ -92,7 +92,7 @@ Text under second H2"#;
     async fn test_same_level_headers_are_siblings() {
         let (node_service, _temp_dir) = setup_test_service().await;
 
-        // Test case from issue #350: Multiple H2s should be siblings, not nested
+        // Multiple H2s should be siblings, not nested
         let markdown = r#"# Main Title
 ## First H2
 Some content under first H2
@@ -1292,7 +1292,7 @@ Text under section 1
     async fn test_bullet_with_link() {
         let (node_service, _temp_dir) = setup_test_service().await;
 
-        // Issue #871: Bullet items containing links should have "- " stripped
+        // Bullet items containing links should have "- " stripped
         // The link IS the bullet content, not a special case to exclude
         let markdown = r#"Text paragraph
 - [Click here](https://example.com)
@@ -1740,7 +1740,7 @@ Regular text after code."#;
         );
     }
 
-    // Issue #760: Test async mode (default) returns immediately with minimal response
+    // Test async mode (default) returns immediately with minimal response
     #[tokio::test]
     async fn test_async_import_returns_immediately() {
         let (node_service, _temp_dir) = setup_test_service().await;
@@ -1772,7 +1772,7 @@ Content under section 2"#;
         );
     }
 
-    // Issue #760: Test that async mode actually creates nodes in background
+    // Test that async mode actually creates nodes in background
     #[tokio::test]
     async fn test_async_import_creates_nodes_in_background() {
         let (node_service, _temp_dir) = setup_test_service().await;
@@ -1829,7 +1829,7 @@ More nested content"#;
         );
     }
 
-    // Issue #760: Test that sync mode (for tests) returns full response
+    // Test that sync mode (for tests) returns full response
     #[tokio::test]
     async fn test_sync_import_for_tests() {
         let (node_service, _temp_dir) = setup_test_service().await;
@@ -1857,12 +1857,12 @@ Some content"#;
         assert!(result["duration_ms"].is_number());
     }
 
-    // Issue #855: Test multi-paragraph quote blocks with empty continuation lines
+    // Test multi-paragraph quote blocks with empty continuation lines
     #[tokio::test]
     async fn test_quote_block_with_empty_continuation_lines() {
         let (node_service, _temp_dir) = setup_test_service().await;
 
-        // Test case from issue #855: Multi-line quote with empty continuation line
+        // Multi-line quote with empty continuation line
         let markdown = r#"> **First line of quote**
 >
 > **Second line of quote**
@@ -1917,7 +1917,7 @@ Some content"#;
         );
     }
 
-    // Issue #855: Test quote block starting with empty continuation line (edge case)
+    // Test quote block starting with empty continuation line (edge case)
     #[tokio::test]
     async fn test_quote_block_starting_with_empty_line() {
         let (node_service, _temp_dir) = setup_test_service().await;
@@ -1957,7 +1957,7 @@ Some content"#;
         );
     }
 
-    // Issue #855: Test production example from testing guide
+    // Test production example from testing guide
     #[tokio::test]
     async fn test_quote_block_production_example() {
         let (node_service, _temp_dir) = setup_test_service().await;
@@ -1989,7 +1989,7 @@ Some content"#;
         assert_eq!(nodes[1]["node_type"], "quote-block");
     }
 
-    // Issue #855: Test quote block via update path (handle_update_root_from_markdown)
+    // Test quote block via update path (handle_update_root_from_markdown)
     // This ensures the parse_markdown function (used for updates) also handles empty continuations
     #[tokio::test]
     async fn test_update_root_with_quote_block_empty_continuation() {
@@ -2006,7 +2006,7 @@ Some content"#;
             .unwrap();
         let root_id = create_result["root_id"].as_str().unwrap();
 
-        // Update with multi-line quote containing empty continuation (issue #855 pattern)
+        // Update with multi-line quote containing empty continuation
         let update_params = json!({
             "root_id": root_id,
             "markdown": "> Line 1\n>\n> Line 2"
@@ -2036,7 +2036,7 @@ Some content"#;
         assert_eq!(lines[2], "> Line 2");
     }
 
-    // Issue #914: Verify parse_markdown id_map handles 3+ level deep hierarchy
+    // Verify parse_markdown id_map handles 3+ level deep hierarchy
     // prepare_nodes_from_markdown generates temporary UUIDs; parse_markdown must map
     // grandparent → parent → child IDs correctly through the id_map
     #[tokio::test]
@@ -2112,7 +2112,7 @@ Some content"#;
         assert!(h3_text_nodes[0].content.contains("Top-level text"));
     }
 
-    // Issue #914: Verify create_nodes_from_markdown and update_root_from_markdown
+    // Verify create_nodes_from_markdown and update_root_from_markdown
     // produce identical node structures for the same markdown input.
     // Both paths now share prepare_nodes_from_markdown for detection logic.
     #[tokio::test]
@@ -2212,7 +2212,7 @@ Some content"#;
     }
 }
 
-/// Tests for link transformation (Issue #854)
+/// Tests for link transformation
 ///
 /// These tests verify that inter-file links are correctly transformed
 /// during bulk import operations.
@@ -2479,7 +2479,7 @@ mod link_transformation_tests {
     }
 }
 
-/// Tests for mention collection during link transformation (Issue #868)
+/// Tests for mention collection during link transformation
 ///
 /// These tests verify that mention relationships are correctly collected
 /// when inter-file links are transformed to nodespace:// format.
@@ -2943,7 +2943,7 @@ ___
     async fn test_horizontal_rule_placed_at_root_level_inside_heading() {
         let (node_service, _temp_dir) = setup_test_service().await;
 
-        // Regression test for issue #948: HR inside a heading section should be
+        // Regression test: HR inside a heading section should be
         // placed as a direct child of root, not nested under the heading.
         let markdown = r#"# Section One
 
@@ -3015,7 +3015,7 @@ Some text here.
 }
 
 // ============================================================================
-// NodeTemplate / prepare_nodes_from_template unit tests (Issue #1056)
+// NodeTemplate / prepare_nodes_from_template unit tests
 // ============================================================================
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 /**
  * Tests for TaskNode Type-Safe Wrapper
  *
- * TaskNode uses flat structure matching Rust backend serialization (Issue #673, #700).
+ * TaskNode uses flat structure matching Rust backend serialization.
  * Spoke fields (status, priority, dueDate, assignee) are at the top level, not nested.
  */
 

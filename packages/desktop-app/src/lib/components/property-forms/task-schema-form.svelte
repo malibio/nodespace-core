@@ -1,5 +1,5 @@
 <!--
-  TaskSchemaForm - Type-Safe Task Property Form (Issue #709)
+  TaskSchemaForm - Type-Safe Task Property Form
 
   Hybrid approach:
   - Hardcoded UI for core task properties (status, priority, dueDate, assignee)
@@ -202,7 +202,7 @@
   // Update a user-defined field.
   //
   // WRITE uses the STORAGE shape: the backend stores type properties namespaced
-  // under `properties.task` (issue #838), so updates must re-nest the field there.
+  // under `properties.task`, so updates must re-nest the field there.
   // This leaves the local node in the nested shape until the backend echo
   // re-flattens it — getUserFieldValue above reads both forms to bridge the gap.
   function updateUserField(fieldName: string, value: unknown) {

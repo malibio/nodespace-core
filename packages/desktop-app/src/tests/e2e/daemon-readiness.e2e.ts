@@ -1,5 +1,5 @@
 /**
- * E2E: daemon readiness — not-ready → degraded → recovered (#1525)
+ * E2E: daemon readiness — not-ready → degraded → recovered
  *
  * ADR-044 decision 3 promises daemon-dependent stores "re-run their load
  * automatically when the daemon transitions from unreachable to healthy."
@@ -28,7 +28,7 @@
  *     reload triggered right then failed silently). Waiting on the real
  *     round-trip the test is about to exercise is the only signal that
  *     means what "ready" needs to mean here — the same "reachable at one
- *     layer is not usable end-to-end" gap #1525 exists to close, this time
+ *     layer is not usable end-to-end" gap this suite exists to close, this time
  *     surfacing in the test's own harness rather than the app. (Checked
  *     separately: production's tonic lazy channel does NOT have this gap —
  *     a call issued right after the daemon binds succeeds immediately, no

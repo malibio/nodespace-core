@@ -232,7 +232,7 @@ impl NodeService {
         })
     }
 
-    /// Rename a field across all node instances and update the schema definition (Issue #1088).
+    /// Rename a field across all node instances and update the schema definition.
     pub async fn rename_schema_field(
         &self,
         type_id: &str,

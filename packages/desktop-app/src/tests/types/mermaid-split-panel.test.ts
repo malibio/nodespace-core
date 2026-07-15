@@ -1,5 +1,5 @@
 /**
- * Tests for Mermaid split-panel edit mode logic (issue #925)
+ * Tests for Mermaid split-panel edit mode logic
  *
  * Tests the debounce behavior and language-gating that controls the
  * live preview in code-block-node.svelte. The component logic is tested

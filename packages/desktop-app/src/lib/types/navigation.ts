@@ -1,6 +1,6 @@
 /**
  * Node Navigation Interface - Entry/Exit Methods
- * Based on GitHub Issue #28: Pluggable Node Navigation System
+ * Pluggable Node Navigation System
  */
 
 export interface NodeNavigationMethods {

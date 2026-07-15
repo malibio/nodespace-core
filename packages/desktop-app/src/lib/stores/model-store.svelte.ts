@@ -3,8 +3,6 @@
  *
  * Wired to real Tauri invocations for model lifecycle management.
  * Falls back to mock model data and simulated downloads when Tauri is not available.
- *
- * Issue #1008: replaced mock-only implementation with real Tauri integration.
  */
 
 import { createLogger } from '$lib/utils/logger';

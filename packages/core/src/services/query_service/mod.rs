@@ -8,7 +8,7 @@
 //!
 //! - **Unified Node Table**: All queries target the `node` table directly
 //! - **JSON Properties**: Type-specific properties stored in `properties` JSON column
-//! - **Universal Relationship Table**: All relationships in `relationship` table with `relationship_type` discriminator (Issue #788)
+//! - **Universal Relationship Table**: All relationships in `relationship` table with `relationship_type` discriminator
 //! - **No FETCH**: Single table queries, no record link resolution needed
 //!
 //! # Query Pattern Examples
@@ -217,7 +217,7 @@ impl QueryService {
         });
     }
 
-    /// Compare two nodes by a specific field (Issue #794: Namespaced property access)
+    /// Compare two nodes by a specific field (Namespaced property access)
     fn compare_nodes_by_field(&self, a: &Node, b: &Node, field: &str) -> std::cmp::Ordering {
         match field {
             // Metadata fields
@@ -275,7 +275,7 @@ impl QueryService {
     /// Builds queries against the unified node table with JSON properties.
     /// All node types use the same query pattern with properties stored inline.
     ///
-    /// Issue #794: Properties are now stored in namespaced format:
+    /// Properties are now stored in namespaced format:
     /// properties[node_type][field_name] instead of properties[field_name]
     fn build_query(&self, query: &QueryDefinition) -> Result<String> {
         let mut sql = String::from("SELECT * FROM node");
@@ -337,7 +337,7 @@ impl QueryService {
         Ok(sql)
     }
 
-    /// Resolve field name for SQLite queries (Issue #794: Namespaced property access)
+    /// Resolve field name for SQLite queries (Namespaced property access)
     ///
     /// Metadata fields accessed directly: created_at, modified_at, content, node_type
     /// Type-specific fields use json_extract: json_extract(properties, '$.task.status')
@@ -353,7 +353,7 @@ impl QueryService {
 
     // ========== Filter Builders ==========
 
-    /// Build property filter (Issue #794: Namespaced property access)
+    /// Build property filter (Namespaced property access)
     ///
     /// Uses SQLite json_extract for property access.
     fn build_property_filter(&self, filter: &QueryFilter, target_type: &str) -> Result<String> {

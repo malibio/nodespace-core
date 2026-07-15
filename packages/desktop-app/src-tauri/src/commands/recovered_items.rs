@@ -1,4 +1,4 @@
-//! Pro-tier "Recovered Items" commands (core#1303 viewer/restore half).
+//! Pro-tier "Recovered Items" commands (viewer/restore half).
 //!
 //! When a cloud last-writer-wins conflict overwrites a genuine local edit, the
 //! Pro daemon snapshots the superseded content to a per-user **local-only** log
@@ -96,7 +96,7 @@ pub async fn pro_list_recovered_items(app: AppHandle) -> Result<Vec<RecoveredIte
 /// between our read and rewrite, that entry is clobbered. Low-probability and the
 /// only loss is a recovery breadcrumb (the node content itself lives in the store
 /// and cloud); a proper fix is daemon-mediated mutation (or file locking), tracked
-/// as a follow-up. Acceptable for the viewer/restore slice (core#1303).
+/// as a follow-up. Acceptable for the viewer/restore slice.
 #[tauri::command]
 pub async fn pro_dismiss_recovered_item(app: AppHandle, node_id: String) -> Result<(), String> {
     if app.try_state::<ProClient>().is_none() {

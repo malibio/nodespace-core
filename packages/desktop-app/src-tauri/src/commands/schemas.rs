@@ -1,6 +1,6 @@
 //! Schema read commands for retrieving entity schemas
 //!
-//! As of Issue #1113, schema operations proxy through the in-process gRPC server
+//! Schema operations proxy through the in-process gRPC server
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 //!
 //! This module provides read-only schema commands:

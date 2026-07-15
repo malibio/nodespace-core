@@ -690,7 +690,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
   });
 
   // ========================================================================
-  // Issue #880: Immediate Backlinks Reactivity
+  // Immediate Backlinks Reactivity
   // ========================================================================
 
   describe('Immediate Backlinks Reactivity (Issue #880)', () => {

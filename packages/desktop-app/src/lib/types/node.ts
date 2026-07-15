@@ -165,7 +165,7 @@ export interface Node {
   embeddingVector?: number[] | null;
 
   /**
-   * Indexed title for efficient @mention autocomplete search (Issue #821)
+   * Indexed title for efficient @mention autocomplete search
    *
    * Contains markdown-stripped content for clean display and search.
    * Populated only for:

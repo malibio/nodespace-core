@@ -62,7 +62,7 @@ pub struct SearchSemanticParams {
     #[serde(default)]
     pub include_archived: Option<bool>,
 
-    /// Search scope - controls which node types are included (Issue #1018).
+    /// Search scope - controls which node types are included.
     /// Values: "knowledge" (default), "conversations", "everything".
     #[serde(default)]
     pub scope: Option<String>,

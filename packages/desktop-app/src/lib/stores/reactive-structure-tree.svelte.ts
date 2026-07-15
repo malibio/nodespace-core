@@ -118,7 +118,7 @@ export class ReactiveStructureTree {
     // arrive in either order — and a move applied on the receiver's daemon emits a
     // RelationshipCreated for the new parent but no delete for the old (the daemon
     // reparents in one step). Rejecting here left the node stranded under its old
-    // parent on every OTHER window (nodespace-sync#162: indent/outdent not
+    // parent on every OTHER window (indent/outdent not
     // reflected across windows / cloud sync). Prune the old parent, then add below.
     const currentParent = this.getParent(childId);
     if (currentParent && currentParent !== parentId) {
@@ -225,8 +225,8 @@ export class ReactiveStructureTree {
    * @param childId - Child node ID
    * @param order - Sort order (use 1.0 for first child, or get max order + 1)
    *
-   * @note This creates a temporary in-memory relationship. Once Issue #603 is complete
-   * (backend returns relationship data from createNode API), this workaround can be
+   * @note This creates a temporary in-memory relationship. Once the backend
+   * returns relationship data from the createNode API, this workaround can be
    * replaced with proper optimistic updates from backend responses.
    */
   addInMemoryRelationship(parentId: string, childId: string, order: number = 1.0) {

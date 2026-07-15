@@ -5,13 +5,13 @@
 //! - `NodeService` - CRUD operations and hierarchy management
 //! - `NodeEmbeddingService` - Embedding generation and semantic search (`nlp` feature)
 //! - `EmbeddingProcessor` - Background task for processing stale root embeddings (`nlp` feature)
-//! - `NodeAccessor` - Read-only trait for behavior-driven node access (Issue #1018)
+//! - `NodeAccessor` - Read-only trait for behavior-driven node access
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
 //! - `InboundRelationshipCache` - Fast NLP discovery of inbound relationships
-//! - `QueryService` - Query execution with SQL translation (Issue #440)
-//! - `CollectionService` - Collection path parsing and membership management (Issue #756)
+//! - `QueryService` - Query execution with SQL translation
+//! - `CollectionService` - Collection path parsing and membership management
 //!
-//! Schema nodes are managed via generic NodeService CRUD operations (Issue #690).
+//! Schema nodes are managed via generic NodeService CRUD operations.
 //! Validation is handled by SchemaNodeBehavior.
 //!
 //! Services coordinate between the database layer and application logic,
@@ -32,7 +32,7 @@ pub mod node_service;
 pub mod query_service;
 pub mod relationship_cache;
 
-/// Read-only node accessor for behavior-driven content extraction (Issue #1018)
+/// Read-only node accessor for behavior-driven content extraction
 ///
 /// This trait provides a minimal, read-only interface for `NodeBehavior` implementations
 /// to access related nodes during content aggregation (e.g., fetching children for
@@ -65,7 +65,7 @@ pub trait NodeAccessor: Send + Sync {
     async fn get_nodes(&self, ids: &[&str]) -> Result<Vec<Node>, error::NodeServiceError>;
 }
 
-/// Scope for semantic search queries (Issue #1018)
+/// Scope for semantic search queries
 ///
 /// Controls which node types are included in search results. Replaces the
 /// previous `exclude_types` parameter approach — callers don't need to know
@@ -85,7 +85,7 @@ pub enum SearchScope {
     },
 }
 
-/// Service-layer filters for semantic search queries (Issue #1059).
+/// Service-layer filters for semantic search queries.
 ///
 /// Allows callers to narrow `semantic_search_nodes` results by node type and/or
 /// property values without duplicating filter logic in every caller.
@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // Unit tests for SearchNodeFilters (Issue #1059)
+    // Unit tests for SearchNodeFilters
 
     #[test]
     fn test_default_is_empty() {

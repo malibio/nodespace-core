@@ -90,7 +90,7 @@ describe('Free-user guardrail: Pro features stay inert in the community build', 
   });
 
   // -------------------------------------------------------------------------
-  // Recovered Items (core#1303) — the conflict-loser viewer/restore UI.
+  // Recovered Items — the conflict-loser viewer/restore UI.
   // The daemon writes its local-only log only in Pro; the frontend store must
   // never even ask for it in community, so no badge/snackbar can ever appear.
   // -------------------------------------------------------------------------
@@ -118,7 +118,7 @@ describe('Free-user guardrail: Pro features stay inert in the community build', 
   });
 
   // -------------------------------------------------------------------------
-  // #188 reconnect-replay render coalescing — Pro-only. In community, incoming
+  // Reconnect-replay render coalescing — Pro-only. In community, incoming
   // node events must still apply through the unchanged per-event path; the
   // coalescing window must NOT engage. The guarantee for free users is simply:
   // live node updates still land in the store.

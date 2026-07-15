@@ -2,7 +2,7 @@
  * E2E: Schema seeding verification
  *
  * Verifies that core schemas are populated after daemon startup, covering
- * the startup timing requirement from issue #1308.
+ * the startup timing requirement.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

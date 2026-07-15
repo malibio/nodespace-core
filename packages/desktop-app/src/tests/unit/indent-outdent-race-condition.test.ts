@@ -1,5 +1,5 @@
 /**
- * Tests for indent/outdent race condition prevention (Issue #662)
+ * Tests for indent/outdent race condition prevention
  *
  * Verifies that rapid indent/outdent operations are serialized properly
  * through the pending move operation tracking mechanism.

@@ -328,7 +328,7 @@ export class PluginRegistry {
    * Get all pattern detection configs from enabled plugins
    * Used by TextareaController to detect node type conversions
    *
-   * Issue #667: Now derives configs from plugin.pattern (new architecture)
+   * Now derives configs from plugin.pattern (new architecture)
    * for backward compatibility with existing code that uses PatternDetectionConfig
    */
   getAllPatternDetectionConfigs(): PatternDetectionConfig[] {
@@ -342,7 +342,7 @@ export class PluginRegistry {
         patterns.push(...plugin.config.patternDetection);
       }
 
-      // New: derive PatternDetectionConfig from plugin.pattern (Issue #667)
+      // New: derive PatternDetectionConfig from plugin.pattern
       if (plugin.pattern) {
         // Get slash command for additional config (desiredCursorPosition)
         const slashCommand = plugin.config.slashCommands.find(
@@ -374,7 +374,7 @@ export class PluginRegistry {
    * Detect node type from content using plugin-owned patterns
    * Returns the plugin and match result if a pattern is detected
    *
-   * Issue #667: Uses plugin.pattern instead of legacy patternDetection arrays
+   * Uses plugin.pattern instead of legacy patternDetection arrays
    *
    * @param content - The content to check for patterns
    * @returns PatternDetectionResult with plugin, pattern config, match result, and metadata, or null if no pattern matches
@@ -438,7 +438,7 @@ export class PluginRegistry {
    * Extract metadata for a node using its plugin's extractMetadata function
    * Falls back to returning properties as-is if plugin doesn't define extractMetadata
    *
-   * Issue #698: Type-agnostic BaseNodeViewer refactoring
+   * Type-agnostic BaseNodeViewer refactoring
    *
    * @param node - Node with properties from database
    * @returns Metadata object compatible with node component expectations
@@ -476,7 +476,7 @@ export class PluginRegistry {
    * Map UI state to schema property value using plugin's mapStateToSchema function
    * Falls back to returning state as-is if plugin doesn't define mapStateToSchema
    *
-   * Issue #698: Type-agnostic BaseNodeViewer refactoring
+   * Type-agnostic BaseNodeViewer refactoring
    *
    * @param nodeType - Node type to get mapping for
    * @param state - UI state value
@@ -500,7 +500,7 @@ export class PluginRegistry {
    * Check if a node type accepts content merges from adjacent nodes
    * Returns true by default if plugin not found or acceptsContentMerge not specified
    *
-   * Issue #698: Type-agnostic BaseNodeViewer refactoring
+   * Type-agnostic BaseNodeViewer refactoring
    *
    * @param nodeType - Node type to check
    * @returns true if node type accepts content merges, false otherwise
@@ -542,7 +542,7 @@ export class PluginRegistry {
   }
 
   // ============================================================================
-  // Type-Safe CRUD Support (Issue #709)
+  // Type-Safe CRUD Support
   // ============================================================================
 
   /**

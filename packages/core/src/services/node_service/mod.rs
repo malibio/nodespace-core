@@ -4,7 +4,7 @@
 //! - The `NodeService` struct definition and `Clone` impl
 //! - Construction (`new`, `seed_*`) and accessors (`store`, `behaviors`, `with_client`,
 //!   `subscribe_to_events`)
-//! - Hierarchy methods (Phase 4 — kept here until #1237 lands; will move to `hierarchy.rs`)
+//! - Hierarchy methods (Phase 4 — kept here for now; will move to `hierarchy.rs`)
 //! - `NodeAccessor` trait impl
 //! - Module declarations for the focused sub-modules:
 //!   `crud`, `relationship`, `schema`, `bulk`, `query`, `embedding`
@@ -50,7 +50,7 @@ pub(crate) mod schema;
 /// key off this constant so the node is deterministic and created at most once.
 pub(crate) const DATABASE_SETTINGS_NODE_ID: &str = "database-settings-singleton";
 
-/// Compute property changes between pre-mutation and post-mutation node properties (Issue #995)
+/// Compute property changes between pre-mutation and post-mutation node properties
 ///
 /// Diffs the top-level keys within each namespace. For namespaced properties
 /// (e.g., `{"task": {"status": "done"}}`), diffs within each namespace object,
@@ -737,7 +737,7 @@ pub struct NodeService {
     pub(crate) migration_registry: Arc<MigrationRegistry>,
 
     /// Broadcast channel for domain events (128 subscriber capacity)
-    /// Issue #995: Changed from DomainEvent to EventEnvelope
+    /// Changed from DomainEvent to EventEnvelope
     pub(crate) event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
 
     /// Shared batch state for coalescing events during bulk operations.
@@ -747,7 +747,7 @@ pub struct NodeService {
     /// returns a `BatchEmitGuard` that flushes on drop.
     pub(crate) batch_state: Arc<Mutex<BatchState>>,
 
-    /// Optional client identifier for event source tracking (Issue #665)
+    /// Optional client identifier for event source tracking
     ///
     /// When set, all emitted events will include this client_id as source_client_id
     /// in the EventEnvelope metadata.
@@ -755,13 +755,13 @@ pub struct NodeService {
     /// Use `with_client()` to create a new NodeService instance with client_id set.
     pub(crate) client_id: Option<String>,
 
-    /// Optional playbook execution context for cycle detection (Issue #995)
+    /// Optional playbook execution context for cycle detection
     ///
     /// When set, emitted events carry this context in EventEnvelope metadata.
     /// Use `scoped_for_playbook()` to create a scoped instance.
     pub(crate) execution_context: Option<crate::db::events::PlaybookExecutionContext>,
 
-    /// Optional waker to trigger embedding processor (Issue #729)
+    /// Optional waker to trigger embedding processor
     ///
     /// When set, `queue_root_for_embedding()` will wake the processor after
     /// creating stale markers. This enables event-driven embedding processing
@@ -815,7 +815,7 @@ impl NodeService {
     /// # }
     /// ```
     ///
-    /// # Cache Population (Issue #704)
+    /// # Cache Population
     ///
     /// Takes `&mut Arc<SqliteStore>` to enable cache updates during schema seeding:
     /// - On first launch: Seeds schemas and updates caches incrementally via `Arc::get_mut()`
@@ -825,26 +825,26 @@ impl NodeService {
         // Infrastructure exists for future schema evolution post-deployment
         let migration_registry = MigrationRegistry::new();
 
-        // Initialize broadcast channel for domain events (Issue #995: EventEnvelope)
+        // Initialize broadcast channel for domain events (EventEnvelope)
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
         // Shared batch state — Immediate by default; swapped to Batching during bulk ops.
         let batch_state: Arc<Mutex<BatchState>> = Arc::new(Mutex::new(BatchState::Immediate));
 
-        // Register store-level notifier for automatic domain event emission (Issue #718)
+        // Register store-level notifier for automatic domain event emission
         // This callback converts StoreChange notifications to EventEnvelopes.
         // Must be set BEFORE seed_core_schemas so schema seeding also emits events.
         //
-        // Issue #724: Events now send only node_id (not full payload) for efficiency.
-        // Issue #995: Events wrapped in EventEnvelope with metadata.
-        // Issue #1306: Batch mode coalesces events per node during bulk operations.
+        // Events now send only node_id (not full payload) for efficiency.
+        // Events wrapped in EventEnvelope with metadata.
+        // Batch mode coalesces events per node during bulk operations.
         {
             let tx = event_tx.clone();
             let batch_state_ref = Arc::clone(&batch_state);
             let notifier = Arc::new(move |change: StoreChange| {
                 use crate::db::events::{EventEnvelope, EventMetadata};
 
-                // Compute changed properties for updates (Issue #995)
+                // Compute changed properties for updates
                 let changed_properties = if change.operation == StoreOperation::Updated {
                     if let Some(ref prev) = change.previous_node {
                         compute_property_changes(&prev.properties, &change.node.properties)
@@ -873,7 +873,7 @@ impl NodeService {
                     },
                 };
 
-                // Wrap in EventEnvelope with metadata (Issue #995)
+                // Wrap in EventEnvelope with metadata
                 let envelope = EventEnvelope {
                     event,
                     metadata: EventMetadata {
@@ -882,7 +882,7 @@ impl NodeService {
                     },
                 };
 
-                // Issue #1306: In batch mode, accumulate last-write-wins per node.
+                // In batch mode, accumulate last-write-wins per node.
                 // In immediate mode (default), broadcast directly.
                 let mut state = batch_state_ref.lock().unwrap_or_else(|e| e.into_inner());
                 match &mut *state {
@@ -904,7 +904,7 @@ impl NodeService {
             store_mut.set_notifier(notifier);
         }
 
-        // Seed core schemas if needed (Issue #704)
+        // Seed core schemas if needed
         // This must happen BEFORE we clone the Arc into Self, so we can use Arc::get_mut()
         // to update schema caches incrementally during seeding.
         Self::seed_core_schemas_if_needed(store).await?;
@@ -921,11 +921,11 @@ impl NodeService {
             embedding_waker: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
 
-        // Issue #1351: backfill description subtrees for schemas that still have
+        // Backfill description subtrees for schemas that still have
         // properties.description but no child nodes (databases created before this change).
         service.backfill_schema_description_subtrees().await?;
 
-        // ADR-037 (#133): every install has exactly one local PersonNode (the user).
+        // ADR-037: every install has exactly one local PersonNode (the user).
         service.seed_local_person_if_needed().await?;
 
         // ADR-037: seed the DatabaseSettingsNode singleton and its owner has_role
@@ -935,14 +935,14 @@ impl NodeService {
         Ok(service)
     }
 
-    /// ADR-037 (#133): seed exactly one local PersonNode — the local user.
+    /// ADR-037: seed exactly one local PersonNode — the local user.
     /// Idempotent: skips when a person already exists, so an existing database
     /// is backfilled on next open too. Name/email stay absent until the user
     /// fills them in (PersonNodeBehavior allows it). On Pro upgrade this node
-    /// is bound to a Supabase identity (nodespace-sync#125) via a single
+    /// is bound to a Supabase identity via a single
     /// `auth_identities` row — not recreated.
     ///
-    /// Note: `auth_status` lives on DatabaseSettingsNode (#1398), not here.
+    /// Note: `auth_status` lives on DatabaseSettingsNode, not here.
     async fn seed_local_person_if_needed(&self) -> Result<(), NodeServiceError> {
         if !self.query_nodes_by_type("person", None).await?.is_empty() {
             return Ok(());
@@ -1265,7 +1265,7 @@ impl NodeService {
             }
         } // ← Arc clone dropped here, enabling Arc::get_mut() below
 
-        // Update schema caches incrementally (Issue #704)
+        // Update schema caches incrementally
         // We use Arc::get_mut() since we're the only owner at this point (before cloning into Self)
         let store_mut = Arc::get_mut(store).ok_or_else(|| {
             NodeServiceError::InitializationError(
@@ -1284,7 +1284,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// Seed node hierarchies from pre-expanded template node lists (Issue #1056).
+    /// Seed node hierarchies from pre-expanded template node lists.
     ///
     /// Each element of `template_groups` is a flat `Vec<PreparedNode>` produced
     /// by [`crate::markdown::prepare_nodes_from_template`].
@@ -1386,8 +1386,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// Backfill description child subtrees for schemas that still have `properties.description`
-    /// (Issue #1351).
+    /// Backfill description child subtrees for schemas that still have `properties.description`.
     ///
     /// Runs at every startup; idempotent because `properties.description` is removed from the
     /// schema node after a successful backfill. Schemas without that key are skipped in O(1).
@@ -1504,7 +1503,7 @@ impl NodeService {
         &self.store
     }
 
-    /// Get a reference to the behavior registry (Issue #1018)
+    /// Get a reference to the behavior registry
     pub fn behaviors(&self) -> &Arc<NodeBehaviorRegistry> {
         &self.behaviors
     }
@@ -1516,7 +1515,7 @@ impl NodeService {
             .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)))
     }
 
-    /// Check if a node type is embeddable according to its behavior (Issue #1018)
+    /// Check if a node type is embeddable according to its behavior
     ///
     /// Uses `NodeBehavior::get_embeddable_content()` on a probe node to determine
     /// if this node type can ever produce embeddable content. Types that unconditionally
@@ -1582,7 +1581,7 @@ impl NodeService {
     }
 
     /// Return a scoped `NodeService` that tags all emitted events with the given
-    /// playbook execution context (Issue #995).
+    /// playbook execution context.
     ///
     /// Events emitted through the returned instance carry `playbook_context` in
     /// `EventEnvelope.metadata` for cycle detection in the playbook engine.
@@ -1598,7 +1597,7 @@ impl NodeService {
         cloned
     }
 
-    /// Subscribe to domain events (Issue #995: returns EventEnvelope)
+    /// Subscribe to domain events (returns EventEnvelope)
     ///
     /// Returns a broadcast receiver that receives all domain events wrapped
     /// in `EventEnvelope` with metadata (source_client_id, playbook_context).
@@ -1606,7 +1605,7 @@ impl NodeService {
         self.event_tx.subscribe()
     }
 
-    /// Begin batched event emission for bulk operations (Issue #1306).
+    /// Begin batched event emission for bulk operations.
     ///
     /// While the returned `BatchEmitGuard` is live, domain events from the store
     /// notifier are coalesced per node (last-write-wins) instead of being broadcast
@@ -1634,7 +1633,7 @@ impl NodeService {
         }
     }
 
-    /// Emit a domain event to all subscribers (Issue #995: wraps in EventEnvelope)
+    /// Emit a domain event to all subscribers (wraps in EventEnvelope)
     ///
     /// Internal helper for emitting events after successful operations.
     /// Wraps the event in an EventEnvelope with this instance's client_id
@@ -1724,7 +1723,7 @@ fn build_node_tree_recursive(
     json
 }
 
-/// Issue #1018: NodeAccessor implementation for NodeService
+/// NodeAccessor implementation for NodeService
 ///
 /// Delegates to existing NodeService methods, ensuring all business rules
 /// (mentions, migrations, etc.) apply when behaviors fetch related nodes.
@@ -1787,7 +1786,7 @@ mod tests {
     async fn test_create_task_node() {
         let (service, _temp) = create_test_service().await;
 
-        // Issue #838: Client sends flat properties, backend normalizes to namespaced storage
+        // Client sends flat properties, backend normalizes to namespaced storage
         let node = Node::new(
             "task".to_string(),
             "Implement NodeService".to_string(),
@@ -1824,7 +1823,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_write_wrappers_upsert_read_delete() {
-        // #97 pull-apply path: the non-nlp NodeService write wrappers must
+        // Pull-apply path: the non-nlp NodeService write wrappers must
         // round-trip a received vector into the local store and clear it.
         let (service, _temp) = create_test_service().await;
         let id = service
@@ -2107,7 +2106,7 @@ mod tests {
         assert_eq!(after_type_update.node_type, "text");
 
         // Update only properties — content and node_type must be preserved.
-        // #1434: bulk_update now NORMALIZES + deep-MERGES properties exactly like the
+        // bulk_update now NORMALIZES + deep-MERGES properties exactly like the
         // single-node update_node path (it previously wholesale-replaced with the raw
         // client value, diverging from single-update and skipping normalization).
         service
@@ -2830,7 +2829,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Atomic subtree cascade delete tests (Issue #220)
+    // Atomic subtree cascade delete tests
     // ---------------------------------------------------------------------------
 
     #[tokio::test]
@@ -2965,7 +2964,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Issue #1306: BatchEmitGuard — batched event emission tests
+    // BatchEmitGuard — batched event emission tests
     // =========================================================================
 
     /// Single `update_node` (non-bulk) must still emit immediately — no guard involved.
@@ -3124,8 +3123,8 @@ mod tests {
     }
 
     /// `bulk_create_hierarchy_trusted` must emit exactly one Created event per inserted
-    /// node with no duplicates, delivered in a single flush rather than one-at-a-time
-    /// (Issue #1311). The batch guard coalesces last-write-wins per node_id on drop.
+    /// node with no duplicates, delivered in a single flush rather than one-at-a-time.
+    /// The batch guard coalesces last-write-wins per node_id on drop.
     #[tokio::test]
     async fn bulk_create_hierarchy_trusted_coalesces_events_per_root() {
         let (service, _temp) = create_test_service().await;

@@ -562,7 +562,7 @@ impl GrpcNodeService for NodeServiceImpl {
                 &req.node_type,
                 &req.parent_id,
                 &req.root_id,
-                None, // before_sibling_id intentionally None per #616 fractional ordering
+                None, // before_sibling_id intentionally None for fractional ordering
             )
             .await
             .map_err(service_error_to_status)?;
@@ -1425,7 +1425,7 @@ impl GrpcNodeService for NodeServiceImpl {
         let req = request.into_inner();
         if !req.node_type.is_empty() || !req.root_id.is_empty() {
             // Filtering is intentionally out of scope for the initial implementation
-            // (issue #1114 lists it as a Non-Goal). Log so clients can see the
+            // (this filtering is a documented Non-Goal). Log so clients can see the
             // request was accepted but the filter is being ignored.
             tracing::debug!(
                 node_type = %req.node_type,
@@ -1527,7 +1527,7 @@ pub(crate) fn node_to_proto(node: Node) -> NodeData {
 /// Translate a core `DomainEvent` into a proto `NodeEvent`.
 ///
 /// Returns `None` for non-node events (relationships) — those are out of scope
-/// for `WatchNodes` (per issue #1114 Non-Goals: relationship streaming is a
+/// for `WatchNodes` (a documented Non-Goal: relationship streaming is a
 /// separate concern).
 ///
 /// For `NodeCreated` and `NodeUpdated`, fetches the current node payload so

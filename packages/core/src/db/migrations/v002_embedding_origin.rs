@@ -1,4 +1,4 @@
-//! Adds `embedding.origin` (#182/#183): 'local' = generated on this device,
+//! Adds `embedding.origin`: 'local' = generated on this device,
 //! 'remote' = pulled from another device via cloud sync. The cloud-push sweep
 //! reads only 'local' rows, so a pulled vector never gets re-pushed (no
 //! cross-device re-push loop / write amplification). Rebuilds `idx_emb_modified`

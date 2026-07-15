@@ -17,7 +17,7 @@
 //! 3. All subscribers receive the event asynchronously
 //! 4. LiveQueryService (Tauri layer) listens to events and forwards to frontend
 //!
-//! # Unified Relationship Event System (Issue #811)
+//! # Unified Relationship Event System
 //!
 //! All relationships (`has_child`, `member_of`, `mentions`, and custom types)
 //! use a generic `RelationshipEvent` struct with `relationship_type` for discrimination.
@@ -26,7 +26,7 @@
 use crate::models::Node;
 use serde::{Deserialize, Serialize};
 
-/// Unified relationship event for all relationship types (Issue #811)
+/// Unified relationship event for all relationship types
 ///
 /// This generic structure supports all relationship types: `has_child`, `member_of`, `mentions`,
 /// and any future custom relationship types. It replaces the enum-based approach
@@ -100,7 +100,7 @@ pub(crate) fn node_thing(id: &str) -> String {
     }
 }
 
-/// Describes a single property change for playbook trigger matching (Issue #995)
+/// Describes a single property change for playbook trigger matching
 ///
 /// Computed by diffing pre-mutation and post-mutation node properties.
 /// Used by the playbook engine for fine-grained `property_changed` triggers.
@@ -114,7 +114,7 @@ pub struct PropertyChange {
     pub new_value: Option<serde_json::Value>,
 }
 
-/// Playbook execution context carried on events for cycle detection (Issue #995)
+/// Playbook execution context carried on events for cycle detection
 ///
 /// When the playbook engine executes actions that mutate the graph, the resulting
 /// events carry this context so the engine can track chain depth and attribution.
@@ -128,7 +128,7 @@ pub struct PlaybookExecutionContext {
     pub source_playbook_id: String,
 }
 
-/// Metadata for cross-cutting concerns on domain events (Issue #995)
+/// Metadata for cross-cutting concerns on domain events
 ///
 /// Wraps `DomainEvent` in an envelope so metadata like `source_client_id` lives
 /// in one place instead of being duplicated across every event variant.
@@ -140,7 +140,7 @@ pub struct EventMetadata {
     pub playbook_context: Option<PlaybookExecutionContext>,
 }
 
-/// Envelope wrapping DomainEvent with metadata (Issue #995)
+/// Envelope wrapping DomainEvent with metadata
 ///
 /// Carried on the broadcast channel. All subscribers receive envelopes.
 /// `source_client_id` has been moved from individual event variants into
@@ -159,7 +159,7 @@ pub struct EventEnvelope {
 /// They represent domain-level changes, not database operations.
 ///
 /// Source client identification is carried in `EventMetadata` (on the
-/// `EventEnvelope` wrapper), not on individual variants (Issue #995).
+/// `EventEnvelope` wrapper), not on individual variants.
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainEvent {
@@ -186,7 +186,7 @@ pub enum DomainEvent {
     },
 
     // ============================================================================
-    // Unified Relationship Events (Issue #811)
+    // Unified Relationship Events
     // All relationship types (has_child, member_of, mentions, custom) use these
     // generic events. No backward compatibility - old EdgeCreated/etc removed.
     // ============================================================================
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(rel.to_id, "node:def");
     }
 
-    /// Contract test: Documents and enforces the exact JSON format for RelationshipEvent (Issue #811)
+    /// Contract test: Documents and enforces the exact JSON format for RelationshipEvent
     ///
     /// IMPORTANT: The frontend TypeScript types MUST match this format.
     /// This is the unified format that supports all relationship types.

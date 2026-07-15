@@ -1,5 +1,5 @@
 /**
- * Regression tests for issue #1492: edit persistence amplifies writes and
+ * Regression tests: edit persistence amplifies writes and
  * self-conflicts during fast typing.
  *
  * Covers the SimplePersistenceCoordinator's per-node serial writer: a

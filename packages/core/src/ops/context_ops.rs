@@ -6,9 +6,9 @@
 //!
 //! Entity types are no longer included here by default — the model discovers
 //! type metadata on-demand via `search_skills` which returns `schema_metadata`
-//! per match (#1283). When a query + embedding service are provided, schemas
+//! per match. When a query + embedding service are provided, schemas
 //! semantically relevant to the query are injected to cover implicit references
-//! (e.g. "track my clients" → `customer` schema) (#1300).
+//! (e.g. "track my clients" → `customer` schema).
 
 use crate::models::SchemaNode;
 use crate::services::{CollectionService, NodeEmbeddingService, NodeService};
@@ -60,7 +60,7 @@ const MAX_SEMANTIC_SCHEMAS: usize = 5;
 /// When `embedding_service` and `query` are both provided, schema nodes
 /// semantically similar to the query are retrieved and injected into the
 /// context. Falls back to schema-free context when the embedding service is
-/// unavailable or the query is empty (#1300).
+/// unavailable or the query is empty.
 pub async fn build_workspace_context(
     node_service: &Arc<NodeService>,
     embedding_service: Option<&Arc<NodeEmbeddingService>>,
@@ -93,7 +93,7 @@ pub async fn build_workspace_context(
         })
         .collect();
 
-    // Semantic schema retrieval (#1300): find schemas relevant to the query.
+    // Semantic schema retrieval: find schemas relevant to the query.
     // Only runs when both an embedding service and a non-empty query are present.
     let relevant_schemas = match (embedding_service, query.filter(|q| !q.trim().is_empty())) {
         (Some(emb), Some(q)) => {
@@ -143,8 +143,8 @@ impl WorkspaceContext {
     ///
     /// Semantically-relevant schemas are injected when present (retrieved via
     /// vector similarity by `build_workspace_context` — covers implicit type
-    /// references like "clients" → `customer` schema, #1300). All other entity
-    /// types remain on-demand via `search_skills` (#1283).
+    /// references like "clients" → `customer` schema). All other entity
+    /// types remain on-demand via `search_skills`.
     ///
     /// `max_chars` is a rough character budget for the combined output.
     pub fn format_for_prompt(&self, max_chars: usize) -> String {
@@ -158,7 +158,7 @@ impl WorkspaceContext {
             }
         }
 
-        // Relevant schemas section (query-matched via semantic retrieval, #1300)
+        // Relevant schemas section (query-matched via semantic retrieval)
         if !self.relevant_schemas.is_empty() {
             let header = "\nRELEVANT ENTITY TYPES:\n";
             if out.len() + header.len() <= max_chars {

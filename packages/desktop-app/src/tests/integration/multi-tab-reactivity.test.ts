@@ -8,7 +8,7 @@
  * 2. ReactiveStructureTree - Svelte 5 state for parent→child hierarchy
  * 3. ReactiveNodeService - Per-viewer instances that subscribe to SharedNodeStore
  *
- * Test scenarios from issue #641:
+ * Test scenarios:
  * 1. Content Update Propagation - Edit in viewer 1, verify viewer 2 updates
  * 2. Structural Change Propagation - Indent in viewer 1, verify hierarchy in viewer 2
  * 3. Cross-Pane Split View - Split panes with independent scroll positions

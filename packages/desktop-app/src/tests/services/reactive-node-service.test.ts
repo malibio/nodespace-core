@@ -1768,7 +1768,7 @@ describe('ReactiveNodeService - CreateNode Edge Cases', () => {
       expect(moveChildrenMock.mock.calls.length).toBe(callsBefore + 1);
     }, { timeout: 3000 });
 
-    // After moveChildrenToParent rejects, the catch block should emit the #656 notification
+    // After moveChildrenToParent rejects, the catch block should emit the rollback notification
     await vi.waitFor(() => {
       expect(conflictNotifications.notifications.length).toBeGreaterThan(0);
     }, { timeout: 1000 });

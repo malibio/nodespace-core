@@ -50,7 +50,7 @@ const testableService = browserSyncService as unknown as TestableBrowserSyncServ
  *
  * ## Testing Strategy
  *
- * Issue #724: Events now send only nodeId (not full payload).
+ * Events now send only nodeId (not full payload).
  * Tests mock backendAdapter.getNode to return test data.
  */
 
@@ -131,7 +131,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       registerMockNode(nodeData);
 
       // But events arrive in reverse order (relationship first, then node)
-      // First, the relationship event arrives (unified format - Issue #811)
+      // First, the relationship event arrives (unified format)
       const relationshipEvent: SseEvent = {
         type: 'relationshipCreated',
         id: 'relationship:parent1:node1',
@@ -141,7 +141,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
         properties: { order: 1 }
       };
 
-      // Then, the node event arrives (Issue #724: ID-only)
+      // Then, the node event arrives (ID-only)
       const nodeEvent: SseEvent = {
         type: 'nodeCreated',
         nodeType: 'text',
@@ -196,7 +196,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       // Node doesn't exist in store yet
       expect(sharedNodeStore.getNode('child1')).toBeUndefined();
 
-      // Now create the node event (Issue #724: ID-only)
+      // Now create the node event (ID-only)
       const nodeEvent: SseEvent = {
         type: 'nodeCreated',
         nodeType: 'text',
@@ -218,7 +218,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       // Scenario: Two has_child edges naming DIFFERENT parents for the same child
       // arrive before node:created. ReactiveStructureTree enforces a single-parent
       // tree, so the second edge is treated as a MOVE: the child is pruned from the
-      // first parent and re-attached under the second (nodespace-sync#162). A move
+      // first parent and re-attached under the second. A move
       // applied on another window/cloud delivers the new-parent edge with no old-parent
       // delete, so reparenting (not rejecting) is what keeps windows consistent.
 
@@ -253,7 +253,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       expect(structureTree.getChildren('parent1')).not.toContain('child');
       expect(structureTree.getChildren('parent2')).toContain('child');
 
-      // Now create the node (Issue #724: ID-only)
+      // Now create the node (ID-only)
       testableService.handleEvent({
         type: 'nodeCreated',
         nodeType: 'text',
@@ -363,7 +363,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       registerMockNode(createTestNode('N2', 'Node 2'));
       registerMockNode(createTestNode('N3', 'Node 3'));
 
-      // Relationships arrive first (unified format - Issue #811)
+      // Relationships arrive first (unified format)
       const relationships: SseEvent[] = [
         { type: 'relationshipCreated', id: 'rel:P:N1', fromId: 'P', toId: 'N1', relationshipType: 'has_child', properties: { order: 1 } },
         { type: 'relationshipCreated', id: 'rel:P:N2', fromId: 'P', toId: 'N2', relationshipType: 'has_child', properties: { order: 2 } },
@@ -378,7 +378,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       expect(structureTree.getChildren('P').sort()).toEqual(['N1', 'N2']);
       expect(structureTree.getChildren('N2')).toEqual(['N3']);
 
-      // Now nodes arrive in random order (Issue #724: ID-only)
+      // Now nodes arrive in random order (ID-only)
       const nodes: SseEvent[] = [
         { type: 'nodeCreated', nodeType: 'text', nodeId: 'N2' },
         { type: 'nodeCreated', nodeType: 'text', nodeId: 'N1' },
@@ -409,7 +409,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       // Set up node
       sharedNodeStore.setNode(nodeData, { type: 'database', reason: 'sse-sync' });
 
-      // Create relationship first time (unified format - Issue #811)
+      // Create relationship first time (unified format)
       const relationshipEvent: SseEvent = {
         type: 'relationshipCreated',
         id: 'relationship:parent1:child1',
@@ -448,7 +448,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       };
       registerMockNode(updatedNode);
 
-      // Update event arrives (Issue #724: ID-only)
+      // Update event arrives (ID-only)
       testableService.handleEvent({
         type: 'nodeUpdated',
         nodeId: 'node1'
@@ -477,7 +477,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       registerMockNode(createTestNode('N1', 'Node 1'));
       registerMockNode(createTestNode('N3', 'Node 3'));
 
-      // Interleaved events (Issue #724: ID-only for node events, Issue #811: unified relationships)
+      // Interleaved events (ID-only for node events, unified relationships)
       const events: SseEvent[] = [
         // Tree 1 setup
         { type: 'nodeCreated', nodeType: 'text', nodeId: 'P1' },
@@ -544,7 +544,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       const nodeData = createTestNode('other-client-node', 'Created by another client');
       registerMockNode(nodeData);
 
-      // Issue #724: ID-only event
+      // ID-only event
       const event: SseEvent = {
         type: 'nodeCreated',
         nodeType: 'text',
@@ -572,7 +572,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
       const nodeData = createTestNode('legacy-node', 'Legacy event without clientId');
       registerMockNode(nodeData);
 
-      // Issue #724: ID-only event, no clientId
+      // ID-only event, no clientId
       const event: SseEvent = {
         type: 'nodeCreated',
         nodeType: 'text',
@@ -673,7 +673,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
     });
 
     it('should skip fetch for nodeUpdated when node is not in store', async () => {
-      // Issue #724 optimization: Don't fetch nodes that aren't visible
+      // Optimization: Don't fetch nodes that aren't visible
       const nodeData = createTestNode('invisible-node', 'Not in view');
       registerMockNode(nodeData);
 
@@ -737,7 +737,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
 
   describe('Task Node Normalization', () => {
     it('should normalize task nodes from SSE events', async () => {
-      // Issue #724: Task nodes need to be normalized from properties to flat format
+      // Task nodes need to be normalized from properties to flat format
       const taskNodeData: Node = {
         id: 'task1',
         nodeType: 'task',

@@ -292,7 +292,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             modified_at: now,
             is_core: true,
             schema_version: 1,
-            // ADR-037 #1372: opt-in restriction. A Core-protected boolean; the Pro
+            // ADR-037: opt-in restriction. A Core-protected boolean; the Pro
             // RLS layer reads `properties->>'restrictedToMembers'` to gate access.
             // Default/absent = false = open (organizational). member_of edge
             // `permission` (admin/modify/readOnly) is a free-form edge property the
@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     fn test_collection_has_restricted_to_members_field() {
-        // ADR-037 #1372: opt-in restriction is a Core-protected boolean on collection.
+        // ADR-037: opt-in restriction is a Core-protected boolean on collection.
         let schemas = get_core_schemas();
         let collection = schemas.iter().find(|s| s.id == "collection").unwrap();
         let field = collection

@@ -3,8 +3,6 @@
  *
  * Tests the unified pattern detection system for HeaderNode auto-conversion
  * and bidirectional conversion between TextNode and HeaderNode.
- *
- * Issue #275: Implement HeaderNode component with textarea
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -29,7 +27,7 @@ describe('HeaderNode Pattern Detection', () => {
 
       const headerPlugin = registry.getPlugin('header');
       expect(headerPlugin).toBeDefined();
-      // Issue #667: Pattern now lives on plugin.pattern (new architecture)
+      // Pattern now lives on plugin.pattern (new architecture)
       expect(headerPlugin?.pattern).toBeDefined();
       expect(headerPlugin?.pattern?.detect).toBeDefined();
     });

@@ -1,5 +1,5 @@
 /**
- * Unit tests for computeTabTitle (issue #1564).
+ * Unit tests for computeTabTitle.
  *
  * Type-specific title logic is covered separately in plugin-registry.test.ts
  * (getNodeTitle/getTitle hook) — these tests isolate computeTabTitle's own branching:

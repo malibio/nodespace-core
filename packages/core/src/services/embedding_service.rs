@@ -1,4 +1,4 @@
-//! Root-Aggregate Embedding Service (Issue #729, refactored in Issue #1018)
+//! Root-Aggregate Embedding Service
 //!
 //! ## Overview
 //!
@@ -8,7 +8,7 @@
 //! - Uses the dedicated `embedding` table (not node.embedding_vector)
 //! - Supports chunking for content > 512 tokens
 //!
-//! ## Behavior-Driven Embeddability (Issue #1018)
+//! ## Behavior-Driven Embeddability
 //!
 //! Whether a node is embeddable is determined by its `NodeBehavior::get_embeddable_content()`.
 //! No hardcoded type list. Content extraction uses a two-phase approach:
@@ -41,7 +41,7 @@ pub const DEFAULT_BATCH_SIZE: usize = 50;
 /// Maximum depth for parent chain traversal (safety limit to prevent infinite loops)
 pub const MAX_PARENT_CHAIN_DEPTH: usize = 100;
 
-/// Title keyword boost added to composite score when any query term matches the node title (Issue #936)
+/// Title keyword boost added to composite score when any query term matches the node title
 ///
 /// Applied as an additive bonus: `composite_score + TITLE_BOOST` when a match is found.
 /// Start at 0.1; tune against benchmark if needed.
@@ -52,7 +52,7 @@ pub const MAX_PARENT_CHAIN_DEPTH: usize = 100;
 /// the node is fetched — so the boost must be Rust-side, not SQL-side.
 pub const TITLE_BOOST: f64 = 0.1;
 
-/// Root-aggregate embedding service (Issue #1018: behavior-driven)
+/// Root-aggregate embedding service (behavior-driven)
 ///
 /// Manages semantic embeddings using the root-aggregate model where only
 /// root nodes get embedded. Whether a node is embeddable is decided by its
@@ -75,7 +75,7 @@ pub struct NodeEmbeddingService {
 }
 
 impl NodeEmbeddingService {
-    /// Create a new NodeEmbeddingService with behavior-driven content extraction (Issue #1018)
+    /// Create a new NodeEmbeddingService with behavior-driven content extraction
     ///
     /// # Arguments
     /// * `nlp_engine` - The NLP engine for generating embeddings
@@ -182,7 +182,7 @@ impl NodeEmbeddingService {
     }
 
     // =========================================================================
-    // Behavior-Driven Content Extraction (Issue #1018)
+    // Behavior-Driven Content Extraction
     // =========================================================================
 
     /// Extract full embeddable content for a root node using its behavior.
@@ -191,7 +191,7 @@ impl NodeEmbeddingService {
     /// 1. `behavior.get_embeddable_content(node)` — sync, the node's own content
     /// 2. `behavior.get_aggregated_content(node, accessor)` — async, child aggregation
     ///
-    /// Also prepends the node title if present (Issue #936 title boost).
+    /// Also prepends the node title if present (title boost).
     ///
     /// Returns `None` if the behavior says this node is not embeddable.
     async fn extract_content_for_embedding(
@@ -214,7 +214,7 @@ impl NodeEmbeddingService {
         // Build full content: title + own + aggregated
         let mut parts = Vec::new();
 
-        // Prepend title so it is included in the embedding (Issue #936)
+        // Prepend title so it is included in the embedding
         if let Some(ref title) = node.title {
             if !title.trim().is_empty() {
                 parts.push(title.clone());
@@ -360,7 +360,7 @@ impl NodeEmbeddingService {
     /// Generate and store embeddings for a root node
     ///
     /// This is the main entry point for embedding a root node's content.
-    /// Uses behavior-driven content extraction (Issue #1018):
+    /// Uses behavior-driven content extraction:
     /// 1. `behavior.get_embeddable_content()` determines if node is embeddable
     /// 2. `behavior.get_aggregated_content()` gathers child content
     /// 3. Chunks, generates vectors, and stores in the embedding table
@@ -540,7 +540,7 @@ impl NodeEmbeddingService {
     ///
     /// If the node is a root of an embeddable type, marks its embedding as stale.
     /// If the node is a child, finds its root and marks that as stale.
-    /// Embeddability is determined by `NodeBehavior::get_embeddable_content()` (Issue #1018).
+    /// Embeddability is determined by `NodeBehavior::get_embeddable_content()`.
     pub async fn queue_for_embedding(&self, node_id: &str) -> Result<(), NodeServiceError> {
         // Find the root of this node's tree
         let root_id = self.find_root_id(node_id).await?;
@@ -632,7 +632,7 @@ impl NodeEmbeddingService {
     // Search
     // =========================================================================
 
-    /// Search for nodes using hybrid BM25 + KNN scoring (Issue #951)
+    /// Search for nodes using hybrid BM25 + KNN scoring
     ///
     /// Runs BM25 full-text search and KNN vector search in parallel, then tiers results:
     /// - **Tier 1** (highest confidence): roots in BOTH BM25 and KNN results
@@ -665,7 +665,7 @@ impl NodeEmbeddingService {
         })?;
         let embed_time = embed_start.elapsed();
 
-        // Run BM25 and KNN searches in parallel (Issue #951)
+        // Run BM25 and KNN searches in parallel
         // BM25 is O(log n) via inverted index — sub-millisecond
         // KNN is ~50-100ms via HNSW — total latency = max(bm25, knn) ≈ same as before
         let search_start = std::time::Instant::now();
@@ -685,7 +685,7 @@ impl NodeEmbeddingService {
         let bm25_roots = bm25_roots
             .map_err(|e| NodeServiceError::query_failed(format!("BM25 search failed: {}", e)))?;
 
-        // Apply title keyword boost (Issue #936) to KNN results
+        // Apply title keyword boost to KNN results
         // Punctuation is stripped from tokens so queries like "persistence?" still match.
         let query_terms: Vec<String> = query
             .split_whitespace()
@@ -709,7 +709,7 @@ impl NodeEmbeddingService {
             }
         }
 
-        // Tier results by intersection signal (Issue #951)
+        // Tier results by intersection signal
         //
         // Tier 1: roots present in BOTH KNN and BM25 → highest confidence
         // Tier 2: roots in KNN only → semantic relevance alone
@@ -799,7 +799,7 @@ impl NodeEmbeddingService {
     /// Search and return full nodes
     ///
     /// Convenience method that fetches the full Node objects for search results.
-    /// Search with scope filtering (Issue #1018)
+    /// Search with scope filtering
     ///
     /// Wraps `semantic_search` and applies post-result filtering based on the
     /// `SearchScope`. The scope determines which node types are included in
@@ -862,7 +862,7 @@ impl NodeEmbeddingService {
     /// a SQL join, eliminating N+1 query overhead.
     ///
     /// Accepts an optional [`SearchNodeFilters`] to restrict results by node type
-    /// and/or property values (Issue #1059). When filters are active, the fetch
+    /// and/or property values. When filters are active, the fetch
     /// is inflated by 3× to compensate for post-filter attrition, then truncated
     /// to `limit`. Passing `None` preserves the original unfiltered behavior.
     pub async fn semantic_search_nodes(
@@ -1205,7 +1205,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Behavior-Driven Embedding Decision Tests (Issue #1018)
+    // Behavior-Driven Embedding Decision Tests
     // =========================================================================
 
     /// Mock NodeAccessor for testing extract_content_for_embedding without a database.

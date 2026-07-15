@@ -5,7 +5,7 @@
  * These interfaces mirror the serde JSON output from the Tauri boundary
  * and are used for type-safe event handling and command return values.
  *
- * Issue #998: prerequisite that unblocks all parallel agent implementation streams.
+ * Prerequisite that unblocks all parallel agent implementation streams.
  */
 
 // ---------------------------------------------------------------------------

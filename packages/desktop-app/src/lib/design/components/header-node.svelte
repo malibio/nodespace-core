@@ -1,7 +1,7 @@
 <!--
   HeaderNode - Wraps BaseNode with header-specific functionality
 
-  ARCHITECTURE NOTE (Issue #311 Refactor):
+  ARCHITECTURE NOTE:
   - Header level detection moved FROM TextareaController TO HeaderNode $effect
   - CSS styling moved FROM BaseNode TO HeaderNode wrapper classes (.header-h1 through .header-h6)
   - This ensures proper separation of concerns: BaseNode is node-type agnostic
@@ -51,7 +51,7 @@
   const dispatch = createEventDispatcher();
 
   // Header level - derived from markdown syntax (#, ##, ###, etc.)
-  // REFACTOR (Issue #316 Phase 1): Replaced $effect with $derived for pure reactive computation
+  // Replaced $effect with $derived for pure reactive computation
   let headerLevel = $derived(parseHeaderLevel(content));
 
   // Headers use default single-line editing
@@ -90,7 +90,7 @@
 
   /**
    * Handle content changes and sync with parent
-   * REFACTOR (Issue #316 Phase 2): Moved newline stripping from $effect to event handler
+   * Moved newline stripping from $effect to event handler
    * This makes side effects explicit and event-driven instead of reactive
    * REFACTOR: Using $bindable() prop - update content directly via two-way binding
    */

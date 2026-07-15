@@ -60,7 +60,7 @@
   // Initialize Tauri injection, then render AppShell immediately. Daemon
   // readiness is NOT a render-blocking gate — AppShell owns its own
   // connecting/unreachable UI via the daemon-status service, and each
-  // daemon-dependent store retries its load on daemon reconnect. See #1470.
+  // daemon-dependent store retries its load on daemon reconnect.
   onMount(async () => {
     try {
       // Step 1: Initialize Tauri injection (fast, one-time environment check)
@@ -99,7 +99,7 @@
   });
 
   // Retry whichever of the above didn't succeed on the first attempt once
-  // the daemon signals it is reachable (#1470).
+  // the daemon signals it is reachable.
   onMount(() => {
     const unsubscribe = onDaemonReconnect(() => {
       if (!schemaPluginsReady) loadSchemaPlugins();

@@ -1,5 +1,5 @@
 <!--
-  Pro-tier re-login modal (T18, #1304).
+  Pro-tier re-login modal.
 
   Surfaced by the app shell when the Pro daemon reports `AUTH_REQUIRED`
   (`SyncStatusEvent.state` = 4) — i.e. the persisted refresh token could

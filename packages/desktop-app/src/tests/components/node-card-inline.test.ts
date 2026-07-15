@@ -1,5 +1,5 @@
 /**
- * NodeCardInline — on-mount fetch (ADR-049 / #1566).
+ * NodeCardInline — on-mount fetch (ADR-049).
  *
  * The card previously fetched a missing node from inside a $effect that watched the
  * derived `node` value. After the ADR-049 conversion it fetches once on mount (the card

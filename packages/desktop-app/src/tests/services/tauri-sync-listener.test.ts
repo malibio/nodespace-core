@@ -18,7 +18,7 @@ import { proSync } from '$lib/stores/pro-sync.svelte';
  * 2. Tauri event system forwards events to frontend
  * 3. TauriSyncListener handles events and updates stores
  *
- * ## Issue #724: ID-Only Events
+ * ## ID-Only Events
  *
  * Events now send only node_id (not full payload). Tests mock backendAdapter.getNode
  * to return test data when frontend fetches node details.
@@ -170,7 +170,7 @@ describe('TauriSyncListener', () => {
 			expect(mockEventListeners.has('node:created')).toBe(true);
 			expect(mockEventListeners.has('node:updated')).toBe(true);
 			expect(mockEventListeners.has('node:deleted')).toBe(true);
-			// Issue #811: Unified relationship events replace old edge:* events
+			// Unified relationship events replace old edge:* events
 			expect(mockEventListeners.has('relationship:created')).toBe(true);
 			expect(mockEventListeners.has('relationship:updated')).toBe(true);
 			expect(mockEventListeners.has('relationship:deleted')).toBe(true);
@@ -261,7 +261,7 @@ describe('TauriSyncListener', () => {
 		});
 	});
 
-	// #188: when sync is active, a reconnect-replay burst of node events is
+	// When sync is active, a reconnect-replay burst of node events is
 	// coalesced — collected over a short window, then applied in one synchronous
 	// pass so the caught-up set renders once instead of once per node.
 	describe('Pro reconnect-replay render coalescing (#188)', () => {
@@ -473,8 +473,8 @@ describe('TauriSyncListener', () => {
 
 	describe('Relationship Events — node: prefix normalization (Issue #1209)', () => {
 		// Backend's `RelationshipEvent` serialization contract emits
-		// `from_id` / `to_id` already prefixed with `node:` (see
-		// nodespace-core#1206 + #1208). The listener's `stripNodePrefix`
+		// `from_id` / `to_id` already prefixed with `node:`. The
+		// listener's `stripNodePrefix`
 		// helper normalizes at the boundary so the structureTree's
 		// bare-id keyspace stays consistent with the local-action path.
 		// Without these tests, deleting `stripNodePrefix` from any of

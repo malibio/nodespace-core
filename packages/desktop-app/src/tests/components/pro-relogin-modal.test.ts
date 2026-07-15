@@ -1,5 +1,5 @@
 /**
- * ProReloginModal Component Tests (T18, #1304)
+ * ProReloginModal Component Tests
  *
  * The modal the app shell surfaces when the Pro daemon reports AUTH_REQUIRED
  * (refresh token couldn't be renewed). Presentational only — the shell owns

@@ -1,5 +1,5 @@
 <!--
-  GenericSchemaForm - Schema-driven property form for custom node types (Issue #965)
+  GenericSchemaForm - Schema-driven property form for custom node types
 
   Renders fields from a SchemaNode definition as appropriate inputs.
   Used by BaseNodeViewer when a node's nodeType is a UUID (custom schema type)

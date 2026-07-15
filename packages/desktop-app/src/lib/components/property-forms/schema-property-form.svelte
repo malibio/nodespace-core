@@ -111,7 +111,7 @@
   });
 
   /**
-   * Get property value with backward compatibility (Issue #397)
+   * Get property value with backward compatibility
    *
    * Supports multiple formats:
    * - Strongly-typed nodes: top-level type-specific fields (e.g., task.status)
@@ -127,7 +127,7 @@
       return (node as unknown as Record<string, unknown>)[fieldName];
     }
 
-    // Issue #794: Properties are namespaced under properties[nodeType][fieldName]
+    // Properties are namespaced under properties[nodeType][fieldName]
     const typeNamespace = node.properties?.[nodeType];
     if (typeNamespace && typeof typeNamespace === 'object' && fieldName in typeNamespace) {
       return (typeNamespace as Record<string, unknown>)[fieldName];
@@ -200,7 +200,7 @@
   function updateProperty(fieldName: string, value: unknown) {
     if (!node || !schema) return;
 
-    // AUTO-MIGRATION (Issue #397): If this is the first write and node is still in old
+    // AUTO-MIGRATION: If this is the first write and node is still in old
     // flat format, migrate all existing properties to new nested format. This prevents
     // mixed-format properties within the same node and ensures clean data migration.
     const typeNamespace = node.properties?.[nodeType];
@@ -311,7 +311,7 @@
   }
 
   // Format enum value for display (convert snake_case to Title Case)
-  // Handles lowercase values like "in_progress" → "In Progress" (Issue #670)
+  // Handles lowercase values like "in_progress" → "In Progress"
   function formatEnumLabel(value: string): string {
     return value
       .split('_')

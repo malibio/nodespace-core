@@ -69,7 +69,7 @@ describe('Core Plugins Integration', () => {
       expect(taskNodePlugin.id).toBe('task');
       expect(taskNodePlugin.name).toBe('Task Node');
       expect(taskNodePlugin.config.slashCommands).toHaveLength(1);
-      // Task nodes have TaskNodeViewer for task-specific UI (Issue #715)
+      // Task nodes have TaskNodeViewer for task-specific UI
       expect(taskNodePlugin.viewer).toBeDefined();
       expect(taskNodePlugin.node).toBeDefined(); // Has node component instead
       expect(taskNodePlugin.reference).toBeDefined();
@@ -200,7 +200,7 @@ describe('Core Plugins Integration', () => {
     });
 
     it('should resolve viewer components for plugins with viewers', async () => {
-      // date and task have custom viewers (TaskNodeViewer added in Issue #715)
+      // date and task have custom viewers (TaskNodeViewer)
       const viewerPlugins = ['date', 'task'];
 
       for (const pluginId of viewerPlugins) {
@@ -532,7 +532,7 @@ describe('Core Plugins Integration', () => {
       registerCorePlugins(registry);
 
       // Architecture changed: text, task now use BaseNodeViewer (default)
-      // date and task have custom viewers (TaskNodeViewer added in Issue #715)
+      // date and task have custom viewers (TaskNodeViewer)
       const customViewerTypes = ['date', 'task'];
 
       for (const viewerType of customViewerTypes) {

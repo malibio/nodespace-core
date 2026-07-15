@@ -1,4 +1,4 @@
-//! Integration test for #1525 — proves the daemon-readiness contract holds
+//! Integration test — proves the daemon-readiness contract holds
 //! against a REAL headless `nodespaced`, not a mock: a socket nothing is
 //! listening on reports NotRunning, a real daemon's bind is observed as
 //! Healthy once `wait_for_daemon` catches up to it, and both the raw

@@ -3,8 +3,6 @@
 //! Thin gRPC proxy to `LocalAgentService` model management RPCs in the daemon.
 //! Download progress is forwarded through the `model://download-progress`
 //! Tauri event channel.
-//!
-//! Issue #1058, #1194
 
 use crate::agent_events;
 use crate::commands::nodes::CommandError;

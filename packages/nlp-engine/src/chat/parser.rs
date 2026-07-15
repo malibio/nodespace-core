@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Regression fixtures — historical engine failures (issue #1355)
+    // Regression fixtures — historical engine failures
     //
     // These tests pin the two tool-call failures that were misattributed to
     // model capability but were caused by the old vendored llama.cpp engine

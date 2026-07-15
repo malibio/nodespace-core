@@ -41,7 +41,7 @@
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
 
-  // Daemon connectivity state (Issue #1179, generalized in #1470). `connecting`
+  // Daemon connectivity state. `connecting`
   // covers the brief window before the first daemon-status event arrives (or
   // a short grace period elapses); `unreachable` reflects a terminal
   // `not_running` event.
@@ -50,10 +50,10 @@
   const daemonConnecting = $derived($daemonStatus.connecting);
   const daemonUnreachable = $derived($daemonStatus.unreachable);
 
-  // First-launch onboarding wizard (Issue #1180).
+  // First-launch onboarding wizard.
   let showOnboarding = $state(false);
 
-  // Recovered Items (core#1303): once the daemon's probe confirms Pro tier, load
+  // Recovered Items: once the daemon's probe confirms Pro tier, load
   // the local-only recovery log. If the daemon preserved any conflict "losers",
   // show a one-time snackbar on first open; the inline badge handles per-node
   // review/restore. Guarded one-shot so it loads exactly once per session; fully
@@ -252,18 +252,18 @@
         collectionsData.loadCollections();
       });
 
-      // Show a warning if the nodespace CLI is not on $PATH after skill install (Issue #1199).
+      // Show a warning if the nodespace CLI is not on $PATH after skill install.
       unlistenSkillCliMissing = listen<{ warning: string }>('skill:cli-missing', (event) => {
         log.warn('nodespace CLI not on PATH:', event.payload.warning);
         statusBar.error(event.payload.warning);
       });
 
-      // Start the shared daemon-status listener (Issue #1179, generalized in #1470).
+      // Start the shared daemon-status listener.
       // Drives daemonConnecting/daemonUnreachable above and fans out reconnect
       // events to any store registered via onDaemonReconnect.
       startDaemonStatusListener();
 
-      // Show first-launch onboarding wizard if setup has not been completed (Issue #1180).
+      // Show first-launch onboarding wizard if setup has not been completed.
       invoke<{ completed: boolean }>('check_onboarding_status')
         .then((status) => {
           if (!status.completed) {
@@ -640,10 +640,10 @@
       <StatusBar />
     </div>
 
-    <!-- First-launch onboarding wizard (Issue #1180) -->
+    <!-- First-launch onboarding wizard -->
     <OnboardingWizard open={showOnboarding} onClose={() => (showOnboarding = false)} />
 
-    <!-- Conflict resolution notifications (Issue #642) -->
+    <!-- Conflict resolution notifications -->
     <ConflictToast />
 
     <!-- Pro chrome modal slot (re-login prompt when the daemon's session can't be

@@ -1,7 +1,7 @@
 /**
  * Tauri System Commands Service Tests
  *
- * Tests the non-node commands that remain in tauri-commands after C1a (#1251).
+ * Tests the non-node commands that remain in tauri-commands after C1a.
  * Node-CRUD functions were removed; use backend-adapter directly.
  */
 

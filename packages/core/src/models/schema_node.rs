@@ -3,7 +3,7 @@
 //! Provides compile-time type safety for schema nodes using Universal Graph Architecture.
 //! Schema properties (fields, relationships) are stored in node.properties.
 //!
-//! # Architecture (Universal Graph - Issue #783)
+//! # Architecture (Universal Graph)
 //!
 //! **Query Pattern:**
 //! Note: Column aliases use camelCase to match serde's `#[serde(rename_all = "camelCase")]`.
@@ -23,7 +23,7 @@
 //! FROM node:`task` WHERE node_type = 'schema';
 //! ```
 //!
-//! ## Description Storage (Issue #1351)
+//! ## Description Storage
 //!
 //! Schema descriptions are stored as a **child node subtree** (markdown parsed into text/header
 //! nodes), not as `properties.description`. This enables:

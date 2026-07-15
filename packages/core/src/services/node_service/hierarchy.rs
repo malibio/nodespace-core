@@ -143,7 +143,7 @@ impl NodeService {
         }
 
         // Create adjacency list: parent_id → Vec of child_ids (sorted by order)
-        // Issue #788: RelationshipRecord now stores order in properties, accessed via order() method
+        // RelationshipRecord now stores order in properties, accessed via order() method
         let mut adjacency_with_order: HashMap<String, Vec<(String, f64)>> = HashMap::new();
         for rel in relationships {
             adjacency_with_order
@@ -334,7 +334,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipUpdated event (Issue #811: unified relationship events)
+        // Emit RelationshipUpdated event (unified relationship events)
         if let Some(parent_id) = new_parent {
             self.emit_event(DomainEvent::RelationshipUpdated {
                 relationship: crate::db::events::RelationshipEvent::new(
@@ -446,7 +446,7 @@ impl NodeService {
         }
 
         // Capture the OLD parent before the move so we can surface its edge removal
-        // (sync-epic nodespace-sync#162 / S3): the store deletes the old has_child
+        // (sync-epic S3): the store deletes the old has_child
         // edge but, historically, only a RelationshipUpdated for the NEW parent was
         // emitted (gated on Some). A move-to-root (new_parent = None) therefore
         // emitted no relationship event at all, so the detach never propagated to
@@ -463,7 +463,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipUpdated event (Issue #811: unified relationship events).
+        // Emit RelationshipUpdated event (unified relationship events).
         // Emit the NEW-parent edge first so a consumer that inserts-then-deletes
         // never sees the node parentless mid-move.
         if let Some(parent_id) = new_parent {
@@ -754,7 +754,7 @@ impl NodeService {
             "create_parent_edge: START"
         );
 
-        // Idempotency guard for nodespace-sync#77 (alice-side echo) — if
+        // Idempotency guard for the alice-side echo — if
         // `child_id` is already a child of `parent_id` AND the position is
         // End (no explicit reorder hint), treat this call as a no-op.
         // `Beginning` and `After(_)` still trigger a real reorder.
@@ -786,7 +786,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipCreated event (Issue #811: unified relationship events)
+        // Emit RelationshipCreated event (unified relationship events)
         self.emit_event(DomainEvent::RelationshipCreated {
             relationship: crate::db::events::RelationshipEvent::new(
                 format!("relationship:{}:{}", parent_id, child_id),
@@ -866,7 +866,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipUpdated event (Issue #811: unified relationship events)
+        // Emit RelationshipUpdated event (unified relationship events)
         // Reordering updates the hierarchy edge's order field
         if let Some(ref parent_id) = parent_id {
             self.emit_event(DomainEvent::RelationshipUpdated {

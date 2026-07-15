@@ -14,7 +14,7 @@
  * (NodeServiceContext, FocusManager, etc.) which is beyond the scope of
  * browser mode testing. Business logic is tested in Happy-DOM unit tests.
  *
- * Related: Issue #282 (Vitest Browser Mode)
+ * Related: Vitest Browser Mode
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

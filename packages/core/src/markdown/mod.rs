@@ -4,7 +4,7 @@
 //! Preserves heading hierarchy and list indentation as parent-child relationships.
 //! Consumed as a library by `nodespace-agent` and `nodespace-daemon`.
 //!
-//! As of Issue #676, all handlers use NodeService directly instead of NodeOperations.
+//! All handlers use NodeService directly instead of NodeOperations.
 //!
 //! # Examples
 //!
@@ -59,7 +59,7 @@ const MAX_NODES_PER_IMPORT: usize = 1000;
 const MAX_BULLET_CONTENT_LENGTH: usize = 100;
 
 // ============================================================================
-// Two-Phase Batch Creation (Issue #737)
+// Two-Phase Batch Creation
 // ============================================================================
 
 /// A node prepared for bulk insertion with pre-calculated hierarchy
@@ -160,14 +160,14 @@ impl PrepareContext {
 }
 
 // ============================================================================
-// Link Transformation (Issue #854, #868)
+// Link Transformation
 // ============================================================================
 
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// Result of link transformation containing collected mentions (Issue #868)
+/// Result of link transformation containing collected mentions
 ///
 /// During link transformation, we collect (source_node_id, target_node_id) pairs
 /// for creating mention relationships after nodes are inserted into the database.
@@ -218,7 +218,7 @@ pub fn transform_links_in_nodes(
     let _ = transform_links_in_nodes_with_mentions(nodes, file_to_root_id, current_file_path, "");
 }
 
-/// Transform inter-file markdown links and collect mention relationships (Issue #868)
+/// Transform inter-file markdown links and collect mention relationships
 ///
 /// Same as `transform_links_in_nodes` but also returns a `LinkTransformResult`
 /// containing (source_node_id, target_node_id) pairs for creating mention relationships.
@@ -267,7 +267,7 @@ pub fn transform_links_in_nodes_with_mentions(
     result
 }
 
-/// Transform links in a single content string and collect target IDs (Issue #868)
+/// Transform links in a single content string and collect target IDs
 fn transform_links_in_content_with_mentions(
     content: &str,
     file_to_root_id: &HashMap<PathBuf, String>,
@@ -301,7 +301,7 @@ fn transform_links_in_content_with_mentions(
     (transformed, target_ids)
 }
 
-/// Transform a single link and return the target ID if it resolves to a nodespace link (Issue #868)
+/// Transform a single link and return the target ID if it resolves to a nodespace link
 ///
 /// Returns a tuple of (transformed_link, Option<target_id>)
 /// - For existing nodespace:// links: returns the link and extracts the target ID
@@ -910,7 +910,7 @@ pub async fn handle_create_nodes_from_markdown(
     };
 
     // ============================================================================
-    // Two-Phase Batch Creation (Issue #737)
+    // Two-Phase Batch Creation
     // Phase 1: Create container/root node (single node, uses existing path)
     // Phase 2: Batch create all children in a single transaction
     // ============================================================================
@@ -1246,7 +1246,7 @@ pub async fn handle_create_nodes_from_markdown(
 }
 
 // ============================================================================
-// Node Template (Issue #1056)
+// Node Template
 // ============================================================================
 //
 // Allows callers to define a hierarchy using markdown content while overriding

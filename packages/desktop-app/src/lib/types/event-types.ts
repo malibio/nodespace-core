@@ -15,12 +15,12 @@
 // ============================================================================
 
 /**
- * Node event data from domain events (Issue #724)
+ * Node event data from domain events
  *
  * Events now send only node ID for efficiency.
  * Frontend fetches full node data via get_node() API if needed.
  *
- * Issue #832: node:created events include nodeType for reactive UI updates
+ * node:created events include nodeType for reactive UI updates
  * (e.g., collections sidebar needs to know when collection nodes are created)
  */
 export interface NodeEventData {
@@ -53,7 +53,7 @@ export interface HierarchyRelationship {
 }
 
 // ============================================================================
-// Unified Relationship Event (Issue #811)
+// Unified Relationship Event
 // ============================================================================
 
 /**

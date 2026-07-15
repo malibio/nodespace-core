@@ -3,8 +3,6 @@
 //! Implements the [`ModelManager`] trait by delegating to either the GGUF model manager
 //! (for local GGUF models) or the Ollama model manager (for models served by a local
 //! Ollama daemon). Models are distinguished by the "ollama:" prefix on the model ID.
-//!
-//! Issue #1058
 
 use std::sync::Arc;
 
@@ -247,7 +245,7 @@ mod tests {
         );
     }
 
-    // -- Ollama progress callback de-prefixing (issue #1471 re-review) ------
+    // -- Ollama progress callback de-prefixing ------
     //
     // `download()` strips the "ollama:" prefix before delegating to the
     // underlying OllamaModelManager, which keys its progress callbacks and

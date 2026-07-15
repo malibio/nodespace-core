@@ -15,7 +15,7 @@ impl SqliteStore {
     }
 
     /// Replace a node's embeddings with vectors PULLED from another device
-    /// (`origin = 'remote'`, #182/#183). Identical to `upsert_embeddings` except
+    /// (`origin = 'remote'`). Identical to `upsert_embeddings` except
     /// for the provenance tag, which keeps the push sweep from re-pushing a vector
     /// this device merely received (no cross-device re-push loop).
     pub async fn apply_remote_embeddings(
@@ -216,7 +216,7 @@ impl SqliteStore {
     }
 
     /// Read all locally-stored embedding records for a node (one per chunk),
-    /// ordered by chunk index. Used by the Pro daemon's cloud push (#97) to
+    /// ordered by chunk index. Used by the Pro daemon's cloud push to
     /// mirror a node's vectors into Supabase pgvector.
     pub async fn get_embeddings(&self, node_id: &str) -> Result<Vec<crate::models::Embedding>> {
         let mut rows = self
@@ -240,11 +240,11 @@ impl SqliteStore {
 
     /// Read **locally-generated** (`origin = 'local'`) embedding records modified
     /// at or after `since`, across all nodes, ordered by `modified_at`. Drives the
-    /// Pro daemon's cloud-push sweep (#97): the daemon keeps a cursor over
+    /// Pro daemon's cloud-push sweep: the daemon keeps a cursor over
     /// `modified_at` and pushes newly (re)computed vectors. Stale rows are
     /// included — the caller decides whether to skip them.
     ///
-    /// The `origin = 'local'` filter (#182/#183) excludes vectors PULLED from
+    /// The `origin = 'local'` filter excludes vectors PULLED from
     /// other devices, so a received vector is never re-pushed — without it, a
     /// pull's `modified_at = now` would re-arm this sweep and bounce the vector
     /// back to cloud, amplifying writes and (on heterogeneous devices) looping.

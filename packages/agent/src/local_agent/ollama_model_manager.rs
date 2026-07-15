@@ -3,8 +3,6 @@
 //! Implements the [`ModelManager`] trait for models served by a local Ollama instance.
 //! Models are managed entirely by Ollama (download, caching, loading); this implementation
 //! acts as a client to the Ollama HTTP API.
-//!
-//! Issue #1058
 
 use std::collections::HashMap;
 use std::sync::Arc;
