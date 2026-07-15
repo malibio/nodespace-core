@@ -15,9 +15,11 @@
     members: CollectionMember[];
     onClose: () => void;
     onNodeClick: (_nodeId: string, _nodeType: string) => void;
+    /** Open the collection's own page (Contents / Collaboration tabs). */
+    onOpenCollection: () => void;
   }
 
-  let { open, collectionName, members, onClose, onNodeClick }: Props = $props();
+  let { open, collectionName, members, onClose, onNodeClick, onOpenCollection }: Props = $props();
 
   function getNodeIcon(nodeType: string): 'calendar' | 'circle' | 'text' {
     const iconMap: Record<string, 'calendar' | 'circle' | 'text'> = {
@@ -31,7 +33,14 @@
 
 <div class="sub-panel" class:open>
   <div class="sub-panel-header">
-    <span class="sub-panel-title">{collectionName}</span>
+    <button
+      class="sub-panel-title"
+      onclick={onOpenCollection}
+      title="Open collection (manage members & collaboration)"
+    >
+      <span class="sub-panel-title-text">{collectionName}</span>
+      <Icon name="chevronRight" size={14} />
+    </button>
     <button class="close-btn" onclick={onClose} aria-label="Close panel">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M18 6L6 18M6 6l12 12" />
@@ -91,9 +100,27 @@
   }
 
   .sub-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
     font-size: 0.875rem;
     font-weight: 600;
     color: hsl(var(--foreground));
+    background: none;
+    border: none;
+    padding: 0.125rem 0.25rem;
+    margin: -0.125rem -0.25rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  .sub-panel-title:hover {
+    background: hsl(var(--border));
+  }
+
+  .sub-panel-title-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

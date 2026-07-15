@@ -163,9 +163,32 @@ pub fn resolve_socket_path(override_: Option<&str>) -> std::path::PathBuf {
         return std::path::PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
-        .join(".nodespace")
-        .join("daemon.sock")
+    discover_socket_in(&std::path::PathBuf::from(home).join(".nodespace"))
+}
+
+/// Pick the daemon socket to dial when none is set explicitly. The daemon socket
+/// filename is scoped by the app's build variant (release/dev × community/Pro),
+/// so a running dev or Pro app does not listen on the canonical `daemon.sock`.
+/// Prefer the canonical path, but if it is absent, auto-discover a running
+/// daemon of another variant so the CLI works against whichever app is open
+/// without needing `NODESPACED_SOCKET`. When none exist, return the canonical
+/// path so the caller reports a clean "is the daemon running?" error.
+#[cfg(unix)]
+fn discover_socket_in(dir: &std::path::Path) -> std::path::PathBuf {
+    // Order = preference: canonical first, then the other build variants.
+    const VARIANTS: [&str; 4] = [
+        "daemon.sock",         // release community (canonical / CLI default)
+        "daemon-pro.sock",     // release Pro
+        "daemon-dev.sock",     // dev community
+        "daemon-dev-pro.sock", // dev Pro
+    ];
+    for name in VARIANTS {
+        let candidate = dir.join(name);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(VARIANTS[0])
 }
 
 /// Build a tonic `Channel` connected over a Unix Domain Socket.
@@ -360,5 +383,31 @@ pub async fn run(cli: Cli) -> Result<()> {
             commands::database::run(&mut client, action, json).await
         }
         Command::Uninstall(args) => commands::uninstall::run(args),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::discover_socket_in;
+
+    /// With no socket set, the CLI dials the canonical `daemon.sock` when it
+    /// exists, otherwise auto-discovers whichever build-variant daemon is
+    /// actually running, and falls back to the canonical path (for a clean
+    /// error) when none exist.
+    #[test]
+    fn discover_socket_prefers_canonical_then_falls_back_to_a_variant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Nothing running → canonical default (so the connect error is clean).
+        assert_eq!(discover_socket_in(dir), dir.join("daemon.sock"));
+
+        // Only a dev-Pro daemon is up → discover it without NODESPACED_SOCKET.
+        std::fs::write(dir.join("daemon-dev-pro.sock"), b"").unwrap();
+        assert_eq!(discover_socket_in(dir), dir.join("daemon-dev-pro.sock"));
+
+        // Canonical present → always preferred over the variants.
+        std::fs::write(dir.join("daemon.sock"), b"").unwrap();
+        assert_eq!(discover_socket_in(dir), dir.join("daemon.sock"));
     }
 }
