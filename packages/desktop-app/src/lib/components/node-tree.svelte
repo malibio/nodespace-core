@@ -247,7 +247,7 @@
     }
   }
 
-  /* Header-level CSS variables - matches HeaderNode wrapper classes for perfect chevron alignment (Issue #311) */
+  /* Header-level CSS variables - matches HeaderNode wrapper classes for perfect chevron alignment */
   .ns-node-tree :global(.header-h1) {
     --font-size: 2rem;
     --line-height: 1.2;

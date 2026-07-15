@@ -6,7 +6,7 @@ const log = createLogger('RecoveredItems');
 
 /**
  * One superseded local edit, as written by the Pro daemon to the per-user
- * local-only log `~/.nodespace/recovered-items-<user>.jsonl` (core#1303).
+ * local-only log `~/.nodespace/recovered-items-<user>.jsonl`.
  * Field names mirror the on-disk snake_case keys returned by the
  * `pro_list_recovered_items` tauri command.
  */

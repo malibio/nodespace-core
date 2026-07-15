@@ -103,7 +103,7 @@ export interface SortConfig {
  * View configuration (discriminated union)
  *
  * View type and configuration are specified at render time via
- * QueryPreferencesService (#443), enabling different users to view
+ * QueryPreferencesService, enabling different users to view
  * the same query differently.
  */
 export interface BaseViewConfig {

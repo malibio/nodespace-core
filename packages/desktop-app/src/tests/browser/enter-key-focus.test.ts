@@ -12,7 +12,7 @@
  * Business logic (node creation, sibling chains, database persistence) is tested
  * in Happy-DOM unit tests.
  *
- * Related: Issue #282 (Vitest Browser Mode)
+ * Related: Vitest Browser Mode
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

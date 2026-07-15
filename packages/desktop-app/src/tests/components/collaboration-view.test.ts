@@ -1,5 +1,5 @@
 /**
- * CollaborationView component tests (epic #237, slice S3 #240).
+ * CollaborationView component tests.
  * Verifies admin controls gate on the caller's own role and that the community
  * build renders nothing.
  */

@@ -1,5 +1,5 @@
 //! ADR-048 commits-per-edit assertion — validates the backend half of the
-//! #1492 fix (frontend serialization lives in
+//! write-coalescing fix (frontend serialization lives in
 //! `shared-node-store.svelte.ts`'s `SimplePersistenceCoordinator`; that half
 //! already has frontend coverage). What belongs at the Tauri seam is proof
 //! that the real `update_node` command, called the way a correctly
@@ -69,7 +69,7 @@ async fn one_coalesced_edit_produces_exactly_one_version_increment() {
 /// A correctly sequenced writer for a SECOND coalesced edit reads the
 /// version from the first edit's confirmed response (2), not from a stale
 /// pre-confirmation guess (1) — this is the "latest-wins serial writer that
-/// reads the version only after prior confirmation" #1492 mandates.
+/// reads the version only after prior confirmation" the fix mandates.
 /// Confirms that path also increments by exactly one, and that reusing the
 /// now-stale version 1 is rejected — proving self-conflict is structurally
 /// impossible only when the version is sourced correctly, not by accident.
@@ -117,7 +117,7 @@ async fn second_coalesced_edit_uses_the_confirmed_version_not_a_stale_guess() {
         "second coalesced edit must move the version by exactly one more"
     );
 
-    // The regression #1492 fixed: re-using the now-stale pre-confirmation
+    // The regression this guards against: re-using the now-stale pre-confirmation
     // version (1) for a write against a node already at version 3 must be
     // rejected by OCC, not silently accepted — this is what makes
     // self-conflict structurally impossible rather than accidental.

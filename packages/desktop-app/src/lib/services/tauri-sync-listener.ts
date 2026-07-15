@@ -11,10 +11,10 @@
  *
  * This enables real-time sync when external sources (MCP, other windows) modify data.
  *
- * Issue #724: Events now send only node_id (not full payload) for efficiency.
+ * Events send only node_id (not full payload) for efficiency.
  * Frontend fetches full node data via getNode() API only when the node is in the active view.
  *
- * Issue #811: All relationship types use unified RelationshipCreated/Updated/Deleted events.
+ * All relationship types use unified RelationshipCreated/Updated/Deleted events.
  */
 
 import { listen } from '@tauri-apps/api/event';
@@ -37,10 +37,10 @@ import { isActiveDatabaseEvent } from '$lib/stores/database.svelte';
 const log = createLogger('TauriSync');
 
 // ---------------------------------------------------------------------------
-// Pro-only reconnect-replay render coalescing (#188)
+// Pro-only reconnect-replay render coalescing
 //
 // On reconnect the Pro daemon now flushes a caught-up batch of node events as a
-// single burst (sync PR #194). Applied one-by-one, each `node:created/updated`
+// single burst. Applied one-by-one, each `node:created/updated`
 // triggers its own async fetch + `setNode` → one re-render per node. To render
 // the burst in one pass, when sync is active we collect the node ids over a tiny
 // window, fetch them together, then apply them in a SYNCHRONOUS `setNode` loop —
@@ -60,7 +60,7 @@ let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 // Ids deleted while a flush is mid-fetch (between the snapshot and the apply
 // loop). The flush skips these so a delete that lands during the fetch wins over
 // the now-stale upsert it raced — without this, the re-fetch could resurrect a
-// just-deleted node (the sync#193 failure class, opened anew by coalescing).
+// just-deleted node (a failure class opened anew by coalescing).
 let flushInProgress = false;
 const tombstonedDuringFlush = new Set<string>();
 
@@ -171,7 +171,7 @@ function stripNodePrefix(id: string): string {
 /**
  * Fetch full node data from API and update SharedNodeStore
  *
- * Issue #724: Events now send only node_id. This function fetches the full
+ * Events send only node_id. This function fetches the full
  * node data and updates the store.
  */
 async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<void> {
@@ -216,15 +216,15 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
   try {
     // Listen for node events and update SharedNodeStore
-    // Issue #724: Events now send only node_id, fetch full data if needed
-    // Issue #832: node:created includes nodeType for reactive UI updates
+    // Events send only node_id, fetch full data if needed
+    // node:created includes nodeType for reactive UI updates
     await listen<NodeEventData>('node:created', (event) => {
       // ADR-053: drop events from a database we are no longer viewing (guards
       // the race where a watch stream open across a switch delivers stale events).
       if (!isActiveDatabaseEvent(event.payload.databaseId)) return;
       log.debug(`Node created: ${event.payload.id} (type: ${event.payload.nodeType})`);
 
-      // Issue #832: If a collection node is created, refresh collections sidebar
+      // If a collection node is created, refresh collections sidebar
       if (event.payload.nodeType === 'collection') {
         scheduleCollectionRefresh();
       }
@@ -238,7 +238,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       }
 
       // Fetch full node data since the node might be in the current view.
-      // Pro: coalesce a reconnect-replay burst into one render (#188); community:
+      // Pro: coalesce a reconnect-replay burst into one render; community:
       // apply immediately (unchanged).
       queueOrFetchNode(event.payload.id, 'node:created');
     });
@@ -258,7 +258,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       cancelPendingNodeFetch(event.payload.id);
       sharedNodeStore.deleteNode(event.payload.id, { type: 'database', reason: 'domain-event' }, true);
 
-      // Issue #832: We don't know if deleted node was a collection without fetching,
+      // We don't know if deleted node was a collection without fetching,
       // but if we have it cached in collectionsData, we should refresh
       // For simplicity, we rely on the UI to handle stale data gracefully
       // A more robust solution would cache node types or include type in delete events
@@ -266,7 +266,7 @@ export async function initializeTauriSyncListeners(): Promise<void> {
     });
 
     // ========================================================================
-    // Unified Relationship Events (Issue #811)
+    // Unified Relationship Events
     // All relationship types (has_child, member_of, mentions, custom) use these events.
     // ========================================================================
 

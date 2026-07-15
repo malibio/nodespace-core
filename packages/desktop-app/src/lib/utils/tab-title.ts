@@ -1,7 +1,7 @@
 /**
  * Tab title computation — pure derivation from tab content and node data.
  *
- * Tab titles are never pushed/stored as independent state (see issue #1564): a title is
+ * Tab titles are never pushed/stored as independent state: a title is
  * always a pure function of the tab's content and the current node data, computed on
  * read. This avoids a whole class of Svelte state_unsafe_mutation bugs where a viewer
  * component pushes a computed title into the tab store as a side effect of rendering.

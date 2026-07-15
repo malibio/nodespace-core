@@ -6,8 +6,6 @@
  * - Schema loading and error handling logic
  * - Visual distinction properties (borders, headers, icons)
  * - State management for loading and errors
- *
- * Issue #449: Generic Custom Entity Rendering - Polish UI for Schema-Driven Types
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

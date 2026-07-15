@@ -1,11 +1,11 @@
 /**
  * FocusManagerService - Single Source of Truth for Editor Focus
  *
- * ARCHITECTURAL IMPROVEMENT (Issue #274):
+ * ARCHITECTURAL IMPROVEMENT:
  * Replaces the three-way conflict between autoFocus, focusedNodeId, and pendingCursorPositions
  * with a single reactive state that works naturally with Svelte 5.
  *
- * ARCHITECTURAL IMPROVEMENT (Issue #281):
+ * ARCHITECTURAL IMPROVEMENT:
  * Consolidates cursor positioning into unified CursorPosition type.
  * Replaces separate state properties with reactive action-based architecture.
  *
@@ -147,7 +147,7 @@ export const focusManager = {
   },
 
   /**
-   * Issue #664: Focus an inherited-type node with cursor preservation.
+   * Focus an inherited-type node with cursor preservation.
    *
    * Called when Enter key creates a new node that inherits its type from the parent.
    * Unlike focusNodeFromTypeConversion, this sets cursor type to 'inherited-type'

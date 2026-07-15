@@ -340,7 +340,7 @@ async fn test_ollama_inference_with_production_prompt() {
 
     // Build the full production system prompt (~7KB) using the same assembler
     // the live app uses. This mirrors the exact request shape that produced
-    // prompt_tokens=4095, completion_tokens=1 in the num_ctx bug (issue #1443).
+    // prompt_tokens=4095, completion_tokens=1 in the num_ctx bug.
     let system_prompt =
         nodespace_agent::prompt_assembler::PromptAssembler::assemble_static("", None);
     eprintln!(
@@ -470,7 +470,7 @@ async fn test_ollama_model_info() {
 }
 
 // ===========================================================================
-// Skill Pipeline Real Model E2E Tests (Issue #1057)
+// Skill Pipeline Real Model E2E Tests
 // ===========================================================================
 //
 // Each test resolves an inference engine using this fallback chain:

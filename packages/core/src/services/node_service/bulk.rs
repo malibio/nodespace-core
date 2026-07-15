@@ -64,13 +64,13 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // NOTE: NodeCreated events are now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeCreated events are now automatically emitted by store notifier
 
         // Extract IDs for return (maintaining backward compatibility)
         Ok(created_nodes.into_iter().map(|n| n.id).collect())
     }
 
-    /// Bulk create nodes with hierarchy in a single transaction (Issue #737)
+    /// Bulk create nodes with hierarchy in a single transaction
     ///
     /// Creates multiple nodes with parent-child relationships atomically.
     /// This method is optimized for markdown import where all node data
@@ -104,7 +104,7 @@ impl NodeService {
             return Ok(Vec::new());
         }
 
-        // Performance optimization (Issue #760): Cache schema lookups by node_type
+        // Performance optimization: Cache schema lookups by node_type
         // Instead of querying the database for each node, we query once per unique type
         let unique_types: std::collections::HashSet<&str> = nodes
             .iter()
@@ -129,7 +129,7 @@ impl NodeService {
             }
         }
 
-        // Issue #854: Normalize flat properties to namespaced format before validation
+        // Normalize flat properties to namespaced format before validation
         // Parser emits: { "status": "open" }
         // Storage expects: { "task": { "status": "open" } }
         let nodes_normalized: Vec<_> = nodes
@@ -174,7 +174,7 @@ impl NodeService {
         }
 
         // Find the root ID once - all nodes in a bulk import share the same root
-        // Performance optimization (Issue #760): Single DB query instead of N queries
+        // Performance optimization: Single DB query instead of N queries
         let root_id = if let Some((_, _, _, Some(first_parent), _, _)) = nodes_normalized.first() {
             self.get_root_id(first_parent).await.ok()
         } else {
@@ -188,7 +188,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Queue root for embedding regeneration once (Issue #729, #760)
+        // Queue root for embedding regeneration once
         // All nodes share the same root, so we only need one queue operation
         #[cfg(feature = "nlp")]
         if let Some(root_id) = root_id {
@@ -218,7 +218,7 @@ impl NodeService {
             return Ok(Vec::new());
         }
 
-        // Performance optimization (Issue #760): Cache schema lookups by node_type
+        // Performance optimization: Cache schema lookups by node_type
         let unique_types: std::collections::HashSet<&str> = nodes
             .iter()
             .map(|(_, node_type, _, _, _, _)| node_type.as_str())
@@ -242,7 +242,7 @@ impl NodeService {
             }
         }
 
-        // Issue #854: Normalize flat properties to namespaced format before validation
+        // Normalize flat properties to namespaced format before validation
         // Parser emits: { "status": "open" }
         // Storage expects: { "task": { "status": "open" } }
         let nodes_normalized: Vec<_> = nodes
@@ -310,12 +310,12 @@ impl NodeService {
     ///
     /// Optimized for import paths where the source is trusted (like markdown parser).
     /// This method:
-    /// - Normalizes flat properties to namespaced format (Issue #854)
+    /// - Normalizes flat properties to namespaced format
     /// - Skips schema DB queries (no lookup overhead)
     /// - Skips schema validation (parser output is trusted)
     /// - Still validates via behaviors (type-specific rules)
     ///
-    /// # Issue #854: Import Pipeline Optimization
+    /// # Import Pipeline Optimization
     ///
     /// The markdown parser only creates known node types with correct properties:
     /// - Task nodes get `{"status": "open"}`
@@ -346,7 +346,7 @@ impl NodeService {
             return Ok(Vec::new());
         }
 
-        // Issue #854: Normalize flat properties to namespaced format
+        // Normalize flat properties to namespaced format
         // Parser emits: { "status": "open" }
         // Storage expects: { "task": { "status": "open" } }
         // No schema fields needed - import properties are always simple values
@@ -395,7 +395,7 @@ impl NodeService {
             })
             .collect();
 
-        // Coalesce per-node Created events into one per root node (Issue #1311).
+        // Coalesce per-node Created events into one per root node.
         // Without the guard, bulk_create_hierarchy fires one store notification per
         // inserted node, flooding WatchNodes subscribers on large imports.
         let _batch = self.begin_batch_emit();
@@ -477,7 +477,7 @@ impl NodeService {
             return Ok(());
         }
 
-        // Step 1: Batch-fetch all nodes in a single query (Issue #143)
+        // Step 1: Batch-fetch all nodes in a single query
         // This replaces the N+1 pattern where we called get_node() for each update
         let ids: Vec<String> = updates.iter().map(|(id, _)| id.clone()).collect();
         let existing_nodes = self.store.get_nodes_by_ids(&ids).await.map_err(|e| {
@@ -490,7 +490,7 @@ impl NodeService {
         // Step 2: Build the MERGED update candidate for each node, validate it, and
         // record the property-change set for the event.
         //
-        // #1434: previously bulk_update wholesale-REPLACED properties with the raw
+        // Previously bulk_update wholesale-REPLACED properties with the raw
         // client value (`updated.properties = properties.clone()`) and emitted an
         // empty `changed_properties`. That diverged from the single-update path
         // (which normalizes flat client props → deep-merges into the existing
@@ -588,9 +588,9 @@ impl NodeService {
             ))
         })?;
 
-        // Issue #1306: emit one NodeUpdated event per node (store.bulk_update runs a
+        // Emit one NodeUpdated event per node (store.bulk_update runs a
         // single SQL transaction with no per-row notify), now carrying the real
-        // changed_properties so property-change automation fires (#1434).
+        // changed_properties so property-change automation fires.
         for (id, node, changed_properties) in pending_events {
             self.emit_event(DomainEvent::NodeUpdated {
                 node_id: id,
@@ -637,11 +637,11 @@ impl NodeService {
             return Ok(());
         }
 
-        // #1433: delete in ONE transaction so the documented all-or-nothing contract
+        // Delete in ONE transaction so the documented all-or-nothing contract
         // actually holds. The old loop called store.delete_node per id (each its own
         // autocommit), so a failure on the Nth left the first N-1 committed while the
         // caller got Err and reasonably assumed nothing was deleted → orphaned state /
-        // double-delete on retry. Coalesce the Deleted events: one per node (#1306).
+        // double-delete on retry. Coalesce the Deleted events: one per node.
         let _batch = self.begin_batch_emit();
         self.store
             .bulk_delete(&ids, self.client_id.clone())

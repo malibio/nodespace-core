@@ -3,7 +3,7 @@
 //! Spins the tonic server up in-process against a tempdir-backed SQLite database,
 //! drives a `NodeServiceClient` against it, and verifies a CreateNode →
 //! GetNode round trip plus a few error-mapping paths. This validates the
-//! single acceptance criterion in #1112:
+//! single acceptance criterion:
 //!   > Integration test: start daemon, send GetNode via gRPC client,
 //!   > verify response.
 
@@ -323,7 +323,7 @@ async fn next_event_with_timeout(
         .expect("stream item was an error")
 }
 
-/// Acceptance criterion (#1114): mutate a node via gRPC, verify the watcher
+/// Acceptance criterion: mutate a node via gRPC, verify the watcher
 /// receives the corresponding event. Covers all three event kinds in one go.
 #[tokio::test]
 async fn watch_nodes_receives_create_update_delete_events() {
@@ -413,7 +413,7 @@ async fn watch_nodes_receives_create_update_delete_events() {
     let _ = shutdown.send(());
 }
 
-/// Acceptance criterion (#1114): multiple concurrent watchers supported
+/// Acceptance criterion: multiple concurrent watchers supported
 /// simultaneously. Both must receive the same event from a single mutation.
 #[tokio::test]
 async fn watch_nodes_supports_multiple_concurrent_watchers() {
@@ -663,7 +663,7 @@ async fn test_insert_position_beginning_and_after_proto_decoding() {
     let _ = shutdown.send(());
 }
 
-/// Parity test (AC #1241): create a node with a collection path and a non-default
+/// Parity test: create a node with a collection path and a non-default
 /// lifecycle status via the gRPC RPC. Verifies the daemon delegates to node_ops
 /// correctly — the node lands in the resolved collection and has the requested
 /// lifecycle status.
@@ -716,7 +716,7 @@ async fn create_node_with_collection_and_lifecycle_status() {
     let _ = shutdown.send(());
 }
 
-/// Parity test (AC #1241): update a node without supplying version — the
+/// Parity test: update a node without supplying version — the
 /// daemon delegates to node_ops, which auto-fetches the current version.
 #[tokio::test]
 async fn update_node_auto_fetches_version_when_omitted() {
@@ -760,7 +760,7 @@ async fn update_node_auto_fetches_version_when_omitted() {
     let _ = shutdown.send(());
 }
 
-/// Parity test (AC #1241): add then remove a collection membership via
+/// Parity test: add then remove a collection membership via
 /// update_node's add_to_collection / remove_from_collection fields.
 #[tokio::test]
 async fn update_node_add_then_remove_collection_membership() {

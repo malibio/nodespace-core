@@ -5,8 +5,6 @@
  * - NodeType conversions bypass conflict detection
  * - Regular concurrent edits still trigger conflict detection
  * - Edge cases around rapid updates
- *
- * Part of issue #275: HeaderNode implementation
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

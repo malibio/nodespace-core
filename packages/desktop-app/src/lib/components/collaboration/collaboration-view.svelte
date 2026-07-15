@@ -1,6 +1,6 @@
 <!--
-  CollaborationView — per-collection membership management (epic #237, slice S3
-  #240). Shows the roster (people + role) and, for admins, controls to change a
+  CollaborationView — per-collection membership management. Shows the roster
+  (people + role) and, for admins, controls to change a
   member's role, remove them (last-admin protected server-side), and add someone
   already in the workspace. Self-service "Leave" for the caller. Non-admins see a
   read-only roster.
@@ -39,7 +39,7 @@
 	let addRole = $state<Permission>('readOnly');
 	let adding = $state(false);
 
-	// --- Invites & requests (S4 #241), admin-only ---
+	// --- Invites & requests, admin-only ---
 	const TTL_PRESETS: { label: string; secs?: number }[] = [
 		{ label: '1 day', secs: 86400 },
 		{ label: '7 days', secs: 604800 },

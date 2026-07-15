@@ -184,7 +184,7 @@ pub async fn validate_playbook(
         for (cond_idx, condition) in rule.conditions.iter().enumerate() {
             let location = format!("rule[{}].condition[{}]", rule_idx, cond_idx);
 
-            // Schema-aware path validation (#1010): extract dot-paths and
+            // Schema-aware path validation: extract dot-paths and
             // verify each segment resolves to a field or relationship on the schema graph
             if let Some(nt) = &trigger_node_type {
                 if let Ok(extraction) = path_extractor::extract_paths(&condition.source) {
@@ -528,7 +528,7 @@ async fn validate_relationship_action(
 }
 
 // ---------------------------------------------------------------------------
-// Schema Change Impact Analysis (Issue #1012 Phase 2)
+// Schema Change Impact Analysis (Phase 2)
 // ---------------------------------------------------------------------------
 
 /// A playbook affected by a schema change, with the specific broken paths.
@@ -1242,7 +1242,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // -- Schema-aware path validation tests (#1010) --
+        // -- Schema-aware path validation tests --
 
         #[tokio::test]
         async fn test_valid_multi_hop_path_passes() {
@@ -1377,7 +1377,7 @@ mod tests {
         }
 
         // ---------------------------------------------------------------
-        // check_schema_change_impact tests (Issue #1012 Phase 2)
+        // check_schema_change_impact tests (Phase 2)
         // ---------------------------------------------------------------
 
         /// Helper: create a playbook node in the database.
@@ -1507,7 +1507,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // NodeService synchronous validation gate tests (Issue #1012 Phase 1)
+    // NodeService synchronous validation gate tests (Phase 1)
     // ---------------------------------------------------------------
 
     mod sync_gate_tests {

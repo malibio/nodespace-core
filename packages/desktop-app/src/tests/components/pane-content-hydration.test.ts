@@ -1,5 +1,5 @@
 /**
- * Regression tests for the pane-content.svelte hydration behaviour (issue #1564, #1566).
+ * Regression tests for the pane-content.svelte hydration behaviour.
  *
  * Full-component-mount tests for BaseNodeViewer-adjacent components require complex setup
  * (NodeServiceContext, plugin registry, database mocking - see merge-prevention.test.ts).
@@ -93,7 +93,7 @@ describe('pane-content hydration (event-driven, #1564/#1566)', () => {
     const firstCall = harness.hydrateNode('2026-07-08', 'tab-1');
     const secondCall = harness.hydrateNode('2026-07-07', 'tab-1');
 
-    // Resolve newer first, then the stale one — out-of-order, the #1564 repro.
+    // Resolve newer first, then the stale one — out-of-order, the stale-hydration repro.
     resolvers.get('2026-07-07')?.({ id: '2026-07-07' });
     await secondCall;
     resolvers.get('2026-07-08')?.({ id: '2026-07-08' });

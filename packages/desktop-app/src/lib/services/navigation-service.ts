@@ -4,7 +4,7 @@
  * CRITICAL: Uses lazy initialization pattern (getter function) to avoid
  * module-level singleton exports that cause app freeze during initialization.
  *
- * Architecture Decision (from PR #306 learnings):
+ * Architecture Decision:
  * - ❌ BAD: export const navigationService = NavigationService.getInstance()
  * - ✅ GOOD: export function getNavigationService(): NavigationService
  *

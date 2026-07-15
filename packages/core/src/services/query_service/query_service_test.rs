@@ -83,7 +83,7 @@ mod tests {
     async fn test_property_filter_equals() {
         let (query_service, node_service, _temp) = create_test_services().await;
 
-        // Create task nodes with different statuses (Issue #794: namespaced properties)
+        // Create task nodes with different statuses (namespaced properties)
         let task1 = CreateNodeParams {
             id: None,
             node_type: "task".to_string(),
@@ -424,7 +424,7 @@ mod tests {
     async fn test_combined_filters() {
         let (query_service, node_service, _temp) = create_test_services().await;
 
-        // Create various task nodes (Issue #794: namespaced properties)
+        // Create various task nodes (namespaced properties)
         let tasks = vec![
             ("High priority open task", "open", "high"),
             ("Low priority open task", "open", "low"),
@@ -1250,7 +1250,7 @@ mod tests {
 
         let results = query_service.execute(&query).await.unwrap();
         assert_eq!(results.len(), 3);
-        // Sorted by status alphabetically: done, in_progress, open (Issue #794: namespaced properties)
+        // Sorted by status alphabetically: done, in_progress, open (namespaced properties)
         assert_eq!(results[0].properties["task"]["status"], "done");
         assert_eq!(results[1].properties["task"]["status"], "in_progress");
         assert_eq!(results[2].properties["task"]["status"], "open");

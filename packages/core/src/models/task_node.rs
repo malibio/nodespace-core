@@ -1,7 +1,7 @@
 //! Strongly-Typed TaskNode
 //!
 //! Provides compile-time type safety for task nodes with strongly-typed status,
-//! priority, and date fields. Uses Universal Graph Architecture (Issue #783).
+//! priority, and date fields. Uses Universal Graph Architecture.
 //!
 //! # Architecture
 //!
@@ -97,7 +97,7 @@ mod flexible_date {
 /// Task status enumeration
 ///
 /// Represents the lifecycle states of a task node.
-/// Values use lowercase format for consistency across all layers (Issue #670):
+/// Values use lowercase format for consistency across all layers:
 /// - "open" - Not started (default)
 /// - "in_progress" - Currently being worked on
 /// - "done" - Finished
@@ -869,7 +869,7 @@ mod tests {
 /// the two directions disagree on a property key — the field is silently dropped
 /// on the next write. This proptest turns that silent drop into a test failure by
 /// asserting `from_node(task.into_node())` recovers every typed field: the
-/// domain→storage→domain round trip issue #1502 asks for.
+/// domain→storage→domain round trip.
 #[cfg(test)]
 mod roundtrip_proptests {
     use super::*;

@@ -23,7 +23,7 @@
 //! let mut registry = MigrationRegistry::new();
 //!
 //! // Register a migration transform
-//! // Issue #794: Properties are namespaced under properties[node_type]
+//! // Properties are namespaced under properties[node_type]
 //! registry.register_migration(
 //!     "task",    // schema ID
 //!     1,         // from version
@@ -31,7 +31,7 @@
 //!     |node| {
 //!         // Transform the node (e.g., add new field with default value)
 //!         let mut node = node.clone();
-//!         // Issue #794: Write to namespaced format
+//!         // Write to namespaced format
 //!         if let Some(task_ns) = node
 //!             .properties
 //!             .as_object_mut()
@@ -46,7 +46,7 @@
 //! );
 //!
 //! // Apply migrations to upgrade a node
-//! // Issue #794: Properties are namespaced under properties[node_type]
+//! // Properties are namespaced under properties[node_type]
 //! let mut old_node = Node::new("task".to_string(), "Test".to_string(), json!({"task": {"_schema_version": 1}}));
 //!
 //! let upgraded = registry.apply_migrations(&old_node, 2)?;
@@ -75,7 +75,7 @@ pub type MigrationTransform = fn(&Node) -> Result<Node, NodeServiceError>;
 
 /// Helper function to get _schema_version from a node's properties.
 ///
-/// Issue #794: Properties are now namespaced under properties[node_type][field_name].
+/// Properties are now namespaced under properties[node_type][field_name].
 /// This function reads _schema_version from the namespaced location.
 ///
 /// # Arguments
@@ -86,7 +86,7 @@ pub type MigrationTransform = fn(&Node) -> Result<Node, NodeServiceError>;
 ///
 /// The schema version as u32, or None if not found
 fn get_schema_version(node: &Node) -> Option<u32> {
-    // Issue #794: Read from namespaced format: properties[node_type]._schema_version
+    // Read from namespaced format: properties[node_type]._schema_version
     node.properties
         .get(&node.node_type)
         .and_then(|type_props| type_props.get("_schema_version"))
@@ -202,7 +202,7 @@ impl MigrationRegistry {
         node: &Node,
         target_version: u32,
     ) -> Result<Node, NodeServiceError> {
-        // Get current version from node properties (Issue #794: namespaced format)
+        // Get current version from node properties (namespaced format)
         let current_version = get_schema_version(node).ok_or_else(|| {
             NodeServiceError::SerializationError(
                 "Node missing _schema_version property".to_string(),
@@ -238,7 +238,7 @@ impl MigrationRegistry {
             // Apply transform
             migrated_node = transform(&migrated_node)?;
 
-            // Verify version was updated (Issue #794: namespaced format)
+            // Verify version was updated (namespaced format)
             let new_version = get_schema_version(&migrated_node).ok_or_else(|| {
                 NodeServiceError::SerializationError(format!(
                     "Migration {} v{}→v{} did not set _schema_version",
@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // Helper to create a test node with version (Issue #794: namespaced format)
+    // Helper to create a test node with version (namespaced format)
     fn create_node_with_version(version: u32) -> Node {
         Node::new(
             "task".to_string(),
@@ -321,7 +321,7 @@ mod tests {
         )
     }
 
-    // Migration v1→v2: Add priority field (Issue #794: namespaced format)
+    // Migration v1→v2: Add priority field (namespaced format)
     fn task_v1_to_v2(node: &Node) -> Result<Node, NodeServiceError> {
         let mut node = node.clone();
         if let Some(task_ns) = node
@@ -336,7 +336,7 @@ mod tests {
         Ok(node)
     }
 
-    // Migration v2→v3: Add assignee field (Issue #794: namespaced format)
+    // Migration v2→v3: Add assignee field (namespaced format)
     fn task_v2_to_v3(node: &Node) -> Result<Node, NodeServiceError> {
         let mut node = node.clone();
         if let Some(task_ns) = node
@@ -351,7 +351,7 @@ mod tests {
         Ok(node)
     }
 
-    // Migration v3→v4: Rename status values (Issue #794: namespaced format)
+    // Migration v3→v4: Rename status values (namespaced format)
     fn task_v3_to_v4(node: &Node) -> Result<Node, NodeServiceError> {
         let mut node = node.clone();
         if let Some(task_ns) = node
@@ -388,7 +388,7 @@ mod tests {
         let node = create_node_with_version(1);
         let migrated = registry.apply_migrations(&node, 2).unwrap();
 
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         assert_eq!(migrated.properties["task"]["_schema_version"], 2);
         assert_eq!(migrated.properties["task"]["priority"], 0);
         assert_eq!(migrated.properties["task"]["status"], "OPEN"); // Original field preserved
@@ -403,7 +403,7 @@ mod tests {
         let migrated = registry.apply_migrations(&node, 2).unwrap();
 
         // Should return clone without changes
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         assert_eq!(migrated.properties["task"]["_schema_version"], 2);
         assert!(migrated.properties["task"].get("priority").is_none()); // v2 field not added
     }
@@ -417,7 +417,7 @@ mod tests {
         let migrated = registry.apply_migrations(&node, 2).unwrap();
 
         // Should return clone without downgrading
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         assert_eq!(migrated.properties["task"]["_schema_version"], 3);
     }
 
@@ -432,7 +432,7 @@ mod tests {
         let migrated = registry.apply_migrations(&node, 4).unwrap();
 
         // All migrations should be applied
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         assert_eq!(migrated.properties["task"]["_schema_version"], 4);
         assert_eq!(migrated.properties["task"]["priority"], 0); // Added in v1→v2
         assert_eq!(migrated.properties["task"]["assignee"], json!(null)); // Added in v2→v3
@@ -450,7 +450,7 @@ mod tests {
         let node = create_node_with_version(2);
         let migrated = registry.apply_migrations(&node, 4).unwrap();
 
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         assert_eq!(migrated.properties["task"]["_schema_version"], 4);
         assert!(migrated.properties["task"].get("priority").is_none()); // Not added (started at v2)
         assert_eq!(migrated.properties["task"]["assignee"], json!(null)); // Added in v2→v3
@@ -502,7 +502,7 @@ mod tests {
         let mut registry = MigrationRegistry::new();
         registry.register_migration("task", 1, 2, task_v1_to_v2);
 
-        // Issue #794: Properties are namespaced under properties[node_type]
+        // Properties are namespaced under properties[node_type]
         let node = Node::new(
             "task".to_string(),
             "Test task".to_string(),
@@ -520,10 +520,10 @@ mod tests {
 
         let migrated = registry.apply_migrations(&node, 2).unwrap();
 
-        // New field added (Issue #794: namespaced)
+        // New field added (namespaced)
         assert_eq!(migrated.properties["task"]["priority"], 0);
 
-        // All original fields preserved (Issue #794: namespaced)
+        // All original fields preserved (namespaced)
         assert_eq!(migrated.properties["task"]["status"], "OPEN");
         assert_eq!(migrated.properties["task"]["custom_field"], "custom_value");
         assert_eq!(migrated.properties["task"]["nested"]["deep"], "value");

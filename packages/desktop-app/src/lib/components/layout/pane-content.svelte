@@ -52,7 +52,7 @@
       const viewer = await pluginRegistry.getViewer(nodeType);
       // Always store a result (viewer or BaseNodeViewer fallback) so the guard
       // viewerComponents.has(nodeType) fires true on subsequent calls and prevents
-      // repeated load attempts that cause mount/unmount loops (issue #967).
+      // repeated load attempts that cause mount/unmount loops.
       viewerComponents = new Map(viewerComponents.set(nodeType, viewer ?? BaseNodeViewer));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error loading viewer';

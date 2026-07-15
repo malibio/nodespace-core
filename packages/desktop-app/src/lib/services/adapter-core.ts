@@ -111,7 +111,7 @@ export interface BackendAdapter {
   // Composite operations
   createContainerNode(input: CreateContainerInput): Promise<string>;
 
-  // Schema operations (read-only - mutation commands removed in Issue #690)
+  // Schema operations (read-only - mutation commands removed)
   // Returns SchemaNode with typed top-level fields (isCore, schemaVersion, description, fields)
   getAllSchemas(): Promise<SchemaNode[]>;
   getSchema(schemaId: string): Promise<SchemaNode>;

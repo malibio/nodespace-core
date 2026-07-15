@@ -21,7 +21,7 @@
 
   // Props using Svelte 5 runes mode - unified NodeViewerProps interface.
   // The tab title is never pushed from here — tab-system.svelte derives it directly
-  // from the tab's nodeId via computeTabTitle (see issue #1564).
+  // from the tab's nodeId via computeTabTitle.
   let {
     nodeId,
     onNodeIdChange

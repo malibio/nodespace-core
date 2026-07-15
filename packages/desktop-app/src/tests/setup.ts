@@ -6,7 +6,7 @@ import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 
-// Note: PersistenceCoordinator removed in Issue #558
+// Note: PersistenceCoordinator removed
 // SimplePersistenceCoordinator is now inline in shared-node-store.ts
 
 // Ensure global object is available for legacy test compatibility
@@ -323,7 +323,7 @@ if (typeof window !== 'undefined') {
 }
 
 // SharedNodeStore cleanup for each test
-// NOTE: PersistenceCoordinator removed in Issue #558
+// NOTE: PersistenceCoordinator removed
 beforeEach(() => {
   // Reset SharedNodeStore to clear all nodes between tests
   sharedNodeStore.__resetForTesting();

@@ -1,8 +1,8 @@
 /**
  * Tests for the skip-while-editing guard in SharedNodeStore.setNode().
  *
- * Repro context: nodespace-sync#76 (typing corruption) and #77 (Enter
- * relocates text). Root cause: daemon broadcasts of just-confirmed writes
+ * Repro context: typing corruption and Enter relocating text. Root cause:
+ * daemon broadcasts of just-confirmed writes
  * arrive via the WatchNodes gRPC stream while the user is still typing.
  * The unguarded `setNode()` clobbers the optimistic store with the older
  * server-confirmed state.
@@ -71,7 +71,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // Local content stays at the user's optimistic state. Crucially the
     // local node's `.version` is also unchanged — mutating it inside the
     // reactive Map would cause Svelte to re-render and remount the focused
-    // textarea (resetting selectionStart → triggers sync#77).
+    // textarea (resetting selectionStart → triggers the text-relocation bug).
     const after = store.getNode('n1');
     expect(after?.content).toBe('hello world');
     expect(after?.version).toBe(1);
@@ -223,7 +223,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     // which routes through the same `serverConfirmedVersions` cache the
     // skip-while-editing guard populates. Without this test, a future
     // refactor that drops that read would silently reintroduce the
-    // OCC-defeat from nodespace-sync#76 — the unit tests above only
+    // OCC-defeat from the typing-corruption bug — the unit tests above only
     // assert cache *population*, not *consumption*.
     store.setNode(makeNode('persist', 'abc', 1), databaseSource);
     // Simulate that the local client just persisted 'abc' (own echo
@@ -297,7 +297,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     expect(after?.version).toBe(15);
   });
 
-  // #1436: batchSetNodes (used by doLoadChildrenTree with a database source)
+  // batchSetNodes (used by doLoadChildrenTree with a database source)
   // must apply the SAME skip-while-editing guard as setNode — a concurrent tree
   // reload would otherwise overwrite a child being edited mid-keystroke.
   describe('batchSetNodes guard (#1436)', () => {
@@ -353,7 +353,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     });
   });
 
-  // #1437: a foreign write to an actively-edited node is skipped to protect the
+  // A foreign write to an actively-edited node is skipped to protect the
   // optimistic text — but it must NOT be silent. Surface a version-mismatch
   // conflict notification so the user knows another writer changed the node.
   describe('foreign-write conflict signal (#1437)', () => {

@@ -151,9 +151,9 @@ async fn rapid_sibling_creation_preserves_insertion_order() {
 /// two nodes being reordered are distinct, so there's no version conflict
 /// between them). Does NOT assert the final sibling order matches both
 /// reorders: that assertion is `concurrent_reorders_produce_correct_final_order`
-/// below, `#[ignore]`d as a known-failing regression test for #1561 (a real,
+/// below, `#[ignore]`d as a known-failing regression test for a real,
 /// intermittent race in the fractional-order read-then-write window that
-/// this concurrent case can trigger).
+/// this concurrent case can trigger.
 #[tokio::test]
 async fn concurrent_reorders_of_distinct_nodes_all_succeed() {
     let daemon = SpawnedDaemon::spawn();
@@ -196,7 +196,7 @@ async fn concurrent_reorders_of_distinct_nodes_all_succeed() {
     r2.expect("reorder of ids[0] to End failed");
 }
 
-/// Regression test for #1561: concurrent reorders of distinct siblings to
+/// Regression test: concurrent reorders of distinct siblings to
 /// opposite boundary positions (Beginning / End) must produce a sibling
 /// order reflecting BOTH operations, not just that each RPC individually
 /// succeeded. `move_node`'s same-parent branch reads sibling order values
@@ -204,7 +204,7 @@ async fn concurrent_reorders_of_distinct_nodes_all_succeed() {
 /// (`packages/core/src/db/sqlite_store.rs`), so two concurrent reorders can
 /// read the same sibling snapshot and race. Reproduces intermittently
 /// (roughly 1 in 15 full-suite runs) — `#[ignore]`d so the flake doesn't
-/// block the suite; un-ignore once #1561 wraps the read+compute+write in a
+/// block the suite; un-ignore once the read+compute+write is wrapped in a
 /// transaction per parent.
 #[tokio::test]
 #[ignore = "known race — see #1561"]

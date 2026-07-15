@@ -5,7 +5,7 @@
  * - Click = in-place, Cmd+Click = new tab, Cmd+Shift+Click = other pane
  *
  * (The former chat-tab override was removed alongside the ephemeral ChatPanel /
- *  chatStore in the #1220 follow-up — every conversation is now an ai-chat node,
+ *  chatStore in a later follow-up — every conversation is now an ai-chat node,
  *  so links behave the same in every tab.)
  */
 

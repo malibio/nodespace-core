@@ -1,5 +1,5 @@
 /**
- * DeleteConfirmationModal tests (#1414 regression).
+ * DeleteConfirmationModal tests (focus-trap regression).
  *
  * focusTrap lands initial focus on Cancel (the first button). The modal must NOT
  * carry a global "Enter → confirm" handler, or Enter-with-Cancel-focused would

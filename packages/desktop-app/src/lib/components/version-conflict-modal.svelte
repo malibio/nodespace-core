@@ -2,7 +2,7 @@
   import { focusTrap } from '$lib/actions/focus-trap';
   import type { Node } from '$lib/types';
 
-  // ConflictResolution type moved inline (version-conflict-resolver deleted in #558)
+  // ConflictResolution type moved inline (version-conflict-resolver deleted)
   interface ConflictResolution {
     type: 'yours' | 'current' | 'merged';
     resolvedNode: Node;

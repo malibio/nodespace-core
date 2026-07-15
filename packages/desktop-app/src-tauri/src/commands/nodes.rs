@@ -1,6 +1,6 @@
 //! Node CRUD operation commands for Text, Task, and Date nodes
 //!
-//! As of Issue #1113, all commands proxy through the in-process gRPC server
+//! All commands proxy through the in-process gRPC server
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 
 use crate::types::{
@@ -218,7 +218,7 @@ async fn validate_node_type(
     }
 }
 
-/// Convert a Node to its strongly-typed JSON representation (Issue #673)
+/// Convert a Node to its strongly-typed JSON representation
 pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
     types_node_to_typed_value(node).map_err(|e| CommandError {
         message: e.clone(),
@@ -228,7 +228,7 @@ pub fn node_to_typed_value(node: Node) -> Result<Value, CommandError> {
     })
 }
 
-/// Convert a list of Nodes to their strongly-typed JSON representations (Issue #673)
+/// Convert a list of Nodes to their strongly-typed JSON representations
 pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<Value>, CommandError> {
     types_nodes_to_typed_values(nodes).map_err(|e| CommandError {
         message: e.clone(),
@@ -259,7 +259,7 @@ pub struct SaveNodeWithParentInput {
     pub node_type: String,
     pub parent_id: String,
     pub root_id: String,
-    // before_sibling_id removed - backend uses fractional ordering on has_child edges (Issue #616)
+    // before_sibling_id removed - backend uses fractional ordering on has_child edges
 }
 
 /// Create a new node of any type with a registered schema
@@ -575,7 +575,7 @@ pub async fn get_nodes_by_root_id(
     root_id: String,
 ) -> Result<Vec<Value>, CommandError> {
     let mut c = client.client().await;
-    // Phase 5 (Issue #511): Redirect to get_children (graph-native)
+    // Phase 5: Redirect to get_children (graph-native)
     let resp = c
         .get_children(Request::new(GetChildrenRequest { node_id: root_id }))
         .await

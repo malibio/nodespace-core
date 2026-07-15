@@ -5,7 +5,7 @@
 //! If no prompt nodes are found (corrupted/empty database), falls back to a
 //! minimal emergency prompt and logs a warning.
 //!
-//! Issue #1049, ADR-030 Phase 2.
+//! ADR-030 Phase 2.
 
 use std::sync::Arc;
 

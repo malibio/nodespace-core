@@ -31,7 +31,7 @@ mod tests {
     fn test_status_getter_default() {
         let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
         let task = TaskNode::from_node(node).unwrap();
-        // Default status is Open (Issue #670)
+        // Default status is Open
         assert_eq!(task.status(), TaskStatus::Open);
     }
 
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(task.status(), TaskStatus::Done);
         // Direct field access now
         assert_eq!(task.status, TaskStatus::Done);
-        // Status value uses lowercase format (Issue #670)
+        // Status value uses lowercase format
         assert_eq!(task.as_node().properties["status"], "done");
     }
 
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_as_node_reference() {
-        // Status uses lowercase format (Issue #670)
+        // Status uses lowercase format
         let node = Node::new(
             "task".to_string(),
             "Test".to_string(),
@@ -234,7 +234,7 @@ mod tests {
 
         assert_eq!(task.content, "Implement feature");
         assert_eq!(task.as_node().node_type, "task");
-        // Default status is Open (Issue #670)
+        // Default status is Open
         assert_eq!(task.status(), TaskStatus::Open);
         // Default priority is Medium
         assert_eq!(task.get_priority(), TaskPriority::Medium);
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_task_status_from_str() {
-        // Status values use lowercase format (Issue #670)
+        // Status values use lowercase format
         assert_eq!("open".parse::<TaskStatus>().unwrap(), TaskStatus::Open);
         assert_eq!(
             "in_progress".parse::<TaskStatus>().unwrap(),
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_task_status_as_str() {
-        // Status values use lowercase format (Issue #670)
+        // Status values use lowercase format
         assert_eq!(TaskStatus::Open.as_str(), "open");
         assert_eq!(TaskStatus::InProgress.as_str(), "in_progress");
         assert_eq!(TaskStatus::Done.as_str(), "done");
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_all_status_values() {
-        // Updated status values per Issue #670
+        // Updated status values
         let statuses = vec![
             TaskStatus::Open,
             TaskStatus::InProgress,

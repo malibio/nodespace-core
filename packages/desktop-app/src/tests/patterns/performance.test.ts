@@ -4,7 +4,7 @@
  * Validates that the unified pattern system maintains performance
  * within acceptable thresholds compared to legacy implementation.
  *
- * Acceptance Criteria from #317:
+ * Acceptance Criteria:
  * - Pattern detection performance within 5% of legacy implementation
  * - Splitting performance within 5% of legacy implementation
  */

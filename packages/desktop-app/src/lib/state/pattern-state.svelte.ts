@@ -1,7 +1,7 @@
 /**
  * PatternState - Centralized Pattern Lifecycle Management
  *
- * Issue #664: Replaces the scattered `nodeTypeSetViaPattern` flag with an explicit
+ * Replaces the scattered `nodeTypeSetViaPattern` flag with an explicit
  * state machine that owns all pattern-related lifecycle.
  *
  * The key insight is that pattern detection behavior depends on HOW a node was created:
@@ -9,7 +9,7 @@
  * - 'pattern': Created by pattern detection (# → header) - reversion enabled if plugin allows
  * - 'inherited': Created by inheriting parent's type (Enter on header → header) - reversion controlled by plugin
  *
- * Issue #667: Pattern behavior is now owned by plugins via the `pattern` property.
+ * Pattern behavior is now owned by plugins via the `pattern` property.
  * Each plugin can define:
  * - `detect`: Regex to detect the pattern
  * - `canRevert`: Whether the node can revert to text when pattern is deleted
@@ -68,7 +68,7 @@ export class PatternState {
   private _creationSource = $state<NodeCreationSource>('user');
 
   /**
-   * The plugin that owns this node's pattern behavior (Issue #667)
+   * The plugin that owns this node's pattern behavior
    * Contains detect, canRevert, and revert settings
    */
   private _plugin = $state<PluginDefinition | null>(null);
@@ -115,7 +115,7 @@ export class PatternState {
   /**
    * Whether this node can revert to text type
    *
-   * Issue #667: Uses plugin-owned pattern.canRevert setting.
+   * Uses plugin-owned pattern.canRevert setting.
    *
    * Both 'pattern' and 'inherited' source nodes can revert when their
    * syntax is deleted (e.g., "# Hello" → "#Hello" reverts to text),
@@ -157,7 +157,7 @@ export class PatternState {
   // ============================================================================
 
   /**
-   * Record that a plugin pattern was detected and matched (Issue #667)
+   * Record that a plugin pattern was detected and matched
    *
    * Called when pattern detection finds a match and converts the node type.
    * Changes source to 'pattern' and stores the plugin for reversion.
@@ -173,7 +173,7 @@ export class PatternState {
   /**
    * Attempt to revert node type to text
    *
-   * Issue #667: Uses plugin-owned pattern.revert to check if content should revert.
+   * Uses plugin-owned pattern.revert to check if content should revert.
    *
    * Called when content no longer matches the detected pattern.
    * Only succeeds if the plugin has canRevert: true and the revert pattern matches.
@@ -208,7 +208,7 @@ export class PatternState {
   }
 
   /**
-   * Mark the node type as existing via plugin pattern (Issue #667)
+   * Mark the node type as existing via plugin pattern
    *
    * Called when initializing a controller for a node whose content
    * matches its pattern (e.g., loading a header node with "# " content).

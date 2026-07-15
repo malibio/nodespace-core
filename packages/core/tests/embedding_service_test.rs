@@ -43,7 +43,7 @@ async fn create_unified_test_env(
     // Create NodeService first (it may set up schema)
     let node_service = NodeService::new(&mut store).await?;
 
-    // Create embedding service using the SAME store (Issue #1018: behavior-driven)
+    // Create embedding service using the SAME store (behavior-driven)
     let nlp_engine = create_test_nlp_engine();
     let node_accessor: Arc<dyn nodespace_core::services::NodeAccessor> =
         Arc::new(node_service.clone());
@@ -65,7 +65,7 @@ async fn create_unified_test_env_with_config(
     // Create NodeService first (it may set up schema)
     let node_service = NodeService::new(&mut store).await?;
 
-    // Create embedding service with custom config using the SAME store (Issue #1018)
+    // Create embedding service with custom config using the SAME store
     let nlp_engine = create_test_nlp_engine();
     let node_accessor: Arc<dyn nodespace_core::services::NodeAccessor> =
         Arc::new(node_service.clone());
@@ -174,7 +174,7 @@ async fn test_find_root_id_for_deep_child() -> Result<()> {
     Ok(())
 }
 
-/// Issue #1018: Behavior-driven embeddability test (replaces should_embed_root)
+/// Behavior-driven embeddability test (replaces should_embed_root)
 #[tokio::test]
 async fn test_behavior_driven_embeddable_types() -> Result<()> {
     use nodespace_core::behaviors::NodeBehaviorRegistry;
@@ -182,7 +182,7 @@ async fn test_behavior_driven_embeddable_types() -> Result<()> {
     let registry = NodeBehaviorRegistry::new();
 
     // Types whose behaviors return Some from get_embeddable_content for non-empty content
-    // Issue #1018: table is now correctly embeddable (was excluded from EMBEDDABLE_NODE_TYPES)
+    // table is now correctly embeddable (was excluded from EMBEDDABLE_NODE_TYPES)
     let embeddable_types = vec!["text", "header", "code-block", "schema", "table"];
     for node_type in embeddable_types {
         let behavior = registry.get(node_type).expect("behavior should exist");
@@ -196,7 +196,7 @@ async fn test_behavior_driven_embeddable_types() -> Result<()> {
     Ok(())
 }
 
-/// Issue #1018: Behavior-driven non-embeddability test (replaces should_embed_root)
+/// Behavior-driven non-embeddability test (replaces should_embed_root)
 #[tokio::test]
 async fn test_behavior_driven_non_embeddable_types() -> Result<()> {
     use nodespace_core::behaviors::NodeBehaviorRegistry;
@@ -218,7 +218,7 @@ async fn test_behavior_driven_non_embeddable_types() -> Result<()> {
 }
 
 // =========================================================================
-// Behavior-Driven Content Extraction Tests (Issue #1018)
+// Behavior-Driven Content Extraction Tests
 // =========================================================================
 
 /// Test: behavior.get_aggregated_content() collects children for text nodes
@@ -280,7 +280,7 @@ async fn test_behavior_task_not_embeddable() -> Result<()> {
     Ok(())
 }
 
-/// Test: table nodes are embeddable (bug fix from Issue #1018)
+/// Test: table nodes are embeddable (bug fix)
 #[tokio::test]
 async fn test_behavior_table_is_embeddable() -> Result<()> {
     use nodespace_core::behaviors::{NodeBehavior, TableNodeBehavior};
@@ -690,7 +690,7 @@ async fn test_knn_search_with_multiple_chunks() -> Result<()> {
     Ok(())
 }
 
-/// Test that match density ratio score formula is applied correctly (Issue #944)
+/// Test that match density ratio score formula is applied correctly
 ///
 /// Validates formula: score = max_similarity * (1.0 + 0.3 * (matching_chunks / total_chunks))
 ///
@@ -957,7 +957,7 @@ async fn test_partial_density_ranks_below_full_density() -> Result<()> {
     Ok(())
 }
 
-/// Test that threshold filters by composite score, not raw similarity (Issue #787)
+/// Test that threshold filters by composite score, not raw similarity
 ///
 /// This test verifies that the threshold parameter filters results based on the
 /// composite score (which includes breadth boost) rather than raw similarity.
@@ -1031,7 +1031,7 @@ async fn test_threshold_filters_by_composite_score_not_raw_similarity() -> Resul
         result.max_similarity, result.matching_chunks, result.score
     );
 
-    // Verify the composite score formula is applied correctly (Issue #944: density ratio)
+    // Verify the composite score formula is applied correctly (density ratio)
     // With 5 matching chunks out of 5 total: density = 1.0
     // composite = max_similarity * (1.0 + 0.3 * 1.0) = max_similarity * 1.30
     let density = result.matching_chunks as f64 / 5.0; // total_chunks=5
@@ -1043,7 +1043,7 @@ async fn test_threshold_filters_by_composite_score_not_raw_similarity() -> Resul
         result.score
     );
 
-    // KEY TEST (Issue #787): Find a threshold between raw_similarity and composite_score
+    // KEY TEST: Find a threshold between raw_similarity and composite_score
     // With 5/5 chunks, density = 1.0, density_factor = 1.30
     // If max_similarity = 0.68, composite = 0.68 * 1.30 ≈ 0.88
     // We choose a threshold between them
@@ -1073,7 +1073,7 @@ async fn test_threshold_filters_by_composite_score_not_raw_similarity() -> Resul
         .search_embeddings(&query_vec, 10, Some(threshold))
         .await?;
 
-    // The document SHOULD be returned (Issue #787 fix)
+    // The document SHOULD be returned
     // OLD behavior (bug): document NOT returned because raw_similarity < threshold
     // NEW behavior (fix): document IS returned because composite_score > threshold
     assert!(
@@ -1096,10 +1096,10 @@ async fn test_threshold_filters_by_composite_score_not_raw_similarity() -> Resul
 }
 
 // =========================================================================
-// Issue #936: Title inclusion in embeddings + title keyword boost tests
+// Title inclusion in embeddings + title keyword boost tests
 // =========================================================================
 
-/// Test that title keyword boost is applied when a query term matches the node title (Issue #936)
+/// Test that title keyword boost is applied when a query term matches the node title
 ///
 /// Uses mock embeddings to test Rust-side scoring logic without an NLP engine.
 /// The boost is applied in semantic_search(), which is tested here via search_embeddings()
@@ -1234,7 +1234,7 @@ async fn test_title_keyword_boost_applied() -> Result<()> {
 }
 
 // =========================================================================
-// Hybrid Search Tests (Issue #951)
+// Hybrid Search Tests
 // =========================================================================
 
 /// Test that BM25 search finds nodes containing query terms
@@ -1642,10 +1642,10 @@ async fn test_hybrid_conceptual_query_bm25_misses_knn_hits() -> Result<()> {
 }
 
 // =========================================================================
-// Issue #1018: NodeAccessor Implementation Tests
+// NodeAccessor Implementation Tests
 // =========================================================================
 
-/// Test: NodeAccessor implementation on NodeService works correctly (Issue #1018)
+/// Test: NodeAccessor implementation on NodeService works correctly
 #[tokio::test]
 async fn test_node_accessor_get_node() -> Result<()> {
     use nodespace_core::services::NodeAccessor;
@@ -1665,7 +1665,7 @@ async fn test_node_accessor_get_node() -> Result<()> {
     Ok(())
 }
 
-/// Test: NodeAccessor::get_children returns children sorted by order (Issue #1018)
+/// Test: NodeAccessor::get_children returns children sorted by order
 #[tokio::test]
 async fn test_node_accessor_get_children() -> Result<()> {
     use nodespace_core::services::NodeAccessor;
@@ -1680,7 +1680,7 @@ async fn test_node_accessor_get_children() -> Result<()> {
     Ok(())
 }
 
-/// Test: NodeAccessor::get_nodes batch fetch works (Issue #1018)
+/// Test: NodeAccessor::get_nodes batch fetch works
 #[tokio::test]
 async fn test_node_accessor_get_nodes_batch() -> Result<()> {
     use nodespace_core::services::NodeAccessor;

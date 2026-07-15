@@ -1,5 +1,5 @@
 <!--
-  InvitationsInbox — onboarding entry point (epic #237, slice S5 #242). A modal
+  InvitationsInbox — onboarding entry point. A modal
   opened from the Pro account menu (and once, on first sign-in). Lets a user
   redeem a share-code invite, browse the collections they can join, and join an
   open one directly / request a restricted one.
@@ -26,7 +26,7 @@
 		open?: boolean;
 		onClose: () => void;
 		// When provided, a signed-in user with no code/membership can log out from
-		// here — reverting to the free/signed-out state (#248). Omitted callers get
+		// here — reverting to the free/signed-out state. Omitted callers get
 		// the plain Close-only footer.
 		onLogout?: () => void | Promise<void>;
 	} = $props();

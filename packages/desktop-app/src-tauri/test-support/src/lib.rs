@@ -29,7 +29,7 @@
 //! see that file's comment for why serializing matters here. Prefer `cargo
 //! test -p nodespace-app -- --test-threads=1` when iterating locally on more
 //! than one test in the same file to avoid the same daemon-spawn contention
-//! #1610 fixed in the gate.
+//! the gate serializes away.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -48,7 +48,7 @@ use tauri::Manager;
 /// `tests/*.rs` binary `#[tokio::test]`s run concurrently by default, so
 /// several real daemon spawns can contend for the same cores at once —
 /// worse on a machine that also has an unrelated `cargo test` running
-/// elsewhere (see #1610). 30s was tuned for an unloaded machine and had no
+/// elsewhere. 30s was tuned for an unloaded machine and had no
 /// headroom for that; 60s gives slack without materially raising the
 /// wall-clock cost of a clean, unloaded run, since `wait_for_daemon` returns
 /// as soon as the socket is healthy rather than sleeping out the full

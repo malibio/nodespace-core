@@ -1,4 +1,4 @@
-//! Binary and auth detection for PTY agent CLIs (Issue #1124).
+//! Binary and auth detection for PTY agent CLIs.
 //!
 //! `detect_all_agents()` iterates the static AGENT_CATALOG and checks two
 //! things per agent: (1) the binary is reachable on an augmented PATH, and

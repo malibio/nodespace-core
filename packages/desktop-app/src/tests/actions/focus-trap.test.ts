@@ -1,5 +1,5 @@
 /**
- * Tests for the focusTrap Svelte action (#1414).
+ * Tests for the focusTrap Svelte action.
  *
  * Drives REAL keyboard focus (focus an element, dispatch keydown on the focused
  * element) rather than synthetically firing on the overlay — that's the whole

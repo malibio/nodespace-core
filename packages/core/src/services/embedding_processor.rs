@@ -1,4 +1,4 @@
-//! Background Embedding Processor (Issue #729)
+//! Background Embedding Processor
 //!
 //! Provides event-driven background processing of stale root-aggregate embeddings:
 //! - Purely event-driven: only wakes when nodes change
@@ -240,7 +240,7 @@ impl EmbeddingProcessor {
     /// Unlike polling, this approach has zero overhead when idle. The processor
     /// only runs when there's actual work to do.
     ///
-    /// ## Root-Aggregate Model (Issue #729)
+    /// ## Root-Aggregate Model
     ///
     /// Uses `process_stale_embeddings()` which:
     /// 1. Queries the `embedding` table for stale entries

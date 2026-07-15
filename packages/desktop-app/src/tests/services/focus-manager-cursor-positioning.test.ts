@@ -1,5 +1,5 @@
 /**
- * Tests for FocusManager cursor positioning refactor (Issue #281)
+ * Tests for FocusManager cursor positioning refactor
  *
  * Verifies unified cursor position state and API methods
  */

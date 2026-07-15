@@ -1,5 +1,5 @@
 /**
- * Tests for C3a: Frontend outdent ordering math removal (Issue #1259)
+ * Tests for C3a: Frontend outdent ordering math removal
  *
  * Verifies that:
  * 1. No frontend code computes fractional order values for optimistic placement.

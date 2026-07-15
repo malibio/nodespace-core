@@ -6,8 +6,6 @@
  * - Display content stripping ("> " removed in blur mode)
  * - Content normalization
  *
- * Issue #277: Implement QuoteBlockNode component
- *
  * Note: These test the pure functions that would be used in QuoteBlockNode,
  * not the component itself (component rendering tested manually).
  */

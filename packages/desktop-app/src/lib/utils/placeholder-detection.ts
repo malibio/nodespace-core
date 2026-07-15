@@ -3,11 +3,11 @@
  *
  * Determines if a node is a placeholder (has only type-specific prefix, no actual content).
  *
- * **IMPORTANT - Phase 1 of Issue #479 (Eliminate Ephemeral Nodes):**
+ * **IMPORTANT - Phase 1 (Eliminate Ephemeral Nodes):**
  * This function is now used ONLY for UI styling decisions (gray text, placeholder appearance).
  * It is NO LONGER used for persistence decisions.
  *
- * **Persistence Behavior (as of Issue #479):**
+ * **Persistence Behavior:**
  * - Only ONE ephemeral node exists: initial placeholder when viewer loads with no children
  * - All other nodes (including blank ones) persist immediately with 500ms debounce
  * - Persistence is controlled by explicit `isInitialPlaceholder` flag, not by content detection

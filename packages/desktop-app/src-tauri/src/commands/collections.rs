@@ -1,6 +1,6 @@
 //! Collection CRUD operation commands for collection browsing and management
 //!
-//! As of Issue #1113, all commands proxy through the in-process gRPC server
+//! All commands proxy through the in-process gRPC server
 //! (nodespace-daemon) instead of calling `packages/core` directly.
 
 use crate::types::Node;

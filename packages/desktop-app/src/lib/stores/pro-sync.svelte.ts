@@ -70,7 +70,7 @@ class ProSyncStore {
   /**
    * Email of the signed-in user, from the daemon's `SyncStatusEvent.user_email`
    * (decoded from the session JWT). Empty when signed out / not yet authenticated.
-   * Drives the "signed in as <email>" affordance (#199 S6) — needed because on the
+   * Drives the "signed in as <email>" affordance — needed because on the
    * silent-resume path the frontend never sees an OAuth response.
    */
   userEmail = $state<string>('');
@@ -272,7 +272,7 @@ class ProSyncStore {
   }
 
   /**
-   * Manual sign-out (#199 S6). Tells the daemon to drop its session and wipe the
+   * Manual sign-out. Tells the daemon to drop its session and wipe the
    * persisted refresh token from the keychain (so a restart won't auto-resume),
    * then optimistically reflects signed-out locally. The daemon's AUTH_REQUIRED
    * transition confirms via `sync:status`. No-op in community mode (the backend

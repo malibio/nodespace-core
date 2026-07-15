@@ -562,7 +562,7 @@ export class SharedNodeStore {
   // Avoids querying database on every update to check existence
   private persistedNodeIds = new Set<string>();
 
-  // NOTE: childrenCache and parentsCache REMOVED (Issue #557)
+  // NOTE: childrenCache and parentsCache REMOVED
   // Hierarchy is now managed by ReactiveStructureTree (domain events)
   // Use structureTree.getChildren() and structureTree.getParent() instead
 
@@ -592,8 +592,8 @@ export class SharedNodeStore {
   // Non-reactive cache of the latest server-confirmed `node.version` per id.
   // Populated by the skip-while-editing guard in setNode() instead of
   // mutating the reactive `nodes` Map (which would trigger Svelte re-renders
-  // that remount the textarea and reset selectionStart — see
-  // nodespace-sync#76). Consumed by the UpdateNode persistence path so the
+  // that remount the textarea and reset selectionStart). Consumed by the
+  // UpdateNode persistence path so the
   // next OCC carries the freshest version.
   private serverConfirmedVersions = new Map<string, number>();
 
@@ -650,7 +650,7 @@ export class SharedNodeStore {
    * `currentParentId`. If `structureTree` has no opinion (`null`), the
    * hint is preserved and the backend's own retry loop handles it —
    * silently clearing a valid hint here is what produced
-   * nodespace-sync#77's drop-to-the-top behavior.
+   * the drop-to-the-top behavior.
    *
    * If `structureTree.getParent` returns `null` we emit a debug log so
    * the frequency of "tree not yet populated at persistence time" is
@@ -691,7 +691,7 @@ export class SharedNodeStore {
    * Exposed so the skip-while-editing test suite can lock the contract in
    * place — a future refactor that drops the cache read at the
    * persistence call site would fail the corresponding test instead of
-   * silently re-introducing the OCC-defeat bug from nodespace-sync#76.
+   * silently re-introducing the OCC-defeat bug.
    */
   computeOccVersionForUpdate(nodeId: string): number {
     const confirmed = this.serverConfirmedVersions.get(nodeId);
@@ -916,7 +916,7 @@ export class SharedNodeStore {
    * when their first child is saved. A brand-new date node that has never been
    * persisted will return null from the backend. Synthesize a minimal in-memory
    * node so pane-content does not mistake it for a deleted node and close the tab
-   * (mirrors the same logic in doLoadChildrenTree, issue #941).
+   * (mirrors the same logic in doLoadChildrenTree).
    *
    * Called by pane-content before mounting any viewer so every viewer mounts
    * with the guarantee that sharedNodeStore.getNode(nodeId) is defined.
@@ -1080,18 +1080,18 @@ export class SharedNodeStore {
       // This ensures hierarchy operations work while debouncing rapid typing
       const persistBehavior = this.determinePersistenceBehavior(source, options, changes);
       if (persistBehavior.shouldPersist) {
-        // Issue #479: All real nodes (even blank) should be persisted
+        // All real nodes (even blank) should be persisted
         // FOREIGN KEY validation is handled by persistence coordinator dependencies
         // Structural changes (sibling ordering) are now handled via backend moveNode()
 
-        // Issue #709: Smart routing via plugin system supports type-specific properties
+        // Smart routing via plugin system supports type-specific properties
         // Type-specific updaters route to node-specific methods (updateTaskNode, etc.)
         // The persistence whitelist now includes type-specific property changes
         const isStructuralChange = false; // Structural changes now handled via backend moveNode()
         const isContentChange = 'content' in changes;
         const isNodeTypeChange = 'nodeType' in changes;
         const isPropertyChange = 'properties' in changes;
-        // Issue #709: Check for type-specific property changes (status, priority, dueDate, assignee, etc.)
+        // Check for type-specific property changes (status, priority, dueDate, assignee, etc.)
         // These are persisted via type-specific updaters registered in the plugin system
         const currentNode = this.nodes.get(nodeId);
         const hasTypeUpdater = currentNode?.nodeType
@@ -1113,7 +1113,7 @@ export class SharedNodeStore {
           isPropertyChange ||
           isTypeSpecificChange;
 
-        // Issue #479: Do NOT check isPlaceholder here - that's a UI-only concept
+        // Do NOT check isPlaceholder here - that's a UI-only concept
         // Real nodes created by user actions (Enter key) should persist even if blank
         // Only BaseNodeViewer's viewer-local placeholder should be unpersisted
 
@@ -1122,7 +1122,7 @@ export class SharedNodeStore {
         const hasBatchActive = this.activeBatches.has(nodeId);
 
         if (shouldPersist && !hasBatchActive) {
-          // Issue #880: Capture old content for immediate backlinks reactivity
+          // Capture old content for immediate backlinks reactivity
           // This must be captured BEFORE the debounced persistence, from existingNode (line 747)
           const oldContentForMentions = isContentChange ? existingNode.content : undefined;
 
@@ -1157,7 +1157,7 @@ export class SharedNodeStore {
             nodeId,
             async () => {
               try {
-                // Issue #479: All real nodes (even blank) should be persisted
+                // All real nodes (even blank) should be persisted
                 // No placeholder checks here - viewer-local placeholder never enters this code path
 
                 // Check if node has been persisted - use in-memory tracking to avoid database query
@@ -1207,7 +1207,7 @@ export class SharedNodeStore {
                   );
 
                   try {
-                    // Issue #709: Smart routing via plugin system
+                    // Smart routing via plugin system
                     // Type-specific updaters route to node-specific methods (updateTaskNode, etc.)
                     // Generic updater falls back to node properties JSON update
                     //
@@ -1324,7 +1324,7 @@ export class SharedNodeStore {
 
                 }
 
-                // Issue #880: Update mentionedIn on target nodes after successful persistence
+                // Update mentionedIn on target nodes after successful persistence
                 // This enables immediate backlinks reactivity without requiring navigation
                 if (oldContentForMentions !== undefined) {
                   const persistedNode = this.nodes.get(nodeId);
@@ -1475,7 +1475,7 @@ export class SharedNodeStore {
     // intended skip behavior; the only consumers today are
     // `tauri-sync-listener` and `browser-sync-service`.
     //
-    // Fixes nodespace-sync#76 (typing corruption: chars dropped/replaced
+    // Fixes typing corruption (chars dropped/replaced
     // under sustained input as the optimistic store is clobbered by the
     // daemon's own confirmation looped back through the WatchNodes stream).
     //
@@ -1509,7 +1509,7 @@ export class SharedNodeStore {
         this.serverConfirmedVersions.set(node.id, node.version);
       }
       if (decision.notifyConflict) {
-        // #1437: a FOREIGN write to a node the user is actively editing (not
+        // A FOREIGN write to a node the user is actively editing (not
         // our own echo). We skip the clobber to protect the optimistic text,
         // but that must not be silent — raise a version-mismatch
         // notification (deduped per node) so the conflict is visible.
@@ -1566,7 +1566,7 @@ export class SharedNodeStore {
     // For UPDATES from viewer, skip persistence - BaseNodeViewer handles with debouncing
     // This ensures createNode() persistence works while avoiding duplicate writes on updates
     //
-    // Phase 1 of Issue #479: Eliminate ephemeral nodes during editing
+    // Phase 1: Eliminate ephemeral nodes during editing
     // - Only skip persistence when explicitly requested via skipPersistence flag
     // - This flag is ONLY true for initial viewer placeholder (when no children exist)
     // - All other blank nodes (created via Enter key, etc.) persist immediately
@@ -1575,7 +1575,7 @@ export class SharedNodeStore {
       const shouldPersist = source.type !== 'viewer' || isNewNode;
 
       if (shouldPersist) {
-        // Issue #479: No placeholder checks - all real nodes should be persisted
+        // No placeholder checks - all real nodes should be persisted
 
         // Delegate to PersistenceCoordinator
         // CRITICAL FIX: Track InsertPosition.After sibling as dependency to prevent race conditions
@@ -1590,7 +1590,7 @@ export class SharedNodeStore {
           dependencies.push(afterSiblingId);
         }
 
-        // Issue #479: Always persist the full node including content
+        // Always persist the full node including content
         // Real nodes (even with only syntax like "## ") must include content field for backend validation
         // The old code stripped content for "placeholder" header nodes, but now all user-created nodes
         // should persist with their full content, even if it's just syntax
@@ -1813,7 +1813,7 @@ export class SharedNodeStore {
         continue;
       }
 
-      // Same skip-while-editing guard/policy as setNode (nodespace-sync#76): a
+      // Same skip-while-editing guard/policy as setNode: a
       // concurrent tree (re)load with a `database` source must NOT clobber a
       // node the user is actively editing — `doLoadChildrenTree` passes a
       // database source, so a reload for a parent whose child is mid-keystroke
@@ -1965,7 +1965,7 @@ export class SharedNodeStore {
   }
 
   /**
-   * Update a task node with type-safe property updates (Issue #709)
+   * Update a task node with type-safe property updates
    *
    * Routes task-specific field updates (status, priority, dueDate, assignee) through
    * the type-safe update path that directly modifies task node properties in the backend.
@@ -2169,7 +2169,7 @@ export class SharedNodeStore {
   }
 
   // ========================================================================
-  // New Methods for BaseNodeViewer Migration (Issue #237)
+  // New Methods for BaseNodeViewer Migration
   // ========================================================================
 
   /**
@@ -2193,7 +2193,7 @@ export class SharedNodeStore {
 
       // Ensure the parent node itself is in the store before loading children.
       // This prevents BaseNodeViewer from treating a not-yet-loaded parent as a
-      // stale/deleted node and closing the tab prematurely (issue #941).
+      // stale/deleted node and closing the tab prematurely.
       let parentNode: Node | null = null;
       if (!this.nodes.has(parentId)) {
         parentNode = await backendAdapter.getNode(parentId);
@@ -2286,7 +2286,7 @@ export class SharedNodeStore {
         // child is saved. A brand-new date node that has never been persisted will return an
         // empty tree here. Synthesize a minimal in-memory node so BaseNodeViewer's
         // post-load existence check does not mistake it for a deleted/stale node and close
-        // the tab (issue #941).
+        // the tab.
         if (isValidDateId(parentId)) {
           const now = new Date().toISOString();
           const virtualDateNode: Node = {
@@ -2485,7 +2485,7 @@ export class SharedNodeStore {
   /**
    * Handle updates from external sources (MCP server, database sync, etc.)
    *
-   * This method provides the integration point for future MCP server (#112).
+   * This method provides the integration point for a future MCP server.
    * It routes external updates through the same conflict detection and
    * synchronization pipeline as local edits.
    *
@@ -2493,7 +2493,7 @@ export class SharedNodeStore {
    * @param update - The node update to apply
    *
    * @example
-   * // Future: When MCP server from #112 is ready
+   * // Future: When the MCP server is ready
    * mcpServer.on('node:updated', (mcpUpdate) => {
    *   sharedStore.handleExternalUpdate('mcp-server', mcpUpdate);
    * });
@@ -2575,7 +2575,7 @@ export class SharedNodeStore {
    * Idempotent: Safe to call multiple times for the same node.
    * Concurrent calls for the same node will be ignored.
    *
-   * Future enhancement: Implement conflict merge UI (see #720 non-goals)
+   * Future enhancement: Implement conflict merge UI
    */
   async resyncNodeFromServer(nodeId: string): Promise<void> {
     // Idempotency guard: prevent concurrent resync operations on same node
@@ -2752,7 +2752,7 @@ export class SharedNodeStore {
   }
 
   /**
-   * Update mentionedIn on target nodes when content changes (Issue #880)
+   * Update mentionedIn on target nodes when content changes
    *
    * When a mention is created/removed in content, the target node's mentionedIn
    * should update immediately without requiring navigation away and back.
@@ -3120,7 +3120,7 @@ export class SharedNodeStore {
         return;
       }
 
-      // Issue #479: Always persist batched changes - even blank/syntax-only nodes
+      // Always persist batched changes - even blank/syntax-only nodes
       // Real nodes (created by user actions) should always be persisted
       // The viewer-local placeholder never enters batch system
       this.persistBatchedChanges(nodeId, batch.changes, finalNode, batch.originalContent);
@@ -3333,7 +3333,7 @@ export class SharedNodeStore {
             }
           }
 
-          // Issue #880: Update mentionedIn on target nodes after successful batch persistence
+          // Update mentionedIn on target nodes after successful batch persistence
           // This enables immediate backlinks reactivity without requiring navigation
           if (originalContent !== undefined && 'content' in changes) {
             const persistedNode = this.nodes.get(nodeId);

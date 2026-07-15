@@ -1,4 +1,4 @@
-//! Integration tests for SkillUpdater (Issue #1061).
+//! Integration tests for SkillUpdater.
 //!
 //! Verifies that when schemas are created or deleted, the "Node Creation"
 //! skill node's description is updated to include the new type names,

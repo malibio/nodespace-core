@@ -1,5 +1,5 @@
 /**
- * Daemon-reconnect retry wiring (#1470) — schemasData and collectionsData
+ * Daemon-reconnect retry wiring — schemasData and collectionsData
  * both register with the shared daemon-status reconnect hook at module load
  * so a load that failed while the daemon was still starting up retries
  * automatically once the daemon becomes healthy, instead of staying failed

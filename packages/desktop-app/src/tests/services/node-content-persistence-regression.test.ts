@@ -1,5 +1,5 @@
 /**
- * Regression tests for issue #1307: node content not persisting to database.
+ * Regression tests: node content not persisting to database.
  *
  * Covers the write → flush → read-back cycle so that edits made in the Tauri
  * desktop app reliably reach the backend.

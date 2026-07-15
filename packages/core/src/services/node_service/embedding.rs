@@ -8,7 +8,7 @@ impl NodeService {
     /// Read-only and **independent of the `nlp` feature**: it queries the
     /// persisted `embedding` table, which exists whether or not embedding
     /// *generation* (llama-cpp) is compiled in. The Pro daemon uses this to
-    /// mirror a node's vectors into Supabase pgvector (#97).
+    /// mirror a node's vectors into Supabase pgvector.
     pub async fn get_embeddings(
         &self,
         node_id: &str,
@@ -19,7 +19,7 @@ impl NodeService {
     }
 
     /// Read embedding records modified at or after `since`, across all nodes,
-    /// ordered by `modified_at`. Drives the Pro daemon's cloud-push sweep (#97):
+    /// ordered by `modified_at`. Drives the Pro daemon's cloud-push sweep:
     /// it advances a cursor over `modified_at` and pushes newly (re)computed
     /// vectors. Also independent of the `nlp` feature.
     pub async fn embeddings_modified_since(
@@ -54,8 +54,8 @@ impl NodeService {
             })
     }
 
-    /// Apply embeddings PULLED from another device (`origin = 'remote'`,
-    /// #182/#183). The Pro daemon's cloud pull uses this instead of
+    /// Apply embeddings PULLED from another device (`origin = 'remote'`).
+    /// The Pro daemon's cloud pull uses this instead of
     /// [`Self::upsert_embeddings`] so the push sweep won't re-push a vector this
     /// device merely received. Also independent of the `nlp` feature.
     pub async fn apply_remote_embeddings(
@@ -72,7 +72,7 @@ impl NodeService {
     }
 
     /// Delete all of a node's embeddings. Used by the Pro daemon's cloud pull to
-    /// apply a remote embeddings delete (#97). Also independent of the `nlp` feature.
+    /// apply a remote embeddings delete. Also independent of the `nlp` feature.
     pub async fn delete_embeddings(&self, node_id: &str) -> Result<(), NodeServiceError> {
         self.store.delete_embeddings(node_id).await.map_err(|e| {
             NodeServiceError::query_failed(format!("Failed to delete embeddings: {}", e))
@@ -231,7 +231,7 @@ impl NodeService {
             }
         };
 
-        // Only queue if root is an embeddable type (Issue #1018: behavior-driven)
+        // Only queue if root is an embeddable type (behavior-driven)
         let behavior: std::sync::Arc<dyn crate::behaviors::NodeBehavior> =
             behaviors.get(&root_type).unwrap_or_else(|| {
                 std::sync::Arc::new(crate::behaviors::CustomNodeBehavior::new(&root_type))

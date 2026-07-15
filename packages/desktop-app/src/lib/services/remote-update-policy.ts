@@ -2,7 +2,7 @@
  * Remote-update policy for SharedNodeStore.
  *
  * Extracted from the skip-while-editing guard inline in `setNode` /
- * `batchSetNodes` (nodespace-sync#76, #77, #1436, #1437). A daemon-broadcast
+ * `batchSetNodes`. A daemon-broadcast
  * event (`source.type === 'database'`) arriving for a node the user is
  * actively editing — or has unsaved local changes pending — would otherwise
  * overwrite the optimistic store with the *older* server-confirmed state.

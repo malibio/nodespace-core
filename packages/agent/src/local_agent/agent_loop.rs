@@ -3,8 +3,6 @@
 //! Orchestrates the conversation cycle: build prompts, call inference,
 //! parse tool calls, execute tools, feed results back, and repeat until
 //! the model produces a final response or hits iteration limits.
-//!
-//! Issue #1006
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1848,7 +1846,7 @@ mod tests {
             assert_eq!(tc.name, "search_nodes");
         }
 
-        // The fallback response must encode the invariant from issue #1092:
+        // The fallback response must encode the invariant:
         // no raw tool identifier reaches the UI.
         assert!(
             !result.response.contains("search_nodes"),
@@ -2328,8 +2326,8 @@ mod tests {
         assert_eq!(result.response, "Here is your answer.");
     }
 
-    /// A model whose effective context window was reduced to fit memory (issue
-    /// #1638) must summarize when history exceeds *that* window — not the old
+    /// A model whose effective context window was reduced to fit memory must
+    /// summarize when history exceeds *that* window — not the old
     /// hardcoded 32K budget. Here history is ~10K tokens: comfortably under the
     /// former 32K constant, but well over a 4096-token effective window. Before
     /// budgeting against the effective window, this history would sail past the
@@ -2963,7 +2961,7 @@ mod tests {
 
     // -- search_skills as a regular tool ---------------------------------
 
-    /// Issue #1130: the model decides when to search for skills by calling
+    /// The model decides when to search for skills by calling
     /// the `search_skills` tool, then invokes a matching skill (if any) like
     /// any other tool. There's no pre-LLM dispatch — the loop always runs the
     /// full tool set against the model.
@@ -3075,7 +3073,7 @@ mod tests {
         assert!(result.usage.prompt_tokens > 0);
     }
 
-    /// Multi-skill turn from issue #1130 AC: the model calls `search_skills`
+    /// Multi-skill turn: the model calls `search_skills`
     /// for each sub-task, then invokes the matched skill's tool. This test
     /// exercises a full chain — search_skills (notes) → search_semantic →
     /// search_skills (task) → create_node — not just two back-to-back
@@ -3231,7 +3229,7 @@ mod tests {
     /// Empty `search_skills` matches → model judges and produces a contextual
     /// clarification (referencing what it searched), rather than the prior
     /// hardcoded `CLARIFYING_QUESTION` string. This is the "no relevant skill"
-    /// path from issue #1130 AC.
+    /// path.
     #[tokio::test]
     async fn empty_search_skills_matches_let_model_clarify_with_context() {
         let engine = Arc::new(MockEngine::new(vec![
@@ -3580,7 +3578,7 @@ mod tests {
         );
     }
 
-    /// Per #1130: an empty response with no tool calls is an inference bug
+    /// An empty response with no tool calls is an inference bug
     /// (model should always produce text or a tool call), not a UX surface.
     /// Surface as an error so it lands in logs/metrics rather than being
     /// silently masked.
@@ -3602,7 +3600,7 @@ mod tests {
         }
     }
 
-    // -- Silent-failure guard regression tests (#1531) -----------------------
+    // -- Silent-failure guard regression tests -----------------------
 
     /// Scenario B: the model prints a tool call as plain text instead of using
     /// the structured tool_calls field. `tool_calls == 0`, so the tool-failure

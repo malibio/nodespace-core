@@ -441,7 +441,7 @@ fn bench_batch_update(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark BM25 root-walk latency at realistic corpus sizes (Issue #951)
+/// Benchmark BM25 root-walk latency at realistic corpus sizes
 ///
 /// Measures: BM25 `@@` query + iterative parent-walk to resolve roots.
 /// Run at 100, 500, and 1000 nodes with 3-level nesting (root→child→grandchild).

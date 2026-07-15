@@ -1,9 +1,9 @@
-//! Event Emission Tests (Issue #643, updated for Issue #665, #995)
+//! Event Emission Tests
 //!
 //! Tests that verify correct event emission for all major operations.
-//! As of Issue #665, events are now emitted at the NodeService layer
+//! Events are now emitted at the NodeService layer
 //! (not SqliteStore) to support client filtering.
-//! As of Issue #995, events are wrapped in EventEnvelope with metadata.
+//! Events are wrapped in EventEnvelope with metadata.
 //!
 //! These tests verify:
 //! 1. Correct events are emitted for each operation type
@@ -69,14 +69,14 @@ mod event_emission_tests {
             .create_node(node)
             .await?;
 
-        // Receive the emitted event (Issue #995: EventEnvelope)
+        // Receive the emitted event (EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
             .expect("Should receive event");
 
         // Verify it's a NodeCreated event with correct client_id in envelope metadata
-        // (Issue #724: ID-only events, Issue #832: node_type, Issue #995: EventEnvelope)
+        // (ID-only events, node_type, EventEnvelope)
         match &envelope.event {
             DomainEvent::NodeCreated { node_id, node_type } => {
                 assert_eq!(node_id, &expected_id);
@@ -115,14 +115,14 @@ mod event_emission_tests {
             )
             .await?;
 
-        // Receive the emitted event (Issue #995: EventEnvelope)
+        // Receive the emitted event (EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
             .expect("Should receive event");
 
         // Verify it's a NodeUpdated event with correct client_id in envelope metadata
-        // (Issue #724: ID-only events, Issue #995: EventEnvelope + node_type + changed_properties)
+        // (ID-only events, EventEnvelope + node_type + changed_properties)
         match &envelope.event {
             DomainEvent::NodeUpdated {
                 node_id: updated_id,
@@ -142,7 +142,7 @@ mod event_emission_tests {
 
     #[tokio::test]
     async fn test_collection_query_paginates_members_not_global_set() -> Result<()> {
-        // #1430: offset/limit must paginate the COLLECTION'S members (in memory),
+        // offset/limit must paginate the COLLECTION'S members (in memory),
         // not the global unfiltered set, and non-members must be excluded.
         let (service, _temp_dir) = create_test_service().await?;
 
@@ -202,7 +202,7 @@ mod event_emission_tests {
 
     #[tokio::test]
     async fn test_collection_query_returns_members_despite_many_newer_nonmembers() -> Result<()> {
-        // #1430 regression guard: members must be returned even when MANY newer
+        // Regression guard: members must be returned even when MANY newer
         // non-member nodes exist. The SQL is id-scoped to the member set, so it can
         // never be crowded out. This FAILS under a capped-global-limit approach
         // (the newest N rows would all be non-members → 0 members) and under the
@@ -258,7 +258,7 @@ mod event_emission_tests {
 
     #[tokio::test]
     async fn test_bulk_update_emits_changed_properties_and_merges() -> Result<()> {
-        // #1434: bulk_update must emit a NON-empty changed_properties (so
+        // bulk_update must emit a NON-empty changed_properties (so
         // property-change automation fires) and MERGE properties (not wholesale
         // replace), matching the single-update path.
         let (service, _temp_dir) = create_test_service().await?;
@@ -342,7 +342,7 @@ mod event_emission_tests {
             .await?;
         assert!(result.existed);
 
-        // Receive the emitted event (Issue #995: EventEnvelope)
+        // Receive the emitted event (EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
@@ -395,7 +395,7 @@ mod event_emission_tests {
             )
             .await?;
 
-        // Receive the emitted event (Issue #811: unified relationship events, Issue #995: EventEnvelope)
+        // Receive the emitted event (unified relationship events, EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
@@ -438,7 +438,7 @@ mod event_emission_tests {
             .create_mention(&source_node.id, &target_node.id)
             .await?;
 
-        // Receive the emitted event (Issue #811: unified relationship events, Issue #995: EventEnvelope)
+        // Receive the emitted event (unified relationship events, EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
@@ -485,14 +485,14 @@ mod event_emission_tests {
             .remove_mention(&source_node.id, &target_node.id)
             .await?;
 
-        // Receive the emitted event (Issue #811: unified relationship events, Issue #995: EventEnvelope)
+        // Receive the emitted event (unified relationship events, EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")
             .expect("Should receive event");
 
         // Verify it's a RelationshipDeleted event with correct client_id in metadata
-        // Issue #813: Relationship IDs are now from universal `relationship` table
+        // Relationship IDs are now from universal `relationship` table
         match &envelope.event {
             DomainEvent::RelationshipDeleted {
                 id: _,
@@ -540,7 +540,7 @@ mod event_emission_tests {
             )
             .await?;
 
-        // Should receive exactly ONE event (Issue #995: EventEnvelope)
+        // Should receive exactly ONE event (EventEnvelope)
         let envelope1 = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Should receive event")
@@ -569,7 +569,7 @@ mod event_emission_tests {
         let node = Node::new("text".to_string(), "Test content".to_string(), json!({}));
         service.create_node(node).await?;
 
-        // Receive the emitted event (Issue #995: EventEnvelope)
+        // Receive the emitted event (EventEnvelope)
         let envelope = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("Event should be emitted within 1 second")

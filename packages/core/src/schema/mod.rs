@@ -535,7 +535,7 @@ pub async fn handle_update_schema(
         }
     }
 
-    // Issue #1012: Check if any active playbooks would be affected by this schema change.
+    // Check if any active playbooks would be affected by this schema change.
     // Done before any mutations so a blocked rename doesn't partially execute.
     let affected =
         crate::playbook::validation::check_schema_change_impact(&params.schema_id, node_service)

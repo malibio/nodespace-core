@@ -4,7 +4,7 @@
 /// - Text: Uses asymmetric prefixes (search_document/search_query) for optimal retrieval
 /// - Images: Foundation for future multimodal embedding support
 ///
-/// ## Performance Optimization (Issue #776)
+/// ## Performance Optimization
 ///
 /// The service reuses LlamaContext across embedding calls to avoid the overhead
 /// of Metal kernel compilation on each call. The context is created once during
@@ -195,7 +195,7 @@ pub fn release_llama_backend() {
 
 /// Wrapper to hold model and context together with proper lifetimes.
 ///
-/// ## Safety (Issue #776)
+/// ## Safety
 /// This struct uses `unsafe` to store a `LlamaContext` with an extended lifetime.
 /// This is safe because:
 /// 1. The context is only used while model is alive (owned by this struct)
@@ -340,7 +340,7 @@ impl EmbeddingService {
     /// If the model file is not found, the service will operate in stub mode
     /// returning zero vectors. This allows tests to run without the model.
     ///
-    /// ## Performance (Issue #776)
+    /// ## Performance
     /// Creates a persistent LlamaContext that is reused across all embedding calls.
     /// This avoids the overhead of Metal kernel compilation on each embedding request.
     pub fn initialize(&mut self) -> Result<()> {
@@ -516,7 +516,7 @@ impl EmbeddingService {
         }
     }
 
-    /// Generate embedding using llama.cpp with persistent context (Issue #776)
+    /// Generate embedding using llama.cpp with persistent context
     ///
     /// ## Performance Optimization
     /// This method reuses a persistent `LlamaContext` across calls, avoiding the

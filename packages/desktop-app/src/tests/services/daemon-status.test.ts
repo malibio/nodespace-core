@@ -1,5 +1,5 @@
 /**
- * Daemon status service (#1470) — shared daemon-status listener that drives
+ * Daemon status service — shared daemon-status listener that drives
  * AppShell's connecting/unreachable banner and fans out a reconnect signal
  * to daemon-dependent stores (schemas, collections, children-tree) so they
  * retry a failed load once the daemon becomes healthy, instead of staying

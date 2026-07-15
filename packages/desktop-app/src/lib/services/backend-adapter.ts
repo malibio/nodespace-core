@@ -272,7 +272,7 @@ export class HttpAdapter implements BackendAdapter {
   private getHeaders(): Record<string, string> {
     return {
       'Content-Type': 'application/json'
-      // No X-Client-Id header needed (Issue #715)
+      // No X-Client-Id header needed
       // dev-proxy represents all browser clients as single logical client
     };
   }

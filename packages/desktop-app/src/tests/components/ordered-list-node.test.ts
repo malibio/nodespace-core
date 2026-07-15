@@ -85,7 +85,7 @@ describe('OrderedListNode Plugin', () => {
     it('should preserve content with cleanContent: false (canRevert: true)', () => {
       const plugin = pluginRegistry.getPlugin('ordered-list');
 
-      // Issue #667: Pattern now lives on plugin.pattern (new architecture)
+      // Pattern now lives on plugin.pattern (new architecture)
       // canRevert: true means cleanContent: false (content preserved for reversion)
       expect(plugin?.pattern?.canRevert).toBe(true);
     });
@@ -102,7 +102,7 @@ describe('OrderedListNode Plugin', () => {
     });
 
     it('should have correct cursor positioning in pattern detection', () => {
-      // Issue #667: Cursor positioning comes from slash command config
+      // Cursor positioning comes from slash command config
       const patterns = pluginRegistry.getAllPatternDetectionConfigs();
       const pattern = patterns.find((p) => p.targetNodeType === 'ordered-list');
 
@@ -111,7 +111,7 @@ describe('OrderedListNode Plugin', () => {
     });
 
     it('should have correct pattern priority', () => {
-      // Issue #667: Priority is derived from plugin.pattern
+      // Priority is derived from plugin.pattern
       const patterns = pluginRegistry.getAllPatternDetectionConfigs();
       const pattern = patterns.find((p) => p.targetNodeType === 'ordered-list');
 
@@ -124,7 +124,7 @@ describe('OrderedListNode Plugin', () => {
       const commands = pluginRegistry.getAllSlashCommands();
       const slashCommand = commands.find((c) => c.id === 'ordered-list');
 
-      // Issue #667: Pattern config derived from plugin.pattern via getAllPatternDetectionConfigs
+      // Pattern config derived from plugin.pattern via getAllPatternDetectionConfigs
       const patterns = pluginRegistry.getAllPatternDetectionConfigs();
       const patternDetection = patterns.find((p) => p.targetNodeType === 'ordered-list');
 
@@ -140,7 +140,7 @@ describe('OrderedListNode Plugin', () => {
     it('should have pattern detection extract metadata', () => {
       const plugin = pluginRegistry.getPlugin('ordered-list');
 
-      // Issue #667: extractMetadata now lives on plugin.pattern
+      // extractMetadata now lives on plugin.pattern
       expect(plugin?.pattern?.extractMetadata).toBeDefined();
 
       // For ordered lists, metadata should be empty (no complex parsing needed)
@@ -184,7 +184,7 @@ describe('OrderedListNode Plugin', () => {
     it('should have correct pattern regex', () => {
       const plugin = pluginRegistry.getPlugin('ordered-list');
 
-      // Issue #667: Pattern regex now lives on plugin.pattern.detect
+      // Pattern regex now lives on plugin.pattern.detect
       const regex = plugin?.pattern?.detect;
       expect(regex).toEqual(/^1\.\s/);
 

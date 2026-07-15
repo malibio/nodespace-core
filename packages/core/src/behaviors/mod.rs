@@ -256,7 +256,7 @@ pub trait NodeBehavior: Send + Sync {
     /// let behavior = TaskNodeBehavior;
     /// let defaults = behavior.default_metadata();
     /// // Task defaults use nested format: properties.task.status
-    /// // Status values use lowercase format (Issue #670)
+    /// // Status values use lowercase format
     /// assert_eq!(defaults["task"]["status"], "open");
     /// ```
     fn default_metadata(&self) -> serde_json::Value {
@@ -306,7 +306,7 @@ pub trait NodeBehavior: Send + Sync {
         }
     }
 
-    /// Phase 2: Optional async — aggregated content from related nodes (Issue #1018)
+    /// Phase 2: Optional async — aggregated content from related nodes
     ///
     /// Called by the embedding service after `get_embeddable_content()` returns `Some`.
     /// Enables tree-walking types (text, header) to fetch children via `NodeAccessor`
@@ -435,10 +435,10 @@ impl NodeBehavior for TextNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #479 Phase 1: Allow blank text nodes
+        // Phase 1: Allow blank text nodes
         // Changed behavior: Backend now accepts blank text nodes
         //
-        // Architecture Change (Issue #479):
+        // Architecture Change:
         // - Frontend: Persists blank nodes immediately (with 500ms debounce)
         // - Backend: Accepts blank text nodes (user responsible for managing them)
         // - User Experience: Users can create blank nodes via Enter key, burden is on user to maintain or delete
@@ -448,7 +448,7 @@ impl NodeBehavior for TextNodeBehavior {
         // 2. Prevents UNIQUE constraint violations when indenting blank nodes
         // 3. Simplifies frontend persistence logic (Phase 2 will remove deferred update queue)
         //
-        // Previous behavior (before Issue #479):
+        // Previous behavior (before blank content was allowed):
         // - Backend rejected blank nodes with validation error
         // - Frontend had to manage ephemeral nodes until content was added
         // - Caused database constraint issues during indent operations
@@ -473,7 +473,7 @@ impl NodeBehavior for TextNodeBehavior {
         })
     }
 
-    /// Text nodes aggregate children's content for embedding (Issue #1018)
+    /// Text nodes aggregate children's content for embedding
     fn get_aggregated_content<'a>(
         &'a self,
         node: &'a Node,
@@ -514,7 +514,7 @@ impl NodeBehavior for HeaderNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #484: Allow blank header nodes (e.g., "##" with no content)
+        // Allow blank header nodes (e.g., "##" with no content)
         // Similar to text nodes, headers can be created blank and filled in later
         // Frontend manages the UX of blank headers (e.g., showing placeholder text)
         Ok(())
@@ -535,7 +535,7 @@ impl NodeBehavior for HeaderNodeBehavior {
         })
     }
 
-    /// Header nodes aggregate children's content for embedding (Issue #1018)
+    /// Header nodes aggregate children's content for embedding
     fn get_aggregated_content<'a>(
         &'a self,
         node: &'a Node,
@@ -555,7 +555,7 @@ impl NodeBehavior for HeaderNodeBehavior {
 /// # Valid Status Values (Schema-Defined)
 ///
 /// Status values are defined in the task schema and validated dynamically.
-/// All values use lowercase format for consistency across layers (Issue #670).
+/// All values use lowercase format for consistency across layers.
 ///
 /// Core values (protected, cannot be removed):
 /// - "open" - Not started (default)
@@ -565,7 +565,7 @@ impl NodeBehavior for HeaderNodeBehavior {
 ///
 /// User-extensible values can be added via schema.
 ///
-/// # Strongly-Typed Validation (Issue #673)
+/// # Strongly-Typed Validation
 ///
 /// This behavior supports both generic Node validation (via `validate()`) and
 /// strongly-typed TaskNode validation (via `validate_task_node()`). The generic
@@ -589,7 +589,7 @@ impl NodeBehavior for HeaderNodeBehavior {
 pub struct TaskNodeBehavior;
 
 impl TaskNodeBehavior {
-    /// Validate a strongly-typed TaskNode directly (Issue #673)
+    /// Validate a strongly-typed TaskNode directly
     ///
     /// This method provides compile-time type safety by validating TaskNode
     /// fields directly rather than parsing from JSON properties. Use this
@@ -640,7 +640,7 @@ impl NodeBehavior for TaskNodeBehavior {
     }
 
     fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #673: Convert to strongly-typed TaskNode and validate
+        // Convert to strongly-typed TaskNode and validate
         // This provides type-safe validation with direct field access
         match TaskNode::from_node(node.clone()) {
             Ok(task) => self.validate_task_node(&task),
@@ -652,7 +652,7 @@ impl NodeBehavior for TaskNodeBehavior {
                     e
                 );
 
-                // Type-namespaced property validation (Issue #397)
+                // Type-namespaced property validation
                 // Properties are stored under type-specific namespaces: properties.task.*
                 // This allows preserving properties when converting between types
                 //
@@ -700,7 +700,7 @@ impl NodeBehavior for TaskNodeBehavior {
     }
 
     fn default_metadata(&self) -> serde_json::Value {
-        // Uses lowercase canonical values for consistency across all layers (Issue #670)
+        // Uses lowercase canonical values for consistency across all layers
         serde_json::json!({
             "task": {
                 "status": "open",
@@ -756,7 +756,7 @@ impl NodeBehavior for CodeBlockNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #484: Allow blank code blocks (e.g., "```language" with no code)
+        // Allow blank code blocks (e.g., "```language" with no code)
         // Users can create blank code blocks and fill in code later
         // Frontend manages the UX of blank code blocks (e.g., showing placeholder text)
         Ok(())
@@ -805,7 +805,7 @@ impl NodeBehavior for QuoteBlockNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #484: Allow blank quote blocks (e.g., ">" with no content)
+        // Allow blank quote blocks (e.g., ">" with no content)
         // Users can create blank quote blocks and fill in quoted text later
         // Frontend manages the UX of blank quote blocks (e.g., showing placeholder text)
         Ok(())
@@ -854,7 +854,7 @@ impl NodeBehavior for OrderedListNodeBehavior {
     }
 
     fn validate(&self, _node: &Node) -> Result<(), NodeValidationError> {
-        // Issue #484: Allow blank ordered list nodes (consistent with headers, quotes, etc.)
+        // Allow blank ordered list nodes (consistent with headers, quotes, etc.)
         //
         // ARCHITECTURAL DECISION: Blank ordered lists are semantically valid:
         //
@@ -873,7 +873,7 @@ impl NodeBehavior for OrderedListNodeBehavior {
         //    - User expects immediate persistence without requiring content first
         //    - Backend should accept what frontend naturally generates
         //
-        // 4. Consistency with other node types (Issue #484)
+        // 4. Consistency with other node types
         //    - Headers allow blank content after "##"
         //    - Quote blocks allow blank content after ">"
         //    - Code blocks allow blank content after "```"
@@ -986,7 +986,7 @@ impl NodeBehavior for TableNodeBehavior {
 /// # ID Format
 ///
 /// Date nodes must have IDs matching `YYYY-MM-DD` (e.g., "2025-01-03").
-/// Per Issue #670, the content field can be any custom content (no longer
+/// The content field can be any custom content (no longer
 /// required to match the date ID).
 ///
 /// # Examples
@@ -1026,7 +1026,7 @@ impl NodeBehavior for DateNodeBehavior {
             NodeValidationError::InvalidId(format!("Invalid date format: {}", node.id))
         })?;
 
-        // NOTE: Per Issue #670, date nodes can have custom content (not required to match ID).
+        // NOTE: Date nodes can have custom content (not required to match ID).
         // The ID is always in YYYY-MM-DD format, but content can be anything (e.g., "Custom Date Content").
 
         Ok(())
@@ -2395,12 +2395,12 @@ mod tests {
         let valid_node = Node::new("text".to_string(), "Hello world".to_string(), json!({}));
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Issue #479: Blank text nodes are now allowed (frontend manages persistence)
+        // Blank text nodes are now allowed (frontend manages persistence)
         let mut empty_node = valid_node.clone();
         empty_node.content = "".to_string();
         assert!(behavior.validate(&empty_node).is_ok());
 
-        // Issue #479: Whitespace-only content is also allowed
+        // Whitespace-only content is also allowed
         let mut whitespace_node = valid_node.clone();
         whitespace_node.content = "   ".to_string();
         assert!(behavior.validate(&whitespace_node).is_ok());
@@ -2411,7 +2411,7 @@ mod tests {
         let behavior = TextNodeBehavior;
         let base_node = Node::new("text".to_string(), "Valid".to_string(), json!({}));
 
-        // Issue #479: All whitespace (including Unicode) is now allowed
+        // All whitespace (including Unicode) is now allowed
         // Backend no longer validates content - frontend manages blank node persistence
 
         // Zero-width space (U+200B) - now allowed
@@ -2510,7 +2510,7 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Issue #484: Blank headers are now allowed (e.g., "##" with no content)
+        // Blank headers are now allowed (e.g., "##" with no content)
         let mut blank_node = valid_node.clone();
         blank_node.content = "".to_string();
         assert!(
@@ -2518,7 +2518,7 @@ mod tests {
             "Blank header nodes should be allowed per Issue #484"
         );
 
-        // Issue #484: Whitespace-only headers are allowed
+        // Whitespace-only headers are allowed
         let mut whitespace_node = valid_node.clone();
         whitespace_node.content = "   ".to_string();
         assert!(
@@ -2539,7 +2539,7 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Issue #484: Blank code blocks are now allowed
+        // Blank code blocks are now allowed
         let mut blank_node = valid_node.clone();
         blank_node.content = "".to_string();
         assert!(
@@ -2547,7 +2547,7 @@ mod tests {
             "Blank code blocks should be allowed per Issue #484"
         );
 
-        // Issue #484: Whitespace-only code blocks are allowed
+        // Whitespace-only code blocks are allowed
         let mut whitespace_node = valid_node.clone();
         whitespace_node.content = "   ".to_string();
         assert!(
@@ -2568,7 +2568,7 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Issue #484: Blank quote blocks are now allowed (e.g., ">" with no content)
+        // Blank quote blocks are now allowed (e.g., ">" with no content)
         let mut blank_node = valid_node.clone();
         blank_node.content = "".to_string();
         assert!(
@@ -2576,7 +2576,7 @@ mod tests {
             "Blank quote blocks should be allowed per Issue #484"
         );
 
-        // Issue #484: Quote with just prefix and whitespace
+        // Quote with just prefix and whitespace
         let mut prefix_only_node = valid_node.clone();
         prefix_only_node.content = ">".to_string();
         assert!(
@@ -2584,7 +2584,7 @@ mod tests {
             "Quote blocks with just '>' should be allowed per Issue #484"
         );
 
-        // Issue #484: Quote with prefix and space
+        // Quote with prefix and space
         let mut prefix_space_node = valid_node.clone();
         prefix_space_node.content = "> ".to_string();
         assert!(
@@ -2605,7 +2605,7 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node).is_ok());
 
-        // Issue #484: Blank ordered lists are now allowed (consistent with headers, quotes, etc.)
+        // Blank ordered lists are now allowed (consistent with headers, quotes, etc.)
         let mut blank_node = valid_node.clone();
         blank_node.content = "".to_string();
         assert!(
@@ -2613,7 +2613,7 @@ mod tests {
             "Blank ordered list nodes should be allowed per Issue #484"
         );
 
-        // Issue #484: Ordered list with just prefix
+        // Ordered list with just prefix
         let mut prefix_only_node = valid_node.clone();
         prefix_only_node.content = "1. ".to_string();
         assert!(
@@ -2621,7 +2621,7 @@ mod tests {
             "Ordered lists with just '1. ' should be allowed per Issue #484"
         );
 
-        // Issue #484: Whitespace-only ordered lists are allowed
+        // Whitespace-only ordered lists are allowed
         let mut whitespace_node = valid_node.clone();
         whitespace_node.content = "   ".to_string();
         assert!(
@@ -2704,7 +2704,7 @@ mod tests {
         let behavior = TaskNodeBehavior;
 
         // Valid task with status (old flat format - backward compatibility)
-        // Status values use lowercase format (Issue #670)
+        // Status values use lowercase format
         let valid_node_old_format = Node::new(
             "task".to_string(),
             "Implement feature".to_string(),
@@ -2712,7 +2712,7 @@ mod tests {
         );
         assert!(behavior.validate(&valid_node_old_format).is_ok());
 
-        // Valid task with status (new nested format - Issue #397)
+        // Valid task with status (new nested format)
         let valid_node_new_format = Node::new(
             "task".to_string(),
             "Implement feature".to_string(),
@@ -2812,8 +2812,8 @@ mod tests {
         let behavior = TaskNodeBehavior;
         let metadata = behavior.default_metadata();
 
-        // Properties are now nested under "task" namespace (Issue #397)
-        // Status/priority values use lowercase format (Issue #670)
+        // Properties are now nested under "task" namespace
+        // Status/priority values use lowercase format
         assert_eq!(metadata["task"]["status"], "open");
         assert_eq!(metadata["task"]["priority"], "medium");
         assert!(metadata["task"]["due_date"].is_null());
@@ -2822,13 +2822,13 @@ mod tests {
 
     #[test]
     fn test_type_conversion_preserves_properties() {
-        // Core value proposition of Issue #397: Properties should be preserved
+        // Core value proposition: Properties should be preserved
         // when converting between node types (e.g., task → text → task)
 
         let behavior = TaskNodeBehavior;
 
         // Create a task node with properties in the new nested format
-        // Status/priority values use lowercase format (Issue #670)
+        // Status/priority values use lowercase format
         let mut task_node = Node::new(
             "task".to_string(),
             "Important task".to_string(),
@@ -2892,7 +2892,7 @@ mod tests {
         invalid_date.id = "2025-13-45".to_string();
         assert!(behavior.validate(&invalid_date).is_err());
 
-        // Valid: Per Issue #670, content can be different from ID
+        // Valid: content can be different from ID
         let mut custom_content = valid_node.clone();
         custom_content.content = "Custom Daily Notes".to_string();
         assert!(behavior.validate(&custom_content).is_ok());
@@ -2976,7 +2976,7 @@ mod tests {
         let text_node = Node::new("text".to_string(), "Hello".to_string(), json!({}));
         assert!(registry.validate_node(&text_node).is_ok());
 
-        // Valid task node (status uses lowercase format per Issue #670)
+        // Valid task node (status uses lowercase format)
         let task_node = Node::new(
             "task".to_string(),
             "Do something".to_string(),
@@ -3065,7 +3065,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Two-Level Embeddability Tests (Issue #573)
+    // Two-Level Embeddability Tests
     // =========================================================================
 
     #[test]
@@ -3123,7 +3123,7 @@ mod tests {
         let behavior = TaskNodeBehavior;
 
         // Task node should NOT be embeddable as root
-        // Status uses lowercase format (Issue #670)
+        // Status uses lowercase format
         let node = Node::new(
             "task".to_string(),
             "Buy groceries".to_string(),
@@ -3241,7 +3241,7 @@ mod tests {
         let text_behavior = registry.get("text").unwrap();
         assert!(text_behavior.get_embeddable_content(&text_node).is_some());
 
-        // Task node - not embeddable (status uses lowercase format per Issue #670)
+        // Task node - not embeddable (status uses lowercase format)
         let task_node = Node::new(
             "task".to_string(),
             "Task content".to_string(),
@@ -3674,7 +3674,7 @@ mod tests {
     }
 
     // =========================================================================
-    // title_template Validation Tests (Issue #824)
+    // title_template Validation Tests
     // =========================================================================
 
     #[test]
@@ -3927,7 +3927,7 @@ mod tests {
     fn test_task_node_from_node_nested_format() {
         use crate::models::{TaskNode, TaskPriority};
 
-        // Test that TaskNode::from_node handles nested format (Issue #397)
+        // Test that TaskNode::from_node handles nested format
         // Priority now uses string enum format
         let nested_node = Node::new(
             "task".to_string(),
@@ -4334,7 +4334,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Comprehensive: Every behavior's get_embeddable_content() (Issue #1018)
+    // Comprehensive: Every behavior's get_embeddable_content()
     // =========================================================================
 
     /// Verify the embeddable content decision for every registered behavior type.
@@ -4574,7 +4574,7 @@ mod tests {
         );
     }
 
-    // ToolNodeBehavior tests (issue #1353) ------------------------------------
+    // ToolNodeBehavior tests ------------------------------------
 
     fn tool_node_with_props(props: serde_json::Value) -> Node {
         Node::new("tool".to_string(), "search_nodes".to_string(), props)

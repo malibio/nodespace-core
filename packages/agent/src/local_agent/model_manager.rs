@@ -4,8 +4,6 @@
 //! Implements the [`ModelManager`] trait from `agent_types` for managing local
 //! GGUF model files on disk. Models are downloaded from HuggingFace with HTTP
 //! range-request resume support and verified via streaming SHA-256 hash.
-//!
-//! Issue #1000
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -172,8 +170,8 @@ const GEMMA_4_E4B: CatalogEntry = CatalogEntry {
 };
 
 /// Gemma 4 31B -- Google's larger dense quality-tier option (24GB+ Apple
-/// Silicon, e.g. M3 Pro/Max, M4 Pro). Issue #1094 originally referenced "27B"
-/// but Gemma 4's dense large variant is 31B; 27B was a Gemma 2 size.
+/// Silicon, e.g. M3 Pro/Max, M4 Pro). This tier is 31B: Gemma 4's dense
+/// large variant is 31B, whereas 27B was a Gemma 2 size.
 const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     id: "gemma-4-31b-q4km",
     family: ModelFamily::Gemma4,
@@ -353,8 +351,8 @@ impl GgufModelManager {
     /// Returns Gemma 4 E4B as the primary llama.cpp default, per ADR-056.
     /// Unlike [`Self::recommended_model_id_for`]'s general three-tier Gemma4
     /// behavior, this always recommends E4B regardless of RAM: the 12B and
-    /// 31B tiers remain parked per ADR-046 (unresolved tool-call defects,
-    /// #1346 / #1365 / #1348) and must not become the default recommendation
+    /// 31B tiers remain parked per ADR-046 (unresolved tool-call defects)
+    /// and must not become the default recommendation
     /// on higher-RAM machines. Callers that want the full RAM-tiered
     /// within-family recommendation should use
     /// [`Self::recommended_model_id_for`] directly.
@@ -1760,7 +1758,7 @@ mod tests {
         check_disk_space(tmp.path(), 1).unwrap();
     }
 
-    // -- Progress callback lifecycle (issue #1471) --------------------------
+    // -- Progress callback lifecycle --------------------------
     //
     // A download's gRPC response stream is backed by an mpsc channel whose
     // sender is cloned into the progress callback. If that callback is never

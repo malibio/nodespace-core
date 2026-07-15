@@ -96,7 +96,7 @@
   let isPromoting = $state(false);
 
   // Stable placeholder ID - cached outside reactive system to avoid mutations during derived evaluation
-  // Issue #653: Eliminated $effect by using a non-reactive cache variable
+  // Eliminated $effect by using a non-reactive cache variable
   // The ID is created lazily when first needed and reset when placeholder is promoted
   let cachedPlaceholderId: string | null = null;
 
@@ -122,7 +122,7 @@
 
   // Viewer-local placeholder (not in sharedNodeStore until it gets content)
   // This placeholder is only visible to this viewer instance
-  // Issue #653: Now uses lazy ID generation instead of $effect-managed state
+  // Now uses lazy ID generation instead of $effect-managed state
   const viewerPlaceholder = $derived.by<Node | null>(() => {
     // Note: shouldShowPlaceholder is defined later in the file (forward reference is safe in Svelte 5)
     if (shouldShowPlaceholder) {
@@ -180,7 +180,7 @@
       depth: number,
       result: ViewerRenderNode[] = []
     ): ViewerRenderNode[] {
-      // TRANSITION PERIOD (Issue #580): Try reactive structure tree first, fall back to sharedNodeStore
+      // TRANSITION PERIOD: Try reactive structure tree first, fall back to sharedNodeStore
       // This supports gradual migration where reactive stores are being populated asynchronously.
       // Once all nodes are in reactive stores, remove fallback and use only reactiveStructureTree.
       let childIds = reactiveStructureTree.getChildren(parentId);
@@ -192,12 +192,12 @@
       }
 
       for (const id of childIds) {
-        // Issue #679: sharedNodeStore is now single source of truth (consolidated from nodeData)
+        // sharedNodeStore is now single source of truth (consolidated from nodeData)
         const node = sharedNodeStore.getNode(id);
         if (!node) continue;
 
         // Get children IDs for this node
-        // TRANSITION PERIOD (Issue #580): Same fallback pattern as above
+        // TRANSITION PERIOD: Same fallback pattern as above
         let children = reactiveStructureTree.getChildren(node.id);
         if (children.length === 0) {
           const cachedChildren = sharedNodeStore.getNodesForParent(node.id);
@@ -297,7 +297,7 @@
           return;
         }
 
-        // Issue #679: No longer need viewedNodeCache workaround
+        // No longer need viewedNodeCache workaround
         // sharedNodeStore.nodes is now $state, so currentViewedNode $derived updates automatically
         // Header content derived from currentViewedNode - no manual assignment needed
 
@@ -309,16 +309,16 @@
           return;
         }
 
-        // Issue #709: Preload type-specific schema form for viewed node if available
+        // Preload type-specific schema form for viewed node if available
         // This triggers lazy loading of TaskSchemaForm, DateSchemaForm, etc.
         if (node.nodeType) {
-          // Issue #965: Reset generic schema when navigating to a different node
+          // Reset generic schema when navigating to a different node
           schemaFormLoader.resetGenericSchema();
           schemaFormLoader.loadForm(node.nodeType);
         }
 
         // Tab title is derived directly from node data by tab-system.svelte's
-        // computeTabTitle — no push needed here (see issue #1564).
+        // computeTabTitle — no push needed here.
       } catch (error) {
         loadFailed = true;
         log.error('Failed to load children:', error);
@@ -329,7 +329,7 @@
     loadAndSettle();
 
     // If the initial load failed (e.g. daemon still starting up), retry once
-    // the daemon reconnects instead of leaving this viewer permanently empty (#1470).
+    // the daemon reconnects instead of leaving this viewer permanently empty.
     const unsubscribeReconnect = onDaemonReconnect(() => {
       if (isDestroyed || !loadFailed) return;
       loadAndSettle(true);
@@ -359,7 +359,7 @@
    * Handle header content changes (for default editable header).
    * Persists to database; the tab title updates automatically since tab-system.svelte
    * derives it from sharedNodeStore, which nodeManager.updateNodeContent writes to
-   * synchronously (see issue #1564 — titles are computed, never pushed).
+   * synchronously (titles are computed, never pushed).
    */
   function handleHeaderInput(newValue: string) {
     if (nodeId) {
@@ -455,12 +455,12 @@
         // Note: We already checked cache/DB above, so if allNodes is empty, no persisted children exist
 
         // No children at all - placeholder will be created automatically by viewerPlaceholder derived
-        // Issue #653: Removed manual ID creation - getOrCreatePlaceholderId() handles it lazily
+        // Removed manual ID creation - getOrCreatePlaceholderId() handles it lazily
         // Focus is handled by BaseNode's onMount when autoFocus=true
         // DON'T call initializeNodes() - keep placeholder completely viewer-local!
       } else {
         // Real children exist - initialize with ALL nodes
-        // Issue #653: Removed lastSavedContent tracking - no longer needed without content watcher effect
+        // Removed lastSavedContent tracking - no longer needed without content watcher effect
         nodeManager.initializeNodes(allNodes, {
           expanded: true,
           autoFocus: false,
@@ -625,7 +625,7 @@
     }
 
     // Set cursor position using FocusManager (single source of truth)
-    // Issue #664: For inherited type nodes (Enter key on typed node), use focusNodeFromInheritedType
+    // For inherited type nodes (Enter key on typed node), use focusNodeFromInheritedType
     // which sets pattern state to 'inherited' (cannot revert to text).
     // This is different from pattern-detected type conversions which CAN revert.
     if (newNodeCursorPosition !== undefined && !focusOriginalNode) {
@@ -949,7 +949,7 @@
       // Clear placeholder ID synchronously to prevent re-entry
       resetPlaceholderId();
 
-      // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+      // Defer store mutations to next tick
       // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
       // subscription callbacks that mutate $state. If called during template render,
       // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
@@ -1022,7 +1022,7 @@
       // Clear placeholder ID synchronously to prevent re-entry
       resetPlaceholderId();
 
-      // CRITICAL FIX (Issue #681): Defer store mutations to next tick to avoid
+      // Defer store mutations to next tick to avoid
       // state_unsafe_mutation during template render (matches contentChanged path).
       const promotionParentId = nodeId;
       tick().then(() => {
@@ -1150,7 +1150,7 @@
       // Clear placeholder ID synchronously to prevent re-entry
       resetPlaceholderId();
 
-      // CRITICAL FIX (Issue #681): Defer store mutations to next tick
+      // Defer store mutations to next tick
       // sharedNodeStore.setNode() triggers notifySubscribers() which calls wildcard
       // subscription callbacks that mutate $state. If called during template render,
       // Svelte throws "state_unsafe_mutation". tick() ensures we're outside render.
@@ -1279,7 +1279,7 @@
     // We must commit globally because visible nodes might be empty if viewer already unmounted
     sharedNodeStore.commitAllBatches();
 
-    // Note: PersistenceCoordinator removed in Issue #558
+    // Note: PersistenceCoordinator removed
     // SimplePersistenceCoordinator handles debouncing inline in shared-node-store
 
     // Set cancellation flag to prevent stale writes
@@ -1319,7 +1319,7 @@
   {/if}
 
   <!-- Schema-Driven Properties Panel - fixed between header and content area -->
-  <!-- Issue #709: Type-specific schema forms use plugin registry for smart dispatch -->
+  <!-- Type-specific schema forms use plugin registry for smart dispatch -->
   <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
   <!-- Only render when a schema form is known to exist: null means "checked, none registered" -->
   {#if currentViewedNode && nodeId && schemaFormLoader.getForm(currentViewedNode.nodeType)}
@@ -1330,7 +1330,7 @@
       <TypedSchemaForm {nodeId} />
     </div>
   {:else if currentViewedNode && nodeId && schemaFormLoader.genericSchema && isCustomSchemaType(currentViewedNode.nodeType)}
-    <!-- Issue #965: Generic schema form for custom schema node types (UUID nodeType) -->
+    <!-- Generic schema form for custom schema node types (UUID nodeType) -->
     <!-- autoOpen is captured once at GenericSchemaForm mount time (not reactively synced).
          Safe only because this branch doesn't render until genericSchema is loaded, so
          hasTitleTemplate is already final by the time autoOpen is read. -->

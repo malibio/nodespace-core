@@ -1,7 +1,7 @@
 /**
  * Tauri System Commands — non-node Tauri IPC wrappers.
  *
- * Node-CRUD operations were removed in C1a (#1251); use backendAdapter directly.
+ * Node-CRUD operations were removed in C1a; use backendAdapter directly.
  *
  * In browser/proxy mode, model management and agent commands are forwarded to
  * the dev-proxy's /api/agent/* routes, which translate them to gRPC calls on
@@ -143,7 +143,7 @@ export async function ensureModelReady(modelId: string): Promise<boolean> {
 // ACP Commands — temporarily disabled
 // ============================================================================
 //
-// The ACP transport and Tauri command bridge were removed in #1117 ahead of
+// The ACP transport and Tauri command bridge were removed ahead of
 // the PTY-based agent rewrite (ADR-032). The wrappers below stay so callers
 // in the chat store / agent store don't need to be edited mid-transition,
 // but they no longer invoke any Tauri command. The follow-up PTY-UI issue
@@ -170,7 +170,7 @@ export async function acpRefreshAgents(): Promise<AcpAgentInfo[]> {
 }
 
 // ============================================================================
-// PTY Agent Session Commands (Issue #1120)
+// PTY Agent Session Commands
 // ============================================================================
 
 export interface PtyLaunchInput {
@@ -233,7 +233,7 @@ export async function ptyListSessions(): Promise<PtyListSessionsResult> {
 }
 
 // ============================================================================
-// Session Capture Settings Commands (Issue #1125)
+// Session Capture Settings Commands
 // ============================================================================
 
 export type CaptureContentLevel = 'metadata_only' | 'summary' | 'full';
@@ -296,7 +296,7 @@ export async function setOpenAiCompatConfigsOnDaemon(
 }
 
 // ============================================================================
-// PTY Agent Availability Commands (Issue #1124)
+// PTY Agent Availability Commands
 // ============================================================================
 
 export interface AgentAvailabilityInfo {

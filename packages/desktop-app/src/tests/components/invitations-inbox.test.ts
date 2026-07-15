@@ -1,5 +1,5 @@
 /**
- * InvitationsInbox component tests (epic #237, slice S5 #242).
+ * InvitationsInbox component tests.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/svelte';

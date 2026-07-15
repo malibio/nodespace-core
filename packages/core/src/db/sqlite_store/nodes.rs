@@ -81,7 +81,7 @@ impl SqliteStore {
             libsql::params![parent_id.to_string()],
         ).await.context("Failed to get last child order")?;
 
-        // #1431: distinguish "no siblings" from "a sibling at order <= 0".
+        // distinguish "no siblings" from "a sibling at order <= 0".
         // Fractional ordering legitimately yields orders <= 0 (a prepend gives
         // 0.0, then -1.0…), and `unwrap_or(0.0)` maps a NULL order to 0.0. The old
         // `last_order > 0.0` sentinel misread a lone child at 0.0 as "no children",
@@ -328,7 +328,7 @@ impl SqliteStore {
     /// Version of the REAL persisted `node` row, or `None` if no such row exists.
     /// Unlike `get_node`, this does NOT virtualize a date-page node — so a
     /// concurrently-deleted date page reports `None`, not a phantom version 1.
-    /// Used to disambiguate a no-op version-checked update (#1432).
+    /// Used to disambiguate a no-op version-checked update.
     pub async fn persisted_version(&self, id: &str) -> Result<Option<i64>> {
         let mut rows = self
             .db
@@ -446,7 +446,7 @@ impl SqliteStore {
         })
     }
 
-    /// Atomically delete multiple nodes in a SINGLE transaction (#1433). Either
+    /// Atomically delete multiple nodes in a SINGLE transaction. Either
     /// every existing target row is removed or none are — a mid-batch failure rolls
     /// the whole thing back, so a caller that gets `Err` can rely on nothing having
     /// been deleted. FK CASCADE removes each node's relationships + embeddings (same
@@ -768,7 +768,7 @@ impl SqliteStore {
             bind_values.push(libsql::Value::Text(nt.clone()));
         }
 
-        // #1430: id-scoping (e.g. a collection's members). Build `id IN (…)` and
+        // id-scoping (e.g. a collection's members). Build `id IN (…)` and
         // CHUNK it under SQLite's bound-parameter ceiling so a large member set
         // can't overflow the limit. Each chunk also carries the title/node_type
         // conditions already collected. The caller (NodeService::query_nodes)
@@ -1110,11 +1110,11 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Cycle guard for collection-hierarchy `member_of` edges (#1427). The
+    /// Cycle guard for collection-hierarchy `member_of` edges. The
     /// `has_child` tree has `validate_no_cycle`, but collection hierarchy is built
     /// from `member_of` (a sub-collection is a member_of its parent) and had no
     /// equivalent — so `a member_of b` + `b member_of a` produced a cycle in the
-    /// supposed DAG, which (post-#1426) makes the recursive members walk loop.
+    /// supposed DAG, which now makes the recursive members walk loop.
     ///
     /// `member_of` stores in_node = child/member, out_node = parent/collection.
     /// Adding `source member_of target` makes `target` an ancestor of `source`;

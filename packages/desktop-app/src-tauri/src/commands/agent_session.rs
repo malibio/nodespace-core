@@ -1,4 +1,4 @@
-//! Tauri command proxies for `AgentSessionService` gRPC RPCs (Issue #1120).
+//! Tauri command proxies for `AgentSessionService` gRPC RPCs.
 //!
 //! Each command wraps one RPC. `launch_session` additionally spawns a
 //! background task that reads the `StreamOutput` server-streaming response

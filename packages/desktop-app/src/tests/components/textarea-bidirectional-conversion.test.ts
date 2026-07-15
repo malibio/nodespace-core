@@ -5,7 +5,7 @@
  * - Forward: text → header when typing "## "
  * - Reverse: header → text when removing space "##"
  *
- * Critical for issue #275: Ensures controller's internal nodeType stays in sync
+ * Critical: ensures controller's internal nodeType stays in sync
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

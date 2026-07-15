@@ -1,7 +1,7 @@
 //! Tauri Commands for Topic Embeddings
 //!
 //! Thin gRPC proxy: all operations are forwarded to the `EmbeddingsService`
-//! running in the in-process `nodespaced` server (Issue #1135).
+//! running in the in-process `nodespaced` server.
 
 use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
@@ -210,7 +210,7 @@ pub async fn sync_embeddings(grpc: State<'_, GrpcClient>) -> Result<(), CommandE
 ///
 /// `Unimplemented` collapses to `Ok(0)`: the daemon serves no
 /// `EmbeddingsService` — `nodespaced-pro` omits the NLP/embedding stack
-/// (no llama-cpp, per nodespace-sync#10) and never registers it — so there
+/// (no llama-cpp) and never registers it — so there
 /// is no embedding queue and zero is the honest count.
 ///
 /// Note this arm intentionally collapses *any* `Unimplemented` for this
@@ -238,7 +238,7 @@ fn stale_count_from_result(
 ///
 /// Degrades gracefully when the daemon serves no `EmbeddingsService` (e.g.
 /// `nodespaced-pro`): the status bar polls this every 5s, so an
-/// `Unimplemented` must not flood the console (nodespace-sync#82). See
+/// `Unimplemented` must not flood the console. See
 /// [`stale_count_from_result`] for the mapping rationale.
 #[tauri::command]
 pub async fn get_stale_root_count(grpc: State<'_, GrpcClient>) -> Result<usize, CommandError> {
@@ -323,7 +323,7 @@ mod tests {
         assert!(params.exact.unwrap());
     }
 
-    /// Regression guard for nodespace-sync#82: a daemon with no
+    /// Regression guard: a daemon with no
     /// `EmbeddingsService` returns `Unimplemented`, which must collapse to
     /// a quiet `Ok(0)` rather than an error the 5s poll would flood.
     #[test]

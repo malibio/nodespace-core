@@ -1,5 +1,5 @@
 /**
- * Props-Driven Component Tests (Issue #1384)
+ * Props-Driven Component Tests
  *
  * Verifies that refactored UI components are props-driven and Tauri-independent:
  * - BacklinksPanel: accepts backlinks as a prop (no sharedNodeStore import)

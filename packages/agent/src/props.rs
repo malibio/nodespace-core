@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn get_prop_namespace_overrides_stale_flat() {
-        // Regression test for #1080: skill seeded with flat {"max_iterations": 2},
+        // Regression test: skill seeded with flat {"max_iterations": 2},
         // then MCP update normalizes to {"skill": {"max_iterations": 4}}.
         // Both coexist until the node is re-seeded; namespace must win.
         let props = json!({"max_iterations": 2, "skill": {"max_iterations": 4}});

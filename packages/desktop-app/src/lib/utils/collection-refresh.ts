@@ -4,7 +4,7 @@
  * Shared debounced collection refresh logic used by both Tauri and browser
  * sync services to update the collections sidebar when member_of relationships change.
  *
- * Issue #832: Extracted from browser-sync-service.ts and tauri-sync-listener.ts
+ * Extracted from browser-sync-service.ts and tauri-sync-listener.ts
  * to follow DRY principle.
  */
 

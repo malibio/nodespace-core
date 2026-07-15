@@ -13,7 +13,7 @@ import type { Node } from '$lib/types';
  * IMPORTANT: UpdateSource describes WHERE the update originated from (data provenance),
  * NOT whether the node should be persisted. Use UpdateOptions.persist for persistence control.
  *
- * Type Semantics (Phase 1 Refactor - Issue #393):
+ * Type Semantics (Phase 1 Refactor):
  * - 'viewer': User interaction in the UI (typing, clicking, editing)
  * - 'database': Loaded from backend database (navigation, fetch, initial load)
  * - 'mcp-server': Synchronized from external MCP client (future Phase 3)

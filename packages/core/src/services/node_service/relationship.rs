@@ -73,8 +73,8 @@ impl NodeService {
             ));
         }
 
-        // Issue #813: Store returns relationship ID, service emits event
-        // Issue #834: root_id no longer stored - computed dynamically via graph traversal
+        // Store returns relationship ID, service emits event
+        // root_id no longer stored - computed dynamically via graph traversal
         let relationship_id = self
             .store
             .create_mention(mentioning_node_id, mentioned_node_id)
@@ -130,7 +130,7 @@ impl NodeService {
         mentioning_node_id: &str,
         mentioned_node_id: &str,
     ) -> Result<(), NodeServiceError> {
-        // Issue #813: Store returns relationship ID, service emits event
+        // Store returns relationship ID, service emits event
         let relationship_id = self
             .store
             .delete_mention(mentioning_node_id, mentioned_node_id)
@@ -232,8 +232,8 @@ impl NodeService {
             }
         }
 
-        // Issue #813: Store returns relationship ID, service emits event
-        // Issue #834: root_id no longer stored - computed dynamically via graph traversal
+        // Store returns relationship ID, service emits event
+        // root_id no longer stored - computed dynamically via graph traversal
         let relationship_id = self
             .store
             .create_mention(source_id, target_id)
@@ -287,7 +287,7 @@ impl NodeService {
         source_id: &str,
         target_id: &str,
     ) -> Result<(), NodeServiceError> {
-        // Issue #813: Store returns relationship ID, service emits event
+        // Store returns relationship ID, service emits event
         let relationship_id = self
             .store
             .delete_mention(source_id, target_id)
@@ -417,7 +417,7 @@ impl NodeService {
     }
 
     // ========================================================================
-    // Relationship CRUD Operations (Issue #703 Phase 4)
+    // Relationship CRUD Operations (Phase 4)
     // ========================================================================
 
     /// Create a relationship between two nodes
@@ -426,7 +426,7 @@ impl NodeService {
     /// Validates that both nodes exist, enforces cardinality constraints, and supports
     /// edge field data.
     ///
-    /// # TODO(Issue #710): UI components needed for relationship interaction
+    /// # TODO: UI components needed for relationship interaction
     /// The backend API is complete, but users need UI components to:
     /// - Select nodes to relate (search/dropdown)
     /// - View existing relationships
@@ -480,7 +480,7 @@ impl NodeService {
         target_id: &str,
         edge_data: serde_json::Value,
     ) -> Result<(), NodeServiceError> {
-        // Issue #825: Unified relationship creation - ALL relationships use the `relationship` table
+        // Unified relationship creation - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
         // Built-in type validation
@@ -502,7 +502,7 @@ impl NodeService {
                         target.node_type
                     )));
                 }
-                // #1427: collection hierarchy (collection member_of collection) is a
+                // Collection hierarchy (collection member_of collection) is a
                 // DAG, but nothing enforced it — `a member_of b` + `b member_of a`
                 // created a cycle that makes the recursive members walk loop. Reject
                 // a hierarchy edge that would close a cycle. Only relevant when the
@@ -583,7 +583,7 @@ impl NodeService {
             }
         }
 
-        // Issue #865: For member_of relationships with auto-order, use the atomic
+        // For member_of relationships with auto-order, use the atomic
         // add_to_collection method to prevent race conditions. This ensures the
         // order calculation and relationship creation happen in a single query.
         if relationship_name == "member_of" {
@@ -640,7 +640,7 @@ impl NodeService {
             return Ok(());
         }
 
-        // Issue #839: Auto-calculate order for built-in ordered relationships if not provided
+        // Auto-calculate order for built-in ordered relationships if not provided
         let final_edge_data = if is_builtin {
             let mut data = edge_data.as_object().cloned().unwrap_or_default();
 
@@ -692,7 +692,7 @@ impl NodeService {
     ///
     /// Removes the edge between the source and target nodes for the specified relationship.
     ///
-    /// # TODO(Issue #710): UI components needed for relationship interaction
+    /// # TODO: UI components needed for relationship interaction
     ///
     /// # Arguments
     ///
@@ -731,7 +731,7 @@ impl NodeService {
         relationship_name: &str,
         target_id: &str,
     ) -> Result<(), NodeServiceError> {
-        // Issue #825: Unified relationship deletion - ALL relationships use the `relationship` table
+        // Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
         let rel_id = self
@@ -769,7 +769,7 @@ impl NodeService {
     /// Queries the relationship table and returns all target nodes connected via the specified
     /// relationship. Supports both "out" and "in" directions.
     ///
-    /// # TODO(Issue #710): UI components needed for relationship interaction
+    /// # TODO: UI components needed for relationship interaction
     ///
     /// # Arguments
     ///

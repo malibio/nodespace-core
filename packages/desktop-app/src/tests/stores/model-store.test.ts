@@ -223,7 +223,7 @@ describe('ModelStore', () => {
 
       const modelId = modelStore.models[0].id;
 
-      // Simulate the daemon hanging (issue #1471): chatModelDownload's
+      // Simulate the daemon hanging: chatModelDownload's
       // returned promise never resolves because a stale progress-callback
       // sender keeps the gRPC stream open. The regression fix is that the
       // ready event alone -- independent of that promise -- must flip the

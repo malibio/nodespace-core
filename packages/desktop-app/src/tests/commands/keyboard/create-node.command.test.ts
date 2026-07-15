@@ -325,7 +325,7 @@ describe('CreateNodeCommand', () => {
     });
   });
 
-  // Regression for #1421: rapid Enter in an empty node piled blank nodes UPWARD.
+  // Regression: rapid Enter in an empty node piled blank nodes UPWARD.
   // An empty node always has cursor position 0, so the "create above" branch
   // (meant for cursor-at-start of a NON-empty node, to push its content down)
   // fired on every Enter — inserting before the node and keeping focus on it

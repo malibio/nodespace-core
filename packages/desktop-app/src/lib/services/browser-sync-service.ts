@@ -12,7 +12,7 @@
  * which update the SharedNodeStore and ReactiveStructureTree. This allows browser dev mode
  * to have the same real-time sync as the desktop app.
  *
- * Issue #724: Events now send only node_id (not full payload) for efficiency.
+ * Events send only node_id (not full payload) for efficiency.
  * Frontend fetches full node data via getNode() API only when the node is in the active view.
  */
 
@@ -146,7 +146,7 @@ class BrowserSyncService {
 
     this.connectionState = 'connecting';
 
-    // No clientId needed (Issue #715) - dev-proxy handles filtering server-side
+    // No clientId needed - dev-proxy handles filtering server-side
     const sseUrl = this.sseEndpoint;
 
     log.debug('Connecting to SSE endpoint:', sseUrl);
@@ -199,9 +199,9 @@ class BrowserSyncService {
    * Handle parsed SSE event
    *
    * Routes events to appropriate store/tree handlers to update UI.
-   * Filtering handled server-side by dev-proxy (Issue #715).
+   * Filtering handled server-side by dev-proxy.
    *
-   * Issue #724: Events now send only node_id. Frontend fetches full data
+   * Events send only node_id. Frontend fetches full data
    * via getNode() API only when the node is in the active view (SharedNodeStore).
    */
   private handleEvent(event: SseEvent): void {
@@ -213,7 +213,7 @@ class BrowserSyncService {
       case 'nodeCreated': {
         log.debug(`Node created: ${event.nodeId} (type: ${event.nodeType})`);
 
-        // Issue #832: If a collection node is created, refresh collections sidebar
+        // If a collection node is created, refresh collections sidebar
         if (event.nodeType === 'collection') {
           scheduleCollectionRefresh();
         }
@@ -226,7 +226,7 @@ class BrowserSyncService {
           );
         }
 
-        // Issue #724: Fetch full node data only if we need to display it
+        // Fetch full node data only if we need to display it
         // For now, always fetch since the node might be in the current view
         this.fetchAndUpdateNode(event.nodeId, 'nodeCreated');
         break;
@@ -234,7 +234,7 @@ class BrowserSyncService {
 
       case 'nodeUpdated': {
         log.debug('Node updated:', event.nodeId);
-        // Issue #724: Only fetch if node is already in the store (visible to user)
+        // Only fetch if node is already in the store (visible to user)
         // This avoids unnecessary API calls for nodes not in the current view
         if (sharedNodeStore.hasNode(event.nodeId)) {
           this.fetchAndUpdateNode(event.nodeId, 'nodeUpdated');
@@ -247,14 +247,14 @@ class BrowserSyncService {
       case 'nodeDeleted':
         log.debug('Node deleted:', event.nodeId);
         sharedNodeStore.deleteNode(event.nodeId, { type: 'database', reason: 'sse-sync' }, true);
-        // Issue #832: We don't know if deleted node was a collection without fetching,
+        // We don't know if deleted node was a collection without fetching,
         // but if we have it cached in collectionsData, we should refresh
         // For simplicity, we rely on the UI to handle stale data gracefully
         unregisterSchemaPlugin(event.nodeId);
         break;
 
       // ======================================================================
-      // Unified Relationship Events (Issue #811)
+      // Unified Relationship Events
       // All relationship types (has_child, member_of, mentions, custom) use these events.
       // ======================================================================
 
@@ -313,7 +313,7 @@ class BrowserSyncService {
   /**
    * Fetch full node data from API and update SharedNodeStore
    *
-   * Issue #724: Events now send only node_id. This method fetches the full
+   * Events send only node_id. This method fetches the full
    * node data and updates the store.
    */
   private async fetchAndUpdateNode(nodeId: string, eventType: string): Promise<void> {

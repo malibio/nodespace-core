@@ -6,14 +6,14 @@
 //! template into a flat list of `PreparedNode`s before inserting them via
 //! `NodeService::bulk_create_hierarchy`.
 //!
-//! Issue #1130: The previous push-based [`SkillPipeline`] (pre-LLM intent
+//! The previous push-based [`SkillPipeline`] (pre-LLM intent
 //! routing with confidence thresholds + tool whitelist scoping) has been
 //! removed. Skill discovery is now LLM-orchestrated through the
 //! `search_skills` tool exposed by [`crate::local_agent::tools`], so the
 //! agent loop no longer needs a pipeline object — only the seeded skill
 //! nodes themselves remain.
 //!
-//! Issue #1353: Tool nodes (`node_type='tool'`) bridge graph storage to
+//! Tool nodes (`node_type='tool'`) bridge graph storage to
 //! deterministic Rust handlers. Each tool is seeded as a node carrying its
 //! handler key, typed parameter schema, description, and `source` provenance.
 
@@ -397,7 +397,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
     ]
 }
 
-/// Default tool node templates seeded on first run (issue #1353).
+/// Default tool node templates seeded on first run.
 ///
 /// Each template produces one `node_type='tool'` node bridging graph storage to
 /// a deterministic Rust handler. Properties:
@@ -553,7 +553,7 @@ mod tests {
         );
     }
 
-    // -- Tool node seeding tests (issue #1353) --------------------------------
+    // -- Tool node seeding tests --------------------------------
 
     #[test]
     fn seed_tool_nodes_covers_all_registered_tools() {

@@ -1544,7 +1544,7 @@ mod tests {
     #[test]
     fn oai_value_tool_result_includes_name_for_ministral() {
         // Ministral's Jinja template requires "name" on tool-result messages.
-        // Missing "name" → Jinja exception → ffi error -3 (issue #1373).
+        // Missing "name" → Jinja exception → ffi error -3.
         let m = ChatMessage::tool_result("[]", "tc_1", "search_nodes");
         let v = chat_message_to_oai_value(&m);
         assert_eq!(
@@ -1581,7 +1581,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Regression fixture — Gemma 4 12B tool-call delta (issue #1355)
+    // Regression fixture — Gemma 4 12B tool-call delta
     //
     // With the old vendored engine (pre-b8660) chat_format=0 caused tool calls
     // to be emitted as plain content, never reaching emit_oai_delta as
@@ -1627,7 +1627,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // augment_gemma4_stops — Gemma 4 runaway fix (issue #1365)
+    // augment_gemma4_stops — Gemma 4 runaway fix
     //
     // The ggml-org GGUF does not mark <turn|> as EOG, so llama.cpp's template
     // engine may omit it from additional_stops. augment_gemma4_stops injects

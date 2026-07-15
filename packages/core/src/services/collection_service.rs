@@ -306,7 +306,7 @@ impl ResolvedPath {
 /// queries. It delegates to `NodeService` for relationship operations to ensure
 /// proper event emission.
 ///
-/// # Event Emission (Issue #813)
+/// # Event Emission
 ///
 /// Per service-layer-architecture.md, event emission happens in NodeService.
 /// CollectionService delegates `member_of` operations to NodeService, which
@@ -335,7 +335,7 @@ impl<'a> CollectionService<'a> {
     /// This method parses the path, finds or creates each segment in order,
     /// and establishes hierarchy relationships between them using `member_of` edges.
     ///
-    /// # Collection Hierarchy (Issue #808)
+    /// # Collection Hierarchy
     ///
     /// Collections form a DAG (Directed Acyclic Graph) where:
     /// - Path `hr:policy:vacation` creates hierarchy using `member_of` edges
@@ -381,7 +381,7 @@ impl<'a> CollectionService<'a> {
         let mut collections = Vec::with_capacity(parsed.segments.len());
         let mut previous_collection_id: Option<String> = None;
 
-        // Issue #808: Collections form a hierarchical DAG structure.
+        // Collections form a hierarchical DAG structure.
         // Each segment in the path is a member of the previous segment (its parent).
         // Collection names are globally unique, so the same collection can
         // appear in multiple paths (e.g., "hr:policy:vacation:berlin" and
@@ -401,7 +401,7 @@ impl<'a> CollectionService<'a> {
             // Create hierarchy relationship: current collection is member_of parent collection
             // Direction: child -> member_of -> parent (same as nodes belonging to collections)
             // This is idempotent - if the relationship already exists, nothing happens
-            // Issue #813: Delegate to NodeService for event emission
+            // Delegate to NodeService for event emission
             if let Some(parent_id) = &previous_collection_id {
                 self.node_service
                     .create_relationship(&node.id, "member_of", parent_id, json!({}))
@@ -452,7 +452,7 @@ impl<'a> CollectionService<'a> {
     ///
     /// * `name` - The collection name (will be validated, must be globally unique)
     ///
-    /// # Issue #813
+    /// # Event Emission
     ///
     /// Uses NodeService.create_node() to ensure NodeCreated event emission.
     /// The pattern is "read from store, write through NodeService".
@@ -463,7 +463,7 @@ impl<'a> CollectionService<'a> {
         let node = Node::new("collection".to_string(), validated_name, json!({}));
         let node_id = node.id.clone();
 
-        // Issue #813: Use NodeService for node creation (emits NodeCreated event)
+        // Use NodeService for node creation (emits NodeCreated event)
         self.node_service.create_node(node).await?;
 
         // Fetch and return the created node
@@ -489,7 +489,7 @@ impl<'a> CollectionService<'a> {
     ) -> Result<ResolvedPath, NodeServiceError> {
         let resolved = self.resolve_path(collection_path).await?;
 
-        // Issue #813, #825: Delegate to NodeService for event emission (unified method)
+        // Delegate to NodeService for event emission (unified method)
         self.node_service
             .create_relationship(node_id, "member_of", &resolved.leaf.id, json!({}))
             .await?;
@@ -534,7 +534,7 @@ impl<'a> CollectionService<'a> {
             )));
         }
 
-        // Issue #813, #825: Delegate to NodeService for event emission (unified method)
+        // Delegate to NodeService for event emission (unified method)
         self.node_service
             .create_relationship(node_id, "member_of", collection_id, json!({}))
             .await?;
@@ -553,7 +553,7 @@ impl<'a> CollectionService<'a> {
         node_id: &str,
         collection_id: &str,
     ) -> Result<(), NodeServiceError> {
-        // Issue #813, #825: Delegate to NodeService for event emission (unified method)
+        // Delegate to NodeService for event emission (unified method)
         self.node_service
             .delete_relationship(node_id, "member_of", collection_id)
             .await?;
@@ -656,7 +656,7 @@ impl<'a> CollectionService<'a> {
     /// 3. Creates missing collections in hierarchy order
     /// 4. Returns a map from path → leaf collection ID
     ///
-    /// # Performance (Issue #854)
+    /// # Performance
     ///
     /// For 100 files with paths like "Architecture:Core", "Architecture:Components":
     /// - Before: 100 separate resolve_path calls, each querying for "Architecture"

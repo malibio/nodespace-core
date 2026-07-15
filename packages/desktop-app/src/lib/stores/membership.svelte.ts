@@ -1,5 +1,5 @@
 /**
- * Membership store (collection-membership-UI epic #237, slice S1 #238).
+ * Membership store for the collection-membership UI.
  *
  * Holds a per-collection cache of the roster + pending invites/requests and the
  * caller's own identity, so the Collaboration view (S3/S4) and onboarding inbox
@@ -10,8 +10,8 @@
  * {@link MembershipStore.isPro}), so the community build stays behaviorally
  * unchanged — it never touches the membership commands.
  *
- * Caller identity: fetched once via `pro_current_person` (see the S2 design note
- * on #239 — a one-shot query rather than a stream field) and cached; the derived
+ * Caller identity: fetched once via `pro_current_person` (a one-shot query
+ * rather than a stream field) and cached; the derived
  * `currentUserRole(collectionId)` matches the caller's own person id against the
  * roster so admin controls gate correctly. Call {@link MembershipStore.reset} on
  * sign-out to clear it (identity is per-session).

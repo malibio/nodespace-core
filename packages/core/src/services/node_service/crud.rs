@@ -52,7 +52,7 @@ impl NodeService {
 
         // Auto-detect date nodes by ID format (YYYY-MM-DD) to ensure correct node_type.
         // This maintains data integrity regardless of caller mistakes.
-        // NOTE: Per Issue #670, date nodes can have custom content (not required to match ID).
+        // NOTE: Date nodes can have custom content (not required to match ID).
         // We only enforce the node_type, not the content.
         if is_date_node_id(&node.id) {
             node.node_type = "date".to_string();
@@ -109,7 +109,7 @@ impl NodeService {
                     if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
                         fields_json.clone(),
                     ) {
-                        // Issue #838: Normalize flat properties to namespaced format before processing
+                        // Normalize flat properties to namespaced format before processing
                         // Clients send: { "status": "open" }
                         // Storage format: { "task": { "status": "open" } }
                         node.properties = Self::normalize_flat_properties_to_namespace(
@@ -124,7 +124,7 @@ impl NodeService {
                         // Validate with the same fields
                         self.validate_node_with_fields(&node, &fields)?;
 
-                        // Add schema version if schema has fields (Issue #794)
+                        // Add schema version if schema has fields
                         // Using the already-fetched schema instead of fetching again
                         if !fields.is_empty() {
                             if let Some(version) =
@@ -164,8 +164,8 @@ impl NodeService {
 
         // NOTE: root_id filtering removed - hierarchy now managed via relationships
 
-        // Issue #821: Populate title for @mention search
-        // Issue #824: Schema-driven title_template support
+        // Populate title for @mention search
+        // Schema-driven title_template support
         // Only set title if not already set (create_node_with_parent may have set it for root nodes)
         if node.title.is_none() {
             // For task/collection we know they're always titled; for others we need to check
@@ -173,7 +173,7 @@ impl NodeService {
             node.title = self.compute_title(&node, None).await?;
         }
 
-        // Issue #1012: Synchronous playbook validation gate — reject invalid playbooks before persist
+        // Synchronous playbook validation gate — reject invalid playbooks before persist
         if node.node_type == "playbook" {
             self.validate_playbook_rules(&node.properties).await?;
         }
@@ -193,7 +193,7 @@ impl NodeService {
             db_start.elapsed().as_millis()
         );
 
-        // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeCreated event is now automatically emitted by store notifier
 
         tracing::debug!(
             node_id = %node.id,
@@ -356,8 +356,8 @@ impl NodeService {
         // Save node_type before moving into Node (needed for embedding check)
         let node_type = params.node_type.clone();
 
-        // Issue #821: Determine title for @mention search
-        // Issue #824: Schema-driven title_template support
+        // Determine title for @mention search
+        // Schema-driven title_template support
         // Normalize properties to namespaced format so compute_title can find fields correctly.
         // (create_node will normalize again, but the result is idempotent)
         let title = {
@@ -420,12 +420,12 @@ impl NodeService {
 
             // Step 7a: Child node created - queue root for embedding regeneration
             // The new child's content should be included in the root's aggregate embedding
-            // (Issue #729 - root-aggregate model)
+            // (root-aggregate model)
             #[cfg(feature = "nlp")]
             self.queue_root_for_embedding(&created_id).await;
         } else {
             // Step 7b: Root node created - queue for embedding if embeddable type
-            // (Issue #729 - root-aggregate model)
+            // (root-aggregate model)
             // Stale markers are written unconditionally (even without the `nlp` feature) so
             // that a build re-enabled with NLP picks up existing roots without a manual resync.
             if self.is_embeddable_type(&node_type) {
@@ -642,7 +642,7 @@ impl NodeService {
 
         if let Some(properties) = update.properties {
             properties_changed = true;
-            // Issue #838: Normalize flat client properties to namespaced format before merging
+            // Normalize flat client properties to namespaced format before merging
             // Skip for schema nodes - they use a special non-namespaced format
             if updated.node_type == "schema" {
                 // Schema nodes use flat properties format (relationships, fields, etc.)
@@ -655,7 +655,7 @@ impl NodeService {
                     &properties,
                     None, // Schema fields are fetched later if needed
                 );
-                // Deep-merge namespaced properties (Issue #794)
+                // Deep-merge namespaced properties
                 Self::deep_merge_namespaced_properties(
                     &mut updated.properties,
                     normalized_properties,
@@ -690,8 +690,8 @@ impl NodeService {
             self.validate_node_against_schema(&updated).await?;
         }
 
-        // Issue #821: Sync title when content, node_type, or properties change
-        // Issue #824: Schema-driven title_template — also trigger on properties_changed
+        // Sync title when content, node_type, or properties change
+        // Schema-driven title_template — also trigger on properties_changed
         let title_update = if content_changed || node_type_changed || properties_changed {
             let new_title = self.compute_title(&updated, None).await?;
             Some(new_title)
@@ -714,7 +714,7 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeUpdated event is now automatically emitted by store notifier
 
         // Sync mentions if content changed
         if content_changed {
@@ -774,7 +774,7 @@ impl NodeService {
 
         if let Some(properties) = update.properties {
             properties_changed = true;
-            // Issue #838: Normalize flat client properties to namespaced format before merging
+            // Normalize flat client properties to namespaced format before merging
             // Skip for schema nodes - they use a special non-namespaced format
             if updated.node_type == "schema" {
                 // Schema nodes use flat properties format (relationships, fields, etc.)
@@ -785,7 +785,7 @@ impl NodeService {
                     &properties,
                     None,
                 );
-                // Deep-merge namespaced properties (Issue #794)
+                // Deep-merge namespaced properties
                 Self::deep_merge_namespaced_properties(
                     &mut updated.properties,
                     normalized_properties,
@@ -804,13 +804,13 @@ impl NodeService {
             self.validate_node_against_schema(&updated).await?;
         }
 
-        // Issue #1012: Synchronous playbook validation gate — reject invalid rule changes before persist
+        // Synchronous playbook validation gate — reject invalid rule changes before persist
         if updated.node_type == "playbook" && properties_changed {
             self.validate_playbook_rules(&updated.properties).await?;
         }
 
-        // Issue #821: Sync title when content, node_type, or properties change
-        // Issue #824: Schema-driven title_template — also trigger on properties_changed
+        // Sync title when content, node_type, or properties change
+        // Schema-driven title_template — also trigger on properties_changed
         let title_update = if content_changed || node_type_changed || properties_changed {
             let new_title = self.compute_title(&updated, None).await?;
             Some(new_title)
@@ -819,7 +819,7 @@ impl NodeService {
         };
 
         // Create node update
-        // Issue #828, #770: Pass through lifecycle_status if provided
+        // Pass through lifecycle_status if provided
         let node_update = crate::models::NodeUpdate {
             node_type: Some(updated.node_type.clone()),
             content: Some(updated.content.clone()),
@@ -848,9 +848,9 @@ impl NodeService {
             None => return Ok(None),
         };
 
-        // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeUpdated event is now automatically emitted by store notifier
 
-        // Queue root for embedding regeneration if content changed (Issue #729 - root-aggregate model)
+        // Queue root for embedding regeneration if content changed (root-aggregate model)
         // Fire-and-forget: don't block the update response on embedding queue operations
         #[cfg(feature = "nlp")]
         if content_changed {
@@ -949,7 +949,7 @@ impl NodeService {
         {
             Some(updated_node) => Ok(updated_node),
             None => {
-                // #1432: the version-gated UPDATE matched no row for one of two
+                // The version-gated UPDATE matched no row for one of two
                 // reasons — the node was concurrently DELETED, or its version
                 // moved. Disambiguate against the REAL persisted row: `get_node`
                 // virtualizes a date page, so it would report a phantom version 1
@@ -1014,7 +1014,7 @@ impl NodeService {
                 }
             }
 
-            // Auto-create date nodes when mentioned (Issue #814 fix).
+            // Auto-create date nodes when mentioned.
             // Date nodes are lazily created, but we need them to exist for the
             // "Mentioned by" panel to work. This ensures the relationship can be created.
             if is_date_node_id(mentioned_id) {
@@ -1105,7 +1105,7 @@ impl NodeService {
                 })
             })?;
 
-        // NOTE: NodeDeleted event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeDeleted event is now automatically emitted by store notifier
 
         // Idempotent delete: return success even if node doesn't exist
         Ok(result)
@@ -1162,7 +1162,7 @@ impl NodeService {
                 ))
             })?;
 
-        // NOTE: NodeDeleted event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeDeleted event is now automatically emitted by store notifier
 
         Ok(rows_affected)
     }
@@ -1180,7 +1180,7 @@ impl NodeService {
         node_id: &str,
         expected_version: i64,
     ) -> Result<crate::models::DeleteResult, NodeServiceError> {
-        // Capture root before deletion for embedding queue (Issue #729).
+        // Capture root before deletion for embedding queue.
         let root_id_for_embedding = self.get_root_id(node_id).await.ok();
 
         let (existed, deleted_nodes) = self
@@ -1276,7 +1276,7 @@ impl NodeService {
             ))
         })?;
 
-        // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
+        // NOTE: NodeUpdated event is now automatically emitted by store notifier
 
         Ok(updated_node)
     }
@@ -1331,7 +1331,7 @@ impl NodeService {
                     NodeServiceError::query_failed(format!("Failed to create parent node: {}", e))
                 })?;
 
-            // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
+            // NOTE: NodeCreated event is now automatically emitted by store notifier
         }
 
         // Enforce container rule: the (now-existent) parent must accept children
@@ -1372,7 +1372,7 @@ impl NodeService {
                     NodeServiceError::query_failed(format!("Failed to update node: {}", e))
                 })?;
 
-            // NOTE: NodeUpdated event is now automatically emitted by store notifier (Issue #718)
+            // NOTE: NodeUpdated event is now automatically emitted by store notifier
 
             // Update parent relationship via edge (handles sibling ordering)
             let actual_order = self
@@ -1383,7 +1383,7 @@ impl NodeService {
                     NodeServiceError::query_failed(format!("Failed to update parent: {}", e))
                 })?;
 
-            // Emit RelationshipUpdated event (Issue #811: unified relationship events)
+            // Emit RelationshipUpdated event (unified relationship events)
             self.emit_event(DomainEvent::RelationshipUpdated {
                 relationship: crate::db::events::RelationshipEvent::new(
                     format!("relationship:{}:{}", parent_id, node_id),
@@ -1415,7 +1415,7 @@ impl NodeService {
                     NodeServiceError::query_failed(format!("Failed to create node: {}", e))
                 })?;
 
-            // NOTE: NodeCreated event is now automatically emitted by store notifier (Issue #718)
+            // NOTE: NodeCreated event is now automatically emitted by store notifier
 
             // Create parent relationship via edge (handles sibling ordering)
             let actual_order = self
@@ -1426,7 +1426,7 @@ impl NodeService {
                     NodeServiceError::query_failed(format!("Failed to set parent: {}", e))
                 })?;
 
-            // Emit RelationshipCreated event (Issue #811: unified relationship events)
+            // Emit RelationshipCreated event (unified relationship events)
             self.emit_event(DomainEvent::RelationshipCreated {
                 relationship: crate::db::events::RelationshipEvent::new(
                     format!("relationship:{}:{}", parent_id, node_id),
@@ -1471,7 +1471,7 @@ impl NodeService {
         self.validate_node_with_fields(node, &fields)
     }
 
-    /// Validate playbook rules before persisting (Issue #1012).
+    /// Validate playbook rules before persisting.
     pub(crate) async fn validate_playbook_rules(
         &self,
         properties: &serde_json::Value,
@@ -1525,7 +1525,7 @@ impl NodeService {
         // Get mutable reference to properties object
         let props_obj = node.properties.as_object_mut().unwrap();
 
-        // Get or create the type namespace (Issue #794)
+        // Get or create the type namespace
         // Properties are stored under properties[node_type][field_name]
         let type_namespace = props_obj
             .entry(&node.node_type)
@@ -1552,7 +1552,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// Deep-merge namespaced properties for Issue #794
+    /// Deep-merge namespaced properties
     pub(crate) fn deep_merge_namespaced_properties(
         existing: &mut serde_json::Value,
         new: serde_json::Value,
@@ -1579,7 +1579,7 @@ impl NodeService {
         }
     }
 
-    /// Normalize flat properties input into namespaced storage format (Issue #838)
+    /// Normalize flat properties input into namespaced storage format
     pub(crate) fn normalize_flat_properties_to_namespace(
         node_type: &str,
         properties: &serde_json::Value,
@@ -1642,7 +1642,7 @@ impl NodeService {
         node: &Node,
         fields: &[crate::models::SchemaField],
     ) -> Result<(), NodeServiceError> {
-        // Get properties for this node type from the type namespace (Issue #794)
+        // Get properties for this node type from the type namespace
         // Properties are stored under properties[node_type][field_name]
         let node_props = node
             .properties
@@ -1709,7 +1709,7 @@ impl NodeService {
         &self,
         node: &mut Node,
     ) -> Result<(), NodeServiceError> {
-        // Only backfill for types that have schema fields (Issue #794)
+        // Only backfill for types that have schema fields
         let schema = match self.get_schema_for_type(&node.node_type).await? {
             Some(s) => s,
             None => return Ok(()), // No schema = no version needed
@@ -1726,7 +1726,7 @@ impl NodeService {
             return Ok(()); // Empty schema = no version needed
         }
 
-        // Check if _schema_version exists in the type namespace (Issue #794)
+        // Check if _schema_version exists in the type namespace
         let has_version = node
             .properties
             .get(&node.node_type)
@@ -1800,7 +1800,7 @@ impl NodeService {
         &self,
         node: &mut Node,
     ) -> Result<(), NodeServiceError> {
-        // Get current version from type namespace (Issue #794)
+        // Get current version from type namespace
         let current_version = node
             .properties
             .get(&node.node_type)
@@ -1895,7 +1895,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// Compute the indexed title for a node (Issue #824).
+    /// Compute the indexed title for a node.
     pub(crate) async fn compute_title(
         &self,
         node: &Node,

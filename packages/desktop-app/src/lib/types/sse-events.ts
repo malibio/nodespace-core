@@ -5,7 +5,7 @@
  * the dev-proxy's `/api/events` endpoint. They mirror the Rust SseEvent
  * enum in dev-proxy.rs.
  *
- * Issue #724: Events send only node_id (not full payload) for efficiency.
+ * Events send only node_id (not full payload) for efficiency.
  * Frontend fetches full node data via get_node() API if needed.
  */
 
@@ -18,7 +18,7 @@ export interface SseEventBase {
 
 /**
  * Event sent when a new node is created (ID only)
- * Issue #832: Includes nodeType for reactive UI updates (e.g., collections sidebar)
+ * Includes nodeType for reactive UI updates (e.g., collections sidebar)
  */
 export interface NodeCreatedEvent extends SseEventBase {
   type: 'nodeCreated';
@@ -47,7 +47,7 @@ export interface NodeDeletedEvent extends SseEventBase {
 }
 
 // ============================================================================
-// Unified Relationship Events (Issue #811)
+// Unified Relationship Events
 // All relationship types (has_child, member_of, mentions, custom) use these events.
 // ============================================================================
 

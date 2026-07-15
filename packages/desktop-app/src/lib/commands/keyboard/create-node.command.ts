@@ -185,7 +185,7 @@ export class CreateNodeCommand implements KeyboardCommand {
     // always at position 0, so the old unconditional `position <= 0` made every
     // Enter on an empty node insert *above* and keep focus on it
     // (`focusOriginalNode`) — blank nodes piled upward and focus never advanced,
-    // diverging across sync (#1421). For an empty node, fall through to normal
+    // diverging across sync. For an empty node, fall through to normal
     // "create below + advance focus" splitting.
     if (position <= 0) {
       return content.trim().length > 0;

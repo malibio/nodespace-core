@@ -1616,7 +1616,7 @@ impl GraphToolExecutor {
 impl AgentToolExecutor for GraphToolExecutor {
     /// Return typed `ToolDefinition`s generated from tool nodes in the graph.
     ///
-    /// Reads `node_type='tool'` nodes seeded at startup (issue #1353), builds a
+    /// Reads `node_type='tool'` nodes seeded at startup, builds a
     /// `ToolDefinition` from each enabled node whose handler key is present in
     /// the deterministic registry, then preserves the canonical registry ordering.
     /// Falls back to the hardcoded list when the node service is unavailable or
@@ -2235,7 +2235,7 @@ mod tests {
 
     #[test]
     fn search_skills_description_mentions_empty_signal() {
-        // Per #1130, the description must teach the model that an empty
+        // The description must teach the model that an empty
         // `matches` array is a meaningful signal, not an error. This wording
         // is load-bearing — without it, a small model tends to retry the
         // tool with rephrased queries instead of judging "no skill applies".
@@ -2291,7 +2291,7 @@ mod tests {
         assert!(names.contains(&"create_nodes_from_markdown"));
     }
 
-    // -- Embedding handle is read live (race fix, #1328) --
+    // -- Embedding handle is read live (race fix) --
 
     /// The executor must read the embedding service through the shared handle on
     /// every call, not capture a snapshot at construction. This is what closes
@@ -2428,7 +2428,7 @@ mod tests {
         }
     }
 
-    // -- Scope passthrough test (issue #1085 acceptance criterion) --
+    // -- Scope passthrough test (acceptance criterion) --
 
     /// Verifies that scope="conversations" is correctly parsed from JSON params
     /// and would be forwarded to SearchSemanticInput by exec_search_semantic.

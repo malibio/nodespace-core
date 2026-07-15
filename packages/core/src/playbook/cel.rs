@@ -11,7 +11,7 @@
 //! directly from `node.properties` (the raw DB format), not via
 //! `flatten_properties_for_api`.
 //!
-//! # Graph Traversal (#1010)
+//! # Graph Traversal
 //!
 //! Dot-path relationship walking (e.g., `node.story.epic.status`) is resolved
 //! before evaluation by the `GraphResolver`. The path extractor parses CEL ASTs

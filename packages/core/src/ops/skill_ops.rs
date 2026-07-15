@@ -2,8 +2,6 @@
 //!
 //! Shared logic for skill search used by the local agent's `search_skills`
 //! tool and the MCP `find_skills` handler exposed to external agents.
-//!
-//! Issues #1051, #1130, #1283, #1356, #1392.
 
 use crate::models::Node;
 use crate::services::{NodeEmbeddingService, NodeService, SearchNodeFilters};
@@ -19,8 +17,8 @@ use super::OpsError;
 /// similarity, including weak ones, and decides for itself which (if any)
 /// skill is relevant. The underlying store filter is `composite_score >
 /// $threshold`, so a zero match (orthogonal vector) is still excluded — but
-/// that's the cosine noise floor, not a confidence judgment call. Issue
-/// #1130 explicitly removed server-side bucketing in favour of letting the
+/// that's the cosine noise floor, not a confidence judgment call.
+/// Server-side bucketing was explicitly removed in favour of letting the
 /// LLM judge confidence from the raw score; a non-zero floor here would
 /// partially undo that by silently hiding the long tail.
 const SKILL_SEARCH_THRESHOLD: f32 = 0.0;
@@ -109,9 +107,9 @@ fn render_subtree_dfs(
 /// Returns up to `limit` matches (default 3) with `id`, `name`, `description`,
 /// `confidence`, `tools`, `schema_metadata`, and `instructions`. The `instructions`
 /// field is the skill's child subtree rendered to markdown — the actual procedure
-/// the model must follow (#1356). The `schema_metadata` field contains type IDs,
+/// the model must follow. The `schema_metadata` field contains type IDs,
 /// field names, and enum values for entity types associated with the skill's
-/// `tool_whitelist` scope (#1283).
+/// `tool_whitelist` scope.
 ///
 /// No filtering or bucketing — the caller (model or MCP client) inspects the
 /// raw confidence score and decides how to act. An empty `skills` array is a

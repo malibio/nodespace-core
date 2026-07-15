@@ -100,7 +100,7 @@ export default async function setup() {
   //
   // Solution: Register plugins in setup.ts which runs in the same context as components
 
-  // Note: PersistenceCoordinator removed in Issue #558
+  // Note: PersistenceCoordinator removed
   // Persistence is now handled by SimplePersistenceCoordinator inline in shared-node-store.ts
 
   console.log('✅ Global test setup complete: Plugin registry initialized');

@@ -22,8 +22,8 @@ use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
 
 /// Auth-Worker URL used for the OAuth flow — not client-configurable.
-/// Release builds hit the deployed canonical domain (`pro.nodespace.ai`,
-/// nodespace-cloud#21); debug builds hit the local `wrangler dev` worker
+/// Release builds hit the deployed canonical domain (`pro.nodespace.ai`);
+/// debug builds hit the local `wrangler dev` worker
 /// (`127.0.0.1:8787`, what `device-sync.sh` runs).
 #[cfg(debug_assertions)]
 const DEFAULT_WORKER_URL: &str = "http://127.0.0.1:8787";
@@ -200,7 +200,7 @@ pub async fn pro_initiate_oauth(
     Ok(resp.attempt_id)
 }
 
-/// Sign out of Pro (#199 S6). Tells the daemon to drop its session and wipe the
+/// Sign out of Pro. Tells the daemon to drop its session and wipe the
 /// persisted refresh token from the OS keychain, so a restart won't auto-resume.
 /// The resulting AUTH_REQUIRED transition flows back through the `sync:status`
 /// stream. No-ops in community mode (no `ProClient`), matching the other Pro
@@ -238,7 +238,7 @@ pub async fn pro_enable_sync(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// --- Team membership commands (M5, #147) ----------------------------------
+// --- Team membership commands (M5) ----------------------------------
 //
 // Thin pass-throughs over the daemon's `CloudSyncService` membership RPCs. The
 // daemon forwards the signed-in user's JWT to the matching cloud RPC, so the
@@ -255,7 +255,7 @@ pub struct MemberDto {
     pub permission: String,
 }
 
-/// One pending invite returned by [`pro_list_invites`] (S2, #239).
+/// One pending invite returned by [`pro_list_invites`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InviteDto {
     /// uuid — the handle [`pro_revoke_invite`] takes.
@@ -270,7 +270,7 @@ pub struct InviteDto {
     pub expires_at: String,
 }
 
-/// One pending join request returned by [`pro_list_requests`] (S2, #239).
+/// One pending join request returned by [`pro_list_requests`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RequestDto {
     /// uuid — the handle [`pro_approve_request`] / [`pro_revoke_invite`] take.
@@ -293,7 +293,7 @@ pub struct JoinableCollectionDto {
     pub restricted: bool,
 }
 
-/// The caller's own identity, returned by [`pro_current_person`] (#238/#239).
+/// The caller's own identity, returned by [`pro_current_person`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PersonDto {
     /// Bound PersonNode id; empty on an un-bound device ("role unknown").
@@ -490,7 +490,7 @@ pub async fn pro_approve_request(
     Ok(())
 }
 
-/// List a collection's pending invites (admin only, server-gated). #239.
+/// List a collection's pending invites (admin only, server-gated).
 #[tauri::command]
 pub async fn pro_list_invites(
     app: AppHandle,
@@ -515,7 +515,7 @@ pub async fn pro_list_invites(
         .collect())
 }
 
-/// List a collection's pending join requests (admin only, server-gated). #239.
+/// List a collection's pending join requests (admin only, server-gated).
 #[tauri::command]
 pub async fn pro_list_requests(
     app: AppHandle,
@@ -538,7 +538,7 @@ pub async fn pro_list_requests(
         .collect())
 }
 
-/// Revoke a pending invite or join request by id (admin only, server-gated). #239.
+/// Revoke a pending invite or join request by id (admin only, server-gated).
 #[tauri::command]
 pub async fn pro_revoke_invite(app: AppHandle, invite_id: String) -> Result<(), String> {
     let mut client = membership_client(&app).await?;
@@ -549,7 +549,7 @@ pub async fn pro_revoke_invite(app: AppHandle, invite_id: String) -> Result<(), 
     Ok(())
 }
 
-/// The caller's own identity — bound PersonNode id + signed-in email (#238/#239).
+/// The caller's own identity — bound PersonNode id + signed-in email.
 /// Lets the UI tell which roster row is "me" and gate admin controls on the
 /// caller's own per-collection role. `person_id` is empty on an un-bound device;
 /// the UI treats that as "role unknown" and hides admin controls.

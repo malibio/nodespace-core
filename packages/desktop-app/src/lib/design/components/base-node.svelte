@@ -18,7 +18,7 @@
   - Plugin System: Registered viewers extend this base with type-specific logic
 
   Migration Note:
-  - Replaced ContentEditableController with TextareaController (Issue #274)
+  - Replaced ContentEditableController with TextareaController
   - Single source of truth: textarea.value (no dual representation)
   - Simpler state management and cursor positioning
 -->
@@ -505,7 +505,7 @@
       // Don't update nodeType locally - let parent handle it to avoid double re-renders
       // The parent (base-node-viewer) will update nodeType via nodeManager and trigger autoFocus
       //
-      // ARCHITECTURE (Issue #311): Header level changes are handled by HeaderNode component via $effect
+      // ARCHITECTURE: Header level changes are handled by HeaderNode component via $effect
       // TextareaController only detects pattern → header conversion, NOT level changes within headers
       // This separation ensures BaseNode remains node-type agnostic
     }
@@ -543,7 +543,7 @@
 
   // Import structured view mode renderer (avoids {@html} XSS warning)
   import ViewModeRenderer from './view-mode-renderer.svelte';
-  // Pro-only inline badge for sync conflict "losers" (core#1303). Renders nothing
+  // Pro-only inline badge for sync conflict "losers". Renders nothing
   // unless this node has a preserved superseded edit, so it is inert in community.
   import RecoveredItemsBadge from '$lib/components/recovered-items-badge.svelte';
 

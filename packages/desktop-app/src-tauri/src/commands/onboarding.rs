@@ -1,4 +1,4 @@
-//! Onboarding wizard Tauri commands (Issues #1180, #1199).
+//! Onboarding wizard Tauri commands.
 //!
 //! Handles first-launch setup: PATH configuration and NodeSpace skill
 //! installation. Completion state is persisted to `~/.nodespace/config.json`.

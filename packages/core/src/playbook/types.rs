@@ -39,7 +39,7 @@ pub enum RelEventType {
     RelationshipRemoved,
 }
 
-/// Key for O(1) rule lookup in the TriggerIndex (Issue #995).
+/// Key for O(1) rule lookup in the TriggerIndex.
 ///
 /// An enum — not a flat tuple — because relationship triggers have no
 /// `property_key` dimension. The `RelationshipEvent` variant intentionally

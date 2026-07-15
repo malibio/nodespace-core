@@ -1,8 +1,8 @@
 /**
  * AiChatModelSelector Logic Tests
  *
- * Unit tests for the PTY agent selection path (issue #1450, building on the
- * generic PTY entry point added by issue #1489).
+ * Unit tests for the PTY agent selection path, building on the
+ * generic PTY entry point.
  * Follows the project pattern of testing extracted logic functions directly
  * (not rendering Svelte components) using Happy-DOM.
  */

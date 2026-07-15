@@ -152,7 +152,7 @@
 
   onMount(async () => {
     // Pre-select the agent chosen in the header AiChatModelSelector, when one
-    // was already stored on the node (issue #1450); otherwise keep the
+    // was already stored on the node; otherwise keep the
     // 'claude-code' default.
     const nodeModel = node?.properties?.model as string | undefined;
     if (nodeModel) {

@@ -17,7 +17,7 @@ pub mod constants;
 // Background services
 pub mod services;
 
-// gRPC-backed node event watcher (#1114). Inert until activated by #1113 —
+// gRPC-backed node event watcher. Inert until activated —
 // see watcher.rs module docs for activation gating.
 pub mod watcher;
 
@@ -25,7 +25,7 @@ pub mod watcher;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub mod daemon_setup;
 
-// First-launch skill installer (Issue #1199)
+// First-launch skill installer
 pub mod skill_setup;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -70,7 +70,7 @@ fn frontend_log(line: String) {
 /// Report the current daemon health to the frontend.
 ///
 /// Returns "healthy", "starting", or "not_running". The frontend uses this
-/// to decide whether to show an error state (Issue #1179).
+/// to decide whether to show an error state.
 #[tauri::command]
 async fn check_daemon_status() -> String {
     daemon_status_body().await
@@ -244,7 +244,7 @@ pub fn run() {
             // RPC). Previously `manage(GrpcClient)` ran only after the async connect
             // below, so a frontend command issued at startup (e.g. the date page's
             // `get_children_tree`) raced it and got a fatal "state not managed for
-            // field `client`", closing the view (nodespace-sync#162). With the client
+            // field `client`", closing the view. With the client
             // managed up front, an early call instead yields a retryable transport
             // error until the daemon is reachable.
             #[cfg(any(unix, windows))]
@@ -362,7 +362,7 @@ pub fn run() {
                     // otherwise leave the UI silently empty. After the probe has
                     // exercised the channel, confirm reachability with the same socket
                     // check `check_daemon_status` uses and emit `not_running` so
-                    // app-shell shows its error banner + retry (Issue #1179). `Starting`
+                    // app-shell shows its error banner + retry. `Starting`
                     // is transient — only `NotRunning` trips the banner.
                     {
                         use daemon_setup::{check_daemon_socket, DaemonStatus};
@@ -383,7 +383,7 @@ pub fn run() {
                 });
             }
 
-            // Streaming task registry for PTY session cancellation (Issue #1120)
+            // Streaming task registry for PTY session cancellation
             app.manage(commands::agent_session::StreamingTaskRegistry::default());
 
             Ok(())
@@ -487,7 +487,7 @@ pub fn run() {
             commands::nodes::get_mentioning_roots,
             commands::nodes::delete_node_mention,
             commands::nodes::update_task_node,
-            // Collection commands (Issue #757 - Collection browsing and management UI)
+            // Collection commands (browsing and management UI)
             commands::collections::get_all_collections,
             commands::collections::get_collection_members,
             commands::collections::get_collection_members_recursive,
@@ -500,7 +500,7 @@ pub fn run() {
             commands::collections::create_collection,
             commands::collections::rename_collection,
             commands::collections::delete_collection,
-            // Schema read commands (Issue #690 - mutation commands removed, not used by UI)
+            // Schema read commands (mutation commands removed, not used by UI)
             commands::schemas::get_all_schemas,
             commands::schemas::get_schema_definition,
             // File import commands for bulk markdown import
@@ -527,7 +527,7 @@ pub fn run() {
             commands::local_agent::local_agent_cancel_turn,
             commands::local_agent::ensure_model_ready,
             commands::local_agent::list_local_models,
-            // Chat model management commands (Issue #1008)
+            // Chat model management commands
             commands::chat_models::chat_model_list,
             commands::chat_models::chat_model_recommended,
             commands::chat_models::chat_model_download,
@@ -537,14 +537,14 @@ pub fn run() {
             commands::chat_models::chat_model_unload,
             commands::chat_models::ollama_available,
             commands::chat_models::get_system_ram_gb,
-            // PTY agent session commands (Issue #1120)
+            // PTY agent session commands
             commands::agent_session::launch_session,
             commands::agent_session::write_input,
             commands::agent_session::resize_terminal,
             commands::agent_session::terminate_session,
             commands::agent_session::list_sessions,
             commands::agent_session::check_agent_availability,
-            // First-launch onboarding wizard + Settings integrations panel (Issue #1180, #1181, #1199)
+            // First-launch onboarding wizard + Settings integrations panel
             commands::onboarding::check_onboarding_status,
             commands::onboarding::configure_path,
             commands::onboarding::remove_from_path,

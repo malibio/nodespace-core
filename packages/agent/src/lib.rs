@@ -12,7 +12,7 @@ pub use agent_types::*;
 pub mod local_agent;
 
 // Shared agent guidance rules: single source of truth for tool strategy,
-// schema creation, and node reference guidance (issue #1089). Consumed by
+// schema creation, and node reference guidance. Consumed by
 // `prompt_assembler` (local Ollama agent) and by ADR-032 context-file
 // writers in `acp`.
 pub mod agent_guidance;
@@ -22,7 +22,7 @@ pub mod prompt_assembler;
 
 // Skill seeding templates: default skill nodes inserted on first run.
 // Skill discovery itself is LLM-orchestrated via the `search_skills` tool
-// (issue #1130) — there is no longer a pre-turn intent pipeline.
+// there is no longer a pre-turn intent pipeline.
 pub mod skill_pipeline;
 
 // Shared source of truth for core-type rules referenced by both

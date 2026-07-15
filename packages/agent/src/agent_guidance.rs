@@ -9,8 +9,6 @@
 //! not use these constants — they get all tool/capability guidance from
 //! `packages/skill/SKILL.md`, the CLI-vocabulary companion doc, not from this
 //! module's tool-call-vocabulary prose.
-//!
-//! Issue #1089.
 
 /// Schema creation guidance.
 ///
@@ -18,8 +16,7 @@
 /// `create_node`, and how custom types relate to built-in types. More detailed
 /// `title_template` token / field alignment guidance currently lives in
 /// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
-/// should be consolidated here when that path is unified — tracked separately
-/// from #1089.
+/// should be consolidated here when that path is unified.
 pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in RELEVANT ENTITY TYPES.\n\
     \"DATABASE\" = SCHEMA: When the user says \"create a database\", \"set up a tracker\", or \"track X\", call create_schema IMMEDIATELY — no confirmation, no search_skills, no planning text. The entity name is the schema (\"a contacts database\" → call create_schema with name=\"Contact\").\n\
     INSTANCE vs TYPE: \"Add an invoice for $500\", \"add a contact named Jane Doe\", \"log a project called X\" — these ask for a specific INSTANCE of an existing type. Call search_skills(query=\"add contact\") then call create_node(node_type=\"contact\", ...). Never ask for confirmation — just execute.\n\

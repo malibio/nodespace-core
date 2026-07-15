@@ -57,7 +57,7 @@ export const headerNodePlugin: PluginDefinition = {
   name: 'Header Node',
   description: 'Create a header with customizable level (1-6)',
   version: '1.0.0',
-  // Plugin-owned pattern behavior (Issue #667)
+  // Plugin-owned pattern behavior
   pattern: {
     detect: /^(#{1,6})\s/,
     canRevert: true,
@@ -134,7 +134,7 @@ export const taskNodePlugin: PluginDefinition = {
     lazyLoad: () => import('../design/components/task-node.svelte'),
     priority: 1
   },
-  // TaskNodeViewer for task-specific UI (Issue #715)
+  // TaskNodeViewer for task-specific UI
   viewer: {
     lazyLoad: () => import('../components/viewers/task-node-viewer.svelte'),
     priority: 1
@@ -143,12 +143,12 @@ export const taskNodePlugin: PluginDefinition = {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
   },
-  // Type-specific metadata extraction (Issue #698, #794, #838)
-  // Issue #838: Backend returns TaskNode with status at TOP LEVEL (flat type-specific fields)
+  // Type-specific metadata extraction
+  // Backend returns TaskNode with status at TOP LEVEL (flat type-specific fields)
   // Also supports generic Node where status is in properties (for SSE events)
   extractMetadata: (node: { nodeType: string; status?: string; priority?: string | number; properties?: Record<string, unknown> }) => {
     const properties = node.properties || {};
-    // Issue #838: Check top-level status first (TaskNode format), fall back to properties.status
+    // Check top-level status first (TaskNode format), fall back to properties.status
     // TaskNode has status at node.status, generic Node has it at node.properties.status
     const status = node.status ?? properties.status;
     const priority = node.priority ?? properties.priority;
@@ -169,7 +169,7 @@ export const taskNodePlugin: PluginDefinition = {
     // This ensures top-level type-specific fields take precedence over properties
     return { ...properties, taskState, status, priority };
   },
-  // Type-specific state mapping (Issue #698)
+  // Type-specific state mapping
   mapStateToSchema: (state: string, _fieldName: string): CoreTaskStatus => {
     switch (state) {
       case 'pending':
@@ -183,7 +183,7 @@ export const taskNodePlugin: PluginDefinition = {
     }
   },
 
-  // Type-specific updater for task node properties (Issue #709)
+  // Type-specific updater for task node properties
   // Routes to updateTaskNode() instead of generic updateNode()
   updater: {
     update: async (id: string, version: number, changes: Record<string, unknown>) => {
@@ -205,7 +205,7 @@ export const taskNodePlugin: PluginDefinition = {
     }
   },
 
-  // Type-specific schema form for task node properties (Issue #709)
+  // Type-specific schema form for task node properties
   schemaForm: {
     lazyLoad: () => import('../components/property-forms/task-schema-form.svelte')
   }
@@ -290,7 +290,7 @@ export const codeBlockNodePlugin: PluginDefinition = {
   name: 'Code Block Node',
   description: 'Code snippet with language selection and syntax',
   version: '1.0.0',
-  // Plugin-owned pattern behavior (Issue #667)
+  // Plugin-owned pattern behavior
   pattern: {
     detect: /^```\n/,  // Matches ``` followed immediately by newline (language set via dropdown only)
     canRevert: true,
@@ -325,7 +325,7 @@ export const codeBlockNodePlugin: PluginDefinition = {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
   },
-  // Structured content - cannot accept arbitrary merges (Issue #698)
+  // Structured content - cannot accept arbitrary merges
   acceptsContentMerge: false
 };
 
@@ -334,7 +334,7 @@ export const quoteBlockNodePlugin: PluginDefinition = {
   name: 'Quote Block Node',
   description: 'Block quote with markdown styling conventions',
   version: '1.0.0',
-  // Plugin-owned pattern behavior (Issue #667)
+  // Plugin-owned pattern behavior
   pattern: {
     detect: /^>\s/,
     canRevert: true,
@@ -368,7 +368,7 @@ export const quoteBlockNodePlugin: PluginDefinition = {
     component: BaseNodeReference as NodeReferenceComponent,
     priority: 1
   },
-  // Structured content - cannot accept arbitrary merges (Issue #698)
+  // Structured content - cannot accept arbitrary merges
   acceptsContentMerge: false
 };
 
@@ -377,7 +377,7 @@ export const orderedListNodePlugin: PluginDefinition = {
   name: 'Ordered List Node',
   description: 'Auto-numbered ordered list items',
   version: '1.0.0',
-  // Plugin-owned pattern behavior (Issue #667)
+  // Plugin-owned pattern behavior
   pattern: {
     detect: /^1\.\s/,
     canRevert: true,
@@ -580,7 +580,7 @@ export const collectionNodePlugin: PluginDefinition = {
     canHaveChildren: true, // Collections can have sub-collections (DAG structure)
     canBeChild: true // Collections can be nested under other nodes
   },
-  // CollectionNodeViewer for collection-specific UI (Issue #757)
+  // CollectionNodeViewer for collection-specific UI
   viewer: {
     lazyLoad: () => import('../components/viewers/collection-node-viewer.svelte'),
     priority: 1
@@ -704,7 +704,7 @@ export function registerCorePlugins(registry: import('./plugin-registry').Plugin
   for (const plugin of corePlugins) {
     registry.register(plugin);
 
-    // Register pattern with PatternRegistry if present (Issue #667)
+    // Register pattern with PatternRegistry if present
     // Convert PluginPattern to PatternTemplate for PatternRegistry compatibility
     if (plugin.pattern) {
       const patternTemplate: PatternTemplate = {

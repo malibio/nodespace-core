@@ -414,7 +414,7 @@ describe('SharedNodeStore', () => {
   });
 
   // ========================================================================
-  // New Methods for BaseNodeViewer Migration (Issue #237)
+  // New Methods for BaseNodeViewer Migration
   // ========================================================================
 
   describe('BaseNodeViewer Migration Methods', () => {
@@ -514,12 +514,12 @@ describe('SharedNodeStore', () => {
         expect(store.getNode(mockNode.id)?.content).toBe('Updated content');
       });
 
-      // Note: Tests for PersistenceCoordinator integration removed (service deleted in #558)
+      // Note: Tests for PersistenceCoordinator integration removed (service deleted)
     });
 
-    // Note: hasPendingSave tests removed (PersistenceCoordinator deleted in #558)
+    // Note: hasPendingSave tests removed (PersistenceCoordinator deleted)
 
-    // Note: waitForNodeSaves tests removed (PersistenceCoordinator deleted in #558)
+    // Note: waitForNodeSaves tests removed (PersistenceCoordinator deleted)
 
   });
 
@@ -923,7 +923,7 @@ describe('SharedNodeStore', () => {
     });
   });
 
-  // Note: Explicit Persistence API tests removed (PersistenceCoordinator deleted in #558)
+  // Note: Explicit Persistence API tests removed (PersistenceCoordinator deleted)
 
   // ========================================================================
   // loadChildrenTree() - NodeWithChildren handling
@@ -1031,7 +1031,7 @@ describe('SharedNodeStore', () => {
     it('should synthesize virtual date node when backend returns null for a valid date id', async () => {
       // A brand-new date with no children yet returns null from the backend.
       // The store must synthesise a minimal in-memory node so the viewer does not
-      // mistake the missing node for a deleted/stale one and close the tab (#941).
+      // mistake the missing node for a deleted/stale one and close the tab.
       const dateId = '2026-03-14';
 
       const getChildrenTreeSpy = vi
@@ -1516,7 +1516,7 @@ describe('SharedNodeStore', () => {
   });
 
   // ========================================================================
-  // OCC Error Recovery Tests (Issue #720)
+  // OCC Error Recovery Tests
   // ========================================================================
 
   describe('OCC Error Recovery', () => {

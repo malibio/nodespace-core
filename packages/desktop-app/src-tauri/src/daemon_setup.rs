@@ -34,7 +34,7 @@ const CLI_BINARY_NAME: &str = "nodespace";
 #[cfg(target_os = "linux")]
 const SYSTEMD_SERVICE_NAME: &str = "nodespace.service";
 
-// ── Pro edition, baked at compile time (#156) ───────────────────────────────
+// ── Pro edition, baked at compile time ───────────────────────────────
 // A Pro build sets these env vars when running `tauri build` (see
 // nodespace-sync/scripts/build-pro-dmg.sh); a community build leaves them unset.
 // When set, the app installs + launches the `nodespaced-pro` sync daemon with the

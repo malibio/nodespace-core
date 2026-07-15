@@ -283,7 +283,7 @@ mod wire_contract {
 /// If someone adds a field to the stored shape but forgets to model it on the
 /// wire struct (`TaskNode` / `AiChatNode`), the promoted field vanishes from the
 /// output and the corresponding proptest fails — turning a silent data-drop into
-/// a test failure, which is the whole point of issue #1502.
+/// a test failure, which is the whole point of this guard.
 #[cfg(test)]
 mod promotion_proptests {
     use super::*;
