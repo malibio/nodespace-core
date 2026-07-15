@@ -19,6 +19,19 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) })
 
 import FirstProConsentSlot from '$lib/components/first-pro-consent-slot.svelte';
 import { proSync } from '$lib/stores/pro-sync.svelte';
+import { databaseStore } from '$lib/stores/database.svelte';
+
+/** In-memory localStorage stub (happy-dom's isn't guaranteed available). */
+function stubLocalStorage(): Map<string, string> {
+  const backing = new Map<string, string>();
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => (backing.has(k) ? backing.get(k)! : null),
+    setItem: (k: string, v: string) => void backing.set(k, v),
+    removeItem: (k: string) => void backing.delete(k),
+    clear: () => backing.clear()
+  });
+  return backing;
+}
 
 describe('FirstProConsentSlot', () => {
   beforeEach(() => {
@@ -28,15 +41,18 @@ describe('FirstProConsentSlot', () => {
     proSync.signedInEpisode = 0;
     proSync.consentDeclinedEpisode = -1;
     proSync.consentPromptOpen = true;
+    databaseStore.activeDatabaseId = null;
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     proSync.tier = 'unknown';
     proSync.signedInEpisode = 0;
     proSync.consentDeclinedEpisode = -1;
     proSync.consentPromptOpen = false;
+    databaseStore.activeDatabaseId = null;
   });
 
   it('merges: records the publish consent (already signed in) and closes', async () => {
@@ -78,5 +94,44 @@ describe('FirstProConsentSlot', () => {
     await fireEvent.click(getByRole('button', { name: /keep this database local-only/i }));
     expect(proSync.consentDeclinedEpisode).toBe(1);
     await waitFor(() => expect(queryByRole('dialog')).toBeNull());
+  });
+
+  it('keep-local persists the decline per database', async () => {
+    const store = stubLocalStorage();
+    databaseStore.activeDatabaseId = 'db-alpha';
+
+    const { getByRole, findByRole } = render(FirstProConsentSlot);
+    await findByRole('dialog');
+    await fireEvent.click(getByRole('button', { name: /keep this database local-only/i }));
+
+    expect(store.get('ns:consent-declined:db-alpha')).toBe('1');
+  });
+
+  it('does not re-pop after a reload once the decline is persisted for this database', async () => {
+    const store = stubLocalStorage();
+    store.set('ns:consent-declined:db-alpha', '1');
+    databaseStore.activeDatabaseId = 'db-alpha';
+    // Simulate a fresh store on reload: no manual open, but the resumed session
+    // re-bumps signedInEpisode.
+    proSync.consentPromptOpen = false;
+    proSync.consentDeclinedEpisode = -1;
+    proSync.signedInEpisode = 1;
+
+    const { queryByRole } = render(FirstProConsentSlot);
+    // The persisted decline suppresses the auto-open, so no dialog appears.
+    await waitFor(() => expect(queryByRole('dialog')).toBeNull());
+  });
+
+  it('a persisted decline for a different database does not suppress this one', async () => {
+    const store = stubLocalStorage();
+    store.set('ns:consent-declined:db-other', '1');
+    databaseStore.activeDatabaseId = 'db-alpha';
+    proSync.consentPromptOpen = false;
+    proSync.consentDeclinedEpisode = -1;
+    proSync.signedInEpisode = 1;
+
+    const { findByRole } = render(FirstProConsentSlot);
+    // db-alpha has no decline of its own, so the consent still auto-opens.
+    await findByRole('dialog');
   });
 });

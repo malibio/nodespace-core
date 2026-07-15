@@ -19,23 +19,55 @@
   import { invoke } from '@tauri-apps/api/core';
   import FirstProConsentModal from '$lib/components/first-pro-consent-modal.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
+  import { databaseStore } from '$lib/stores/database.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('FirstProConsentSlot');
 
   const KEPT_LOCAL_NOTICE_MS = 4000;
+  // Per-database "declined the publish consent" marker, so a Keep-local choice
+  // survives a webview reload / app restart instead of re-popping this irreversible
+  // dialog every launch. Keyed by database id — the decision is per-database.
+  const DECLINE_KEY_PREFIX = 'ns:consent-declined:';
+
+  function declineKeyFor(id: string | null): string | null {
+    return id ? DECLINE_KEY_PREFIX + id : null;
+  }
+
+  function hasPersistedDecline(id: string | null): boolean {
+    const key = declineKeyFor(id);
+    if (!key) return false;
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1';
+    } catch {
+      return false; // storage unavailable — fall back to showing the consent
+    }
+  }
+
+  function persistDecline(id: string | null): void {
+    const key = declineKeyFor(id);
+    if (!key) return;
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(key, '1');
+    } catch {
+      /* ignore — an unpersisted decline still holds for this session */
+    }
+  }
 
   let pending = $state(false);
   let showKeptLocalNotice = $state(false);
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Auto-open once per fresh sign-in episode (unless declined this episode), plus
-  // any manual reopen via the enable-sync pill. Derived from the episode counter
-  // rather than pushed by an effect (ADR-049): a decline sets
-  // `consentDeclinedEpisode` to the current episode, and a later sign-out/in bumps
-  // `signedInEpisode` so the prompt returns for the new session.
+  // Auto-open once per fresh sign-in episode (unless declined), plus any manual
+  // reopen via the enable-sync pill. Derived from the episode counter rather than
+  // pushed by an effect (ADR-049). A decline is honoured two ways: in-session via
+  // `consentDeclinedEpisode`, and across reloads via a persisted per-database
+  // marker — so the modal is a one-time nudge, not a per-launch pop-up. The pill
+  // remains available to reopen it deliberately.
   const autoOpen = $derived(
-    proSync.signedInEpisode > 0 && proSync.signedInEpisode !== proSync.consentDeclinedEpisode
+    proSync.signedInEpisode > 0 &&
+      proSync.signedInEpisode !== proSync.consentDeclinedEpisode &&
+      !hasPersistedDecline(databaseStore.activeDatabaseId)
   );
   const open = $derived(proSync.isPro && (proSync.consentPromptOpen || autoOpen));
 
@@ -59,11 +91,13 @@
 
   function handleKeepLocal() {
     // Decline: leave sync disabled and share nothing, but stay signed in. Record the
-    // decline for this sign-in episode so the auto-open doesn't immediately reopen,
-    // and surface a brief confirmation so the choice visibly registers. The pill
-    // remains, so the user can revisit this later.
+    // decline for this sign-in episode (so the auto-open doesn't immediately reopen)
+    // and persist it per-database (so a reload/restart doesn't re-pop the dialog), and
+    // surface a brief confirmation so the choice visibly registers. The pill remains,
+    // so the user can revisit this later.
     proSync.consentPromptOpen = false;
     proSync.consentDeclinedEpisode = proSync.signedInEpisode;
+    persistDecline(databaseStore.activeDatabaseId);
     showKeptLocalNotice = true;
     if (noticeTimer) clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => {
