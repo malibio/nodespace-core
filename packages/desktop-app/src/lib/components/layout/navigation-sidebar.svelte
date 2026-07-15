@@ -580,6 +580,9 @@
       members={collectionMembers}
       onClose={handleCloseSubPanel}
       onNodeClick={handleNodeClick}
+      onOpenCollection={() => {
+        if (collectionForPanel) handleNodeClick(collectionForPanel.id, 'collection');
+      }}
     />
   </div>
 
