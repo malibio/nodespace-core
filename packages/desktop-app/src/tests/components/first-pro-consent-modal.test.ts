@@ -54,4 +54,17 @@ describe('FirstProConsentModal', () => {
     await fireEvent.click(getByRole('button', { name: /keep this database local-only/i }));
     expect(onKeepLocal).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps decline actionable even while a merge is pending (never a no-op)', async () => {
+    const onKeepLocal = vi.fn();
+    const { getByRole } = render(FirstProConsentModal, {
+      props: { open: true, pending: true, onMerge: vi.fn(), onKeepLocal }
+    });
+    const keepBtn = getByRole('button', { name: /keep this database local-only/i });
+    // Merge is disabled while pending, but decline must always register.
+    expect(getByRole('button', { name: /merging/i }).hasAttribute('disabled')).toBe(true);
+    expect(keepBtn.hasAttribute('disabled')).toBe(false);
+    await fireEvent.click(keepBtn);
+    expect(onKeepLocal).toHaveBeenCalledTimes(1);
+  });
 });

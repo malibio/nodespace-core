@@ -51,7 +51,13 @@ export function activeDatabaseSettings(): DatabaseSettings | undefined {
 /**
  * Resolve the current Pro-sync variant from the two independent signals:
  *   - axis 1: `proSync.tier` (daemon build variant) — not Pro ⇒ `teaser`.
- *   - axis 2: the active database's `sync_enabled` / `auth_status`.
+ *   - axis 2: the active database's `auth_status` (signed in?) and `sync_enabled`
+ *     (opted into the public-workspace publish?).
+ *
+ * The flow is sign-in-first: an un-opted-in database shows `sign-in` until the
+ * user authenticates, then `consent` (the publish decision) — nothing is enabled
+ * until they merge. An opted-in database is `connected` while authenticated, or
+ * `relogin` when its session has lapsed.
  *
  * A plain function (not a `$derived`) so it composes into any consumer's own
  * derivation; its reads are reactive because the underlying sources are.
@@ -59,20 +65,23 @@ export function activeDatabaseSettings(): DatabaseSettings | undefined {
 export function resolveProSyncVariant(): ProSyncVariant {
   if (proSync.tier !== 'pro') return 'teaser';
   const settings = activeDatabaseSettings();
-  if (settings?.sync_enabled !== true) return 'enable-prompt';
-  if (settings.auth_status === 'connected') return 'connected';
-  return 'sign-in';
+  const authed = settings?.auth_status === 'connected';
+  const enabled = settings?.sync_enabled === true;
+  // Not yet opted in: sign in first, then present the publish consent.
+  if (!enabled) return authed ? 'consent' : 'sign-in';
+  // Opted in: connected once authenticated, else a re-login is needed.
+  return authed ? 'connected' : 'relogin';
 }
 
 /**
  * True when sync is actually active for the current build + active database —
- * i.e. axis 1 is Pro AND axis 2 has `sync_enabled: true`. This is the two-axis
- * gate dependent stores (membership, recovered-items) use in place of the raw
- * `proSync.isPro` (which is axis 1 only).
+ * i.e. axis 1 is Pro AND axis 2 has `sync_enabled: true` (the `relogin` and
+ * `connected` variants). This is the two-axis gate dependent stores (membership,
+ * recovered-items) use in place of the raw `proSync.isPro` (which is axis 1 only).
  */
 export function isProSyncActive(): boolean {
   const variant = resolveProSyncVariant();
-  return variant === 'sign-in' || variant === 'connected';
+  return variant === 'relogin' || variant === 'connected';
 }
 
 /** Chrome contributions for `slot` that match the currently-resolved variant. */

@@ -1,9 +1,10 @@
 /**
  * enable-sync-pill component.
  *
- * Rendered only for a Pro daemon whose active database has sync disabled.
- * Clicking opens the first-Pro data-sharing consent modal (which owns the
- * irreversible merge choice) rather than pushing anything itself.
+ * Rendered for the `consent` variant — a Pro daemon whose active database is
+ * signed in but not yet opted into sync. Clicking (re)opens the first-Pro
+ * data-sharing consent modal (which owns the irreversible publish choice) rather
+ * than pushing anything itself.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/svelte';
@@ -27,16 +28,16 @@ describe('EnableSyncPill', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the enable-sync CTA', () => {
+  it('renders the turn-on-sync CTA', () => {
     const { getByRole, getByText } = render(EnableSyncPill);
-    expect(getByText('Enable sync')).toBeTruthy();
-    expect(getByRole('button', { name: /enable cloud sync/i })).toBeTruthy();
+    expect(getByText('Turn on sync')).toBeTruthy();
+    expect(getByRole('button', { name: /turn on sync/i })).toBeTruthy();
   });
 
   it('opens the consent modal on click (does not push anything itself)', async () => {
     const { getByRole } = render(EnableSyncPill);
     expect(proSync.consentPromptOpen).toBe(false);
-    await fireEvent.click(getByRole('button', { name: /enable cloud sync/i }));
+    await fireEvent.click(getByRole('button', { name: /turn on sync/i }));
     expect(proSync.consentPromptOpen).toBe(true);
   });
 });

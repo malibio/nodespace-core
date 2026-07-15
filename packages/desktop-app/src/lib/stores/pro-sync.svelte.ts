@@ -86,7 +86,7 @@ class ProSyncStore {
   /**
    * The `authRequiredEpisode` the user last dismissed via "Work offline". Held on
    * the store (not inside the re-login slot component) so a dismissal survives the
-   * slot remounting when the resolved variant flips between `sign-in` and
+   * slot remounting when the resolved variant flips between `relogin` and
    * `connected` — both map to the same re-login slot, so a flip must not re-arm an
    * already-dismissed modal. `-1` = nothing dismissed yet.
    */
@@ -108,6 +108,16 @@ class ProSyncStore {
    * contributions — share one source of truth.
    */
   consentPromptOpen = $state(false);
+
+  /**
+   * The `signedInEpisode` for which the user declined the first-Pro publish consent
+   * ("Keep local"). The consent slot auto-opens the modal once per fresh sign-in
+   * episode; recording the declined episode here stops it from immediately
+   * reopening for that same session, while leaving the pill available to reopen it.
+   * Held on the store (not the slot) so it survives the slot remounting. `-1` =
+   * nothing declined yet. Same episode-comparison pattern as `dismissedReloginEpisode`.
+   */
+  consentDeclinedEpisode = $state(-1);
 
   /**
    * Axis 1 only: "this daemon binary CAN sync" (the capability probe found

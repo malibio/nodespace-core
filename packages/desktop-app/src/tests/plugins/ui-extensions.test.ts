@@ -3,7 +3,9 @@
  *
  * Exercises the two-signal state machine (`proSync.tier` × the active database's
  * DatabaseSettingsNode) and the registry filtering that resolves which chrome /
- * viewer contributions are active for each variant.
+ * viewer contributions are active for each variant. The flow is sign-in-first:
+ * sign-in → consent → connected, with relogin as the re-auth state for an
+ * already-enabled database.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Node } from '$lib/types';
@@ -60,11 +62,12 @@ describe('UI-extension registry', () => {
   describe('registry registration', () => {
     it('registers the built-in pro-sync extension with all contributions', () => {
       expect(uiExtensionRegistry.has('pro-sync')).toBe(true);
-      // 4 overlay pill variants + 3 modal (enable-prompt consent / sign-in / connected).
-      expect(uiExtensionRegistry.chromeFor('app-shell-overlay')).toHaveLength(4);
+      // 5 overlay pills (teaser / sign-in / consent / relogin / connected).
+      expect(uiExtensionRegistry.chromeFor('app-shell-overlay')).toHaveLength(5);
+      // 3 modals (consent / relogin / connected) — no modal for teaser or sign-in.
       expect(uiExtensionRegistry.chromeFor('app-shell-modal')).toHaveLength(3);
-      // 3 collaboration viewer extensions (enable-prompt/sign-in/connected).
-      expect(uiExtensionRegistry.viewersFor('collection')).toHaveLength(3);
+      // 4 collaboration viewer extensions (sign-in / consent / relogin / connected).
+      expect(uiExtensionRegistry.viewersFor('collection')).toHaveLength(4);
       expect(uiExtensionRegistry.viewersFor('text')).toEqual([]);
     });
   });
@@ -77,23 +80,31 @@ describe('UI-extension registry', () => {
       expect(isProSyncActive()).toBe(false);
     });
 
-    it('pro + no hydrated settings node → enable-prompt (sync not enabled)', () => {
+    it('pro + no hydrated settings node → sign-in (not enabled, not authed)', () => {
       proSync.tier = 'pro';
-      expect(resolveProSyncVariant()).toBe('enable-prompt');
+      expect(resolveProSyncVariant()).toBe('sign-in');
       expect(isProSyncActive()).toBe(false);
     });
 
-    it('pro + sync_enabled: false → enable-prompt', () => {
+    it("pro + sync_enabled: false + auth_status 'local' → sign-in", () => {
       proSync.tier = 'pro';
       seedSettings({ sync_enabled: false, auth_status: 'local' });
-      expect(resolveProSyncVariant()).toBe('enable-prompt');
+      expect(resolveProSyncVariant()).toBe('sign-in');
       expect(isProSyncActive()).toBe(false);
     });
 
-    it("pro + sync_enabled + auth_status 'local' → sign-in (sync active)", () => {
+    it("pro + sync_enabled: false + auth_status 'connected' → consent (signed in, publish pending)", () => {
+      proSync.tier = 'pro';
+      seedSettings({ sync_enabled: false, auth_status: 'connected' });
+      expect(resolveProSyncVariant()).toBe('consent');
+      // Not active yet — consent gates the sync_enabled flip.
+      expect(isProSyncActive()).toBe(false);
+    });
+
+    it("pro + sync_enabled + auth_status 'local' → relogin (enabled but session lapsed)", () => {
       proSync.tier = 'pro';
       seedSettings({ sync_enabled: true, auth_status: 'local' });
-      expect(resolveProSyncVariant()).toBe('sign-in');
+      expect(resolveProSyncVariant()).toBe('relogin');
       expect(isProSyncActive()).toBe(true);
     });
 
@@ -104,14 +115,19 @@ describe('UI-extension registry', () => {
       expect(isProSyncActive()).toBe(true);
     });
 
-    it('re-resolves when the settings node changes (derived reads, no cache)', () => {
+    it('sign-in-first transition: sign-in → consent → connected as auth then sync land', () => {
       proSync.tier = 'pro';
+      // Fresh Pro database: sign in first.
       seedSettings({ sync_enabled: false, auth_status: 'local' });
-      expect(resolveProSyncVariant()).toBe('enable-prompt');
-      seedSettings({ sync_enabled: true, auth_status: 'local' });
       expect(resolveProSyncVariant()).toBe('sign-in');
+      // After sign-in, the publish consent is presented — still nothing enabled.
+      seedSettings({ sync_enabled: false, auth_status: 'connected' });
+      expect(resolveProSyncVariant()).toBe('consent');
+      expect(isProSyncActive()).toBe(false);
+      // Merge flips sync_enabled → connected and active.
       seedSettings({ sync_enabled: true, auth_status: 'connected' });
       expect(resolveProSyncVariant()).toBe('connected');
+      expect(isProSyncActive()).toBe(true);
     });
   });
 
@@ -125,19 +141,46 @@ describe('UI-extension registry', () => {
       expect(getActiveViewerExtensions('collection')).toEqual([]);
     });
 
-    it('enable-prompt: enable-sync pill + the consent modal + a locked collab tab', () => {
+    it('sign-in: the sync pill (OAuth) + no modal + a locked collab tab', () => {
       proSync.tier = 'pro';
       seedSettings({ sync_enabled: false, auth_status: 'local' });
       const overlay = getActiveChromeContributions('app-shell-overlay');
       expect(overlay).toHaveLength(1);
-      expect(overlay[0].variant).toBe('enable-prompt');
-      const modal = getActiveChromeContributions('app-shell-modal');
-      expect(modal).toHaveLength(1);
-      expect(modal[0].variant).toBe('enable-prompt');
+      expect(overlay[0].variant).toBe('sign-in');
+      // No consent modal before sign-in.
+      expect(getActiveChromeContributions('app-shell-modal')).toEqual([]);
       const viewers = getActiveViewerExtensions('collection');
       expect(viewers).toHaveLength(1);
-      expect(viewers[0].variant).toBe('enable-prompt');
+      expect(viewers[0].variant).toBe('sign-in');
       expect(viewers[0].tab.id).toBe('collaboration');
+    });
+
+    it('consent: the turn-on-sync pill + the consent modal + a locked collab tab', () => {
+      proSync.tier = 'pro';
+      seedSettings({ sync_enabled: false, auth_status: 'connected' });
+      const overlay = getActiveChromeContributions('app-shell-overlay');
+      expect(overlay).toHaveLength(1);
+      expect(overlay[0].variant).toBe('consent');
+      const modal = getActiveChromeContributions('app-shell-modal');
+      expect(modal).toHaveLength(1);
+      expect(modal[0].variant).toBe('consent');
+      const viewers = getActiveViewerExtensions('collection');
+      expect(viewers).toHaveLength(1);
+      expect(viewers[0].variant).toBe('consent');
+    });
+
+    it('relogin: the live pill + the relogin modal + the live collab tab', () => {
+      proSync.tier = 'pro';
+      seedSettings({ sync_enabled: true, auth_status: 'local' });
+      const overlay = getActiveChromeContributions('app-shell-overlay');
+      expect(overlay).toHaveLength(1);
+      expect(overlay[0].variant).toBe('relogin');
+      const modal = getActiveChromeContributions('app-shell-modal');
+      expect(modal).toHaveLength(1);
+      expect(modal[0].variant).toBe('relogin');
+      const viewers = getActiveViewerExtensions('collection');
+      expect(viewers).toHaveLength(1);
+      expect(viewers[0].variant).toBe('relogin');
     });
 
     it('connected: the live pill + the relogin modal + the live collab tab', () => {

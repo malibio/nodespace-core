@@ -38,8 +38,13 @@ export const DATABASE_SETTINGS_NODE_ID = 'database-settings-singleton';
 /** The chrome slots a contribution can target in the app shell. */
 export type ChromeSlot = 'app-shell-overlay' | 'app-shell-modal';
 
-/** The four states the Pro-sync surface can be in (the variant state machine). */
-export type ProSyncVariant = 'teaser' | 'enable-prompt' | 'sign-in' | 'connected';
+/**
+ * The states the Pro-sync surface can be in (the variant state machine). Ordered
+ * by the sign-in-first flow: a Pro user signs in (`sign-in`), consents to the
+ * public-workspace publish (`consent`), then syncs (`connected`); `relogin` is
+ * the re-auth state for an already-enabled database whose session expired.
+ */
+export type ProSyncVariant = 'teaser' | 'sign-in' | 'consent' | 'relogin' | 'connected';
 
 /**
  * One chrome contribution: a lazily-loaded component mounted into `slot` when the

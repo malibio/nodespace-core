@@ -1,17 +1,26 @@
 <!--
   Collaboration locked placeholder.
 
-  Shown in the collection viewer's Collaboration tab for the `enable-prompt`
-  variant — a Pro daemon whose active database has `sync_enabled: false`. People &
-  roles live in the cloud tenant a database is bound to, so there is nothing to
-  show until sync is enabled. Purely static: no membership calls, no daemon
-  commands. Accepts the host collection's `nodeId` for a uniform viewer-extension
-  signature (surfaced as a data attribute for debugging).
+  Shown in the collection viewer's Collaboration tab for the `sign-in` and
+  `consent` variants — a Pro daemon whose active database has `sync_enabled:
+  false`. People & roles live in the cloud tenant a database is bound to, so there
+  is nothing to show until sync is enabled. Purely static: no membership calls, no
+  daemon commands. Accepts the host collection's `nodeId` for a uniform
+  viewer-extension signature (surfaced as a data attribute for debugging).
+
+  The action depends on where the user is in the sign-in-first flow: once signed
+  in (`consent`) the button reopens the publish-consent modal (mounted for that
+  variant); before sign-in (`sign-in`) there is no consent slot to open, so it
+  points the user at the toolbar sync button to sign in first.
 -->
 <script lang="ts">
   import { proSync } from '$lib/stores/pro-sync.svelte';
+  import { resolveProSyncVariant } from '$lib/plugins/ui-extensions.svelte';
 
   let { nodeId }: { nodeId: string } = $props();
+
+  // Signed in but not yet opted into sync ⇒ the consent modal is available here.
+  const canConsent = $derived(resolveProSyncVariant() === 'consent');
 
   function openConsent() {
     proSync.consentPromptOpen = true;
@@ -21,11 +30,18 @@
 <div class="collab-locked" data-collection-id={nodeId}>
   <div class="lock" aria-hidden="true">🔒</div>
   <p class="headline">Collaboration is off for this database</p>
-  <p class="detail">
-    Enable cloud sync for this database to invite people, manage roles, and share
-    collections.
-  </p>
-  <button class="enable-btn" type="button" onclick={openConsent}> Enable sync </button>
+  {#if canConsent}
+    <p class="detail">
+      Turn on sync for this database to invite people, manage roles, and share
+      collections.
+    </p>
+    <button class="enable-btn" type="button" onclick={openConsent}> Turn on sync </button>
+  {:else}
+    <p class="detail">
+      Sign in from the sync button in the toolbar, then turn on sync to invite
+      people, manage roles, and share collections.
+    </p>
+  {/if}
 </div>
 
 <style>

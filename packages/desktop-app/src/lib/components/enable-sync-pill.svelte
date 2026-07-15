@@ -1,12 +1,13 @@
 <!--
-  Enable-sync prompt.
+  Turn-on-sync prompt.
 
-  Rendered in the app-shell overlay slot for the `enable-prompt` variant — a Pro
-  daemon whose active database has `sync_enabled: false`. Clicking opens the
-  first-Pro data-sharing consent modal (rendered by `first-pro-consent-slot` in
-  the app-shell modal slot for the same variant), which is where the user makes
-  the informed, irreversible choice to merge into the public workspace. Nothing
-  leaves the device until they opt in there.
+  Rendered in the app-shell overlay slot for the `consent` variant — a Pro daemon
+  whose active database is signed in but has not yet opted into sync. Clicking
+  (re)opens the first-Pro data-sharing consent modal (rendered by
+  `first-pro-consent-slot` in the app-shell modal slot for the same variant),
+  which is where the user makes the informed, irreversible choice to publish this
+  database into the shared public workspace. Nothing leaves the device until they
+  opt in there.
 
   Never rendered in the community build (that resolves to `teaser`), so touching
   Pro state here is safe.
@@ -22,12 +23,12 @@
 <button
   class="enable-sync-pill"
   type="button"
-  title="Turn on cloud sync for this database"
-  aria-label="Enable cloud sync for this database"
+  title="Publish this database to the shared public workspace"
+  aria-label="Turn on sync: publish this database to the shared public workspace"
   onclick={openConsent}
 >
   <span class="dot" aria-hidden="true"></span>
-  <span class="label">Enable sync</span>
+  <span class="label">Turn on sync</span>
 </button>
 
 <style>
