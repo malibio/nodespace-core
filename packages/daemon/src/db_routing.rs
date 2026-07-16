@@ -17,15 +17,62 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tonic::codegen::http;
+use tonic::Status;
 use tower::{Layer, Service};
 
 use crate::services::database_manager::DatabaseManager;
+use crate::services::DatabaseServices;
 
 /// The metadata/header key a client sets to target a specific registered
 /// database. Re-exported from the wire-contract crate so the daemon and every
 /// client share one canonical key; see [`nodespace_proto::DATABASE_ID_HEADER`]
 /// for the full semantics.
 pub use nodespace_proto::DATABASE_ID_HEADER;
+
+/// Resolve the database a routed request targets (ADR-053). This is the single
+/// routing contract shared by every per-database service's `route` adapter
+/// (node, embeddings, import, agent-session).
+///
+/// When the routing middleware ([`DbManagerLayer`]) injected a
+/// [`DatabaseManager`], the `x-ns-database-id` header selects a registered
+/// database (an unregistered id → `NOT_FOUND`) and an absent header selects the
+/// default; the target's service set is opened (lazily) and returned.
+///
+/// Returns `Ok(None)` when no manager was injected AND no routing header is
+/// present — the caller then serves its own single-database service set, which
+/// is how the Pro daemon and directly-constructed test impls behave. A request
+/// that names a database on a daemon without routing installed is rejected
+/// (`UNIMPLEMENTED`) rather than silently served from the active database:
+/// answering with another database's data is a wrong-database read the caller
+/// cannot detect.
+pub(crate) async fn routed_database_services<T>(
+    request: &tonic::Request<T>,
+) -> Result<Option<Arc<DatabaseServices>>, Status> {
+    let header = request
+        .metadata()
+        .get(DATABASE_ID_HEADER)
+        .map(|v| v.to_str())
+        .transpose()
+        .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
+    let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
+        return match header {
+            Some(id) => Err(Status::unimplemented(format!(
+                "this daemon does not route requests to a specific database; \
+                 cannot serve the request targeting database id {id}"
+            ))),
+            None => Ok(None),
+        };
+    };
+    let id = manager
+        .resolve_database_id(header)
+        .await
+        .map_err(|e| Status::not_found(e.to_string()))?;
+    let services = manager
+        .get_or_open(&id)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+    Ok(Some(services))
+}
 
 /// `tower::Layer` that inserts the shared [`Arc<DatabaseManager>`] into each
 /// request's extensions. See the module docs for why this is core-only and

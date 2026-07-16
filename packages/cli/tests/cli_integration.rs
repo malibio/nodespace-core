@@ -1291,11 +1291,15 @@ async fn database_registry_round_trip() {
         .expect("second registered")
         .id
         .clone();
+    // Create makes the database file before registering it — it exists on disk
+    // as soon as the command returns, without any request having routed to it.
+    assert!(
+        tempdir.path().join("second.db").exists(),
+        "create must create the database file"
+    );
 
-    // Open the second database by routing a write to it, so its file exists on
-    // disk — this lets the remove assertion below prove the file is preserved
-    // rather than merely never created (a freshly created DB is "missing" until
-    // first opened).
+    // Route a write to the second database, proving the freshly created
+    // database serves requests immediately.
     let mut node_second = node_client_for(&sock, &second_id).await;
     node_second
         .create_node(CreateNodeRequest {

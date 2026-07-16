@@ -149,6 +149,10 @@ async fn create_second_database_then_route_a_write_to_it() {
         .unwrap()
         .into_inner();
     assert!(!second.is_default);
+    // Create makes the file and opens the database before registering it, so
+    // the response already reports Open and the file exists on disk.
+    assert_eq!(second.status, ProtoDatabaseStatus::Open as i32);
+    assert!(tempdir.path().join("second.db").exists());
     let second_id = second.id.clone();
 
     // Write a node addressed to the second database via the routing header.
@@ -198,8 +202,7 @@ async fn create_second_database_then_route_a_write_to_it() {
         .unwrap_err();
     assert_eq!(miss.code(), Code::NotFound);
 
-    // The routed write opened the second database: it now reports Open where it
-    // was Missing before, proving the write hit db2 and not the default.
+    // The second database is still listed Open after serving the routed write.
     let listed = db.list(ListDatabasesRequest {}).await.unwrap().into_inner();
     assert_eq!(listed.databases.len(), 2);
     let second_listed = listed.databases.iter().find(|d| d.id == second_id).unwrap();

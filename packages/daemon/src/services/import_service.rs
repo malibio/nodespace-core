@@ -19,12 +19,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     import_service_server::ImportService as GrpcImportService, FileImportResult,
     ImportMarkdownFilesRequest, ImportMarkdownRequest, ImportOptions, ImportProgressEvent,
 };
-use crate::services::database_manager::DatabaseManager;
 
 const CHANNEL_BUFFER: usize = 64;
 
@@ -55,30 +53,16 @@ impl ImportServiceImpl {
     }
 
     /// Resolve which database this request targets (ADR-053) and return that
-    /// database's import service. See [`crate::services::NodeServiceImpl::route`]
-    /// for the shared routing contract: with no manager injected (Pro daemon,
-    /// unit tests) this returns `self`, so behavior is unchanged; an
-    /// `x-ns-database-id` header selects a registered database (unregistered →
-    /// rejected).
+    /// database's import service. The routing contract lives in
+    /// [`crate::db_routing::routed_database_services`]: a header selects a
+    /// registered database, header-less requests hit the default, and with no
+    /// routing middleware installed a header-less request falls back to `self`
+    /// while a header-carrying one is rejected.
     async fn route<T>(&self, request: &Request<T>) -> Result<ImportServiceImpl, Status> {
-        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
-            return Ok(self.clone());
-        };
-        let header = request
-            .metadata()
-            .get(DATABASE_ID_HEADER)
-            .map(|v| v.to_str())
-            .transpose()
-            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
-        let id = manager
-            .resolve_database_id(header)
-            .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
-        let services = manager
-            .get_or_open(&id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(services.import.clone())
+        match crate::db_routing::routed_database_services(request).await? {
+            Some(services) => Ok(services.import.clone()),
+            None => Ok(self.clone()),
+        }
     }
 }
 
@@ -1288,6 +1272,8 @@ async fn import_markdown_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db_routing::DATABASE_ID_HEADER;
+    use crate::services::database_manager::DatabaseManager;
     use crate::services::SharedContext;
     use nodespace_agent::pty::PtySessionManager;
     use nodespace_core::services::EmbeddingScheduler;
