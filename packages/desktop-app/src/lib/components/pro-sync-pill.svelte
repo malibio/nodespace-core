@@ -11,6 +11,11 @@
     green      — CONNECTED
     red        — ERROR
 
+  Exception (#1674): CONNECTED/SYNCING only prove the daemon's realtime session
+  is live — i.e. signed in. When the active database has not opted into sync
+  (`sync_enabled: false` on its DatabaseSettingsNode, via isProSyncActive), the
+  pill shows a neutral "Signed in — sync off" instead, never "Synced".
+
   Click: when the daemon is signed out (DISCONNECTED, AUTH_REQUIRED,
   UNSPECIFIED, ERROR), clicking triggers the PKCE flow via
   `pro_initiate_oauth`. The daemon opens the browser; this UI just
@@ -21,40 +26,36 @@
   import { invoke } from '@tauri-apps/api/core';
   import { proSync, type SyncState } from '$lib/stores/pro-sync.svelte';
   import { membership } from '$lib/stores/membership.svelte';
+  import { isProSyncActive } from '$lib/plugins/ui-extensions.svelte';
   import InvitationsInbox from '$lib/components/collaboration/invitations-inbox.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ProSyncPill');
 
   const labels: Record<SyncState, string> = {
-    'unspecified': 'Sign in',
-    'disconnected': 'Sign in',
-    'connecting': 'Connecting…',
-    'authenticating': 'Signing in…',
+    unspecified: 'Sign in',
+    disconnected: 'Sign in',
+    connecting: 'Connecting…',
+    authenticating: 'Signing in…',
     'auth-required': 'Sign in required',
-    'syncing': 'Syncing…',
-    'connected': 'Synced',
-    'error': 'Retry sign-in',
+    syncing: 'Syncing…',
+    connected: 'Synced',
+    error: 'Retry sign-in'
   };
 
   const tones: Record<SyncState, string> = {
-    'unspecified': 'grey',
-    'disconnected': 'grey',
-    'connecting': 'amber',
-    'authenticating': 'amber',
+    unspecified: 'grey',
+    disconnected: 'grey',
+    connecting: 'amber',
+    authenticating: 'amber',
     'auth-required': 'blue',
-    'syncing': 'amber',
-    'connected': 'green',
-    'error': 'red',
+    syncing: 'amber',
+    connected: 'green',
+    error: 'red'
   };
 
   // States where clicking should kick off a fresh sign-in attempt.
-  const SIGN_IN_STATES: SyncState[] = [
-    'unspecified',
-    'disconnected',
-    'auth-required',
-    'error',
-  ];
+  const SIGN_IN_STATES: SyncState[] = ['unspecified', 'disconnected', 'auth-required', 'error'];
 
   // While an InitiateOAuth call is in flight, disable the pill so a
   // double-click doesn't spawn two browser windows.
@@ -94,16 +95,31 @@
   // starting a new sign-in.
   let signedIn = $derived(proSync.userEmail !== '');
   let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
+
+  // Axis-2 cross-check (#1674): the realtime state reads 'connected' whenever
+  // the daemon's session is live — that only proves sign-in, not sync. Whether
+  // data actually leaves the device is the settings node's `sync_enabled`
+  // (surfaced via isProSyncActive, which fails safe to false while the node is
+  // unhydrated). Without this, the sign-in variant's pill claimed "Synced"
+  // while sync was off. Never claim synced/syncing unless the settings node
+  // confirms it.
+  const syncEnabled = $derived(isProSyncActive());
+  const syncOffOverride = $derived(
+    !syncEnabled && (proSync.state === 'connected' || proSync.state === 'syncing')
+  );
+  const label = $derived(syncOffOverride ? 'Signed in — sync off' : labels[proSync.state]);
+  const tone = $derived(syncOffOverride ? 'grey' : tones[proSync.state]);
+
   // While the daemon catches up in the background (state 'syncing'), the app is
   // fully usable on the local cache — so the tooltip surfaces that progress even
   // when signed in, rather than only "Signed in as <email>". Never a blocking gate;
   // the pill is purely a status indicator.
   let pillTitle = $derived(
     signedIn
-      ? proSync.state === 'syncing'
+      ? proSync.state === 'syncing' && syncEnabled
         ? `${labels.syncing} — signed in as ${proSync.userEmail}`
         : `Signed in as ${proSync.userEmail}`
-      : proSync.detail || labels[proSync.state]
+      : proSync.detail || label
   );
 
   // The inbox is open when explicitly opened, or auto-opened for a fresh, undismissed
@@ -146,10 +162,7 @@
     menuOpen = false;
     pending = true;
     try {
-      const attemptId = await invoke<string>(
-        'pro_initiate_oauth',
-        provider ? { provider } : {}
-      );
+      const attemptId = await invoke<string>('pro_initiate_oauth', provider ? { provider } : {});
       log.info('PKCE attempt started', { attemptId, provider: provider || 'email' });
     } catch (e) {
       log.warn('pro_initiate_oauth failed', { error: e, provider });
@@ -189,17 +202,17 @@
     <button
       class="pro-sync-pill"
       class:clickable
-      data-tone={tones[proSync.state]}
+      data-tone={tone}
       title={pillTitle}
       type="button"
-      aria-label="NodeSpace Pro sync status: {labels[proSync.state]}"
+      aria-label="NodeSpace Pro sync status: {label}"
       aria-haspopup={clickable ? 'menu' : undefined}
       aria-expanded={clickable ? menuOpen : undefined}
       disabled={pending || !clickable}
       onclick={onClick}
     >
       <span class="dot" aria-hidden="true"></span>
-      <span class="label">{labels[proSync.state]}</span>
+      <span class="label">{label}</span>
     </button>
 
     {#if menuOpen && clickable}
@@ -241,12 +254,7 @@
           >
             Continue with Google
           </button>
-          <button
-            class="menu-item"
-            type="button"
-            role="menuitem"
-            onclick={() => startSignIn('')}
-          >
+          <button class="menu-item" type="button" role="menuitem" onclick={() => startSignIn('')}>
             Sign in with email
           </button>
         {/if}
