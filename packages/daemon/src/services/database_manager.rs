@@ -283,11 +283,16 @@ impl DatabaseManager {
         }
     }
 
-    /// Register a brand-new database under `name`. When `path` is `None` the
-    /// daemon derives a path under its managed database directory. The registry
-    /// entry is created and persisted; the database file itself is created
-    /// lazily on first open (a follow-on stage), so a freshly created entry
-    /// reports [`DatabaseStatus::Missing`] until then.
+    /// Create a brand-new database under `name`. When `path` is `None` the
+    /// daemon derives a path under its managed database directory.
+    ///
+    /// The database file is created and opened BEFORE the registry entry is
+    /// persisted, so the registry never advertises a database whose file does
+    /// not exist. The open handle is cached, so a freshly created database
+    /// reports [`DatabaseStatus::Open`] and serves routed requests immediately.
+    /// If registration fails after the file was created, the creation is rolled
+    /// back — the handle is closed and the just-created file removed — leaving
+    /// the daemon exactly as it was before the call.
     pub async fn create(&self, name: String, path: Option<PathBuf>) -> Result<DatabaseEntry> {
         let id = DatabaseId::generate();
         let path = match path {
@@ -296,12 +301,56 @@ impl DatabaseManager {
                 .join("database")
                 .join(format!("{id}.db")),
         };
-        self.insert_entry(id, name, path).await
+        // Creating on top of an existing file would silently adopt (and share)
+        // foreign data; `register` is the path for existing database files.
+        // This check is also what makes the rollback below safe: any file at
+        // `path` afterwards is one this call created.
+        if path.exists() {
+            return Err(anyhow!(
+                "a file already exists at {}; use register to add an existing database",
+                path.display()
+            ));
+        }
+
+        // Create and open the database (file, schema, service set) first.
+        let (services, _embed_task) = build_database_services(&path, &self.context, id.as_str())
+            .await
+            .with_context(|| format!("creating database file {}", path.display()))?;
+
+        // Cache the open handle before the entry becomes resolvable: no request
+        // can route to the id until `insert_entry` persists it, so the first
+        // routed request reuses this handle instead of racing a second open.
+        self.open
+            .write()
+            .await
+            .insert(id.clone(), Arc::new(services));
+        self.touch(&id).await;
+
+        match self.insert_entry(id.clone(), name, path.clone()).await {
+            Ok(entry) => Ok(entry),
+            Err(e) => {
+                // Registration failed → roll back the creation: drop the open
+                // handle and remove the file this call just created, so a
+                // failed create leaves no half-registered state behind.
+                self.close(&id).await;
+                remove_database_files(&path).await;
+                Err(e)
+            }
+        }
     }
 
     /// Register an existing database file already present on disk. The name is
-    /// derived from the file stem. Registering never creates or moves files.
+    /// derived from the file stem. Registering never creates or moves files, so
+    /// the file must already exist — a registry entry pointing at nothing would
+    /// report [`DatabaseStatus::Missing`] forever. Use
+    /// [`DatabaseManager::create`] for a new database.
     pub async fn register(&self, path: PathBuf) -> Result<DatabaseEntry> {
+        if !path.exists() {
+            return Err(anyhow!(
+                "no database file exists at {}; use create to make a new database",
+                path.display()
+            ));
+        }
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -683,7 +732,9 @@ impl DatabaseManager {
     }
 
     /// Push a new entry into the registry and persist it. The first registered
-    /// database becomes the default.
+    /// database becomes the default. If persisting fails, the in-memory
+    /// mutation is rolled back so the registry map never drifts from the file
+    /// on disk.
     async fn insert_entry(
         &self,
         id: DatabaseId,
@@ -701,11 +752,43 @@ impl DatabaseManager {
         };
         let mut registry = self.registry.write().await;
         registry.databases.push(entry.clone());
-        if registry.default_database.is_none() {
+        let adopted_default = registry.default_database.is_none();
+        if adopted_default {
             registry.default_database = Some(id);
         }
-        registry.save(&self.registry_path).await?;
+        if let Err(e) = registry.save(&self.registry_path).await {
+            // The write lock is held throughout, so the pushed entry is still
+            // last — pop restores exactly the pre-call state.
+            registry.databases.pop();
+            if adopted_default {
+                registry.default_database = None;
+            }
+            return Err(e);
+        }
         Ok(entry)
+    }
+}
+
+/// Best-effort removal of a database file and its SQLite sidecars (`-wal`,
+/// `-shm`) while rolling back a failed create. Failures are logged rather than
+/// returned — the caller is already unwinding a more meaningful error.
+async fn remove_database_files(path: &Path) {
+    let mut candidates = vec![path.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        candidates.push(PathBuf::from(file));
+    }
+    for candidate in candidates {
+        match tokio::fs::remove_file(&candidate).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %candidate.display(),
+                error = %e,
+                "failed to remove database file while rolling back a failed create"
+            ),
+        }
     }
 }
 
@@ -912,7 +995,9 @@ mod tests {
 
         // Registering a second database does not change routing of header-less
         // requests, and the second id routes explicitly.
-        let second = mgr.register(PathBuf::from("/tmp/second.db")).await.unwrap();
+        let second_path = _dir.path().join("second.db");
+        std::fs::write(&second_path, b"").unwrap();
+        let second = mgr.register(second_path).await.unwrap();
         assert_eq!(
             mgr.resolve_database_id(Some(second.id.as_str()))
                 .await
@@ -932,6 +1017,140 @@ mod tests {
     async fn resolve_without_default_errors() {
         let (mgr, _dir) = temp_manager().await;
         assert!(mgr.resolve_database_id(None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn create_creates_and_opens_the_database_file_before_registering() {
+        let (mgr, dir) = temp_manager().await;
+        let path = dir.path().join("fresh.db");
+
+        let entry = mgr
+            .create("Fresh".into(), Some(path.clone()))
+            .await
+            .unwrap();
+
+        // The database file exists on disk the moment create returns — the
+        // registry never advertises a database with no file behind it.
+        assert!(path.exists(), "create must create the database file");
+
+        // The fresh database is open and, as the first registration, default.
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.databases[0].status, DatabaseStatus::Open);
+        assert!(snap.databases[0].is_default);
+        assert_eq!(snap.default_database.as_ref(), Some(&entry.id));
+
+        // The handle cached by create is the one routing reuses — no second open.
+        let first = mgr.get_or_open(&entry.id).await.unwrap();
+        let second = mgr.get_or_open(&entry.id).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_existing_file() {
+        let (mgr, dir) = temp_manager().await;
+        let path = dir.path().join("existing.db");
+        std::fs::write(&path, b"data").unwrap();
+
+        let err = mgr
+            .create("Clobber".into(), Some(path.clone()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already exists"),
+            "unexpected error: {err}"
+        );
+
+        // Nothing was registered and the existing file is untouched.
+        assert!(mgr.list().await.databases.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+    }
+
+    #[tokio::test]
+    async fn failed_create_rolls_back_and_leaves_the_daemon_serviceable() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+
+        // Register + open a healthy default first, as the daemon boot path does.
+        let default_path = dir.path().join("default.db");
+        let default_id = mgr
+            .ensure_default_registered("Default".into(), default_path)
+            .await
+            .unwrap();
+        mgr.get_or_open(&default_id).await.unwrap();
+
+        // Break registry persistence by replacing the registry file with a
+        // directory, so create fails at the registration step — after the
+        // database file has already been created.
+        tokio::fs::remove_file(&registry_path).await.unwrap();
+        tokio::fs::create_dir(&registry_path).await.unwrap();
+
+        let fresh_path = dir.path().join("fresh.db");
+        mgr.create("Fresh".into(), Some(fresh_path.clone()))
+            .await
+            .unwrap_err();
+
+        // Rolled back: no registry entry, no leftover file, and the default
+        // still resolves and serves — a failed create must not wedge routing.
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases.len(),
+            1,
+            "a failed create must not leave a registry entry"
+        );
+        assert!(
+            !fresh_path.exists(),
+            "a failed create must remove the file it created"
+        );
+        assert_eq!(mgr.resolve_database_id(None).await.unwrap(), default_id);
+        assert!(mgr.get_or_open(&default_id).await.is_ok());
+
+        // With persistence restored, the same create succeeds cleanly.
+        tokio::fs::remove_dir(&registry_path).await.unwrap();
+        let entry = mgr
+            .create("Fresh".into(), Some(fresh_path.clone()))
+            .await
+            .unwrap();
+        assert!(fresh_path.exists());
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 2);
+        assert_eq!(
+            snap.databases
+                .iter()
+                .find(|d| d.entry.id == entry.id)
+                .unwrap()
+                .status,
+            DatabaseStatus::Open
+        );
+    }
+
+    #[tokio::test]
+    async fn register_requires_an_existing_file() {
+        let (mgr, dir) = temp_manager().await;
+
+        // An absent path is rejected — a registration pointing at nothing would
+        // report Missing forever.
+        let absent = dir.path().join("not-here.db");
+        let err = mgr.register(absent).await.unwrap_err();
+        assert!(
+            err.to_string().contains("no database file exists"),
+            "unexpected error: {err}"
+        );
+        assert!(mgr.list().await.databases.is_empty());
+
+        // An existing file registers (name from the file stem) and reports
+        // Closed until first opened.
+        let present = dir.path().join("present.db");
+        std::fs::write(&present, b"").unwrap();
+        mgr.register(present).await.unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.databases[0].status, DatabaseStatus::Closed);
+        assert_eq!(snap.databases[0].entry.name, "present");
+        assert!(snap.databases[0].is_default);
     }
 
     #[tokio::test]

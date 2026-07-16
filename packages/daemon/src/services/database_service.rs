@@ -205,8 +205,10 @@ mod tests {
             .into_inner();
         assert_eq!(first.name, "First");
         assert!(first.is_default);
-        // File not created until first open, so a freshly created entry is Missing.
-        assert_eq!(first.status, ProtoDatabaseStatus::Missing as i32);
+        // Create makes the file and opens it before registering, so a freshly
+        // created entry reports Open — never Missing.
+        assert_eq!(first.status, ProtoDatabaseStatus::Open as i32);
+        assert!(dir.path().join("first.db").exists());
 
         let second = svc
             .create(Request::new(CreateDatabaseRequest {
@@ -274,17 +276,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_reports_missing_for_absent_file() {
+    async fn register_rejects_an_absent_file_and_accepts_an_existing_one() {
         let (svc, dir) = service().await;
-        let info = svc
+
+        // Registering never creates files, so an absent target is rejected
+        // rather than registered as permanently Missing.
+        let err = svc
             .register(Request::new(RegisterDatabaseRequest {
                 path: dir.path().join("not-here.db").display().to_string(),
             }))
             .await
+            .unwrap_err();
+        assert!(
+            err.message().contains("no database file exists"),
+            "unexpected error: {}",
+            err.message()
+        );
+
+        // An existing file registers and reports Closed until first opened.
+        let present = dir.path().join("present.db");
+        std::fs::write(&present, b"").unwrap();
+        let info = svc
+            .register(Request::new(RegisterDatabaseRequest {
+                path: present.display().to_string(),
+            }))
+            .await
             .unwrap()
             .into_inner();
-        // Registering never creates the file, so an absent target reports Missing.
-        assert_eq!(info.status, ProtoDatabaseStatus::Missing as i32);
+        assert_eq!(info.status, ProtoDatabaseStatus::Closed as i32);
         assert!(info.is_default); // first registered → default
     }
 

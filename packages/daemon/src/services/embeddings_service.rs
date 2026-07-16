@@ -15,7 +15,6 @@ use nodespace_core::services::{EmbeddingProcessor, NodeEmbeddingService, NodeSer
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     embeddings_service_server::EmbeddingsService as GrpcEmbeddingsService, BatchEmbeddingFailure,
     BatchQueueEmbeddingsRequest, BatchQueueEmbeddingsResponse, EmbeddingStatusResponse,
@@ -24,7 +23,6 @@ use crate::nodespace::{
     SearchSemanticRequest, SearchSemanticResponse, TriggerBatchEmbedRequest,
     TriggerBatchEmbedResponse,
 };
-use crate::services::database_manager::DatabaseManager;
 use crate::services::node_service::node_to_proto;
 
 /// Live embedding state once the model has finished loading.
@@ -53,35 +51,24 @@ impl EmbeddingsServiceImpl {
     }
 
     /// Resolve which database this request targets (ADR-053) and return that
-    /// database's embeddings service. See
-    /// [`crate::services::NodeServiceImpl::route`] for the shared contract: no
-    /// manager injected (Pro daemon, unit tests) → `self`; an `x-ns-database-id`
-    /// header selects a registered database (unregistered → rejected). If the
-    /// target database has no embeddings service (no model — which, since the
-    /// model is process-global, cannot happen while this service is registered)
-    /// fall back to `self`.
+    /// database's embeddings service. The routing contract lives in
+    /// [`crate::db_routing::routed_database_services`]: a header selects a
+    /// registered database, header-less requests hit the default, and with no
+    /// routing middleware installed a header-less request falls back to `self`
+    /// while a header-carrying one is rejected rather than silently served from
+    /// the active database.
     async fn route<T>(&self, request: &Request<T>) -> Result<EmbeddingsServiceImpl, Status> {
-        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
-            return Ok(self.clone());
-        };
-        let header = request
-            .metadata()
-            .get(DATABASE_ID_HEADER)
-            .map(|v| v.to_str())
-            .transpose()
-            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
-        let id = manager
-            .resolve_database_id(header)
-            .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
-        let services = manager
-            .get_or_open(&id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(services
-            .embeddings_service_grpc
-            .clone()
-            .unwrap_or_else(|| self.clone()))
+        match crate::db_routing::routed_database_services(request).await? {
+            // The embedding model is process-global, so a registered
+            // EmbeddingsService implies every open database has one; if the
+            // target somehow has none, answering from `self` would silently
+            // serve another database, so fail instead.
+            Some(services) => services
+                .embeddings_service_grpc
+                .clone()
+                .ok_or_else(|| Status::internal("the target database has no embeddings service")),
+            None => Ok(self.clone()),
+        }
     }
 
     /// Shared implementation for stale-count queries used by both

@@ -35,8 +35,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::db_routing::DATABASE_ID_HEADER;
-use crate::services::database_manager::DatabaseManager;
 use crate::services::embeddings_service::EmbeddingReady;
 use tonic::{Request, Response, Status};
 
@@ -104,35 +102,17 @@ impl NodeServiceImpl {
     }
 
     /// Resolve which database a request targets (ADR-053) and return that
-    /// database's node service.
-    ///
-    /// When the routing middleware ([`crate::db_routing::DbManagerLayer`])
-    /// injected a [`DatabaseManager`], resolve the `x-ns-database-id` header
-    /// (absent → the default database) and hand back that database's cached
-    /// [`NodeServiceImpl`]; a header naming an unregistered database is
-    /// rejected rather than silently served from the default. When no manager
-    /// is present — the Pro daemon does not install the layer, and unit tests
-    /// construct the impl directly — fall back to `self` so behavior is
-    /// unchanged.
+    /// database's node service. The routing contract lives in
+    /// [`crate::db_routing::routed_database_services`]: a header selects a
+    /// registered database, header-less requests hit the default, and with no
+    /// routing middleware installed a header-less request falls back to `self`
+    /// while a header-carrying one is rejected rather than silently served from
+    /// the active database.
     async fn route<T>(&self, request: &Request<T>) -> Result<NodeServiceImpl, Status> {
-        let Some(manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
-            return Ok(self.clone());
-        };
-        let header = request
-            .metadata()
-            .get(DATABASE_ID_HEADER)
-            .map(|v| v.to_str())
-            .transpose()
-            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
-        let id = manager
-            .resolve_database_id(header)
-            .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
-        let services = manager
-            .get_or_open(&id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(services.node_service_grpc.clone())
+        match crate::db_routing::routed_database_services(request).await? {
+            Some(services) => Ok(services.node_service_grpc.clone()),
+            None => Ok(self.clone()),
+        }
     }
 }
 
@@ -1740,6 +1720,8 @@ fn normalize_date_for_storage(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db_routing::DATABASE_ID_HEADER;
+    use crate::services::database_manager::DatabaseManager;
     use crate::services::SharedContext;
     use nodespace_agent::pty::PtySessionManager;
     use nodespace_core::db::SqliteStore;
@@ -1853,6 +1835,39 @@ mod tests {
         assert_eq!(
             svc.get_node(get_bad).await.unwrap_err().code(),
             tonic::Code::NotFound
+        );
+    }
+
+    /// A request that names a database on a daemon without the routing
+    /// middleware installed is rejected rather than silently served from the
+    /// active database — silently answering would be a wrong-database read the
+    /// client cannot detect.
+    #[tokio::test]
+    async fn database_header_without_routing_middleware_is_rejected() {
+        let (svc, _tmp) = make_service().await;
+
+        // Header-less requests keep working against the impl's own database.
+        let plain = Request::new(crate::nodespace::GetNodeRequest {
+            node_id: "no-such-node".into(),
+        });
+        assert_eq!(
+            svc.get_node(plain).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+
+        // A routing header with no manager injected must be rejected.
+        let mut routed = Request::new(crate::nodespace::GetNodeRequest {
+            node_id: "no-such-node".into(),
+        });
+        routed
+            .metadata_mut()
+            .insert(DATABASE_ID_HEADER, "SOME-DB-ID".parse().unwrap());
+        let err = svc.get_node(routed).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+        assert!(
+            err.message().contains("SOME-DB-ID"),
+            "rejection must name the database the request targeted: {}",
+            err.message()
         );
     }
 

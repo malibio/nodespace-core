@@ -24,7 +24,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::db_routing::DATABASE_ID_HEADER;
 use crate::nodespace::{
     agent_session_service_server::AgentSessionService, AgentAvailability, CheckAvailabilityRequest,
     CheckAvailabilityResponse, LaunchSessionRequest, LaunchSessionResponse, ListSessionsRequest,
@@ -33,7 +32,6 @@ use crate::nodespace::{
     WriteInputResponse,
 };
 use crate::services::capture_service::{finalize_capture, CompletedSession};
-use crate::services::database_manager::DatabaseManager;
 use crate::services::settings_service::{read_capture_settings, CaptureConfig};
 
 /// gRPC adapter that owns shared handles to the PTY engine.
@@ -61,10 +59,11 @@ impl AgentSessionHandler {
     }
 
     /// Resolve which database this request targets (ADR-053) and return that
-    /// database's handler. See [`crate::services::NodeServiceImpl::route`] for
-    /// the shared contract: no manager injected (Pro daemon, unit tests) →
-    /// `self`; an `x-ns-database-id` header selects a registered database
-    /// (unregistered → rejected).
+    /// database's handler. The routing contract lives in
+    /// [`crate::db_routing::routed_database_services`]: a header selects a
+    /// registered database, header-less requests hit the default, and with no
+    /// routing middleware installed a header-less request falls back to `self`
+    /// while a header-carrying one is rejected.
     ///
     /// Only [`launch_session`](Self::launch_session) routes: the `PtySessionManager`
     /// is process-global (the same `Arc` backs every database), so PTY
@@ -73,24 +72,10 @@ impl AgentSessionHandler {
     /// per-database context assembler and node service (for context + capture),
     /// so it follows the targeted database.
     async fn route<T>(&self, request: &Request<T>) -> Result<AgentSessionHandler, Status> {
-        let Some(db_manager) = request.extensions().get::<Arc<DatabaseManager>>() else {
-            return Ok(self.clone());
-        };
-        let header = request
-            .metadata()
-            .get(DATABASE_ID_HEADER)
-            .map(|v| v.to_str())
-            .transpose()
-            .map_err(|_| Status::invalid_argument("x-ns-database-id must be valid ASCII"))?;
-        let id = db_manager
-            .resolve_database_id(header)
-            .await
-            .map_err(|e| Status::not_found(e.to_string()))?;
-        let services = db_manager
-            .get_or_open(&id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(services.agent_session.clone())
+        match crate::db_routing::routed_database_services(request).await? {
+            Some(services) => Ok(services.agent_session.clone()),
+            None => Ok(self.clone()),
+        }
     }
 }
 
