@@ -17,13 +17,13 @@ describe('ReactiveStructureTree', () => {
     // Initialize with event listeners disabled in test environment
     // (Tauri events won't work in test runner)
     vi.clearAllMocks();
-    // Clear any previous state
-    structureTree.children.clear();
+    // Clear any previous state (clear() also resets the reverse parent index)
+    structureTree.clear();
   });
 
   afterEach(async () => {
     // Cleanup
-    structureTree.children.clear();
+    structureTree.clear();
   });
 
   describe('getChildren', () => {
@@ -95,14 +95,16 @@ describe('ReactiveStructureTree', () => {
     });
 
     it('should return parent ID for existing child', () => {
-      structureTree.children.set('parent1', [{ nodeId: 'child1', order: 1.0 }]);
+      // Mutate through the public API — getParent is answered by the reverse
+      // child→parent index, which the mutators maintain.
+      structureTree.addChild({ parentId: 'parent1', childId: 'child1', order: 1.0 });
       const parent = structureTree.getParent('child1');
       expect(parent).toBe('parent1');
     });
 
     it('should find correct parent among multiple parents', () => {
-      structureTree.children.set('parent1', [{ nodeId: 'child1', order: 1.0 }]);
-      structureTree.children.set('parent2', [{ nodeId: 'child2', order: 1.0 }]);
+      structureTree.addChild({ parentId: 'parent1', childId: 'child1', order: 1.0 });
+      structureTree.addChild({ parentId: 'parent2', childId: 'child2', order: 1.0 });
 
       expect(structureTree.getParent('child1')).toBe('parent1');
       expect(structureTree.getParent('child2')).toBe('parent2');
@@ -411,9 +413,7 @@ describe('ReactiveStructureTree', () => {
 
       // Verify parent2 has its child
       const parent2Children = structureTree.getChildrenWithOrder('parent2');
-      expect(parent2Children).toEqual([
-        { nodeId: 'child3', order: 1.0 }
-      ]);
+      expect(parent2Children).toEqual([{ nodeId: 'child3', order: 1.0 }]);
     });
 
     it('should handle bulk load with many relationships and maintain sort order', () => {
@@ -433,7 +433,7 @@ describe('ReactiveStructureTree', () => {
 
       // Verify relationships are sorted correctly
       const children = structureTree.getChildrenWithOrder('root');
-      expect(children.map(c => c.nodeId)).toEqual(['b', 'c', 'a', 'd']);
+      expect(children.map((c) => c.nodeId)).toEqual(['b', 'c', 'a', 'd']);
     });
 
     it('should handle empty bulk load', () => {
@@ -500,7 +500,7 @@ describe('ReactiveStructureTree', () => {
 
       // Verify order was updated
       const childInfo = structureTree.getChildrenWithOrder('parent1');
-      expect(childInfo.find(c => c.nodeId === 'child1')?.order).toBe(5.0);
+      expect(childInfo.find((c) => c.nodeId === 'child1')?.order).toBe(5.0);
     });
 
     it('reparents (moves) a child when added under a different parent', () => {
@@ -712,7 +712,10 @@ describe('ReactiveStructureTree', () => {
 
     it('I3: throws in dev for unsorted order', () => {
       // Directly set unsorted state bypassing addChild
-      structureTree.children.set('p', [{ nodeId: 'c1', order: 5 }, { nodeId: 'c2', order: 2 }]);
+      structureTree.children.set('p', [
+        { nodeId: 'c1', order: 5 },
+        { nodeId: 'c2', order: 2 }
+      ]);
       const nodeIds = new Set(['c1', 'c2', 'p']);
       expect(() => structureTree.assertInvariants(nodeIds)).toThrow(/I3/);
     });
@@ -786,7 +789,7 @@ describe('ReactiveStructureTree', () => {
 
       // Verify order was auto-calculated (should be 3.0 = existing length + 1)
       const childInfo = structureTree.getChildrenWithOrder('parent2');
-      expect(childInfo.find(c => c.nodeId === 'child1')?.order).toBe(3.0);
+      expect(childInfo.find((c) => c.nodeId === 'child1')?.order).toBe(3.0);
     });
 
     it('should calculate order 1.0 when moving to empty parent', () => {
@@ -846,6 +849,158 @@ describe('ReactiveStructureTree', () => {
       structureTree.removeChild({ parentId: 'old', childId: 'n', order: 0 });
       expect(structureTree.getChildren('p1')).toEqual(['n']);
       expect(structureTree.getParent('n')).toBe('p1');
+    });
+  });
+
+  describe('reverse parent index', () => {
+    it('getParent reflects each step of an add → move → remove lifecycle', () => {
+      structureTree.addChild({ parentId: 'p1', childId: 'c', order: 1 });
+      expect(structureTree.getParent('c')).toBe('p1');
+
+      structureTree.moveInMemoryRelationship('p1', 'p2', 'c', 1);
+      expect(structureTree.getParent('c')).toBe('p2');
+      expect(structureTree.getChildren('p1')).toEqual([]);
+
+      structureTree.removeChild({ parentId: 'p2', childId: 'c', order: 0 });
+      expect(structureTree.getParent('c')).toBeNull();
+    });
+
+    it('getParent is correct for every edge after a large batchAddRelationships', () => {
+      const relationships: Array<{ parentId: string; childId: string; order: number }> = [];
+      for (let i = 0; i < 1000; i++) {
+        relationships.push({ parentId: `p${i % 50}`, childId: `c${i}`, order: i });
+      }
+      structureTree.batchAddRelationships(relationships);
+
+      for (let i = 0; i < 1000; i++) {
+        expect(structureTree.getParent(`c${i}`)).toBe(`p${i % 50}`);
+      }
+    });
+
+    it('reparenting inside a batch keeps the index on the latest parent', () => {
+      structureTree.batchAddRelationships([
+        { parentId: 'p1', childId: 'c', order: 1 },
+        { parentId: 'p2', childId: 'c', order: 1 } // reparent within the same batch
+      ]);
+      expect(structureTree.getParent('c')).toBe('p2');
+      expect(structureTree.getChildren('p1')).toEqual([]);
+    });
+
+    it('restore() rebuilds the index from the snapshot', () => {
+      structureTree.addChild({ parentId: 'p1', childId: 'c1', order: 1 });
+      const snapshot = structureTree.snapshot();
+
+      structureTree.clear();
+      expect(structureTree.getParent('c1')).toBeNull();
+
+      structureTree.restore(snapshot);
+      expect(structureTree.getParent('c1')).toBe('p1');
+    });
+
+    it('clear() empties the index', () => {
+      structureTree.addChild({ parentId: 'p1', childId: 'c1', order: 1 });
+      structureTree.clear();
+      expect(structureTree.getParent('c1')).toBeNull();
+    });
+
+    it('getParent never iterates the whole tree (O(1) per lookup)', () => {
+      // Build a wide tree through the public API.
+      for (let i = 0; i < 500; i++) {
+        structureTree.addChild({ parentId: `p${i}`, childId: `c${i}`, order: 1 });
+      }
+
+      // Swap in an iteration-counting map via restore() (which rebuilds the
+      // index). The removed O(N) implementation walked the map with for..of
+      // (Symbol.iterator) on every call; the index-backed one must not.
+      class CountingMap extends Map<string, Array<{ nodeId: string; order: number }>> {
+        scans = 0;
+        [Symbol.iterator]() {
+          this.scans++;
+          return super[Symbol.iterator]();
+        }
+      }
+      const counting = new CountingMap(structureTree.snapshot());
+      structureTree.restore(counting);
+      counting.scans = 0; // restore's own index rebuild iterates once — reset
+
+      for (let i = 0; i < 500; i++) {
+        expect(structureTree.getParent(`c${i}`)).toBe(`p${i}`);
+      }
+      expect(structureTree.getParent('not-in-tree')).toBeNull();
+      expect(counting.scans).toBe(0);
+    });
+  });
+
+  describe('runBatch', () => {
+    it('applies all mutations with exactly one reactive notification', () => {
+      const before = structureTree.children;
+      let during: unknown = null;
+
+      structureTree.runBatch(() => {
+        structureTree.addChild({ parentId: 'p', childId: 'a', order: 1 });
+        structureTree.addChild({ parentId: 'p', childId: 'b', order: 2 });
+        structureTree.removeChild({ parentId: 'p', childId: 'a', order: 0 });
+        during = structureTree.children;
+      });
+
+      // No reassignment while the batch is open ($state.raw consumers are not
+      // invalidated per-op) ...
+      expect(during).toBe(before);
+      // ... exactly one reassignment when the batch closes.
+      expect(structureTree.children).not.toBe(before);
+      expect(structureTree.getChildren('p')).toEqual(['b']);
+    });
+
+    it('preserves op order — create then delete of the same edge ends absent', () => {
+      structureTree.runBatch(() => {
+        structureTree.addChild({ parentId: 'p', childId: 'c', order: 1 });
+        structureTree.removeChild({ parentId: 'p', childId: 'c', order: 0 });
+      });
+      expect(structureTree.getChildren('p')).toEqual([]);
+      expect(structureTree.getParent('c')).toBeNull();
+    });
+
+    it('preserves op order — delete then re-create of the same edge ends present', () => {
+      structureTree.addChild({ parentId: 'p', childId: 'c', order: 1 });
+      structureTree.runBatch(() => {
+        structureTree.removeChild({ parentId: 'p', childId: 'c', order: 0 });
+        structureTree.addChild({ parentId: 'p', childId: 'c', order: 2 });
+      });
+      expect(structureTree.getChildren('p')).toEqual(['c']);
+      expect(structureTree.getParent('c')).toBe('p');
+    });
+
+    it('a batch with no mutations does not notify', () => {
+      const before = structureTree.children;
+      structureTree.runBatch(() => {});
+      expect(structureTree.children).toBe(before);
+    });
+
+    it('nested batches notify once, at the end of the outermost batch', () => {
+      const before = structureTree.children;
+      structureTree.runBatch(() => {
+        structureTree.addChild({ parentId: 'p', childId: 'a', order: 1 });
+        structureTree.runBatch(() => {
+          structureTree.addChild({ parentId: 'p', childId: 'b', order: 2 });
+        });
+        // Inner batch closed, but the outer one is still open — no notify yet.
+        expect(structureTree.children).toBe(before);
+      });
+      expect(structureTree.children).not.toBe(before);
+      expect(structureTree.getChildren('p')).toEqual(['a', 'b']);
+    });
+
+    it('notifies even when the batch callback throws after mutating', () => {
+      const before = structureTree.children;
+      expect(() =>
+        structureTree.runBatch(() => {
+          structureTree.addChild({ parentId: 'p', childId: 'a', order: 1 });
+          throw new Error('boom');
+        })
+      ).toThrow('boom');
+      // The mutation landed, so consumers must still be invalidated.
+      expect(structureTree.children).not.toBe(before);
+      expect(structureTree.getChildren('p')).toEqual(['a']);
     });
   });
 });

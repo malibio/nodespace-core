@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from '$lib/services/hierarchy-sync';
+import {
+  applyHasChildCreated,
+  applyHasChildUpdated,
+  applyHasChildDeleted
+} from '$lib/services/hierarchy-sync';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 
 describe('hierarchy-sync', () => {
   beforeEach(() => {
-    structureTree.children.clear();
+    structureTree.clear();
   });
 
   describe('applyHasChildCreated', () => {
@@ -43,7 +47,7 @@ describe('hierarchy-sync', () => {
       applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c2', order: undefined });
       const order1 = structureTree.getChildrenWithOrder('p').find((c) => c.nodeId === 'c2')!.order;
 
-      structureTree.children.clear();
+      structureTree.clear();
       applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c1', order: 5 });
       applyHasChildCreated(structureTree, { parentId: 'p', childId: 'c2', order: undefined });
       const order2 = structureTree.getChildrenWithOrder('p').find((c) => c.nodeId === 'c2')!.order;
@@ -58,7 +62,7 @@ describe('hierarchy-sync', () => {
       applyHasChildCreated(tree1, { parentId: 'parent', childId: 'child', order: 2.5 });
       const tauri = structureTree.getChildrenWithOrder('parent');
 
-      structureTree.children.clear();
+      structureTree.clear();
       applyHasChildCreated(structureTree, { parentId: 'parent', childId: 'child', order: 2.5 });
       const browser = structureTree.getChildrenWithOrder('parent');
 
