@@ -13,9 +13,11 @@ vi.mock('$lib/utils/logger', () => ({
 }));
 
 const mockGetAllSchemas = vi.fn();
+const mockGetNode = vi.fn(async (..._args: unknown[]) => null);
 vi.mock('$lib/services/backend-adapter', () => ({
   backendAdapter: {
-    getAllSchemas: (...args: unknown[]) => mockGetAllSchemas(...args)
+    getAllSchemas: (...args: unknown[]) => mockGetAllSchemas(...args),
+    getNode: (...args: unknown[]) => mockGetNode(...args)
   }
 }));
 
@@ -83,5 +85,38 @@ describe('daemon-reconnect retry wiring (#1470)', () => {
     await goHealthy();
 
     expect(mockGetAllCollections).toHaveBeenCalledTimes(1);
+  });
+
+  it('databaseStore retries load once the daemon reconnects when nothing is loaded yet (#1674)', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      await import('$lib/stores/database.svelte');
+      expect(mockInvoke).not.toHaveBeenCalledWith('list_databases');
+
+      await goHealthy();
+
+      // The registry load runs, which also hydrates the DatabaseSettingsNode —
+      // the Pro-sync variant machine's axis-2 feed.
+      expect(mockInvoke).toHaveBeenCalledWith('list_databases');
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    }
+  });
+
+  it('databaseStore does NOT reload on reconnect once a selection is established', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      const { databaseStore } = await import('$lib/stores/database.svelte');
+      // An earlier load already established the selection; a background
+      // reconnect must not yank it or refire the registry query.
+      databaseStore.activeDatabaseId = 'db-a';
+
+      await goHealthy();
+
+      expect(mockInvoke).not.toHaveBeenCalledWith('list_databases');
+      expect(databaseStore.activeDatabaseId).toBe('db-a');
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    }
   });
 });

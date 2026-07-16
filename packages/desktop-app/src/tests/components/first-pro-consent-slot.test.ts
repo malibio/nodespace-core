@@ -69,6 +69,19 @@ describe('FirstProConsentSlot', () => {
     await waitFor(() => expect(proSync.consentPromptOpen).toBe(false));
   });
 
+  it('merge re-pulls the settings node so the consent → connected flip does not depend on a watch event (#1674)', async () => {
+    const refreshSpy = vi
+      .spyOn(databaseStore, 'refreshDatabaseSettings')
+      .mockImplementation(() => {});
+    const { getByRole, findByRole } = render(FirstProConsentSlot);
+    await findByRole('dialog');
+
+    await fireEvent.click(getByRole('checkbox'));
+    await fireEvent.click(getByRole('button', { name: /merge into public workspace/i }));
+
+    await waitFor(() => expect(refreshSpy).toHaveBeenCalled());
+  });
+
   it('keep-local closes with no daemon call, records the decline, and confirms', async () => {
     const { getByRole, findByRole, findByText } = render(FirstProConsentSlot);
     await findByRole('dialog');

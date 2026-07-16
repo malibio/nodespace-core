@@ -85,7 +85,10 @@
     } finally {
       pending = false;
       proSync.consentPromptOpen = false;
-      // Enabling flips the variant to `connected`, unmounting this slot.
+      // Enabling flips the variant to `connected`, unmounting this slot. Re-pull
+      // the settings node directly so that flip doesn't depend on the
+      // `node:updated` watch event, which can be lost for good (#1674).
+      databaseStore.refreshDatabaseSettings();
     }
   }
 

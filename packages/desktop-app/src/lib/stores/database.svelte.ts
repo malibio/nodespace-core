@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '$lib/utils/logger';
+import { backendAdapter } from '$lib/services/backend-adapter';
+import { onDaemonReconnect } from '$lib/services/daemon-status';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { collectionsData } from '$lib/stores/collections.svelte';
@@ -115,7 +117,7 @@ class DatabaseStore {
       this.defaultDatabaseId = IMPLICIT_BROWSER_DATABASE.id;
       if (this.activeDatabaseId === null) {
         this.activeDatabaseId = IMPLICIT_BROWSER_DATABASE.id;
-        this.hydrateDatabaseSettings();
+        this.refreshDatabaseSettings();
       }
       this.loading = false;
       return;
@@ -132,7 +134,7 @@ class DatabaseStore {
         this.activeDatabaseId = this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
         // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
         // variant machine can read sync_enabled/auth_status.
-        this.hydrateDatabaseSettings();
+        this.refreshDatabaseSettings();
       }
     } catch (err) {
       this.error = String(err);
@@ -195,7 +197,7 @@ class DatabaseStore {
       schemasData.loadSchemas();
       // Re-hydrate the new database's DatabaseSettingsNode (the previous one was
       // evicted by clearAll) so the Pro-sync variant re-resolves for it.
-      this.hydrateDatabaseSettings();
+      this.refreshDatabaseSettings();
     } catch (err) {
       this.error = String(err);
       log.error('Failed to switch database', { id, error: err });
@@ -203,15 +205,38 @@ class DatabaseStore {
   }
 
   /**
-   * Load the active database's `DatabaseSettingsNode` into the shared store so the
-   * Pro-sync variant machine resolves from its `sync_enabled`/`auth_status`.
-   * Fire-and-forget: the switch/load must not block on it, and a missing node
-   * (older database not yet backfilled) simply leaves the variant at its default.
+   * Force-refetch the active database's `DatabaseSettingsNode` into the shared
+   * store (bypassing the cache-first `ensureNode` path) so the Pro-sync variant
+   * machine re-resolves from fresh `sync_enabled`/`auth_status` values.
+   *
+   * The node is otherwise read once per app life and then kept fresh only by
+   * `node:updated` watch events, which have unrecoverable loss modes (watcher
+   * reconnect backoff, broadcast lag drops, failed coalescer refetch) — miss one
+   * and the variant is stuck stale, e.g. at `sign-in` after the daemon already
+   * flipped `auth_status` to connected (#1674). Callers re-pull on the
+   * transitions that matter: sync-status edges, the consent decision, database
+   * switch, and initial load.
+   *
+   * Fire-and-forget: callers must not block on it, and a missing node (older
+   * database not yet backfilled) simply leaves the variant at its default.
    */
-  private hydrateDatabaseSettings(): void {
-    sharedNodeStore.ensureNode(DATABASE_SETTINGS_NODE_ID).catch((err) => {
-      log.debug('Could not hydrate DatabaseSettingsNode', { error: err });
-    });
+  refreshDatabaseSettings(): void {
+    const epoch = sharedNodeStore.currentEpoch();
+    backendAdapter
+      .getNode(DATABASE_SETTINGS_NODE_ID)
+      .then((node) => {
+        // The active database switched while the read was in flight — the row
+        // belongs to the previous database, so drop it (see `currentEpoch()`).
+        if (!node || sharedNodeStore.currentEpoch() !== epoch) return;
+        sharedNodeStore.setNode(
+          node,
+          { type: 'database', reason: 'refresh-database-settings' },
+          true
+        );
+      })
+      .catch((err: unknown) => {
+        log.debug('Could not refresh DatabaseSettingsNode', { error: err });
+      });
   }
 
   /**
@@ -277,6 +302,17 @@ class DatabaseStore {
 }
 
 export const databaseStore = new DatabaseStore();
+
+// Retry the initial registry load once the daemon becomes reachable, mirroring
+// the collections/schemas stores: a `load()` that ran while the daemon was
+// still starting fails and leaves `activeDatabaseId` null (and the settings
+// node unhydrated) until a manual reload. Guarded on the not-yet-loaded state
+// so a background reconnect never re-runs against an established selection.
+onDaemonReconnect(() => {
+  if (databaseStore.activeDatabaseId === null) {
+    void databaseStore.load();
+  }
+});
 
 /**
  * True when a `database_id` event envelope belongs to the active database.

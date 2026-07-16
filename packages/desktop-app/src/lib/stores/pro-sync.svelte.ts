@@ -15,6 +15,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '$lib/utils/logger';
+import { databaseStore } from '$lib/stores/database.svelte';
 
 const log = createLogger('ProSync');
 
@@ -159,6 +160,16 @@ class ProSyncStore {
   private setState(next: SyncState) {
     if (next === 'auth-required' && this.state !== 'auth-required') {
       this.authRequiredEpisode++;
+    }
+    if (next !== this.state) {
+      // Axis 2 (the settings node's auth_status/sync_enabled) generally changes
+      // when axis 1 (this realtime state) transitions — e.g. a sign-in flips
+      // auth_status to 'connected'. Re-pull the settings node on every edge
+      // rather than relying solely on the `node:updated` watch event, which can
+      // be lost for good (watcher reconnect backoff, broadcast lag drops, failed
+      // coalescer refetch) and would leave the Pro-sync variant permanently
+      // stuck — e.g. at `sign-in` with the consent modal never appearing (#1674).
+      databaseStore.refreshDatabaseSettings();
     }
     this.state = next;
   }

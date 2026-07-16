@@ -16,14 +16,27 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 // Collaborators exercised by switchTo — stubbed so we can assert the flush →
 // switch → clear → reset → reload orchestration without their real behavior.
+// `epochValue` backs currentEpoch() so tests can simulate a database switch
+// landing while a settings refetch is in flight.
 const flushAllPendingSaves = vi.fn((..._a: unknown[]) => Promise.resolve(new Set<string>()));
 const clearAll = vi.fn((..._a: unknown[]) => undefined);
-const ensureNode = vi.fn((..._a: unknown[]) => Promise.resolve(undefined));
+const setNode = vi.fn((..._a: unknown[]) => undefined);
+let epochValue = 0;
 vi.mock('$lib/services/shared-node-store.svelte', () => ({
   sharedNodeStore: {
     flushAllPendingSaves: (...a: unknown[]) => flushAllPendingSaves(...a),
     clearAll: (...a: unknown[]) => clearAll(...a),
-    ensureNode: (...a: unknown[]) => ensureNode(...a)
+    setNode: (...a: unknown[]) => setNode(...a),
+    currentEpoch: () => epochValue
+  }
+}));
+
+// The settings-node refetch goes through the backend adapter directly (it must
+// bypass the cache-first ensureNode path).
+const mockGetNode = vi.fn((..._a: unknown[]) => Promise.resolve<unknown>(null));
+vi.mock('$lib/services/backend-adapter', () => ({
+  backendAdapter: {
+    getNode: (...a: unknown[]) => mockGetNode(...a)
   }
 }));
 
@@ -60,6 +73,8 @@ import {
   isActiveDatabaseEvent,
   type DatabaseInfo
 } from '$lib/stores/database.svelte';
+import { DATABASE_SETTINGS_NODE_ID } from '$lib/plugins/ui-extensions';
+import type { Node } from '$lib/types';
 
 function db(id: string, overrides: Partial<DatabaseInfo> = {}): DatabaseInfo {
   return {
@@ -74,9 +89,32 @@ function db(id: string, overrides: Partial<DatabaseInfo> = {}): DatabaseInfo {
   };
 }
 
+function settingsNode(): Node {
+  return {
+    id: DATABASE_SETTINGS_NODE_ID,
+    nodeType: 'database-settings',
+    content: '',
+    properties: { 'database-settings': { sync_enabled: false, auth_status: 'connected' } },
+    mentions: [],
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
+    version: 1
+  };
+}
+
+/** Let the fire-and-forget settings refetch (`.then` chain) settle. */
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('Database Store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetNode.mockReset();
+    mockGetNode.mockResolvedValue(null);
+    epochValue = 0;
     // The store gates `load()` on the Tauri bridge; present it so these tests
     // exercise the invoke path. The browser-mode describe removes it.
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
@@ -209,6 +247,83 @@ describe('Database Store', () => {
       // Only the winner cleared caches and reloaded — no stale mid-switch state.
       expect(clearAll).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('refreshDatabaseSettings (#1674)', () => {
+    it('force-refetches the settings node via the adapter and lands it in the shared store', async () => {
+      const node = settingsNode();
+      mockGetNode.mockResolvedValueOnce(node);
+
+      databaseStore.refreshDatabaseSettings();
+      await flushMicrotasks();
+
+      // Bypasses the cache-first ensureNode path: always a fresh backend read.
+      expect(mockGetNode).toHaveBeenCalledWith(DATABASE_SETTINGS_NODE_ID);
+      expect(setNode).toHaveBeenCalledWith(
+        node,
+        { type: 'database', reason: 'refresh-database-settings' },
+        true
+      );
+    });
+
+    it('load() hydrates the settings node through the same forced refetch', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        databases: [db('a', { isDefault: true })],
+        defaultDatabaseId: 'a'
+      });
+      mockGetNode.mockResolvedValueOnce(settingsNode());
+
+      await databaseStore.load();
+      await flushMicrotasks();
+
+      expect(mockGetNode).toHaveBeenCalledWith(DATABASE_SETTINGS_NODE_ID);
+      expect(setNode).toHaveBeenCalledOnce();
+    });
+
+    it('a missing settings node (older database) leaves the store untouched', async () => {
+      mockGetNode.mockResolvedValueOnce(null);
+
+      databaseStore.refreshDatabaseSettings();
+      await flushMicrotasks();
+
+      expect(setNode).not.toHaveBeenCalled();
+    });
+
+    it('drops the fetched node when the database epoch changed mid-flight', async () => {
+      // The fetch resolves only after a database switch bumped the epoch — the
+      // row belongs to the previous database and must not land.
+      mockGetNode.mockImplementationOnce(async () => {
+        epochValue = 1;
+        return settingsNode();
+      });
+
+      databaseStore.refreshDatabaseSettings();
+      await flushMicrotasks();
+
+      expect(setNode).not.toHaveBeenCalled();
+    });
+
+    it('is fire-and-forget: a failed refetch is swallowed at debug level', async () => {
+      mockGetNode.mockRejectedValueOnce(new Error('daemon unavailable'));
+
+      expect(() => databaseStore.refreshDatabaseSettings()).not.toThrow();
+      await flushMicrotasks();
+
+      expect(setNode).not.toHaveBeenCalled();
+    });
+
+    it('switchTo re-pulls the new database settings after the caches are cleared', async () => {
+      databaseStore.databases = [db('a'), db('b')];
+      databaseStore.activeDatabaseId = 'a';
+      mockInvoke.mockResolvedValueOnce(undefined); // set_active_database
+      mockGetNode.mockResolvedValueOnce(settingsNode());
+
+      await databaseStore.switchTo('b');
+      await flushMicrotasks();
+
+      expect(mockGetNode).toHaveBeenCalledWith(DATABASE_SETTINGS_NODE_ID);
+      expect(setNode).toHaveBeenCalledOnce();
     });
   });
 
