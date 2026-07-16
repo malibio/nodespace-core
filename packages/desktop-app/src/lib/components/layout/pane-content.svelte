@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { setContext, untrack } from 'svelte';
+  import { onMount, setContext, untrack } from 'svelte';
   import BaseNodeViewer from '$lib/design/components/base-node-viewer.svelte';
   import { navigationStore, updateTabContent, closeTab } from '$lib/stores/navigation.svelte';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { onDaemonReconnect } from '$lib/services/daemon-status';
   import type { Pane } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
   import SettingsPane from '$lib/components/settings/settings-pane.svelte';
@@ -34,7 +35,11 @@
 
   // Load viewer when needed - moved to function called from onMount to avoid derived context issues
   async function loadViewerForNodeType(nodeType: string) {
-    if (viewerComponents.has(nodeType) || viewerLoadErrors.has(nodeType) || viewerLoading.has(nodeType)) {
+    if (
+      viewerComponents.has(nodeType) ||
+      viewerLoadErrors.has(nodeType) ||
+      viewerLoading.has(nodeType)
+    ) {
       return;
     }
 
@@ -136,6 +141,22 @@
     }
   });
 
+  // A hydration fetch that fails is otherwise permanent: the $effect above only
+  // re-runs on tab changes, so a pane whose first fetch raced the daemon's boot
+  // window (fresh install: the webview renders while the sidecar is still
+  // seeding its DB and binding the socket) sits on "Loading..." forever. Retry
+  // the active tab's hydration whenever the daemon transitions back to healthy.
+  // hydrateNode's store-presence guard makes this a no-op once hydration has
+  // succeeded; same idiom as the sidebar stores and base-node-viewer.
+  onMount(() =>
+    onDaemonReconnect(() => {
+      const nodeId = activeTab?.content?.nodeId;
+      const tabId = activeTabId;
+      if (nodeId && tabId && !sharedNodeStore.getNode(nodeId)) {
+        hydrateNode(nodeId, tabId);
+      }
+    })
+  );
 </script>
 
 {#if activeTab?.type === 'settings'}

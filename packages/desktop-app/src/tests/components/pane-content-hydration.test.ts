@@ -106,7 +106,7 @@ describe('pane-content hydration (event-driven, #1564/#1566)', () => {
     expect(harness.isHydrated('2026-07-08')).toBe(true);
   });
 
-  it('closes the tab only if the not-found response is still the tab\'s current nodeId', async () => {
+  it("closes the tab only if the not-found response is still the tab's current nodeId", async () => {
     const resolvers = new Map<string, (node: Node | undefined) => void>();
     const ensureNode = vi.fn(
       (nodeId: string) =>
@@ -172,5 +172,39 @@ describe('pane-content hydration (event-driven, #1564/#1566)', () => {
     await harness.hydrateNode('2026-07-07', 'tab-1'); // second call is a no-op
 
     expect(ensureNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('a hydration that failed during the daemon boot window succeeds on the reconnect retry', async () => {
+    // First fetch races the daemon's startup (fresh install: the webview renders
+    // while the sidecar is still seeding its DB and binding the socket) → the
+    // invoke rejects with a transport error, not a clean not-found. Without a
+    // retry the pane sits on "Loading..." forever — the round-1 fresh-install
+    // hang. pane-content now re-runs hydrateNode via onDaemonReconnect; this
+    // mirrors that wiring: retry only when the node is still absent.
+    const ensureNode = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('transport error: connection refused'))
+      .mockResolvedValue({ id: '2026-07-16' });
+    const harness = createHydrationHarness(ensureNode, () => '2026-07-16');
+
+    await harness.hydrateNode('2026-07-16', 'tab-1');
+    expect(harness.isHydrated('2026-07-16')).toBe(false);
+    expect(harness.errors).toHaveLength(1);
+
+    // Daemon flips not-healthy → healthy; the reconnect listener retries the
+    // active tab's hydration iff its node is still missing from the store.
+    const onReconnect = async () => {
+      if (!harness.isHydrated('2026-07-16')) {
+        await harness.hydrateNode('2026-07-16', 'tab-1');
+      }
+    };
+    await onReconnect();
+
+    expect(harness.isHydrated('2026-07-16')).toBe(true);
+    expect(ensureNode).toHaveBeenCalledTimes(2);
+
+    // A second healthy transition is a no-op — the store-presence guard holds.
+    await onReconnect();
+    expect(ensureNode).toHaveBeenCalledTimes(2);
   });
 });
