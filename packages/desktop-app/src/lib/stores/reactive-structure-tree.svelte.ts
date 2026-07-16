@@ -8,6 +8,8 @@
  * Features:
  * - Svelte 5 $state for automatic UI reactivity
  * - Binary search insertion to maintain sorted children
+ * - Reverse child→parent index for O(1) getParent
+ * - runBatch() to apply a burst of mutations with one reactive notification
  * - Snapshot/restore for optimistic rollback
  */
 
@@ -25,11 +27,63 @@ export class ReactiveStructureTree {
   children = $state.raw(new Map<string, ChildInfo[]>());
 
   /**
+   * Reverse child→parent index so getParent is O(1) instead of a scan over
+   * every edge in the tree. Non-reactive bookkeeping: every mutator
+   * (addChildInternal, removeChild, clear, restore) keeps it consistent, and
+   * getParent verifies each hit against `children` (self-healing on a stale
+   * entry), so an inconsistent entry can never leak out of the API.
+   */
+  private parentIndex = new Map<string, string>();
+
+  /** Depth of nested runBatch() calls; while >0, notifyChange() is deferred. */
+  private batchDepth = 0;
+  /** Whether any mutation was notified inside the current batch. */
+  private batchDirty = false;
+
+  /**
    * Reassign the children map to trigger Svelte reactivity.
    * $state.raw() only tracks reassignment, not in-place Map mutations.
+   * Inside runBatch() the reassignment is deferred to the end of the
+   * outermost batch so a burst of mutations invalidates consumers once.
    */
   private notifyChange() {
+    if (this.batchDepth > 0) {
+      this.batchDirty = true;
+      return;
+    }
     this.children = new Map(this.children);
+  }
+
+  /**
+   * Run a sequence of tree mutations as one batch: mutations apply in call
+   * order, but the reactive notification (the map reassignment every
+   * getChildren consumer depends on) fires at most once, when the outermost
+   * batch completes.
+   *
+   * Used by the sync-event coalescer to apply a burst of relationship events
+   * without paying one full-tree invalidation per event.
+   */
+  runBatch(mutate: () => void): void {
+    this.batchDepth++;
+    try {
+      mutate();
+    } finally {
+      this.batchDepth--;
+      if (this.batchDepth === 0 && this.batchDirty) {
+        this.batchDirty = false;
+        this.children = new Map(this.children);
+      }
+    }
+  }
+
+  /** Rebuild the reverse child→parent index from the current children map. */
+  private rebuildParentIndex(): void {
+    this.parentIndex.clear();
+    for (const [parentId, childrenList] of this.children) {
+      for (const child of childrenList) {
+        this.parentIndex.set(child.nodeId, parentId);
+      }
+    }
   }
 
   /**
@@ -58,15 +112,25 @@ export class ReactiveStructureTree {
   }
 
   /**
-   * Get parent of a node by searching all edges
-   * Note: This is O(n) - consider adding reverse map if performance issue
+   * Get parent of a node (reactive).
+   *
+   * O(1) via the reverse child→parent index — a full-edge scan here made a
+   * cloud-sync relationship burst O(N²) on the main thread. Each hit is
+   * verified against the children map (and a stale entry dropped) so the
+   * index can never disagree with the tree an observer sees.
    */
   getParent(nodeId: string): string | null {
-    for (const [parentId, childrenList] of this.children) {
-      if (childrenList.some((c) => c.nodeId === nodeId)) {
-        return parentId;
-      }
+    // Read the reactive map first so consumers re-run on any tree change,
+    // including when the lookup below misses ($state.raw tracks reassignment).
+    const children = this.children;
+    const parentId = this.parentIndex.get(nodeId);
+    if (parentId === undefined) return null;
+    const siblings = children.get(parentId);
+    if (siblings && siblings.some((c) => c.nodeId === nodeId)) {
+      return parentId;
     }
+    // Stale entry (e.g. the map was replaced externally) — self-heal.
+    this.parentIndex.delete(nodeId);
     return null;
   }
 
@@ -101,7 +165,8 @@ export class ReactiveStructureTree {
     if (existingIndex >= 0) {
       // Duplicate detected - this is expected when relationships are loaded from multiple sources
       // (e.g., bulk edge load + children-tree endpoint). Silently handle it.
-      // Update order if different
+      // Refresh the reverse index (self-healing, cheap) and update order if different.
+      this.parentIndex.set(childId, parentId);
       if (children[existingIndex].order !== order) {
         children[existingIndex].order = order;
         // Re-sort array
@@ -144,6 +209,7 @@ export class ReactiveStructureTree {
 
     children.splice(insertIndex, 0, newChild);
     this.children.set(parentId, children);
+    this.parentIndex.set(childId, parentId);
   }
 
   /**
@@ -158,6 +224,13 @@ export class ReactiveStructureTree {
 
     const children = this.children.get(parentId) || [];
     const filtered = children.filter((c) => c.nodeId !== childId);
+
+    // Drop the reverse-index entry only when this edge actually existed AND
+    // the index still points at this parent — a stale delete for an edge the
+    // child was already reparented away from must not clobber the live entry.
+    if (filtered.length !== children.length && this.parentIndex.get(childId) === parentId) {
+      this.parentIndex.delete(childId);
+    }
 
     if (filtered.length === 0) {
       this.children.delete(parentId);
@@ -206,6 +279,7 @@ export class ReactiveStructureTree {
    */
   restore(snapshot: Map<string, ChildInfo[]>) {
     this.children = snapshot;
+    this.rebuildParentIndex();
   }
 
   /**
@@ -213,6 +287,7 @@ export class ReactiveStructureTree {
    */
   clear() {
     this.children = new Map();
+    this.parentIndex.clear();
   }
 
   /**
@@ -240,7 +315,9 @@ export class ReactiveStructureTree {
   /**
    * Batch add multiple relationships with a single reactivity notification.
    */
-  batchAddRelationships(relationships: Array<{parentId: string, childId: string, order: number}>) {
+  batchAddRelationships(
+    relationships: Array<{ parentId: string; childId: string; order: number }>
+  ) {
     for (const rel of relationships) {
       this.addChildInternal(rel);
     }
@@ -328,11 +405,15 @@ export class ReactiveStructureTree {
         }
         const existingParent = seen.get(nodeId);
         if (existingParent && existingParent !== parentId) {
-          violations.push(`I2: dual-parent "${nodeId}" under "${existingParent}" and "${parentId}"`);
+          violations.push(
+            `I2: dual-parent "${nodeId}" under "${existingParent}" and "${parentId}"`
+          );
         }
         seen.set(nodeId, parentId);
         if (order < prevOrder) {
-          violations.push(`I3: unsorted order for "${nodeId}" under "${parentId}" (${order} < ${prevOrder})`);
+          violations.push(
+            `I3: unsorted order for "${nodeId}" under "${parentId}" (${order} < ${prevOrder})`
+          );
         }
         prevOrder = order;
       }

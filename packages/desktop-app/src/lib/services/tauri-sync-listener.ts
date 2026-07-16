@@ -55,6 +55,11 @@ const log = createLogger('TauriSync');
  *  collect a daemon-flushed batch without adding perceptible latency. */
 const REPLAY_COALESCE_WINDOW_MS = 16;
 
+/** Max node fetches dispatched and applied per chunk of a coalesced flush.
+ *  Chunks are separated by a macrotask yield so an initial-pull burst of tens
+ *  of thousands of nodes cannot monopolize the webview main thread. */
+const NODE_FETCH_CHUNK_SIZE = 200;
+
 const pendingNodeIds = new Set<string>();
 let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 // Ids deleted while a flush is mid-fetch (between the snapshot and the apply
@@ -90,11 +95,20 @@ function enqueueNodeFetch(nodeId: string): void {
   coalesceTimer = setTimeout(flushPendingNodeFetches, REPLAY_COALESCE_WINDOW_MS);
 }
 
-/** Fetch all queued nodes, then apply them in one synchronous pass so the burst
- *  renders once. A failed fetch for a single node is skipped, never fatal; a node
- *  tombstoned (deleted) during the fetch is skipped so the delete wins. */
+/** Fetch all queued nodes in chunks, applying each chunk in one synchronous
+ *  pass so it renders once, with a macrotask yield between chunks so a huge
+ *  burst never monopolizes the main thread. A failed fetch for a single node
+ *  is skipped, never fatal; a node tombstoned (deleted) during the flush is
+ *  skipped so the delete wins. */
 async function flushPendingNodeFetches(): Promise<void> {
   coalesceTimer = null;
+  // A previous flush is still working through its chunks — re-arm the window
+  // so this batch flushes after it completes. Two interleaved flushes would
+  // share (and prematurely clear) the tombstone/in-progress state.
+  if (flushInProgress) {
+    coalesceTimer = setTimeout(flushPendingNodeFetches, REPLAY_COALESCE_WINDOW_MS);
+    return;
+  }
   const ids = [...pendingNodeIds];
   pendingNodeIds.clear();
   if (ids.length === 0) return;
@@ -103,39 +117,52 @@ async function flushPendingNodeFetches(): Promise<void> {
   tombstonedDuringFlush.clear();
   try {
     // ADR-053: capture the database generation before the reads so a switch
-    // mid-flush drops the whole burst rather than writing the previous
+    // mid-flush drops the rest of the burst rather than writing the previous
     // database's rows into the now-active store. isActiveDatabaseEvent gates on
     // event arrival, before these async fetches dispatch, so it cannot close
     // this in-flight window on its own.
     const epoch = sharedNodeStore.currentEpoch();
-    const fetched = await Promise.all(
-      ids.map((id) =>
-        backendAdapter.getNode(id).catch((error) => {
-          log.error('replay-coalesce: failed to fetch node', { nodeId: id, error });
-          return null;
-        })
-      )
-    );
-
-    // The active database switched while these reads were in flight — the rows
-    // belong to the previous database, so apply none of them.
-    if (sharedNodeStore.currentEpoch() !== epoch) return;
-
-    // Synchronous apply loop — no `await` between setNode calls, so Svelte
-    // coalesces the resulting reactive updates into a single render. A node
-    // deleted while we were fetching is skipped so the delete is not clobbered.
     let applied = 0;
-    for (let i = 0; i < fetched.length; i++) {
-      const node = fetched[i];
-      if (!node || tombstonedDuringFlush.has(ids[i])) continue;
-      sharedNodeStore.setNode(
-        normalizeNodeData(node),
-        { type: 'database', reason: 'domain-event' },
-        true
+    for (let start = 0; start < ids.length; start += NODE_FETCH_CHUNK_SIZE) {
+      if (start > 0) {
+        // Yield a macrotask between chunks so rendering and input handling
+        // stay responsive while a large burst is applied.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      // Re-check the generation guard per chunk: a database switch during an
+      // earlier chunk or the yield must drop the remainder of the burst, not
+      // just the chunk whose fetch it happened to race.
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
+
+      const chunk = ids.slice(start, start + NODE_FETCH_CHUNK_SIZE);
+      const fetched = await Promise.all(
+        chunk.map((id) =>
+          backendAdapter.getNode(id).catch((error) => {
+            log.error('replay-coalesce: failed to fetch node', { nodeId: id, error });
+            return null;
+          })
+        )
       );
-      applied++;
+
+      // The active database switched while these reads were in flight — the
+      // rows belong to the previous database, so apply none of them.
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
+
+      // Synchronous apply loop — no `await` between setNode calls, so Svelte
+      // coalesces the chunk's reactive updates into a single render. A node
+      // deleted while we were fetching is skipped so the delete is not clobbered.
+      for (let i = 0; i < fetched.length; i++) {
+        const node = fetched[i];
+        if (!node || tombstonedDuringFlush.has(chunk[i])) continue;
+        sharedNodeStore.setNode(
+          normalizeNodeData(node),
+          { type: 'database', reason: 'domain-event' },
+          true
+        );
+        applied++;
+      }
     }
-    log.info('replay-coalesce: applied node burst in one pass', {
+    log.info('replay-coalesce: applied node burst', {
       requested: ids.length,
       applied
     });
@@ -152,6 +179,122 @@ function queueOrFetchNode(nodeId: string, eventType: string): void {
     enqueueNodeFetch(nodeId);
   } else {
     fetchAndUpdateNode(nodeId, eventType);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pro-only has_child relationship-event coalescing
+//
+// The initial cloud-sync pull of a populated tenant floods the event stream
+// with tens of thousands of relationship events. Applied one-by-one, each
+// `relationship:*` synchronously mutates the structure tree and triggers a
+// full reactive invalidation on the webview main thread, freezing the UI
+// (and backing up the daemon's WatchNodes stream until it drops events).
+//
+// When sync is active we instead buffer has_child ops over the same small
+// window the node coalescer uses, then apply the whole burst inside a single
+// structureTree.runBatch — one reactive notification per burst. Ops are
+// applied strictly in arrival order through the same per-event appliers, so
+// a create followed by a delete of one edge (or the reverse) resolves exactly
+// as it would un-coalesced — the delete-wins/tombstone semantics fall out of
+// order preservation rather than a separate reconciliation pass.
+//
+// Gated on `proSync.isPro` like the node coalescer: the community build never
+// enters this path and its per-event behavior is unchanged.
+// ---------------------------------------------------------------------------
+
+interface HasChildOp {
+  kind: 'created' | 'updated' | 'deleted';
+  parentId: string;
+  childId: string;
+  order: unknown;
+  /** Database generation at arrival — ops from before a switch are dropped. */
+  epoch: number;
+}
+
+let pendingHasChildOps: HasChildOp[] = [];
+let relationshipCoalesceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Reset all relationship-coalescer state. Called on (re)init so a stale
+ *  in-flight timer from a prior listener registration can't fire into fresh
+ *  state. */
+function resetRelationshipCoalescer(): void {
+  if (relationshipCoalesceTimer !== null) {
+    clearTimeout(relationshipCoalesceTimer);
+    relationshipCoalesceTimer = null;
+  }
+  pendingHasChildOps = [];
+}
+
+/** Queue a has_child op for the next coalesced flush (Pro path). Arrival
+ *  order is preserved so interleaved creates/deletes of the same edge resolve
+ *  the same way they would applied one-by-one. */
+function enqueueHasChildOp(op: Omit<HasChildOp, 'epoch'>): void {
+  pendingHasChildOps.push({ ...op, epoch: sharedNodeStore.currentEpoch() });
+  if (relationshipCoalesceTimer !== null) return;
+  relationshipCoalesceTimer = setTimeout(flushPendingHasChildOps, REPLAY_COALESCE_WINDOW_MS);
+}
+
+/** Apply all queued has_child ops in arrival order inside one structureTree
+ *  batch, so the burst costs a single reactive invalidation. Ops that arrived
+ *  before a database switch are dropped (the tree was rebuilt for the new
+ *  database; those edges belong to the old one). */
+function flushPendingHasChildOps(): void {
+  relationshipCoalesceTimer = null;
+  const ops = pendingHasChildOps;
+  pendingHasChildOps = [];
+  if (ops.length === 0) return;
+
+  const epoch = sharedNodeStore.currentEpoch();
+  let applied = 0;
+  structureTree.runBatch(() => {
+    for (const op of ops) {
+      if (op.epoch !== epoch) continue;
+      if (op.kind === 'created') {
+        applyHasChildCreated(structureTree, {
+          parentId: op.parentId,
+          childId: op.childId,
+          order: op.order
+        });
+      } else if (op.kind === 'updated') {
+        applyHasChildUpdated(structureTree, {
+          parentId: op.parentId,
+          childId: op.childId,
+          order: op.order
+        });
+      } else {
+        applyHasChildDeleted(structureTree, { parentId: op.parentId, childId: op.childId });
+      }
+      applied++;
+    }
+  });
+  log.info('relationship-coalesce: applied has_child burst in one batch', {
+    queued: ops.length,
+    applied
+  });
+}
+
+/** Route a has_child op through the Pro coalescer, or apply immediately in
+ *  the community build (unchanged behavior). */
+function queueOrApplyHasChildOp(op: Omit<HasChildOp, 'epoch'>): void {
+  if (proSync.isPro) {
+    enqueueHasChildOp(op);
+    return;
+  }
+  if (op.kind === 'created') {
+    applyHasChildCreated(structureTree, {
+      parentId: op.parentId,
+      childId: op.childId,
+      order: op.order
+    });
+  } else if (op.kind === 'updated') {
+    applyHasChildUpdated(structureTree, {
+      parentId: op.parentId,
+      childId: op.childId,
+      order: op.order
+    });
+  } else {
+    applyHasChildDeleted(structureTree, { parentId: op.parentId, childId: op.childId });
   }
 }
 
@@ -211,8 +354,9 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
   log.info('Initializing Tauri real-time sync listeners');
 
-  // Clear any coalescer state (and a stale in-flight timer) from a prior init.
+  // Clear any coalescer state (and stale in-flight timers) from a prior init.
   resetNodeFetchCoalescer();
+  resetRelationshipCoalescer();
 
   try {
     // Listen for node events and update SharedNodeStore
@@ -256,7 +400,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       // Evict any coalesced re-fetch first so a delete racing an upsert in the
       // same window can't be clobbered by the queued fetch re-adding the node.
       cancelPendingNodeFetch(event.payload.id);
-      sharedNodeStore.deleteNode(event.payload.id, { type: 'database', reason: 'domain-event' }, true);
+      sharedNodeStore.deleteNode(
+        event.payload.id,
+        { type: 'database', reason: 'domain-event' },
+        true
+      );
 
       // We don't know if deleted node was a collection without fetching,
       // but if we have it cached in collectionsData, we should refresh
@@ -277,11 +425,12 @@ export async function initializeTauriSyncListeners(): Promise<void> {
 
       // Handle different relationship types
       if (rel.relationshipType === 'has_child') {
-        const parentBare = stripNodePrefix(rel.fromId);
-        const childBare = stripNodePrefix(rel.toId);
-        applyHasChildCreated(structureTree, {
-          parentId: parentBare,
-          childId: childBare,
+        // Pro: coalesce a sync burst into one tree batch; community: apply
+        // immediately (unchanged).
+        queueOrApplyHasChildOp({
+          kind: 'created',
+          parentId: stripNodePrefix(rel.fromId),
+          childId: stripNodePrefix(rel.toId),
           order: (rel.properties as { order?: unknown } | undefined)?.order
         });
       } else if (rel.relationshipType === 'member_of') {
@@ -317,10 +466,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       const rel = event.payload;
       log.debug(`Relationship updated: ${rel.relationshipType} (${rel.fromId} -> ${rel.toId})`);
       if (rel.relationshipType === 'has_child') {
-        applyHasChildUpdated(structureTree, {
+        queueOrApplyHasChildOp({
+          kind: 'updated',
           parentId: stripNodePrefix(rel.fromId),
           childId: stripNodePrefix(rel.toId),
-          order: (rel.properties?.order as unknown)
+          order: rel.properties?.order
         });
       }
     });
@@ -331,9 +481,11 @@ export async function initializeTauriSyncListeners(): Promise<void> {
       log.debug(`Relationship deleted: ${relationshipType} (${id}) from ${fromId} to ${toId}`);
 
       if (relationshipType === 'has_child') {
-        applyHasChildDeleted(structureTree, {
+        queueOrApplyHasChildOp({
+          kind: 'deleted',
           parentId: stripNodePrefix(fromId),
-          childId: stripNodePrefix(toId)
+          childId: stripNodePrefix(toId),
+          order: undefined
         });
       } else if (relationshipType === 'member_of') {
         // Collection membership removed - refresh collections sidebar.
@@ -379,7 +531,6 @@ export async function initializeTauriSyncListeners(): Promise<void> {
  */
 function isRunningInTauri(): boolean {
   return (
-    typeof window !== 'undefined' &&
-    ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+    typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
   );
 }
