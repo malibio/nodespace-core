@@ -121,7 +121,7 @@ const BODY_TRUNCATE_FULL: usize = 2000;
 const BODY_TRUNCATE_SUMMARY: usize = 500;
 
 /// Default search result limit.
-const DEFAULT_SEARCH_LIMIT: usize = 10;
+const DEFAULT_SEARCH_LIMIT: usize = 50;
 
 /// Default semantic search result limit.
 const DEFAULT_SEMANTIC_LIMIT: usize = 5;

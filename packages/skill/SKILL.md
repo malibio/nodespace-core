@@ -222,7 +222,7 @@ nodespace query --type task --filters '[{"type":"property","operator":"gte","pro
 - `--sorting <json>` — array of `{"field":"...","direction":"asc"|"desc"}`
 - `--limit <n>` — max results (0 = server default of 50; server caps at 500 regardless of the value passed)
 
-See the Tool Decision Guide above for worked examples. This is the CLI counterpart of the local agent's `execute_query` tool.
+See the Tool Decision Guide above for worked examples. This is the CLI counterpart of the property-filtering path of the local agent's `search_nodes` tool.
 
 **Output:** JSON array of matching nodes
 
