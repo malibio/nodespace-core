@@ -587,8 +587,8 @@ async fn run_batch_import(
                 // Refresh in place. Update the root now (non-destructive) so its
                 // id and inbound links/mentions survive, and capture its current
                 // children to prune only after the fresh subtree is inserted.
-                let update = nodespace_core::NodeUpdate::new()
-                    .with_content(prepared.root_content.clone());
+                let update =
+                    nodespace_core::NodeUpdate::new().with_content(prepared.root_content.clone());
                 if let Err(e) = store
                     .update_node(&prepared.root_id, update, Some("import".to_string()))
                     .await
@@ -603,8 +603,7 @@ async fn run_batch_import(
                             prepared.root_id,
                             e
                         );
-                        phase2_error
-                            .get_or_insert_with(|| format!("Subtree replace failed: {e}"));
+                        phase2_error.get_or_insert_with(|| format!("Subtree replace failed: {e}"));
                     }
                 }
                 replaced_roots.push(prepared.root_id.clone());
@@ -627,7 +626,7 @@ async fn run_batch_import(
 
             // Children are (re)created for new and replaced roots. Skipped roots
             // keep their existing subtree, so contribute no children here.
-            if !(exists && !replace) {
+            if !exists || replace {
                 for child in &prepared.children {
                     let parent = child
                         .parent_id
@@ -748,7 +747,10 @@ async fn run_batch_import(
         // insert) means a failed bulk insert leaves the previous content intact
         // instead of truncating it — re-import is never destructive on error.
         if !bulk_insert_failed && !prune_after_insert.is_empty() {
-            if let Err(e) = store.delete_nodes_by_ids_unchecked(&prune_after_insert).await {
+            if let Err(e) = store
+                .delete_nodes_by_ids_unchecked(&prune_after_insert)
+                .await
+            {
                 tracing::error!(
                     "Failed to prune {} stale node(s) after replace: {}",
                     prune_after_insert.len(),
@@ -762,7 +764,10 @@ async fn run_batch_import(
         // content effectively changed — re-mark it stale so it re-embeds. New
         // roots already get their markers inside bulk_create_hierarchy_trusted.
         if !bulk_insert_failed && !replaced_roots.is_empty() {
-            if let Err(e) = store.create_stale_embedding_markers_bulk(&replaced_roots).await {
+            if let Err(e) = store
+                .create_stale_embedding_markers_bulk(&replaced_roots)
+                .await
+            {
                 tracing::warn!(
                     "Failed to re-mark {} replaced root(s) stale: {}",
                     replaced_roots.len(),
@@ -1496,7 +1501,11 @@ mod tests {
         assert!(ns.get_node(&id_b).await.unwrap().is_some(), "Doc B created");
         let headers_after_first = ns.store().count_nodes_by_type("header").await.unwrap();
         assert!(
-            !ns.store().get_node_memberships(&id_a).await.unwrap().is_empty(),
+            !ns.store()
+                .get_node_memberships(&id_a)
+                .await
+                .unwrap()
+                .is_empty(),
             "Doc A is assigned to a collection",
         );
 
@@ -1531,7 +1540,11 @@ mod tests {
             "Doc B root kept across replace",
         );
         assert!(
-            !ns.store().get_node_memberships(&id_a).await.unwrap().is_empty(),
+            !ns.store()
+                .get_node_memberships(&id_a)
+                .await
+                .unwrap()
+                .is_empty(),
             "collection membership survives replace",
         );
     }
