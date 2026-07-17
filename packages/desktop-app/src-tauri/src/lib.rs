@@ -472,6 +472,7 @@ pub fn run() {
             commands::nodes::create_root_node,
             commands::nodes::create_node_mention,
             commands::nodes::get_node,
+            commands::nodes::probe_and_recover_channel,
             commands::nodes::update_node,
             commands::nodes::move_node,
             commands::nodes::move_children_to_parent,

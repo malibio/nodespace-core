@@ -92,6 +92,17 @@ impl ProClient {
     pub async fn client(&self) -> CloudSyncServiceClient<Channel> {
         self.inner.read().await.client.clone()
     }
+
+    /// Point the cached Pro client at a freshly-rebuilt channel after a
+    /// wedged-connection recovery (see [`crate::services::GrpcClient::reconnect`]).
+    /// The `ProClient` caches its own clone of the shared channel, so without
+    /// this every subsequent `client()` call would keep riding the dead
+    /// connection. Only the transport changes — the detected tier and last
+    /// cached status are preserved.
+    pub async fn rebind(&self, channel: Channel) {
+        let mut inner = self.inner.write().await;
+        inner.client = CloudSyncServiceClient::new(channel);
+    }
 }
 
 /// Single-shot probe of `WatchSyncStatus`. Returns the detected tier

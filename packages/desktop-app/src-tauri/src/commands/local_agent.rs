@@ -53,13 +53,26 @@ pub fn start_token_stream_subscription(app: AppHandle, grpc: GrpcClient) {
 
 async fn try_subscribe(app: &AppHandle, grpc: &GrpcClient) -> Result<(), String> {
     let mut client = grpc.local_agent_client().await;
+    // Interrupt a wedged stream when the shared channel is rebuilt after a
+    // recovery (GrpcClient::reconnect bumps this) or the active database
+    // switches — mirrors the node watcher so the outer loop re-subscribes on the
+    // fresh channel instead of hanging forever on the dead one.
+    let mut db_changed = grpc.subscribe_active_database();
     let mut stream = client
         .subscribe_token_stream(SubscribeTokenStreamRequest {})
         .await
         .map_err(|e| e.message().to_string())?
         .into_inner();
 
-    while let Some(chunk_result) = stream.next().await {
+    loop {
+        let chunk_result = tokio::select! {
+            biased;
+            _ = db_changed.changed() => return Ok(()),
+            item = stream.next() => match item {
+                Some(item) => item,
+                None => return Ok(()),
+            },
+        };
         let chunk = chunk_result.map_err(|e| e.message().to_string())?;
 
         match chunk.chunk_type.as_str() {
@@ -181,8 +194,6 @@ async fn try_subscribe(app: &AppHandle, grpc: &GrpcClient) -> Result<(), String>
             _ => {}
         }
     }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

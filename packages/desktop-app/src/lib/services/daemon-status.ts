@@ -67,6 +67,14 @@ export interface DaemonStatusSource {
   getCurrent(): Promise<string>;
   /** Subscribe to pushed status changes. Returns an unsubscribe function. */
   subscribe(callback: (status: string) => void): () => void;
+  /**
+   * Optional: probe the underlying transport for a wedged-but-healthy
+   * connection and recover it in place. Resolves `true` if a wedge was found
+   * and the connection was rebuilt (the caller should then re-fire reconnect
+   * listeners), `false` if the connection was already live. Sources whose
+   * transport cannot wedge (tests, browser dev) may omit this.
+   */
+  probeChannel?(): Promise<boolean>;
 }
 
 const _status = writable<DaemonStatusState>({ connecting: true, unreachable: false });
@@ -94,6 +102,17 @@ export const daemonStatus = {
   subscribe: _status.subscribe
 };
 
+/** Run every registered reconnect listener once, isolating throws. */
+function fireReconnectListeners(): void {
+  for (const cb of reconnectListeners) {
+    try {
+      cb();
+    } catch (err) {
+      log.error('Reconnect listener threw', err);
+    }
+  }
+}
+
 /** Apply a status string to shared state and fan out reconnect callbacks. Transport-agnostic. */
 function applyStatus(payload: string): void {
   const healthy = payload === 'healthy';
@@ -101,13 +120,7 @@ function applyStatus(payload: string): void {
 
   if (healthy && !lastHealthy) {
     lastHealthy = true;
-    for (const cb of reconnectListeners) {
-      try {
-        cb();
-      } catch (err) {
-        log.error('Reconnect listener threw', err);
-      }
-    }
+    fireReconnectListeners();
   } else if (!healthy) {
     lastHealthy = false;
   }
@@ -117,6 +130,7 @@ function applyStatus(payload: string): void {
 function tauriSource(): DaemonStatusSource {
   return {
     getCurrent: () => invoke<string>('check_daemon_status'),
+    probeChannel: () => invoke<boolean>('probe_and_recover_channel'),
     subscribe(callback) {
       let unlistened = false;
       let unlisten: (() => void) | null = null;
@@ -182,9 +196,26 @@ export function startDaemonStatusListener(source?: DaemonStatusSource): void {
   steadyStatePoll = setInterval(() => {
     if (pollInFlight || !activeSource) return;
     pollInFlight = true;
-    activeSource
+    const source = activeSource;
+    source
       .getCurrent()
-      .then(applyStatus)
+      .then(async (payload) => {
+        applyStatus(payload);
+        // A healthy socket does NOT prove the long-lived gRPC channel is
+        // usable: it can wedge (reads/writes and the WatchNodes stream hang
+        // indefinitely) while the daemon stays up and the socket probe keeps
+        // reporting "healthy". Probe the real channel and, if it had to be
+        // rebuilt, re-fire the reconnect listeners so panes re-fetch on the
+        // fresh channel — applyStatus won't, since the daemon never left
+        // "healthy" for it to observe a transition.
+        if (payload === 'healthy' && source.probeChannel) {
+          const recovered = await source.probeChannel();
+          if (recovered) {
+            log.warn('gRPC channel was wedged — rebuilt it; re-firing reconnect listeners');
+            fireReconnectListeners();
+          }
+        }
+      })
       .catch((err) => log.warn('Steady-state daemon status poll failed', err))
       .finally(() => {
         pollInFlight = false;
