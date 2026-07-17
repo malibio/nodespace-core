@@ -6,7 +6,7 @@
  * failed until a manual app restart.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { get } from 'svelte/store';
 
 vi.mock('$lib/utils/logger', () => ({
@@ -47,6 +47,14 @@ describe('daemon-status service (#1470)', () => {
     mockIsTauri.mockReturnValue(true);
     mockInvoke.mockReturnValue(new Promise<string>(() => {}));
     daemonStatusHandler = null;
+  });
+
+  afterEach(async () => {
+    // Tear down the singleton's steady-state poll so its interval doesn't leak
+    // into the next case (the module instance imported here is the same one the
+    // test used — beforeEach's resetModules only fires before the next case).
+    const { stopDaemonStatusListener } = await import('$lib/services/daemon-status');
+    stopDaemonStatusListener();
   });
 
   it('clears connecting via the grace-period timer if no daemon-status event ever arrives', async () => {
@@ -262,5 +270,56 @@ describe('daemon-status service (#1470)', () => {
     const { refreshDaemonStatus } = await import('$lib/services/daemon-status');
     await expect(refreshDaemonStatus()).resolves.toBeUndefined();
     expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('re-probes daemon health on a steady-state interval after start', async () => {
+    vi.useFakeTimers();
+    try {
+      mockInvoke.mockResolvedValue('healthy');
+      const { startDaemonStatusListener } = await import('$lib/services/daemon-status');
+      startDaemonStatusListener();
+      // Let the async listen() registration + the initial pull settle.
+      await vi.advanceTimersByTimeAsync(0);
+      const callsAfterStart = mockInvoke.mock.calls.length;
+      expect(callsAfterStart).toBeGreaterThanOrEqual(1); // initial pull happened
+
+      // One poll interval later, the steady-state poll fires another probe —
+      // this is the signal source a mid-session restart needs, since the
+      // backend never pushes daemon-status again after its startup task.
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(mockInvoke.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-fires onDaemonReconnect when a steady-state poll observes a healthy → not_running → healthy restart', async () => {
+    vi.useFakeTimers();
+    try {
+      mockInvoke.mockResolvedValue('healthy');
+      const { startDaemonStatusListener, onDaemonReconnect } = await import(
+        '$lib/services/daemon-status'
+      );
+      const callback = vi.fn();
+      onDaemonReconnect(callback);
+
+      startDaemonStatusListener();
+      // Initial pull observes healthy → first reconnect fires.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // Daemon dies. Nothing is pushed mid-session; only the poll observes it.
+      mockInvoke.mockResolvedValue('not_running');
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // Daemon is relaunched. The poll observes healthy again and re-fires the
+      // reconnect signal — the wedged-until-restart gap this fix closes.
+      mockInvoke.mockResolvedValue('healthy');
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(callback).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

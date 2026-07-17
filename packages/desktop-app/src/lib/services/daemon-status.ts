@@ -35,6 +35,19 @@ const log = createLogger('DaemonStatus');
 /** How long to show a "connecting" banner before any status is known. */
 const CONNECTING_GRACE_PERIOD_MS = 1500;
 
+/**
+ * How often to re-probe daemon health once the listener is running.
+ *
+ * The backend pushes `daemon-status` only from its one-shot startup task, so a
+ * daemon that dies and is relaunched mid-session emits nothing — every
+ * reconnect consumer would stay wedged until an app restart. A low-frequency
+ * pull observes the `healthy → not_running → healthy` cycle so `applyStatus`
+ * re-fires `onDaemonReconnect`. Kept slow because the only work on a steady
+ * healthy poll is a cheap socket probe; the reconnect callbacks fire only on
+ * the not-healthy → healthy edge, never on repeated healthy polls.
+ */
+const STEADY_STATE_POLL_MS = 15000;
+
 export interface DaemonStatusState {
   /** True until the first status is known or the grace period elapses. */
   connecting: boolean;
@@ -63,6 +76,9 @@ const reconnectListeners = new Set<() => void>();
 let started = false;
 let lastHealthy = false;
 let activeSource: DaemonStatusSource | null = null;
+let steadyStatePoll: ReturnType<typeof setInterval> | null = null;
+/** Guards against overlapping polls if a `getCurrent` probe runs long. */
+let pollInFlight = false;
 
 /**
  * Register a callback to run whenever the daemon transitions to healthy
@@ -156,6 +172,42 @@ export function startDaemonStatusListener(source?: DaemonStatusSource): void {
     .catch((err) => {
       log.warn('Failed to pull initial daemon status', err);
     });
+
+  // Steady-state poll: keep re-probing at a low frequency so a mid-session
+  // daemon restart (healthy → not_running → healthy) is observed here. The
+  // backend emits `daemon-status` only from its one-shot startup task, so a
+  // relaunched daemon pushes nothing; without this poll every reconnect
+  // consumer (schemas, collections, children-tree, pane hydration) stays
+  // wedged until an app restart.
+  steadyStatePoll = setInterval(() => {
+    if (pollInFlight || !activeSource) return;
+    pollInFlight = true;
+    activeSource
+      .getCurrent()
+      .then(applyStatus)
+      .catch((err) => log.warn('Steady-state daemon status poll failed', err))
+      .finally(() => {
+        pollInFlight = false;
+      });
+  }, STEADY_STATE_POLL_MS);
+  // Never let the poll on its own keep a runtime (or a test worker) alive.
+  (steadyStatePoll as unknown as { unref?: () => void })?.unref?.();
+}
+
+/**
+ * Stop the steady-state poll and reset the listener so it can be started
+ * again. Production never calls this (the service lives for the whole session);
+ * it exists so tests can tear the singleton down between cases.
+ */
+export function stopDaemonStatusListener(): void {
+  if (steadyStatePoll) {
+    clearInterval(steadyStatePoll);
+    steadyStatePoll = null;
+  }
+  pollInFlight = false;
+  started = false;
+  lastHealthy = false;
+  activeSource = null;
 }
 
 /**
