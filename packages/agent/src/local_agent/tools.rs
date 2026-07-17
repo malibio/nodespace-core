@@ -192,54 +192,30 @@ fn strip_node_uri(id: &str) -> &str {
 fn def_search_nodes() -> ToolDefinition {
     ToolDefinition {
         name: "search_nodes".into(),
-        description: "Search nodes by title keyword and/or filter by type. \
-            Searches the title field (indexed, populated for root and task nodes). \
-            Pass an empty query string to skip the title filter (e.g. to list all tasks). \
-            Use node_type to filter by type (e.g. node_type='task'). \
-            For structured property queries (status, due_date, operators like gt/lt), use execute_query instead. \
-            Prefer this over search_semantic when you know the node name or need to list nodes by type."
+        description: "Find, list, and filter nodes. This is the single tool for querying the graph by \
+            title, type, and/or typed properties — use it for all three of: \
+            (1) title/keyword lookup (query='invoice'); \
+            (2) listing every node of a type (query='', node_type='task' — empty query lists all of that type); \
+            (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — \
+            pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). \
+            Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. \
+            Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; \
+            use search_semantic only for meaning-based / fuzzy questions."
             .into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Keyword or phrase to search for in node titles. Pass empty string to skip title filter."
+                    "description": "Keyword or phrase to match against node titles (substring match). Pass empty string to skip the title filter (e.g. to list all nodes of a type)."
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "Optional filter by node type (text, task, date, etc.)"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max results to return (default 10)"
-                }
-            },
-            "required": ["query"]
-        }),
-    }
-}
-
-fn def_execute_query() -> ToolDefinition {
-    ToolDefinition {
-        name: "execute_query".into(),
-        description: "Execute a structured property query backed by SQL. Use for filtering nodes by \
-            typed properties with operators (equals, gt, lt, gte, lte, in, exists, contains). \
-            Examples: tasks due this week, open invoices over $500, all contacts added this month. \
-            Property filters use SQL json_extract — far more reliable than search_nodes filters. \
-            For date fields, use YYYY-MM-DD format. Operators: equals, contains, gt, lt, gte, lte, in, exists. \
-            Keep search_nodes for title/keyword lookup; use execute_query for any structured filtering."
-            .into(),
-        parameters_schema: json!({
-            "type": "object",
-            "properties": {
-                "target_type": {
-                    "type": "string",
-                    "description": "Node type to query ('task', 'text', or a custom schema ID). Use '*' for all types."
+                    "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). Omit to search all types."
                 },
                 "filters": {
                     "type": "array",
-                    "description": "Filter conditions. Each item specifies a filter type, operator, and value.",
+                    "description": "Optional typed-property filters. Use for status/due_date/amount and any custom schema field, with operators. Omit for plain title/type listing.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -279,7 +255,7 @@ fn def_execute_query() -> ToolDefinition {
                 },
                 "sorting": {
                     "type": "array",
-                    "description": "Sort configuration. Applied in order.",
+                    "description": "Optional sort configuration, applied in order.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -301,7 +277,7 @@ fn def_execute_query() -> ToolDefinition {
                     "description": "Max results to return (default 50)"
                 }
             },
-            "required": ["target_type"]
+            "required": ["query"]
         }),
     }
 }
@@ -757,7 +733,6 @@ fn def_update_task_status() -> ToolDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     SearchNodes,
-    ExecuteQuery,
     SearchSemantic,
     GetNode,
     CreateNode,
@@ -777,7 +752,6 @@ impl Tool {
     /// presented to the model, so keep retrieval/discovery tools first.
     pub const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
-        Tool::ExecuteQuery,
         Tool::SearchSemantic,
         Tool::GetNode,
         Tool::CreateNode,
@@ -796,7 +770,6 @@ impl Tool {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Tool::SearchNodes => "search_nodes",
-            Tool::ExecuteQuery => "execute_query",
             Tool::SearchSemantic => "search_semantic",
             Tool::GetNode => "get_node",
             Tool::CreateNode => "create_node",
@@ -823,7 +796,6 @@ impl Tool {
     pub(crate) fn definition(self) -> ToolDefinition {
         match self {
             Tool::SearchNodes => def_search_nodes(),
-            Tool::ExecuteQuery => def_execute_query(),
             Tool::SearchSemantic => def_search_semantic(),
             Tool::GetNode => def_get_node(),
             Tool::CreateNode => def_create_node(),
@@ -847,7 +819,6 @@ impl Tool {
     pub(crate) fn humanized(self) -> &'static str {
         match self {
             Tool::SearchNodes => "node search",
-            Tool::ExecuteQuery => "property query",
             Tool::SearchSemantic => "semantic search",
             Tool::GetNode => "node lookup",
             Tool::CreateNode => "node creation",
@@ -891,6 +862,18 @@ pub struct GraphToolExecutor {
 impl GraphToolExecutor {
     // -- Individual tool implementations --
 
+    /// The single query tool: find, list, and filter nodes by title, type,
+    /// and/or typed properties.
+    ///
+    /// Routing is by capability, transparent to the model:
+    /// - **No property filters** (plain title keyword and/or type listing) →
+    ///   `node_ops::query_nodes`, which owns `title contains` matching (the
+    ///   title index is the only path that filters by title).
+    /// - **Property filters present** → `query_ops::execute_query`
+    ///   (`QueryService`), which pushes typed property conditions to SQL
+    ///   `json_extract` — the correct path for operators and date comparisons.
+    ///
+    /// Both paths return each node's `properties` in the summary.
     async fn exec_search_nodes(
         &self,
         tool_call_id: &str,
@@ -901,83 +884,69 @@ impl GraphToolExecutor {
                 tool: "search_nodes".to_string(),
                 reason: e.to_string(),
             })?;
-        let query = params.query;
-        let node_type = params.node_type;
         let limit = params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
 
         let ns = self.node_service()?;
 
-        // Title search filter — only added when query is non-empty.
-        // title is populated for root nodes and task nodes only.
-        let filters = if !query.is_empty() {
-            Some(vec![node_ops::QueryFilterItem {
-                field: "title".to_string(),
-                operator: "contains".to_string(),
-                value: Value::String(query),
-            }])
+        let output = if params.filters.is_empty() {
+            // Title/type listing: only `node_ops::query_nodes` filters by title.
+            let filters = if params.query.is_empty() {
+                None
+            } else {
+                Some(vec![node_ops::QueryFilterItem {
+                    field: "title".to_string(),
+                    operator: "contains".to_string(),
+                    value: Value::String(params.query),
+                }])
+            };
+
+            node_ops::query_nodes(
+                &ns,
+                node_ops::QueryNodesInput {
+                    node_type: params.node_type,
+                    parent_id: None,
+                    root_id: None,
+                    limit: Some(limit),
+                    offset: None,
+                    collection_id: None,
+                    collection: None,
+                    filters,
+                },
+            )
+            .await
+            .map_err(|e| ops_error_to_tool(e, "search_nodes"))?
         } else {
-            None
+            // Typed property query: route through QueryService (SQL json_extract).
+            // A non-empty title keyword is added as a content filter alongside the
+            // property predicates (QueryService has no title path).
+            let mut filters = params.filters;
+            if !params.query.is_empty() {
+                filters.push(query_ops::AgentFilterItem {
+                    filter_type: "content".to_string(),
+                    operator: "contains".to_string(),
+                    property: None,
+                    value: Some(Value::String(params.query)),
+                    case_sensitive: Some(false),
+                    relationship_type: None,
+                    node_id: None,
+                });
+            }
+
+            query_ops::execute_query(
+                &ns,
+                query_ops::ExecuteQueryInput {
+                    target_type: params.node_type.unwrap_or_else(|| "*".to_string()),
+                    filters,
+                    sorting: params.sorting,
+                    limit: Some(limit),
+                },
+            )
+            .await
+            .map_err(|e| ops_error_to_tool(e, "search_nodes"))?
         };
 
-        let input = node_ops::QueryNodesInput {
-            node_type,
-            parent_id: None,
-            root_id: None,
-            limit: Some(limit),
-            offset: None,
-            collection_id: None,
-            collection: None,
-            filters,
-        };
-
-        let output = node_ops::query_nodes(&ns, input)
-            .await
-            .map_err(|e| ops_error_to_tool(e, "search_nodes"))?;
-
-        // Truncate node data for token efficiency
-        let summaries: Vec<Value> = output
-            .nodes
-            .iter()
-            .map(|v| {
-                json!({
-                    "id": node_uri(v.get("id").and_then(|v| v.as_str()).unwrap_or("")),
-                    "title": truncate(
-                        v.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-                        100
-                    ),
-                    "type": v.get("node_type").or(v.get("type")).and_then(|v| v.as_str()).unwrap_or(""),
-                    "snippet": truncate(
-                        v.get("content").and_then(|v| v.as_str()).unwrap_or(""),
-                        BODY_TRUNCATE_SUMMARY
-                    ),
-                })
-            })
-            .collect();
-
-        Ok(ok_result(
-            tool_call_id,
-            "search_nodes",
-            json!({ "count": summaries.len(), "nodes": summaries }),
-        ))
-    }
-
-    async fn exec_execute_query(
-        &self,
-        tool_call_id: &str,
-        args: Value,
-    ) -> Result<ToolResult, ToolError> {
-        let input: query_ops::ExecuteQueryInput =
-            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
-                tool: "execute_query".to_string(),
-                reason: e.to_string(),
-            })?;
-
-        let ns = self.node_service()?;
-
-        let output = query_ops::execute_query(&ns, input)
-            .await
-            .map_err(|e| ops_error_to_tool(e, "execute_query"))?;
-
+        // Truncate node data for token efficiency. Properties are always included
+        // so the model can see and act on typed fields (status, amount, etc.).
         let summaries: Vec<Value> = output
             .nodes
             .iter()
@@ -1000,7 +969,7 @@ impl GraphToolExecutor {
 
         Ok(ok_result(
             tool_call_id,
-            "execute_query",
+            "search_nodes",
             json!({ "count": summaries.len(), "nodes": summaries }),
         ))
     }
@@ -1746,7 +1715,6 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         match tool {
             Tool::SearchNodes => self.exec_search_nodes(&tool_call_id, args).await,
-            Tool::ExecuteQuery => self.exec_execute_query(&tool_call_id, args).await,
             Tool::SearchSemantic => self.exec_search_semantic(&tool_call_id, args).await,
             Tool::GetNode => self.exec_get_node(&tool_call_id, args).await,
             Tool::CreateNode => self.exec_create_node(&tool_call_id, args).await,
@@ -1871,7 +1839,7 @@ mod tests {
     fn definitions_count() {
         // Derived from the registry: one definition per `Tool::ALL` entry.
         assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
-        assert_eq!(all_tool_definitions().len(), 14);
+        assert_eq!(all_tool_definitions().len(), 13);
     }
 
     // -- Tool registry invariants --
@@ -1946,33 +1914,16 @@ mod tests {
     }
 
     #[test]
-    fn search_nodes_schema_has_no_filters_property() {
-        // filters removed — use execute_query for property filtering
+    fn search_nodes_schema_exposes_filters_and_sorting() {
+        // The collapsed query tool now owns property filtering: 'filters' and
+        // 'sorting' are exposed alongside 'query'/'node_type' so a single tool
+        // covers title lookup, type listing, AND structured property queries.
         let def = def_search_nodes();
         let props = def.parameters_schema["properties"]
             .as_object()
             .expect("properties must be object");
-        assert!(
-            !props.contains_key("filters"),
-            "search_nodes schema must not expose 'filters' — use execute_query"
-        );
-    }
-
-    #[test]
-    fn execute_query_schema_requires_target_type() {
-        let def = def_execute_query();
-        let required = def.parameters_schema["required"]
-            .as_array()
-            .expect("required must be array");
-        assert!(required.contains(&json!("target_type")));
-    }
-
-    #[test]
-    fn execute_query_schema_has_filters_and_sorting() {
-        let def = def_execute_query();
-        let props = def.parameters_schema["properties"]
-            .as_object()
-            .expect("properties must be object");
+        assert!(props.contains_key("query"), "must expose query");
+        assert!(props.contains_key("node_type"), "must expose node_type");
         assert!(props.contains_key("filters"), "must expose filters");
         assert!(props.contains_key("sorting"), "must expose sorting");
         assert!(props.contains_key("limit"), "must expose limit");
@@ -2273,10 +2224,9 @@ mod tests {
     async fn available_tools_returns_all() {
         let executor = test_executor();
         let tools = executor.available_tools().await.unwrap();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 13);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_nodes"));
-        assert!(names.contains(&"execute_query"));
         assert!(names.contains(&"search_semantic"));
         assert!(names.contains(&"get_node"));
         assert!(names.contains(&"create_node"));
