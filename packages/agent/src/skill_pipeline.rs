@@ -232,7 +232,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Search and explore the knowledge graph to find relevant information, discover connections, and answer questions about stored knowledge.",
-                "tool_whitelist": ["search_semantic", "search_nodes", "execute_query", "get_node"],
+                "tool_whitelist": ["search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 4,
             }),
             child_node_type: Some("prompt".to_string()),
@@ -267,15 +267,17 @@ PARAMETER GUIDANCE:
 
 MULTIPLE DOCUMENTS: If the user asks about multiple topics, call search_semantic once per topic rather than searching broadly and fetching each result individually.
 
+search_nodes is the single tool for finding, listing, and filtering nodes — by title, by type, and by typed property. It returns each node's properties.
+
 LISTING BY TYPE: To list all nodes of a type, use search_nodes with an empty query. Examples:
 - "list all tasks" → search_nodes(query="", node_type="task")
 - "list all customers" → search_nodes(query="", node_type="<customer-schema-id>")
 
-STRUCTURED PROPERTY QUERIES: For filtering by property values (status, due_date, etc.) or using comparison operators (gt, lt, gte, lte, in), use execute_query — NOT search_nodes. Examples:
-- "find all my open tasks" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])
-- "tasks due tomorrow" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])
-- "tasks due this week" → execute_query(target_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])
-- "find tasks for Acme" → execute_query(target_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])
+STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc.) or comparison operators (gt, lt, gte, lte, in), pass filters to search_nodes. Examples:
+- "find all my open tasks" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])
+- "tasks due tomorrow" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])
+- "tasks due this week" → search_nodes(node_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])
+- "find tasks for Acme" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])
 - Date format: always YYYY-MM-DD. Operators: equals, contains, gt, lt, gte, lte, in, exists."#.to_string(),
         },
         NodeTemplate {

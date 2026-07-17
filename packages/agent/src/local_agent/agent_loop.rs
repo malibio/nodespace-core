@@ -141,7 +141,7 @@ fn contains_action_claim(text: &str) -> bool {
 /// one bullet with a retry count so the diagnostic signal — the agent looped on
 /// the same operation — survives. Executions that errored are labelled
 /// "failed" rather than "completed" so a turn that only ever failed is never
-/// summarized as a success (e.g. the looping-`execute_query` case).
+/// summarized as a success (e.g. the looping-`search_nodes` case).
 fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
     // (label, total, errored) preserving first-seen order.
     let mut counts: Vec<(&'static str, usize, usize)> = Vec::new();
@@ -179,7 +179,7 @@ fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
 ///
 /// Some locally-hosted models (e.g. `mistral:7b` via Ollama) don't reliably use
 /// the structured `tool_calls` response field — they instead print the call as
-/// prose, e.g. `execute_query(target_type='task', ...)`. No tool ever executes,
+/// prose, e.g. `search_nodes(node_type='task', ...)`. No tool ever executes,
 /// yet the pseudo-code is persisted verbatim as the assistant's answer, so the
 /// user sees a raw code snippet with no indication anything went wrong.
 ///
@@ -558,7 +558,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // Narrated-tool-call guard: some local models emit a tool call as
-                // plain text (e.g. `execute_query(...)`) instead of using the
+                // plain text (e.g. `search_nodes(...)`) instead of using the
                 // structured tool_calls field, so nothing executes and the raw
                 // pseudo-code would be persisted as the answer. Detect that shape
                 // and replace it with a confirmation request rather than leaking
@@ -3341,7 +3341,7 @@ mod tests {
     fn narrated_tool_call_detects_registered_tool_invocation() {
         // The exact shape reproduced with mistral:7b via Ollama.
         assert!(looks_like_narrated_tool_call(
-            r#"execute_query(target_type='task', filters=[{"property":"status"}])"#
+            r#"search_nodes(node_type='task', filters=[{"property":"status"}])"#
         ));
         assert!(looks_like_narrated_tool_call("create_node(title='Foo')"));
         // Whitespace between name and paren still counts.
@@ -3361,7 +3361,7 @@ mod tests {
         ));
         // Tool name mentioned but not as a call (no following paren).
         assert!(!looks_like_narrated_tool_call(
-            "You can use execute_query to filter by property."
+            "You can use search_nodes to filter by property."
         ));
         // A generic function-call shape that is NOT a registered tool must not
         // trip the narrow detector.
@@ -3386,13 +3386,13 @@ mod tests {
 
     #[test]
     fn summarize_executions_marks_all_failed_calls_as_failed() {
-        // The looping-execute_query case: every call errored → "failed", never
+        // The looping-search case: every call errored → "failed", never
         // an optimistic "completed".
         let summary = summarize_executions(&[
-            exec_record("execute_query", true),
-            exec_record("execute_query", true),
+            exec_record("search_nodes", true),
+            exec_record("search_nodes", true),
         ]);
-        assert_eq!(summary, "• property query failed (2×)");
+        assert_eq!(summary, "• node search failed (2×)");
     }
 
     #[test]
@@ -3609,7 +3609,7 @@ mod tests {
     #[tokio::test]
     async fn narrated_tool_call_as_text_is_not_persisted_verbatim() {
         let engine = Arc::new(MockEngine::single_text(
-            r#"execute_query(target_type='task', filters=[{"property":"status", "operator": "equals", "value": "open"}])"#,
+            r#"search_nodes(node_type='task', filters=[{"property":"status", "operator": "equals", "value": "open"}])"#,
         ));
         let executor = Arc::new(MockToolExecutor::new());
         let agent_loop = LocalAgentLoop::new(engine, executor);
@@ -3630,7 +3630,7 @@ mod tests {
         assert!(result.tool_calls_made.is_empty());
         // The leaked pseudo-code must not reach the user.
         assert!(
-            !result.response.contains("execute_query("),
+            !result.response.contains("search_nodes("),
             "narrated tool call should be suppressed, not persisted: {:?}",
             result.response
         );
@@ -3644,7 +3644,7 @@ mod tests {
         );
         // And the persisted assistant message matches the returned response.
         let last = session.messages.last().unwrap();
-        assert!(!last.content.contains("execute_query("));
+        assert!(!last.content.contains("search_nodes("));
         assert!(!last.content.trim().is_empty());
     }
 
@@ -3661,8 +3661,8 @@ mod tests {
         impl AgentToolExecutor for ErrorToolExecutor {
             async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
                 Ok(vec![ToolDefinition {
-                    name: "execute_query".into(),
-                    description: "Run a property query".into(),
+                    name: "search_nodes".into(),
+                    description: "Find, list, and filter nodes".into(),
                     parameters_schema: json!({"type": "object"}),
                 }])
             }
@@ -3689,11 +3689,11 @@ mod tests {
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "execute_query".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
-                    args_json: r#"{"target_type":"task"}"#.to_string(),
+                    args_json: r#"{"query":"","node_type":"task"}"#.to_string(),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
@@ -3739,7 +3739,7 @@ mod tests {
             "empty final inference must not yield a blank response"
         );
         // And no leaked internal call syntax.
-        assert!(!result.response.contains("execute_query("));
+        assert!(!result.response.contains("search_nodes("));
         // The synthesized summary is honest about the failure — a turn that only
         // ever failed must not be reported as "completed".
         assert!(

@@ -3,7 +3,8 @@
 //! Distinct from `nodespace node query`, which only supports exact-match
 //! filters (id/content_contains/title_contains/type). This command exposes
 //! the full `execute_query` operator set (equals/contains/gt/lt/gte/lte/in/exists)
-//! plus sorting, matching the local agent's `execute_query` tool.
+//! plus sorting, backed by the same `QueryService` query op the local agent's
+//! `search_nodes` tool routes property filters through.
 //!
 //! Filters and sorting are JSON rather than per-condition flags: a filter
 //! item's `value` is free-form (string, number, bool, array — see

@@ -5,9 +5,14 @@
 //! MCP search handler); they moved here when the MCP transport was deleted, since
 //! the agent tool executor is now their only consumer.
 
+use crate::ops::query_ops::{AgentFilterItem, AgentSortItem};
 use serde::Deserialize;
 
-/// Parameters for the `search_nodes` (keyword/title search) tool.
+/// Parameters for the `search_nodes` tool — the single query tool for finding,
+/// listing, and filtering nodes by title, type, and/or typed properties.
+///
+/// Plain title/type listing (no `filters`) runs through the title-index path;
+/// any `filters`/`sorting` route through `QueryService` for SQL property queries.
 #[derive(Debug, Deserialize)]
 pub struct SearchNodesParams {
     /// Keyword or phrase to search for in node titles. Pass an empty string to
@@ -18,7 +23,16 @@ pub struct SearchNodesParams {
     #[serde(default)]
     pub node_type: Option<String>,
 
-    /// Maximum number of results. Default: 10.
+    /// Optional typed-property filters (status, due_date, amount, custom fields)
+    /// with operators. When present, the query routes through `QueryService`.
+    #[serde(default)]
+    pub filters: Vec<AgentFilterItem>,
+
+    /// Optional sort configuration, applied in order.
+    #[serde(default)]
+    pub sorting: Option<Vec<AgentSortItem>>,
+
+    /// Maximum number of results. Default: 50.
     #[serde(default)]
     pub limit: Option<usize>,
 }
