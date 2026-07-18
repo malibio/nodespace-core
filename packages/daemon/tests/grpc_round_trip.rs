@@ -465,6 +465,95 @@ async fn watch_nodes_supports_multiple_concurrent_watchers() {
     let _ = shutdown.send(());
 }
 
+/// End-to-end regression for ADR-026's C5 extension (daemon-side same-origin
+/// echo suppression): a desktop window's own write must never echo back on
+/// its own `WatchNodes` stream, over the real tonic wire format — not just
+/// the in-process `Request::new()` construction covered by the daemon's unit
+/// tests. Same-origin classification was previously a client-side
+/// content-comparison guess that repeatedly produced false-positive/false-
+/// negative conflict toasts; the daemon is now the sole authority, keyed on a
+/// real `x-ns-client-id` metadata header round-tripped over the wire exactly
+/// as `packages/desktop-app/src-tauri/src/services/grpc_client.rs`'s
+/// `DatabaseIdInterceptor` stamps it on every request.
+#[tokio::test]
+async fn watch_nodes_over_real_transport_suppresses_own_echo_and_delivers_foreign_writes() {
+    let (client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    // "window-a" and "window-b" simulate two independent GrpcClient instances
+    // (two desktop windows / a desktop window + a future second client), each
+    // with its own stable x-ns-client-id, exactly as production code stamps
+    // it via the interceptor. Both handles below are clones of the SAME tonic
+    // client/channel — the daemon distinguishes them purely by the
+    // x-ns-client-id metadata header on each request, not by transport
+    // connection, so reusing one client with per-request headers is a
+    // faithful simulation of two separate GrpcClient processes.
+    let mut window_a = client.clone();
+    let mut window_b = client.clone();
+
+    let mut watch_a = tonic::Request::new(WatchRequest::default());
+    watch_a
+        .metadata_mut()
+        .insert("x-ns-client-id", "window-a".parse().unwrap());
+    let mut stream_a = window_a
+        .watch_nodes(watch_a)
+        .await
+        .expect("watch_a failed")
+        .into_inner();
+
+    let mut watch_b = tonic::Request::new(WatchRequest::default());
+    watch_b
+        .metadata_mut()
+        .insert("x-ns-client-id", "window-b".parse().unwrap());
+    let mut stream_b = window_b
+        .watch_nodes(watch_b)
+        .await
+        .expect("watch_b failed")
+        .into_inner();
+
+    // window-a creates a node, tagging the write with its own client id —
+    // exactly as every routed write RPC does in production.
+    let mut create = tonic::Request::new(CreateNodeRequest {
+        node_type: "text".into(),
+        content: "window-a's own write".into(),
+        parent_id: None,
+        properties: String::new(),
+        collection: None,
+        lifecycle_status: None,
+        id: None,
+        position: None,
+    });
+    create
+        .metadata_mut()
+        .insert("x-ns-client-id", "window-a".parse().unwrap());
+    let created = window_a
+        .create_node(create)
+        .await
+        .expect("create_node failed")
+        .into_inner();
+
+    // window-b (a different client) sees the write.
+    let event_b = next_event_with_timeout(&mut stream_b).await;
+    match event_b.event {
+        Some(NodeEventKind::Created(data)) => assert_eq!(data.id, created.node_id),
+        other => panic!(
+            "expected window-b to see the foreign write, got {:?}",
+            other
+        ),
+    }
+
+    // window-a's own WatchNodes stream must NOT receive its own write back.
+    // Race the real event (if the bug were reintroduced) against a timeout —
+    // this must resolve via timeout, not via receiving the echo.
+    let no_echo = tokio::time::timeout(Duration::from_millis(500), stream_a.next()).await;
+    assert!(
+        no_echo.is_err(),
+        "window-a's own WatchNodes stream must not see its own write echoed back, got: {:?}",
+        no_echo
+    );
+
+    let _ = shutdown.send(());
+}
+
 /// Verifies the server-side stream closes cleanly when the client drops its
 /// receiver, rather than holding the broadcast subscription forever. Matches
 /// the AC "Stream closes gracefully when the client disconnects".

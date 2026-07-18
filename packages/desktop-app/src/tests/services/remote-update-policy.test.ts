@@ -9,11 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  decideRemoteUpdate,
-  isPlausibleOwnEcho,
-  shouldSkipStaleAiChatUpdate
-} from '$lib/services/remote-update-policy';
+import { decideRemoteUpdate, shouldSkipStaleAiChatUpdate } from '$lib/services/remote-update-policy';
 import type { Node } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 
@@ -35,57 +31,25 @@ const viewerSource: UpdateSource = { type: 'viewer', viewerId: 'v1' };
 const databaseSource: UpdateSource = { type: 'database', reason: 'domain-event' };
 const notEditing = { isFocused: false, hasPending: false };
 
-describe('isPlausibleOwnEcho', () => {
-  it('returns false when there is no last-sent record', () => {
-    expect(isPlausibleOwnEcho(makeNode({ content: 'x' }), undefined)).toBe(false);
-  });
-
-  it('returns true when incoming content matches the last-sent content exactly', () => {
-    expect(isPlausibleOwnEcho(makeNode({ content: 'hello world' }), 'hello world')).toBe(true);
-  });
-
-  it('returns false for a prefix-compatible but different foreign write (not a startsWith heuristic)', () => {
-    // Regression: an older `local.startsWith(incoming)` heuristic mis-classified
-    // this as an echo. The content-equality contract must not do that.
-    expect(isPlausibleOwnEcho(makeNode({ content: 'hello' }), 'hello world')).toBe(false);
-  });
-
-  it('treats missing content as empty string', () => {
-    expect(isPlausibleOwnEcho(makeNode({ content: undefined }), '')).toBe(true);
-  });
-});
-
 describe('decideRemoteUpdate', () => {
   it('applies when source is not database', () => {
-    const decision = decideRemoteUpdate(
-      makeNode(),
-      makeNode(),
-      viewerSource,
-      { isFocused: true, hasPending: false },
-      undefined
-    );
+    const decision = decideRemoteUpdate(makeNode(), makeNode(), viewerSource, {
+      isFocused: true,
+      hasPending: false
+    });
     expect(decision.apply).toBe(true);
   });
 
   it('applies when there is no existing node (first sighting)', () => {
-    const decision = decideRemoteUpdate(
-      makeNode(),
-      undefined,
-      databaseSource,
-      { isFocused: true, hasPending: false },
-      undefined
-    );
+    const decision = decideRemoteUpdate(makeNode(), undefined, databaseSource, {
+      isFocused: true,
+      hasPending: false
+    });
     expect(decision.apply).toBe(true);
   });
 
   it('applies when the node is not actively edited (not focused, no pending write)', () => {
-    const decision = decideRemoteUpdate(
-      makeNode(),
-      makeNode(),
-      databaseSource,
-      notEditing,
-      undefined
-    );
+    const decision = decideRemoteUpdate(makeNode(), makeNode(), databaseSource, notEditing);
     expect(decision.apply).toBe(true);
   });
 
@@ -94,8 +58,7 @@ describe('decideRemoteUpdate', () => {
       makeNode({ content: 'incoming' }),
       makeNode({ content: 'local' }),
       databaseSource,
-      { isFocused: true, hasPending: false },
-      undefined
+      { isFocused: true, hasPending: false }
     );
     expect(decision.apply).toBe(false);
   });
@@ -105,72 +68,56 @@ describe('decideRemoteUpdate', () => {
       makeNode({ content: 'incoming' }),
       makeNode({ content: 'local' }),
       databaseSource,
-      { isFocused: false, hasPending: true },
-      undefined
+      { isFocused: false, hasPending: true }
     );
     expect(decision.apply).toBe(false);
   });
 
-  it('stashes the version and does not notify when the broadcast is a plausible own-echo', () => {
-    const decision = decideRemoteUpdate(
-      makeNode({ content: 'hello world', version: 6 }),
-      makeNode({ content: 'hello world', version: 3 }),
-      databaseSource,
-      { isFocused: true, hasPending: false },
-      'hello world'
-    );
-    expect(decision.apply).toBe(false);
-    if (decision.apply) throw new Error('unreachable');
-    expect(decision.stashVersion).toBe(true);
-    expect(decision.notifyConflict).toBe(false);
-  });
-
-  it('does not stash the version and notifies when the broadcast looks like a foreign write', () => {
+  // ADR-026 C5 extension: the daemon suppresses a connection's own write
+  // echoes before they ever reach WatchNodes, so a database-sourced event
+  // from the SAME connection can no longer reach this policy — but a
+  // genuinely newer foreign write (a different window, or a sync-service
+  // pull) still must always notify.
+  it('notifies a genuinely newer foreign write to an actively-edited node', () => {
     const decision = decideRemoteUpdate(
       makeNode({ content: 'bob wrote this', version: 9 }),
       makeNode({ content: 'alice typed this', version: 3 }),
       databaseSource,
-      { isFocused: true, hasPending: false },
-      'alice typed this'
+      { isFocused: true, hasPending: false }
     );
     expect(decision.apply).toBe(false);
     if (decision.apply) throw new Error('unreachable');
-    expect(decision.stashVersion).toBe(false);
     expect(decision.notifyConflict).toBe(true);
   });
 
-  it('does not notify for a stale self-echo whose version is not ahead of the local version', () => {
-    // During rapid typing, one of our own earlier keystrokes echoes back through
-    // the daemon after we've typed further, so its content no longer matches
-    // `lastSentContent` (not a plausible own-echo). But its version is not ahead
-    // of our optimistic local version, so it is not a foreign writer getting
-    // ahead of us either — the daemon assigns a strictly higher version to any
-    // change it applies. It must be dropped silently instead of raising a
-    // phantom conflict notification on every keystroke.
+  it('does not notify for a stale broadcast whose version is not ahead of the local version', () => {
+    // The daemon-side echo suppression covers same-connection writes, but not
+    // a stale sync-service replay (nodespace-sync writes in-process via
+    // NodeService::with_client("sync-service"), a separate path — see this
+    // module's doc comment). A broadcast whose version is not strictly ahead
+    // of the local optimistic version can still arrive from that path and
+    // must be dropped silently instead of raising a phantom conflict
+    // notification.
     const decision = decideRemoteUpdate(
       makeNode({ content: 'hell', version: 4 }),
       makeNode({ content: 'hello world', version: 5 }),
       databaseSource,
-      { isFocused: true, hasPending: false },
-      'hello world'
+      { isFocused: true, hasPending: false }
     );
     expect(decision.apply).toBe(false);
     if (decision.apply) throw new Error('unreachable');
-    expect(decision.stashVersion).toBe(false);
     expect(decision.notifyConflict).toBe(false);
   });
 
-  it('treats an incoming node with no numeric version as never stash-eligible', () => {
+  it('treats an incoming node with no numeric version as conservatively notifying', () => {
     const decision = decideRemoteUpdate(
       makeNode({ content: 'hello world', version: undefined as unknown as number }),
       makeNode({ content: 'hello world', version: 3 }),
       databaseSource,
-      { isFocused: true, hasPending: false },
-      'hello world'
+      { isFocused: true, hasPending: false }
     );
     expect(decision.apply).toBe(false);
     if (decision.apply) throw new Error('unreachable');
-    expect(decision.stashVersion).toBe(false);
     expect(decision.notifyConflict).toBe(true);
   });
 });

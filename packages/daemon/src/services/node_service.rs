@@ -65,6 +65,17 @@ use crate::nodespace::{
 ///
 /// `embedding_state` is `None` while the model is loading or when the NLP
 /// engine is absent. Semantic search returns `UNAVAILABLE` in both cases.
+///
+/// **Adding a new unary RPC handler**: call `self.route(&request).await?`
+/// first, exactly like every existing handler — this both resolves ADR-053
+/// database routing and scopes the returned `node_service` for same-origin
+/// write tagging (ADR-026 C5 extension) via the `x-ns-client-id` header.
+/// **Adding a new streaming (subscribe-style) handler**: if it should also
+/// suppress the subscriber's own writes, read `x-ns-client-id` via the
+/// standalone `client_id_header()` helper *before* calling `route()` — see
+/// `watch_nodes` for the reference implementation. Do not rely on `route()`
+/// alone for a subscribing handler: `route()`'s use of the header scopes
+/// *writes*, which a read-only streaming handler never performs.
 #[derive(Clone)]
 pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,
@@ -108,12 +119,44 @@ impl NodeServiceImpl {
     /// routing middleware installed a header-less request falls back to `self`
     /// while a header-carrying one is rejected rather than silently served from
     /// the active database.
+    ///
+    /// Also applies same-origin write tagging (ADR-026 C5 extension): a
+    /// request carrying `x-ns-client-id` gets its `node_service` scoped via
+    /// `with_client(id)`, so any event this request's write emits is stamped
+    /// with that id as `source_client_id` — the signal `watch_nodes` uses to
+    /// drop the writer's own echo. Applied here, once, so every RPC handler
+    /// (which all start with `let this = self.route(&request).await?`) picks
+    /// it up without individually touching the client-id header.
     async fn route<T>(&self, request: &Request<T>) -> Result<NodeServiceImpl, Status> {
-        match crate::db_routing::routed_database_services(request).await? {
-            Some(services) => Ok(services.node_service_grpc.clone()),
-            None => Ok(self.clone()),
+        let mut this = match crate::db_routing::routed_database_services(request).await? {
+            Some(services) => services.node_service_grpc.clone(),
+            None => self.clone(),
+        };
+        if let Some(client_id) = client_id_header(request).map_err(|e| *e)? {
+            this.node_service = Arc::new(this.node_service.with_client(client_id));
         }
+        Ok(this)
     }
+}
+
+/// Read the `x-ns-client-id` header off a request, if present. Absent →
+/// `Ok(None)`, meaning the caller's writes emit no `source_client_id` and are
+/// never suppressed on any `WatchNodes` stream — behavior identical to before
+/// this header existed. `Status` is boxed on the error path so this small
+/// `Option<String>` success type doesn't blow up `Result`'s stack size next
+/// to it (`clippy::result_large_err`).
+fn client_id_header<T>(request: &Request<T>) -> Result<Option<String>, Box<Status>> {
+    request
+        .metadata()
+        .get(nodespace_proto::CLIENT_ID_HEADER)
+        .map(|v| {
+            v.to_str().map(str::to_owned).map_err(|_| {
+                Box::new(Status::invalid_argument(
+                    "x-ns-client-id must be valid ASCII",
+                ))
+            })
+        })
+        .transpose()
 }
 
 #[tonic::async_trait]
@@ -1393,6 +1436,12 @@ impl GrpcNodeService for NodeServiceImpl {
         &self,
         request: Request<WatchRequest>,
     ) -> Result<Response<Self::WatchNodesStream>, Status> {
+        // Read the subscriber's own client id BEFORE `route()`: `route()` also
+        // reads `x-ns-client-id`, but to scope *writes* made through the
+        // returned `node_service` — irrelevant here, since this handler never
+        // writes. The subscriber's id is instead used below to filter its own
+        // echoes out of the stream it is opening.
+        let subscriber_client_id = client_id_header(&request).map_err(|e| *e)?;
         let this = self.route(&request).await?;
 
         // A live edit stream marks this database active (ADR-053: per-database
@@ -1426,6 +1475,23 @@ impl GrpcNodeService for NodeServiceImpl {
             loop {
                 match rx.recv().await {
                     Ok(envelope) => {
+                        // Same-origin echo suppression (ADR-026 C5 extension):
+                        // the daemon is the sole authority on "is this my own
+                        // write echoed back" — a subscriber with a client id
+                        // never sees an event whose write was made through a
+                        // `node_service` scoped with that same id. A
+                        // subscriber with no client id (legacy/anonymous
+                        // caller) suppresses nothing, matching pre-existing
+                        // behavior; an event with no `source_client_id`
+                        // (write made through an unscoped `node_service`) is
+                        // never suppressed either.
+                        let is_own_echo = matches!(
+                            (&subscriber_client_id, &envelope.metadata.source_client_id),
+                            (Some(sub), Some(src)) if sub == src
+                        );
+                        if is_own_echo {
+                            continue;
+                        }
                         // Translation is serial: a slow `get_node` lookup will
                         // delay the next `rx.recv()` and increase the risk of
                         // `Lagged`. Acceptable because lookups are SQLite
@@ -1733,6 +1799,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::watch;
+    use tokio_stream::StreamExt;
 
     async fn make_service() -> (Arc<NodeServiceImpl>, TempDir) {
         let tmp = TempDir::new().unwrap();
@@ -2319,5 +2386,142 @@ mod tests {
     fn error_mapping_not_a_container_returns_invalid_argument() {
         let s = to_status(NodeServiceError::not_a_container("parent-id", "query"));
         assert_eq!(s.code(), tonic::Code::InvalidArgument);
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-origin echo suppression (ADR-026 C5 extension)
+    //
+    // A gRPC connection tags its writes with `x-ns-client-id` (scoped through
+    // `NodeService::with_client()` in `route()`) and tags its `WatchNodes`
+    // subscription with the same header. The daemon — not the frontend's old
+    // content-comparison heuristic — is the sole authority on "is this my own
+    // write echoed back": `watch_nodes` drops any envelope whose
+    // `source_client_id` matches the subscriber's own id.
+    // -----------------------------------------------------------------------
+
+    /// Open a `WatchNodes` stream tagged with `subscriber_client_id` (or
+    /// untagged if `None`), and return it pinned so the caller can pull the
+    /// next few events with a timeout.
+    async fn watch_as(
+        svc: &Arc<NodeServiceImpl>,
+        subscriber_client_id: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<NodeEvent, Status>> + Send>> {
+        let mut req = Request::new(WatchRequest::default());
+        if let Some(id) = subscriber_client_id {
+            req.metadata_mut()
+                .insert(nodespace_proto::CLIENT_ID_HEADER, id.parse().unwrap());
+        }
+        svc.watch_nodes(req).await.unwrap().into_inner()
+    }
+
+    /// Pull the next event off a `WatchNodes` stream, or `None` if none
+    /// arrives within the timeout — used to assert an echo was suppressed
+    /// (absence, not just "some other event came first").
+    async fn next_event(
+        stream: &mut (impl tokio_stream::Stream<Item = Result<NodeEvent, Status>> + Unpin),
+    ) -> Option<NodeEvent> {
+        tokio::time::timeout(std::time::Duration::from_millis(500), stream.next())
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.unwrap())
+    }
+
+    /// A write made through a connection tagged `x-ns-client-id: alice` is not
+    /// delivered back to alice's own `WatchNodes` subscription (same id on
+    /// both), but IS delivered to a subscription tagged with a different id
+    /// (bob) — genuine foreign-write delivery is unaffected.
+    #[tokio::test]
+    async fn watch_nodes_suppresses_own_echo_but_delivers_to_other_clients() {
+        let (svc, _tmp) = make_service().await;
+
+        let mut alice_stream = watch_as(&svc, Some("alice")).await;
+        let mut bob_stream = watch_as(&svc, Some("bob")).await;
+
+        let mut create = Request::new(crate::nodespace::CreateNodeRequest {
+            id: None,
+            node_type: "text".into(),
+            content: "alice's node".into(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: "{}".into(),
+            position: None,
+        });
+        create
+            .metadata_mut()
+            .insert(nodespace_proto::CLIENT_ID_HEADER, "alice".parse().unwrap());
+        svc.create_node(create).await.unwrap();
+
+        // Bob (a different client) sees the create.
+        let bob_event = next_event(&mut bob_stream)
+            .await
+            .expect("a different client must see a foreign write");
+        assert!(matches!(bob_event.event, Some(NodeEventKind::Created(_))));
+
+        // Alice does not see her own write echoed back.
+        assert!(
+            next_event(&mut alice_stream).await.is_none(),
+            "the writer's own WatchNodes subscription must not see its own echo"
+        );
+    }
+
+    /// A subscriber with no `x-ns-client-id` header suppresses nothing —
+    /// matches pre-existing behavior for callers that never adopt the header.
+    #[tokio::test]
+    async fn watch_nodes_without_client_id_header_suppresses_nothing() {
+        let (svc, _tmp) = make_service().await;
+
+        let mut anon_stream = watch_as(&svc, None).await;
+
+        let mut create = Request::new(crate::nodespace::CreateNodeRequest {
+            id: None,
+            node_type: "text".into(),
+            content: "untagged write".into(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: "{}".into(),
+            position: None,
+        });
+        // Written through a client-id-tagged connection, but the anonymous
+        // subscriber has no id of its own to match against.
+        create
+            .metadata_mut()
+            .insert(nodespace_proto::CLIENT_ID_HEADER, "alice".parse().unwrap());
+        svc.create_node(create).await.unwrap();
+
+        assert!(
+            next_event(&mut anon_stream).await.is_some(),
+            "a subscriber with no client id must still see every write"
+        );
+    }
+
+    /// A write made through a connection with no `x-ns-client-id` header is
+    /// never suppressed on any subscription, including one tagged with an id —
+    /// only an exact id-to-id match suppresses.
+    #[tokio::test]
+    async fn watch_nodes_untagged_write_is_delivered_to_tagged_subscriber() {
+        let (svc, _tmp) = make_service().await;
+
+        let mut alice_stream = watch_as(&svc, Some("alice")).await;
+
+        // No x-ns-client-id header on this write.
+        let create = Request::new(crate::nodespace::CreateNodeRequest {
+            id: None,
+            node_type: "text".into(),
+            content: "anonymous write".into(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: "{}".into(),
+            position: None,
+        });
+        svc.create_node(create).await.unwrap();
+
+        assert!(
+            next_event(&mut alice_stream).await.is_some(),
+            "an untagged write must still reach a client-id-tagged subscriber"
+        );
     }
 }
