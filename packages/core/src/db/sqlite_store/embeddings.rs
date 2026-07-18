@@ -642,16 +642,25 @@ impl SqliteStore {
         // recursive CTE with the whole match set (depth 0), walk `has_child`
         // parents, and for each seed keep the deepest ancestor reached.
         //
-        // The walk stops BELOW a `date` container: a date page is a non-embeddable
-        // organizational root whose top-level children (journal bullets) each carry
-        // their own content and are their own embedding roots (mirrors
-        // `NodeService::get_embedding_root_id`). Without this, a bullet hit resolved
-        // up to the date node, which the default `Knowledge` search scope excludes —
-        // so journal content was silently unfindable. Refusing to traverse INTO a
-        // date parent leaves the top-level bullet (a `text` node, in scope) as the
-        // deepest ancestor.
+        // The walk stops BELOW a non-embeddable *container* (a `date` page, but also
+        // a `task`/`collection`/`prompt` — see `NON_EMBEDDABLE_CONTAINER_TYPES`):
+        // such a node is a non-embeddable organizational root whose children each
+        // carry their own content and are their own embedding roots. This mirrors
+        // the behavior probe in `NodeService::get_embedding_root_id`, which SQL
+        // can't run — so we refuse to traverse INTO any parent of a container type.
+        // Without this, a bullet hit resolved up to the container (e.g. the date or
+        // task node), which the default `Knowledge` search scope excludes — so that
+        // content was silently unfindable. The parity of this list with the
+        // non-embeddable child-bearing behaviors is enforced by
+        // `container_type_parity_tests::non_embeddable_container_types_match_behaviors`.
         let placeholders: Vec<String> = (1..=matching_ids.len())
             .map(|i| format!("?{}", i))
+            .collect();
+        // Container types come from a hardcoded const of static identifiers — no
+        // user input — so inlining them as SQL literals is injection-safe.
+        let container_types: Vec<String> = crate::behaviors::NON_EMBEDDABLE_CONTAINER_TYPES
+            .iter()
+            .map(|t| format!("'{t}'"))
             .collect();
         let sql = format!(
             r#"WITH RECURSIVE ancestors(seed_id, node_id, depth) AS (
@@ -661,11 +670,12 @@ impl SqliteStore {
                 JOIN ancestors a ON r.out_node = a.node_id
                 JOIN node pn ON pn.id = r.in_node
                 WHERE r.relationship_type = 'has_child' AND a.depth < 100
-                  AND pn.node_type != 'date'
+                  AND pn.node_type NOT IN ({})
             )
             SELECT seed_id, node_id FROM ancestors a
             WHERE a.depth = (SELECT MAX(depth) FROM ancestors WHERE seed_id = a.seed_id)"#,
-            placeholders.join(", ")
+            placeholders.join(", "),
+            container_types.join(", ")
         );
 
         let params: Vec<libsql::Value> = matching_ids

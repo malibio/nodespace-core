@@ -250,7 +250,21 @@ impl NodeService {
                     Ok(Some(pid)) => {
                         let parent_embeddable = match store.get_node_type(&pid).await {
                             Ok(Some(pt)) => behavior_is_embeddable(behaviors, &pt),
-                            _ => false,
+                            // No type row → treat the parent as a container and stop here.
+                            Ok(None) => false,
+                            // A transient DB error must NOT be read as "parent is a
+                            // container": that would pick the current mid-tree node as
+                            // the root and embed it. Skip instead — same as the
+                            // `get_parent_id` error arm below and the instance method.
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to find root for node {} (get_node_type({}) failed, embedding not queued): {}",
+                                    node_id,
+                                    pid,
+                                    e
+                                );
+                                return;
+                            }
                         };
                         if !parent_embeddable {
                             break current_id; // parent is a container → current is the root
