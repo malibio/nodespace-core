@@ -176,7 +176,11 @@ pub static CONNECT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 
 /// Wait until the daemon's socket is reachable, then connect a real
 /// `GrpcClient` to it — the same client type `#[tauri::command]` handlers
-/// take as `State<'_, GrpcClient>`.
+/// take as `State<'_, GrpcClient>`. Each call builds an independent
+/// `GrpcClient` with its own stable `x-ns-client-id` (ADR-026 C5 extension) —
+/// calling `TauriTestApp::connect` twice against the same daemon therefore
+/// produces two clients the daemon treats as genuinely different writers, the
+/// same as two real desktop windows. See `optimistic_echo_race_test.rs`.
 async fn connected_client(daemon: &SpawnedDaemon, timeout: Duration) -> GrpcClient {
     use nodespace_app_lib::daemon_setup::{wait_for_daemon, DaemonStatus};
 
