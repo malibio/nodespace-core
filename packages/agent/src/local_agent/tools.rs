@@ -5,7 +5,10 @@
 //! arguments against a JSON schema, executes the corresponding service call, and
 //! returns a compact, token-efficient result suitable for an 8k-context local model.
 
-use crate::agent_types::{AgentToolExecutor, ToolDefinition, ToolError, ToolResult};
+use crate::agent_types::{
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceRequest, Role, StreamingChunk,
+    ToolDefinition, ToolError, ToolResult,
+};
 use async_trait::async_trait;
 use nodespace_core::agent_params::{SearchNodesParams, SearchSemanticParams};
 use nodespace_core::ops::{node_ops, query_ops, rel_ops, search_ops, OpsError};
@@ -26,6 +29,15 @@ use tokio::sync::RwLock;
 /// to remember. The inner `Option` is `None` until the embedding model finishes
 /// loading.
 pub type SharedEmbeddingService = Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>;
+
+/// Shared handle to the chat inference engine, for tools that need to make
+/// their own nested LLM call (e.g. `resolve_query`'s decomposition step).
+///
+/// Mirrors [`SharedEmbeddingService`]'s pattern: the daemon swaps the active
+/// engine (model load/unload/switch) by writing through this handle, so the
+/// executor always reads the *current* engine rather than one captured at
+/// construction time.
+pub type SharedChatInferenceEngine = Arc<RwLock<Option<Arc<dyn ChatInferenceEngine>>>>;
 
 // ---------------------------------------------------------------------------
 // Agent-specific parameter structs
@@ -91,6 +103,15 @@ struct GetRelatedNodesParams {
     pub direction: Option<String>,
 }
 
+/// Parameters for the resolve_query tool
+#[derive(Debug, Deserialize)]
+struct ResolveQueryParams {
+    /// The user's natural-language request, verbatim (e.g. "Mark the $500 invoice as paid").
+    pub request: String,
+    /// The target node type to resolve the request against (e.g. "invoice").
+    pub node_type: String,
+}
+
 /// Parameters for the search_skills tool
 #[derive(Debug, Deserialize)]
 struct SearchSkillsParams {
@@ -128,6 +149,45 @@ const DEFAULT_SEMANTIC_LIMIT: usize = 5;
 
 /// Minimum similarity threshold for semantic search.
 const SEMANTIC_THRESHOLD: f32 = 0.3;
+
+/// Extract the first balanced `{...}` JSON object from arbitrary text.
+///
+/// Small local models sometimes wrap a requested JSON-only response in prose
+/// or a markdown code fence despite instructions not to. Scans for the first
+/// `{`, then tracks brace depth (ignoring braces inside string literals) to
+/// find its matching close, rather than requiring the whole response to be
+/// bare JSON.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
 /// Truncate a string to `max_chars`, appending `[truncated]` if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -278,6 +338,35 @@ fn def_search_nodes() -> ToolDefinition {
                 }
             },
             "required": ["query"]
+        }),
+    }
+}
+
+fn def_resolve_query() -> ToolDefinition {
+    ToolDefinition {
+        name: "resolve_query".into(),
+        description: "Resolve an ambiguous natural-language request into precise search_nodes arguments \
+            BEFORE calling search_nodes, when the request bundles an implicit semantic decision you \
+            are not certain how to phrase as a query — e.g. which property a value like '$500' refers \
+            to, what a relative date like 'next Friday' or 'overdue' resolves to, or how to identify \
+            a specific node from a paraphrased description. Looks up the target type's real schema \
+            fields and returns ready-to-use 'query' and 'filters' values — pass them directly to \
+            search_nodes's matching parameters, do not re-derive them yourself. Skip this for simple, \
+            unambiguous requests (e.g. 'list all my invoices') — call search_nodes directly instead."
+            .into(),
+        parameters_schema: json!({
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "The user's request, verbatim (e.g. \"Mark the $500 invoice as paid\")."
+                },
+                "node_type": {
+                    "type": "string",
+                    "description": "The target node type to resolve against (e.g. 'invoice')."
+                }
+            },
+            "required": ["request", "node_type"]
         }),
     }
 }
@@ -733,6 +822,7 @@ fn def_update_task_status() -> ToolDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     SearchNodes,
+    ResolveQuery,
     SearchSemantic,
     GetNode,
     CreateNode,
@@ -752,6 +842,7 @@ impl Tool {
     /// presented to the model, so keep retrieval/discovery tools first.
     pub const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
+        Tool::ResolveQuery,
         Tool::SearchSemantic,
         Tool::GetNode,
         Tool::CreateNode,
@@ -770,6 +861,7 @@ impl Tool {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Tool::SearchNodes => "search_nodes",
+            Tool::ResolveQuery => "resolve_query",
             Tool::SearchSemantic => "search_semantic",
             Tool::GetNode => "get_node",
             Tool::CreateNode => "create_node",
@@ -796,6 +888,7 @@ impl Tool {
     pub(crate) fn definition(self) -> ToolDefinition {
         match self {
             Tool::SearchNodes => def_search_nodes(),
+            Tool::ResolveQuery => def_resolve_query(),
             Tool::SearchSemantic => def_search_semantic(),
             Tool::GetNode => def_get_node(),
             Tool::CreateNode => def_create_node(),
@@ -819,6 +912,7 @@ impl Tool {
     pub(crate) fn humanized(self) -> &'static str {
         match self {
             Tool::SearchNodes => "node search",
+            Tool::ResolveQuery => "query resolution",
             Tool::SearchSemantic => "semantic search",
             Tool::GetNode => "node lookup",
             Tool::CreateNode => "node creation",
@@ -857,6 +951,12 @@ pub struct GraphToolExecutor {
     /// even when the embedding model finishes loading after this executor is
     /// built. See [`SharedEmbeddingService`].
     pub embedding_service: SharedEmbeddingService,
+    /// Shared handle to the chat inference engine, used by `resolve_query` to
+    /// make its own scoped nested inference call. Read per-call for the same
+    /// reason as `embedding_service` — the active engine can be swapped (model
+    /// load/switch) after this executor is built. `None` when no model is
+    /// loaded yet.
+    pub inference_engine: SharedChatInferenceEngine,
 }
 
 impl GraphToolExecutor {
@@ -971,6 +1071,131 @@ impl GraphToolExecutor {
             tool_call_id,
             "search_nodes",
             json!({ "count": summaries.len(), "nodes": summaries }),
+        ))
+    }
+
+    /// Resolve an ambiguous natural-language request into precise `search_nodes`
+    /// arguments (`query` + `filters`) before the main tool-calling turn.
+    ///
+    /// Looks up the target type's real schema fields via `NodeService`
+    /// (deterministic — not the semantically-truncated schema summary injected
+    /// into the main prompt), then makes a single, narrowly-scoped inference
+    /// call (no tools, temperature 0) asking the model to map the request's
+    /// implicit values (amounts, relative dates, paraphrased identifiers) onto
+    /// those fields. This is a genuinely separate LLM call from the main ReAct
+    /// loop's turn — see `agent_loop::maybe_summarize_history` for the existing
+    /// single-shot sub-call precedent this mirrors.
+    async fn exec_resolve_query(
+        &self,
+        tool_call_id: &str,
+        args: Value,
+    ) -> Result<ToolResult, ToolError> {
+        let params: ResolveQueryParams =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
+                tool: "resolve_query".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let ns = self.node_service()?;
+        let engine = self.inference_engine().await?;
+
+        let schema = ns
+            .get_schema_node(&params.node_type)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("resolve_query failed: {}", e)))?;
+
+        let field_lines: String = match &schema {
+            Some(s) if !s.fields.is_empty() => s
+                .fields
+                .iter()
+                .map(|f| format!("- {} ({})", f.name, f.field_type))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => "(no typed fields on this schema — resolve to a title/content keyword only)"
+                .to_string(),
+        };
+        let schema_label = schema
+            .as_ref()
+            .map(|s| s.content.clone())
+            .unwrap_or_else(|| params.node_type.clone());
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let prompt = format!(
+            "You resolve an ambiguous user request into a precise structured search query. \
+            Do not answer the user, do not explain — output ONLY a single JSON object.\n\n\
+            Target entity type: {node_type} (\"{schema_label}\")\n\
+            Fields on this type:\n{field_lines}\n\n\
+            Today's date: {today}\n\n\
+            User request: \"{request}\"\n\n\
+            Resolve the request against the fields above:\n\
+            - If a value in the request maps to one of the typed fields (e.g. a dollar amount to a \
+            number field, a status word to an enum/status field), emit a filter for it: \
+            {{\"type\":\"property\",\"operator\":\"equals\",\"property\":\"<field name>\",\"value\":<value>}}.\n\
+            - Resolve relative dates (\"next Friday\", \"overdue\", \"recent\") to a concrete YYYY-MM-DD \
+            value and the correct comparison operator (gt/lt/gte/lte/equals) against the matching date field.\n\
+            - Put any remaining identifying words that should match the title/content as a short \
+            \"query\" string (a few keywords, NOT the full sentence).\n\
+            - If nothing resolves to a typed field, leave \"filters\" empty and put your best short \
+            keyword(s) in \"query\".\n\n\
+            Output EXACTLY this JSON shape, nothing else:\n\
+            {{\"query\": \"<keywords or empty string>\", \"filters\": [<filter objects, or empty array>]}}",
+            node_type = params.node_type.as_str(),
+            schema_label = schema_label,
+            field_lines = field_lines,
+            today = today,
+            request = params.request.as_str(),
+        );
+
+        let request = InferenceRequest {
+            messages: vec![ChatMessage::text(Role::User, prompt)],
+            tools: None,
+            temperature: Some(0.0),
+            max_tokens: Some(512),
+        };
+
+        let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let chunks_for_cb = Arc::clone(&chunks);
+        let cb: Box<dyn Fn(StreamingChunk) + Send> = Box::new(move |chunk: StreamingChunk| {
+            if let Ok(mut guard) = chunks_for_cb.lock() {
+                guard.push(chunk);
+            }
+        });
+
+        engine.generate(request, cb).await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("resolve_query inference failed: {}", e))
+        })?;
+
+        let text: String = {
+            let guard = chunks.lock().unwrap_or_else(|p| p.into_inner());
+            guard
+                .iter()
+                .filter_map(|c| match c {
+                    StreamingChunk::Token { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Tolerate a model that wraps the JSON in prose/markdown fences by
+        // extracting the first balanced {...} object rather than requiring an
+        // exact-match parse.
+        let json_slice = extract_json_object(&text).unwrap_or(&text);
+        let resolved: Value = serde_json::from_str(json_slice).unwrap_or_else(|_| {
+            // Decomposition failed to produce parseable JSON — fall back to an
+            // empty resolution so the caller falls through to its own judgment
+            // (e.g. AMBIGUITY clarification) rather than erroring the turn.
+            json!({ "query": "", "filters": [] })
+        });
+
+        Ok(ok_result(
+            tool_call_id,
+            "resolve_query",
+            json!({
+                "node_type": params.node_type,
+                "query": resolved.get("query").cloned().unwrap_or(json!("")),
+                "filters": resolved.get("filters").cloned().unwrap_or(json!([])),
+            }),
         ))
     }
 
@@ -1579,6 +1804,19 @@ impl GraphToolExecutor {
             .clone()
             .ok_or_else(|| ToolError::ExecutionFailed("Embedding service unavailable".to_string()))
     }
+
+    /// Read the current chat inference engine from the shared handle.
+    ///
+    /// Returns the value live each call, mirroring `embedding_service` above —
+    /// a model loaded/swapped after this executor was built is picked up
+    /// without any re-wiring.
+    async fn inference_engine(&self) -> Result<Arc<dyn ChatInferenceEngine>, ToolError> {
+        self.inference_engine
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ToolError::ExecutionFailed("Inference engine unavailable".to_string()))
+    }
 }
 
 #[async_trait]
@@ -1715,6 +1953,7 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         match tool {
             Tool::SearchNodes => self.exec_search_nodes(&tool_call_id, args).await,
+            Tool::ResolveQuery => self.exec_resolve_query(&tool_call_id, args).await,
             Tool::SearchSemantic => self.exec_search_semantic(&tool_call_id, args).await,
             Tool::GetNode => self.exec_get_node(&tool_call_id, args).await,
             Tool::CreateNode => self.exec_create_node(&tool_call_id, args).await,
@@ -1750,6 +1989,7 @@ mod tests {
         GraphToolExecutor {
             node_service: None,
             embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -1839,7 +2079,7 @@ mod tests {
     fn definitions_count() {
         // Derived from the registry: one definition per `Tool::ALL` entry.
         assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
-        assert_eq!(all_tool_definitions().len(), 13);
+        assert_eq!(all_tool_definitions().len(), 14);
     }
 
     // -- Tool registry invariants --
@@ -1954,6 +2194,245 @@ mod tests {
         let params: SearchNodesParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.query, "hello");
         assert!(params.node_type.is_none());
+    }
+
+    // -- resolve_query tests --
+
+    #[test]
+    fn resolve_query_is_registered_in_tool_registry() {
+        assert!(
+            Tool::ALL.contains(&Tool::ResolveQuery),
+            "resolve_query must be in the tool registry"
+        );
+        assert_eq!(Tool::ResolveQuery.name(), "resolve_query");
+        assert_eq!(Tool::from_name("resolve_query"), Some(Tool::ResolveQuery));
+    }
+
+    #[test]
+    fn resolve_query_schema_requires_request_and_node_type() {
+        let def = def_resolve_query();
+        assert_eq!(def.name, "resolve_query");
+        let required = def.parameters_schema["required"]
+            .as_array()
+            .expect("required must be array");
+        assert!(required.contains(&json!("request")));
+        assert!(required.contains(&json!("node_type")));
+    }
+
+    #[test]
+    fn resolve_query_params_parse() {
+        let args = json!({
+            "request": "Mark the $500 invoice as paid",
+            "node_type": "invoice",
+        });
+        let params: ResolveQueryParams = serde_json::from_value(args).unwrap();
+        assert_eq!(params.request, "Mark the $500 invoice as paid");
+        assert_eq!(params.node_type, "invoice");
+    }
+
+    #[test]
+    fn resolve_query_params_missing_node_type_fails() {
+        let args = json!({ "request": "Mark the $500 invoice as paid" });
+        let result: Result<ResolveQueryParams, _> = serde_json::from_value(args);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_query_without_inference_engine_returns_error() {
+        let executor = test_executor();
+        let args = json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" });
+        let result = executor.execute("resolve_query", args).await;
+        assert!(
+            result.is_err(),
+            "resolve_query must fail without a node service/engine"
+        );
+    }
+
+    #[test]
+    fn extract_json_object_finds_bare_object() {
+        let text = r#"{"query": "invoice", "filters": []}"#;
+        assert_eq!(
+            extract_json_object(text),
+            Some(r#"{"query": "invoice", "filters": []}"#)
+        );
+    }
+
+    #[test]
+    fn extract_json_object_skips_leading_prose() {
+        let text = "Sure, here is the resolved query:\n```json\n{\"query\": \"invoice\", \"filters\": []}\n```";
+        assert_eq!(
+            extract_json_object(text),
+            Some(r#"{"query": "invoice", "filters": []}"#)
+        );
+    }
+
+    #[test]
+    fn extract_json_object_handles_nested_braces_and_strings() {
+        let text = r#"noise {"filters": [{"type": "property", "value": "a{b}c"}]} trailing"#;
+        assert_eq!(
+            extract_json_object(text),
+            Some(r#"{"filters": [{"type": "property", "value": "a{b}c"}]}"#)
+        );
+    }
+
+    #[test]
+    fn extract_json_object_returns_none_with_no_braces() {
+        assert_eq!(extract_json_object("no json here"), None);
+    }
+
+    /// End-to-end fixture: real schema (via `handle_create_schema`), stub
+    /// inference engine returning fixed JSON, exercising the full
+    /// `exec_resolve_query` path — schema field lookup, prompt construction,
+    /// nested `generate()` call, and JSON parsing into a tool result.
+    mod resolve_query_integration {
+        use super::*;
+        use crate::agent_types::{ChatModelSpec, InferenceUsage};
+        use nodespace_core::db::SqliteStore;
+        use nodespace_core::schema::handle_create_schema;
+        use tempfile::TempDir;
+
+        async fn make_test_service() -> (Arc<NodeService>, TempDir) {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("test.db");
+            let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+            let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+            (svc, tmp)
+        }
+
+        /// Stub engine that ignores the prompt and always returns a fixed
+        /// JSON string as a single `Token` chunk — verifies the plumbing
+        /// (schema lookup → prompt → generate() → chunk collection → parse)
+        /// without depending on a real model.
+        struct FixedJsonEngine {
+            response: String,
+        }
+
+        #[async_trait]
+        impl ChatInferenceEngine for FixedJsonEngine {
+            async fn generate(
+                &self,
+                _request: InferenceRequest,
+                on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+            ) -> Result<InferenceUsage, crate::agent_types::InferenceError> {
+                on_chunk(StreamingChunk::Token {
+                    text: self.response.clone(),
+                });
+                Ok(InferenceUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 10,
+                })
+            }
+
+            async fn model_info(
+                &self,
+            ) -> Result<Option<ChatModelSpec>, crate::agent_types::InferenceError> {
+                Ok(None)
+            }
+
+            async fn token_count(
+                &self,
+                text: &str,
+            ) -> Result<u32, crate::agent_types::InferenceError> {
+                Ok((text.len() as f32 / 4.0).ceil() as u32)
+            }
+        }
+
+        fn executor_with(ns: Arc<NodeService>, engine_response: &str) -> GraphToolExecutor {
+            let engine: Arc<dyn ChatInferenceEngine> = Arc::new(FixedJsonEngine {
+                response: engine_response.to_string(),
+            });
+            GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: Arc::new(RwLock::new(Some(engine))),
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_returns_engine_resolved_filters() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "amount", "type": "number"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"amount","value":500}]}"#;
+            let executor = executor_with(ns, engine_json);
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["node_type"], json!("invoice"));
+            assert_eq!(result.result["query"], json!(""));
+            assert_eq!(
+                result.result["filters"],
+                json!([{"type":"property","operator":"equals","property":"amount","value":500}])
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_falls_back_to_empty_on_unparseable_engine_output() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [{"name": "amount", "type": "number"}]
+                }),
+            )
+            .await
+            .unwrap();
+
+            // Engine narrates instead of returning JSON — must not error the turn.
+            let executor = executor_with(ns, "I think the amount is 500 dollars.");
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                !result.is_error,
+                "unparseable engine output must fall back, not error"
+            );
+            assert_eq!(result.result["query"], json!(""));
+            assert_eq!(result.result["filters"], json!([]));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_handles_unknown_node_type_gracefully() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = executor_with(ns, r#"{"query": "widget", "filters": []}"#);
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "find the widget", "node_type": "nonexistent_type" }),
+                )
+                .await
+                .unwrap();
+
+            // No schema found: still resolves (engine still gets called with a
+            // "no typed fields" fallback description), just with no field context.
+            assert!(!result.is_error);
+        }
     }
 
     #[test]
@@ -2224,9 +2703,10 @@ mod tests {
     async fn available_tools_returns_all() {
         let executor = test_executor();
         let tools = executor.available_tools().await.unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_nodes"));
+        assert!(names.contains(&"resolve_query"));
         assert!(names.contains(&"search_semantic"));
         assert!(names.contains(&"get_node"));
         assert!(names.contains(&"create_node"));
@@ -2259,6 +2739,7 @@ mod tests {
         let executor = GraphToolExecutor {
             node_service: None,
             embedding_service: handle.clone(),
+            inference_engine: Arc::new(RwLock::new(None)),
         };
 
         // Same lock — a write through `handle` is visible to `executor`.
