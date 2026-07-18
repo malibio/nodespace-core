@@ -30,14 +30,21 @@ use tokio::sync::RwLock;
 /// loading.
 pub type SharedEmbeddingService = Arc<RwLock<Option<Arc<NodeEmbeddingService>>>>;
 
-/// Shared handle to the chat inference engine, for tools that need to make
-/// their own nested LLM call (e.g. `resolve_query`'s decomposition step).
+/// Handle to the chat inference engine, for tools that need to make their own
+/// nested LLM call (e.g. `resolve_query`'s decomposition step).
 ///
-/// Mirrors [`SharedEmbeddingService`]'s pattern: the daemon swaps the active
-/// engine (model load/unload/switch) by writing through this handle, so the
-/// executor always reads the *current* engine rather than one captured at
-/// construction time.
-pub type SharedChatInferenceEngine = Arc<RwLock<Option<Arc<dyn ChatInferenceEngine>>>>;
+/// Unlike [`SharedEmbeddingService`], this is NOT a live-updated shared lock —
+/// the daemon rebuilds the whole `GraphToolExecutor` (and hands it a fresh
+/// engine) on every model load/unload/switch in `replace_engine`, so there is
+/// no "wire it once, update it later in place" scenario to support. `None`
+/// only in tests that construct an executor with no engine at all.
+///
+/// `resolve_query`'s nested call only ever feeds its output into
+/// `search_nodes`'s existing filter pipeline (validated property names,
+/// parameterized `json_extract` values) — never executed as code — so
+/// interpolating user/schema text into its prompt carries no injection risk
+/// beyond what `search_nodes` itself already guards against.
+pub type SharedChatInferenceEngine = Option<Arc<dyn ChatInferenceEngine>>;
 
 // ---------------------------------------------------------------------------
 // Agent-specific parameter structs
@@ -951,11 +958,12 @@ pub struct GraphToolExecutor {
     /// even when the embedding model finishes loading after this executor is
     /// built. See [`SharedEmbeddingService`].
     pub embedding_service: SharedEmbeddingService,
-    /// Shared handle to the chat inference engine, used by `resolve_query` to
-    /// make its own scoped nested inference call. Read per-call for the same
-    /// reason as `embedding_service` — the active engine can be swapped (model
-    /// load/switch) after this executor is built. `None` when no model is
-    /// loaded yet.
+    /// The chat inference engine, used by `resolve_query` to make its own
+    /// scoped nested inference call. Unlike `embedding_service`, this is fixed
+    /// at construction — the daemon rebuilds the whole executor (with a fresh
+    /// engine) on every model load/switch, so there is no later-arriving value
+    /// to read live. `None` only in tests that construct an executor with no
+    /// engine at all. See [`SharedChatInferenceEngine`].
     pub inference_engine: SharedChatInferenceEngine,
 }
 
@@ -1097,7 +1105,7 @@ impl GraphToolExecutor {
             })?;
 
         let ns = self.node_service()?;
-        let engine = self.inference_engine().await?;
+        let engine = self.inference_engine()?;
 
         let schema = ns
             .get_schema_node(&params.node_type)
@@ -1810,10 +1818,8 @@ impl GraphToolExecutor {
     /// Returns the value live each call, mirroring `embedding_service` above —
     /// a model loaded/swapped after this executor was built is picked up
     /// without any re-wiring.
-    async fn inference_engine(&self) -> Result<Arc<dyn ChatInferenceEngine>, ToolError> {
+    fn inference_engine(&self) -> Result<Arc<dyn ChatInferenceEngine>, ToolError> {
         self.inference_engine
-            .read()
-            .await
             .clone()
             .ok_or_else(|| ToolError::ExecutionFailed("Inference engine unavailable".to_string()))
     }
@@ -1989,7 +1995,7 @@ mod tests {
         GraphToolExecutor {
             node_service: None,
             embedding_service: Arc::new(RwLock::new(None)),
-            inference_engine: Arc::new(RwLock::new(None)),
+            inference_engine: None,
         }
     }
 
@@ -2241,17 +2247,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn resolve_query_without_inference_engine_returns_error() {
-        let executor = test_executor();
-        let args = json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" });
-        let result = executor.execute("resolve_query", args).await;
-        assert!(
-            result.is_err(),
-            "resolve_query must fail without a node service/engine"
-        );
-    }
-
     #[test]
     fn extract_json_object_finds_bare_object() {
         let text = r#"{"query": "invoice", "filters": []}"#;
@@ -2348,7 +2343,7 @@ mod tests {
             GraphToolExecutor {
                 node_service: Some(ns),
                 embedding_service: Arc::new(RwLock::new(None)),
-                inference_engine: Arc::new(RwLock::new(Some(engine))),
+                inference_engine: Some(engine),
             }
         }
 
@@ -2436,6 +2431,36 @@ mod tests {
             // No schema found: still resolves (engine still gets called with a
             // "no typed fields" fallback description), just with no field context.
             assert!(!result.is_error);
+        }
+
+        /// Isolates the "no inference engine" failure path from "no node
+        /// service" — a real node_service is present here, so a failure can
+        /// only come from the missing engine.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_without_inference_engine_returns_error() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: None,
+            };
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await;
+
+            match result {
+                Err(ToolError::ExecutionFailed(reason)) => {
+                    assert!(reason.contains("Inference engine unavailable"));
+                }
+                other => panic!(
+                    "Expected ExecutionFailed(\"Inference engine unavailable\"), got {:?}",
+                    other
+                ),
+            }
         }
     }
 
@@ -2745,7 +2770,7 @@ mod tests {
         let executor = GraphToolExecutor {
             node_service: None,
             embedding_service: handle.clone(),
-            inference_engine: Arc::new(RwLock::new(None)),
+            inference_engine: None,
         };
 
         // Same lock — a write through `handle` is visible to `executor`.
