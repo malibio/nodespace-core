@@ -1026,7 +1026,18 @@ export class SharedNodeStore {
         // The persistence whitelist now includes type-specific property changes
         const isStructuralChange = false; // Structural changes now handled via backend moveNode()
         const isContentChange = 'content' in changes;
-        const isNodeTypeChange = 'nodeType' in changes;
+        // A VALUE comparison, not mere presence: `updateNodeContent` always
+        // bundles the current (unchanged) nodeType alongside content on every
+        // keystroke (see reactive-node-service.svelte.ts), so an in-flight
+        // slash-command type conversion can't race a content update and get
+        // silently reverted. Treating that presence alone as "changing type"
+        // forced immediate (non-debounced) persistence on every keystroke,
+        // which raced the broadcast against the next keystroke and produced
+        // spurious "conflicted with a remote change" toasts + content
+        // corruption under fast typing. Only a genuine type change should
+        // skip the debounce.
+        const isNodeTypeChange =
+          'nodeType' in changes && changes.nodeType !== existingNode.nodeType;
         const isPropertyChange = 'properties' in changes;
         // Check for type-specific property changes (status, priority, dueDate, assignee, etc.)
         // These are persisted via type-specific updaters registered in the plugin system
@@ -1178,17 +1189,49 @@ export class SharedNodeStore {
                       );
                     }
 
-                    // Update local node with backend version and any backend-computed fields
-                    // (e.g. title recomputed from title_template after property changes)
+                    // Update local node with the backend's version AND typed
+                    // fields. `node_to_typed_value` (the backend's single
+                    // flattening authority) promotes type-specific fields —
+                    // ai-chat's `provider`/`model`, task's `status`/`priority`,
+                    // etc. — from the namespaced storage shape to genuinely
+                    // top-level fields on this response. `updatePayload` above
+                    // sends the UN-flattened `{ properties: {...} }` shape
+                    // (matching storage, not the wire contract), so viewers
+                    // reading those top-level fields directly (e.g.
+                    // AiChatNodeViewer's `node?.provider`) never saw them
+                    // become defined until a later daemon broadcast happened
+                    // to re-hydrate the node via `setNode()`. Spread the full
+                    // response over the local node so every type-specific
+                    // top-level field is corrected immediately, but re-assert
+                    // `content` and `properties` from the local node
+                    // afterward if they've moved on since `currentNode` was
+                    // read for this RPC — a user (or another in-flight write)
+                    // may have changed either while this request was in
+                    // flight, and blindly applying the response for that
+                    // older send would clobber the newer local state.
                     const localNode = this.nodes.get(nodeId);
                     if (localNode && updatedNodeFromBackend) {
                       const oldVersion = localNode.version;
-                      localNode.version = updatedNodeFromBackend.version;
+                      const localContent = localNode.content;
+                      // Only take the backend's properties if it actually
+                      // returned some — some type-specific responses (e.g.
+                      // TaskNode, or a task-updater response for a
+                      // properties-only change it doesn't map) carry no
+                      // `properties` field at all, and `undefined` must never
+                      // clobber a defined local value.
+                      const localHasMovedOn =
+                        localNode.properties !== currentNode.properties &&
+                        JSON.stringify(localNode.properties) !== JSON.stringify(currentNode.properties);
+                      const localProperties =
+                        localHasMovedOn || updatedNodeFromBackend.properties === undefined
+                          ? localNode.properties
+                          : updatedNodeFromBackend.properties;
                       const titleChanged = updatedNodeFromBackend.title !== undefined &&
                         updatedNodeFromBackend.title !== localNode.title;
-                      if (updatedNodeFromBackend.title !== undefined) {
-                        localNode.title = updatedNodeFromBackend.title;
-                      }
+                      Object.assign(localNode, updatedNodeFromBackend, {
+                        content: localContent,
+                        properties: localProperties
+                      });
                       this.nodesSet(nodeId, localNode);
                       // Notify subscribers if title changed (e.g. title_template recomputed)
                       if (titleChanged) {
@@ -1556,11 +1599,48 @@ export class SharedNodeStore {
                   // Get current version for optimistic concurrency control.
                   const currentVersion = this.computeOccVersionForUpdate(nodeId);
                   const updatedFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
-                  // Sync the backend-assigned version into the local node so the next
-                  // OCC uses a fresh version rather than the now-stale pre-update value.
+                  // Sync the backend-assigned version AND typed fields into the
+                  // local node. `node_to_typed_value` (the backend's single
+                  // flattening authority) promotes type-specific fields — ai-chat's
+                  // `provider`/`model`, task's `status`/`priority`, etc. — from the
+                  // namespaced storage shape to genuinely top-level fields on this
+                  // response. The optimistic write above sent the UN-flattened
+                  // `{ properties: {...} }` shape client-side (matching storage, not
+                  // the wire contract), so the local node's top-level typed fields —
+                  // read directly by viewers like AiChatNodeViewer's
+                  // `node?.provider` — never got corrected to match. Previously only
+                  // `.version` was synced here, so e.g. an ai-chat model selection
+                  // persisted correctly server-side but the local node never
+                  // observed `provider`/`model` becoming defined, leaving the UI
+                  // stuck on "Choose a model to get started" even after the write
+                  // succeeded.
+                  //
+                  // Spread the full response over the local node so every
+                  // type-specific top-level field is corrected, but re-assert
+                  // `content` and `properties` from the local node afterward if
+                  // they've moved on since `currentNode` was snapshotted for this
+                  // RPC — a user (or another in-flight write) may have changed
+                  // either while this request was in flight, and blindly applying
+                  // the response for that older send would clobber the newer local
+                  // state. `properties` is compared shallowly since callers replace
+                  // it wholesale rather than patching individual keys.
                   const latestNode = this.nodes.get(nodeId);
                   if (latestNode && updatedFromBackend) {
-                    latestNode.version = updatedFromBackend.version;
+                    const localContent = latestNode.content;
+                    // Only take the backend's properties if it actually
+                    // returned some — `undefined` must never clobber a
+                    // defined local value.
+                    const localHasMovedOn =
+                      latestNode.properties !== currentNode.properties &&
+                      JSON.stringify(latestNode.properties) !== JSON.stringify(currentNode.properties);
+                    const localProperties =
+                      localHasMovedOn || updatedFromBackend.properties === undefined
+                        ? latestNode.properties
+                        : updatedFromBackend.properties;
+                    Object.assign(latestNode, updatedFromBackend, {
+                      content: localContent,
+                      properties: localProperties
+                    });
                     this.nodesSet(nodeId, latestNode);
                   }
                 } catch (updateError) {
