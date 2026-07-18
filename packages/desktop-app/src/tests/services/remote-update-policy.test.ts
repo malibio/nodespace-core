@@ -73,14 +73,46 @@ describe('decideRemoteUpdate', () => {
     expect(decision.apply).toBe(false);
   });
 
-  // ADR-026's C5 extension: the daemon suppresses a connection's own write echoes before
-  // they ever reach WatchNodes, so every database-sourced event reaching this
-  // policy is guaranteed to be a genuine foreign write — always skip with a
-  // conflict notification, never attempt to classify it as an own-echo.
-  it('always notifies a foreign write to an actively-edited node (no own-echo classification)', () => {
+  // ADR-026 C5 extension: the daemon suppresses a connection's own write
+  // echoes before they ever reach WatchNodes, so a database-sourced event
+  // from the SAME connection can no longer reach this policy — but a
+  // genuinely newer foreign write (a different window, or a sync-service
+  // pull) still must always notify.
+  it('notifies a genuinely newer foreign write to an actively-edited node', () => {
     const decision = decideRemoteUpdate(
       makeNode({ content: 'bob wrote this', version: 9 }),
       makeNode({ content: 'alice typed this', version: 3 }),
+      databaseSource,
+      { isFocused: true, hasPending: false }
+    );
+    expect(decision.apply).toBe(false);
+    if (decision.apply) throw new Error('unreachable');
+    expect(decision.notifyConflict).toBe(true);
+  });
+
+  it('does not notify for a stale broadcast whose version is not ahead of the local version', () => {
+    // The daemon-side echo suppression covers same-connection writes, but not
+    // a stale sync-service replay (nodespace-sync writes in-process via
+    // NodeService::with_client("sync-service"), a separate path — see this
+    // module's doc comment). A broadcast whose version is not strictly ahead
+    // of the local optimistic version can still arrive from that path and
+    // must be dropped silently instead of raising a phantom conflict
+    // notification.
+    const decision = decideRemoteUpdate(
+      makeNode({ content: 'hell', version: 4 }),
+      makeNode({ content: 'hello world', version: 5 }),
+      databaseSource,
+      { isFocused: true, hasPending: false }
+    );
+    expect(decision.apply).toBe(false);
+    if (decision.apply) throw new Error('unreachable');
+    expect(decision.notifyConflict).toBe(false);
+  });
+
+  it('treats an incoming node with no numeric version as conservatively notifying', () => {
+    const decision = decideRemoteUpdate(
+      makeNode({ content: 'hello world', version: undefined as unknown as number }),
+      makeNode({ content: 'hello world', version: 3 }),
       databaseSource,
       { isFocused: true, hasPending: false }
     );

@@ -95,6 +95,30 @@ function forwardToFile(level: LogLevel, message: string, data?: unknown): void {
 // NS_FRONTEND_LOG is set (before the first cross-window sync events arrive).
 forwardToFile('info', '[logger] frontend-console capture initialised');
 
+// Global error capture. Thrown exceptions — a Svelte runtime error (e.g. a keyed
+// `{#each}` duplicate-key crash), a synchronous throw, or an unhandled promise
+// rejection — never pass through the logger methods, so without this they land
+// only in the webview devtools console and are invisible to file-based
+// diagnosis. Forward them to the same NDJSON channel. Gated on the channel being
+// enabled (NS_FRONTEND_LOG) inside `forwardToFile`, so normal builds pay nothing.
+if (typeof window !== 'undefined' && !isTest) {
+  window.addEventListener('error', (e) => {
+    const err = e.error as Error | undefined;
+    forwardToFile('error', `[uncaught] ${e.message}`, {
+      filename: e.filename,
+      lineno: e.lineno,
+      colno: e.colno,
+      stack: err?.stack
+    });
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason as { message?: string; stack?: string } | undefined;
+    forwardToFile('error', `[unhandledrejection] ${reason?.message ?? String(e.reason)}`, {
+      stack: reason?.stack
+    });
+  });
+}
+
 export class Logger {
   private config: LoggerConfig;
 

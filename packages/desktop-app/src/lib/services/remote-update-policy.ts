@@ -16,7 +16,7 @@
  * can disagree between two reads within the same guard) and passes them in,
  * so this module stays reactivity-free and independently testable.
  *
- * Own-write echo classification (ADR-026's C5 extension): earlier versions of
+ * Own-write echo classification (ADR-026 C5 extension): earlier versions of
  * this module guessed whether an incoming broadcast was this client's own
  * write looping back, by comparing its content against the last content this
  * client sent (`isPlausibleOwnEcho`). That guess was inherently racy across an
@@ -26,8 +26,19 @@
  * suppresses a connection's own write echoes before they ever reach
  * `WatchNodes` (`packages/daemon/src/services/node_service.rs`,
  * `x-ns-client-id`-scoped `NodeService::with_client()`), so a `database`-
- * sourced event reaching this module is now guaranteed to be a genuine
- * foreign write. No content comparison is needed or performed here anymore.
+ * sourced event reaching this module can no longer be this client's own
+ * echo of a write made through the SAME gRPC connection. No content
+ * comparison is needed or performed here anymore.
+ *
+ * Sync-service echoes are a separate case the daemon-side fix above does not
+ * cover: `nodespace-sync` writes to the local DB in-process via
+ * `NodeService::with_client("sync-service")` (ADR-027), not over the gRPC
+ * connection the desktop app's `x-ns-client-id` header scopes — so a stale
+ * sync-service replay (e.g. during reconnect reconciliation) can still reach
+ * this module as a `database`-sourced event whose version is not ahead of
+ * the local optimistic version. The `incomingIsNewer` check below guards
+ * against exactly that: only a version genuinely ahead of local is treated
+ * as a real conflict.
  */
 
 import type { Node } from '$lib/types';
@@ -53,9 +64,12 @@ export type RemoteUpdateDecision =
  * apply the incoming node to the store.
  *
  * A `database`-sourced update to a node the user is actively editing is
- * never applied — the daemon's echo suppression (ADR-026's C5 extension) guarantees
- * any such event is a genuine foreign write, so the optimistic local content
- * is protected and a conflict notification is always raised.
+ * never applied — the optimistic local content is always protected. A
+ * conflict notification is raised only when the incoming version is
+ * strictly newer than the local version (a genuine foreign write); a
+ * same-or-older version is a stale broadcast (most commonly a sync-service
+ * replay — same-connection echoes are now suppressed daemon-side, see this
+ * module's doc comment) and must not raise a phantom notification.
  *
  * ai-chat nodes are exempt from the skip — see `shouldSkipStaleAiChatUpdate`
  * for that separate guard (message-count heuristic, not editing state).
@@ -73,7 +87,13 @@ export function decideRemoteUpdate(
     return { apply: true };
   }
 
-  return { apply: false, notifyConflict: true };
+  // Missing/uncomparable versions fall back to notifying (conservative).
+  const incomingIsNewer =
+    typeof incoming.version !== 'number' ||
+    typeof existingNode.version !== 'number' ||
+    incoming.version > existingNode.version;
+
+  return { apply: false, notifyConflict: incomingIsNewer };
 }
 
 /**
