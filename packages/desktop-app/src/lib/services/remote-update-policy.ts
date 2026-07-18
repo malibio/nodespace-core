@@ -87,12 +87,29 @@ export function decideRemoteUpdate(
   const stashVersion =
     typeof incoming.version === 'number' && isPlausibleOwnEcho(incoming, lastSentContent);
 
+  // A database broadcast whose version is NOT ahead of our optimistic local
+  // version is a *stale echo of one of our own earlier writes* looping back
+  // through the daemon — during rapid typing, keystrokes push faster than the
+  // broadcast round-trips, so the echo for an earlier keystroke arrives after
+  // we've typed more and its content no longer matches `lastSentContent`. It is
+  // never a foreign writer getting ahead of us: the daemon assigns a strictly
+  // higher version to any change it applies, so a genuine remote edit always
+  // arrives with a version past ours. Only a strictly-newer version we did not
+  // author (and whose content isn't our own echo) is a real conflict — so a
+  // stale self-echo must not raise a phantom notification on every keystroke.
+  // Missing/uncomparable versions fall back to notifying (the prior behavior).
+  const incomingIsNewer =
+    typeof incoming.version !== 'number' ||
+    typeof existingNode.version !== 'number' ||
+    incoming.version > existingNode.version;
+
   return {
     apply: false,
     stashVersion,
-    // A foreign write (not our own echo) to an actively-edited node is
-    // skipped to protect the optimistic text, but must not be silent.
-    notifyConflict: !stashVersion
+    // A foreign write (not our own echo, and genuinely newer) to an
+    // actively-edited node is skipped to protect the optimistic text, but must
+    // not be silent.
+    notifyConflict: !stashVersion && incomingIsNewer
   };
 }
 
