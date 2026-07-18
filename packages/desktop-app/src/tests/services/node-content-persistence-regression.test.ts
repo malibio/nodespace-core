@@ -151,8 +151,8 @@ describe('Node content persistence regression (#1307)', () => {
     // Regression for a "conflicted with a remote change" toast firing on
     // effectively every keystroke. Root cause: reactive-node-service.svelte's
     // updateNodeContent() always bundles the CURRENT (unchanged) nodeType
-    // alongside content on every keystroke (issue #424 fix, to keep a
-    // slash-command type conversion from racing a content update). But
+    // alongside content on every keystroke, to keep a slash-command type
+    // conversion from racing a content update. But
     // isNodeTypeChange used to be `'nodeType' in changes` — mere presence,
     // not a value comparison — so that redundant nodeType forced
     // mode: 'immediate' on every keystroke instead of 'debounce'. Immediate
@@ -236,5 +236,51 @@ describe('Node content persistence regression (#1307)', () => {
     expect(store.getNode(nodeId)?.content).toBe(userTyped);
 
     await store.flushAllPendingSaves(3000);
+  }, 5000);
+
+  it("a properties-only update syncs the backend's flattened top-level fields back into the local node", async () => {
+    // Regression for the ai-chat viewer getting stuck on "Choose a model to
+    // get started" after selecting a model. Root cause: this store's
+    // updateNode() only copied `.version` from the backend's response back
+    // into the local node. The optimistic write sends the un-flattened
+    // `{ properties: { provider, model } }` shape (matching storage), but
+    // `node_to_typed_value` on the backend promotes type-specific fields like
+    // ai-chat's provider/model to genuinely top-level fields on its response.
+    // Viewers read those top-level fields directly (e.g. `node?.provider`),
+    // so without syncing the full response back, they stayed undefined
+    // forever even though the write succeeded server-side.
+    const nodeId = 'persist-regression-properties-flatten';
+    const initialNode = makeNode(nodeId, '', 1);
+    // Mark the node persisted so updateNode() takes the UPDATE path (not
+    // CREATE) — setNode() only marks a node persisted for a database-sourced
+    // load when the store has already seen it once (see setNode's
+    // existingNode guard), so this simulates the node having been loaded on
+    // a prior sync rather than freshly created in this test.
+    store.setNode(initialNode, dbSource);
+    store.setNode(initialNode, dbSource);
+
+    vi.spyOn(backendAdapter, 'updateNode').mockResolvedValueOnce({
+      ...initialNode,
+      version: 2,
+      properties: { provider: 'native', model: 'gemma-4-e4b-q4km' },
+      // Simulates node_to_typed_value's flattening: promoted to top-level,
+      // as the backend does for ai-chat's provider/model, task's
+      // status/priority, etc.
+      provider: 'native',
+      model: 'gemma-4-e4b-q4km'
+    } as unknown as Node);
+
+    store.updateNode(
+      nodeId,
+      { properties: { provider: 'native', model: 'gemma-4-e4b-q4km' } },
+      viewerSource
+    );
+
+    await store.flushAllPendingSaves(3000);
+
+    const stored = store.getNode(nodeId) as Node & { provider?: string; model?: string };
+    expect(stored?.version).toBe(2);
+    expect(stored?.provider).toBe('native');
+    expect(stored?.model).toBe('gemma-4-e4b-q4km');
   }, 5000);
 });
