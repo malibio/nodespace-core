@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use nodespace_proto::{
     AgentSessionServiceClient, DatabaseServiceClient, EmbeddingsServiceClient, ImportServiceClient,
-    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient, DATABASE_ID_HEADER,
+    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient, CLIENT_ID_HEADER,
+    DATABASE_ID_HEADER,
 };
 use tokio::sync::{watch, RwLock};
 use tonic::metadata::{Ascii, MetadataValue};
@@ -20,8 +21,8 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::service::Interceptor;
 use tonic::transport::Channel;
 
-/// Stamps the ADR-053 `x-ns-database-id` routing header on every outgoing
-/// request so the daemon routes it to a specific local database.
+/// Stamps the ADR-053 `x-ns-database-id` routing header and the ADR-026's C5-extension
+/// `x-ns-client-id` identity header on every outgoing request.
 ///
 /// Concrete (not a closure) so the intercepted client types stay nameable and
 /// aliasable — see [`NodeClient`] and friends. `database_id: None` stamps
@@ -29,25 +30,41 @@ use tonic::transport::Channel;
 /// is applied uniformly so a routed client's type is the same whether or not a
 /// database is currently selected. Mirrors the CLI's interceptor of the same
 /// name.
+///
+/// `client_id` is always `Some` in production — generated once per
+/// `GrpcClient` (i.e. once per app process/window) in [`GrpcClient::from_channel`]
+/// and carried through every interceptor rebuild (database switches rebuild
+/// the routed clients but must keep the SAME client id, or the daemon would
+/// stop recognizing this window's own writes on echo suppression after every
+/// switch). Stamping it lets the daemon scope this connection's writes via
+/// `NodeService::with_client()` and drop their echo on this connection's own
+/// `WatchNodes` stream (see `watcher.rs`) — see ADR-026 C5.
 #[derive(Clone)]
 pub struct DatabaseIdInterceptor {
     // Some(id) → stamp header on every request; None → stamp nothing (daemon
     // uses its default database).
     database_id: Option<MetadataValue<Ascii>>,
+    client_id: MetadataValue<Ascii>,
 }
 
 impl DatabaseIdInterceptor {
-    /// No routing header — the daemon serves its default database.
-    pub fn none() -> Self {
-        Self { database_id: None }
+    /// No routing header — the daemon serves its default database. Still
+    /// stamps `client_id` so writes made before any database is selected are
+    /// still attributable.
+    pub fn none(client_id: MetadataValue<Ascii>) -> Self {
+        Self {
+            database_id: None,
+            client_id,
+        }
     }
 
-    /// Stamp `x-ns-database-id: <id>` on every request when `id` is `Some`.
+    /// Stamp `x-ns-database-id: <id>` on every request when `id` is `Some`,
+    /// and `x-ns-client-id: <client_id>` unconditionally.
     /// `id` must be an already resolved registry identifier (ULID); the daemon
     /// resolves the header as an id only, never a name. An id that is not a
     /// valid gRPC header value falls back to no routing (default database)
     /// rather than poisoning every subsequent request.
-    pub fn for_id(id: Option<&str>) -> Self {
+    pub fn for_id(id: Option<&str>, client_id: MetadataValue<Ascii>) -> Self {
         let database_id = id.and_then(|id| match MetadataValue::try_from(id) {
             Ok(value) => Some(value),
             Err(_) => {
@@ -62,7 +79,10 @@ impl DatabaseIdInterceptor {
                 None
             }
         });
-        Self { database_id }
+        Self {
+            database_id,
+            client_id,
+        }
     }
 }
 
@@ -71,8 +91,18 @@ impl Interceptor for DatabaseIdInterceptor {
         if let Some(id) = &self.database_id {
             req.metadata_mut().insert(DATABASE_ID_HEADER, id.clone());
         }
+        req.metadata_mut()
+            .insert(CLIENT_ID_HEADER, self.client_id.clone());
         Ok(req)
     }
+}
+
+/// Generate a fresh client id for this `GrpcClient` (one per app
+/// process/window, per ADR-026's C5 extension). A UUID is always valid ASCII, so this
+/// cannot fail in practice.
+fn generate_client_id() -> MetadataValue<Ascii> {
+    MetadataValue::try_from(uuid::Uuid::new_v4().to_string())
+        .expect("uuid v4 string is always a valid ascii metadata value")
 }
 
 /// A channel wrapped so every request carries the database routing header.
@@ -103,6 +133,13 @@ struct GrpcClientInner {
     /// daemon's default database. Distinct from the daemon-wide default set via
     /// `DatabaseService::SetDefault`.
     active_database_id: Option<String>,
+    /// This process/window's stable identity (ADR-026's C5 extension), generated once in
+    /// [`GrpcClient::from_channel`] and re-stamped by every interceptor rebuild
+    /// in [`GrpcClient::set_active_database`] — it must never change for the
+    /// lifetime of this `GrpcClient`, or the daemon would stop recognizing this
+    /// window's own writes on its `WatchNodes` echo-suppression check after a
+    /// database switch.
+    client_id: MetadataValue<Ascii>,
     /// Underlying transport channel — held so Pro-tier services can
     /// ride the same h2 connection via `GrpcClient::channel()`. One
     /// channel, multiple service surfaces. Opening a parallel channel
@@ -160,10 +197,14 @@ impl GrpcClient {
     /// Shared by [`connect`] and [`connect_lazy`] so the set of service clients
     /// stays in sync as new services are added. `Channel` is platform-agnostic.
     fn from_channel(channel: Channel) -> Self {
+        // One stable id for this GrpcClient's whole lifetime (ADR-026's C5 extension) —
+        // generated once here, never regenerated on a database switch.
+        let client_id = generate_client_id();
         // No database selected initially → the routed clients carry an empty
         // interceptor and requests fall back to the daemon's default database,
-        // exactly as before ADR-053 client routing existed.
-        let interceptor = DatabaseIdInterceptor::none();
+        // exactly as before ADR-053 client routing existed. The client-id
+        // header is still stamped.
+        let interceptor = DatabaseIdInterceptor::none(client_id.clone());
         let inner = GrpcClientInner {
             node: NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
             import: ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
@@ -179,6 +220,7 @@ impl GrpcClient {
             local_agent: LocalAgentServiceClient::new(channel.clone()),
             database_service: DatabaseServiceClient::new(channel.clone()),
             active_database_id: None,
+            client_id,
             channel,
         };
         let (db_generation, _) = watch::channel(0u64);
@@ -269,7 +311,7 @@ impl GrpcClient {
             if inner.active_database_id == id {
                 return;
             }
-            let interceptor = DatabaseIdInterceptor::for_id(id.as_deref());
+            let interceptor = DatabaseIdInterceptor::for_id(id.as_deref(), inner.client_id.clone());
             let channel = inner.channel.clone();
             inner.node = NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone());
             inner.import =

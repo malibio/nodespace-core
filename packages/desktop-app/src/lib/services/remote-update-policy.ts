@@ -2,11 +2,11 @@
  * Remote-update policy for SharedNodeStore.
  *
  * Extracted from the skip-while-editing guard inline in `setNode` /
- * `batchSetNodes`. A daemon-broadcast
- * event (`source.type === 'database'`) arriving for a node the user is
- * actively editing — or has unsaved local changes pending — would otherwise
- * overwrite the optimistic store with the *older* server-confirmed state.
- * The optimistic state is authoritative until persistence settles.
+ * `batchSetNodes`. A daemon-broadcast event (`source.type === 'database'`)
+ * arriving for a node the user is actively editing — or has unsaved local
+ * changes pending — would otherwise overwrite the optimistic store with the
+ * *older* server-confirmed state. The optimistic state is authoritative
+ * until persistence settles.
  *
  * `decideRemoteUpdate` is a pure function: it takes the incoming node, the
  * existing local node (if any), the update source, and the caller's
@@ -15,6 +15,19 @@
  * caller computes `isFocused`/`hasPending` once (each is a live read that
  * can disagree between two reads within the same guard) and passes them in,
  * so this module stays reactivity-free and independently testable.
+ *
+ * Own-write echo classification (ADR-026's C5 extension): earlier versions of
+ * this module guessed whether an incoming broadcast was this client's own
+ * write looping back, by comparing its content against the last content this
+ * client sent (`isPlausibleOwnEcho`). That guess was inherently racy across an
+ * async network round-trip and repeatedly produced false-positive/false-
+ * negative conflict toasts — the exact failure mode ADR-026's C5 amendment
+ * already rejected for a prior client-side heuristic. The daemon now
+ * suppresses a connection's own write echoes before they ever reach
+ * `WatchNodes` (`packages/daemon/src/services/node_service.rs`,
+ * `x-ns-client-id`-scoped `NodeService::with_client()`), so a `database`-
+ * sourced event reaching this module is now guaranteed to be a genuine
+ * foreign write. No content comparison is needed or performed here anymore.
  */
 
 import type { Node } from '$lib/types';
@@ -29,43 +42,20 @@ export type RemoteUpdateDecision =
   | { apply: true }
   | {
       apply: false;
-      /** Stash `incoming.version` as the server-confirmed version for the next OCC write. */
-      stashVersion: boolean;
       /** Raise a version-mismatch conflict notification (foreign write to an actively-edited node). */
       notifyConflict: boolean;
     };
 
 /**
- * Decide whether an incoming database broadcast is plausibly an echo of
- * *this client's own* most-recent write. Used to decide whether to stash
- * the broadcast's `node.version` for the next OCC write.
- *
- * Returns `true` only when `incoming.content` matches the content this
- * client last sent to the backend for this node. That covers the canonical
- * case the guard exists for: our own write looping back through the daemon
- * broadcast.
- *
- * Returns `false` for everything else, including any incoming content we
- * have no last-sent record for. This is deliberately conservative — false
- * negatives just defer to OCC (the next UpdateNode RPC carries the local
- * `node.version` and the backend's OCC surfaces any conflict), while false
- * positives would silently overwrite a foreign writer's change. An earlier
- * `local.startsWith(incoming)` heuristic had exactly that false-positive
- * shape: alice with optimistic `"hello world"` + bob writes `"hello"` →
- * bob's broadcast falsely classified as own-echo → bob's version stashed →
- * alice's next RPC overwrites bob.
- */
-export function isPlausibleOwnEcho(incoming: Node, lastSentContent: string | undefined): boolean {
-  if (lastSentContent === undefined) return false;
-  return lastSentContent === (incoming.content ?? '');
-}
-
-/**
  * Core remote-update policy. Given the incoming node, the existing local
  * node (undefined if this id has never been seen locally), the update
- * source, the caller's editing state, and the content this client last
- * persisted for the node (for the own-echo check), decide whether the
- * caller should apply the incoming node to the store.
+ * source, and the caller's editing state, decide whether the caller should
+ * apply the incoming node to the store.
+ *
+ * A `database`-sourced update to a node the user is actively editing is
+ * never applied — the daemon's echo suppression (ADR-026's C5 extension) guarantees
+ * any such event is a genuine foreign write, so the optimistic local content
+ * is protected and a conflict notification is always raised.
  *
  * ai-chat nodes are exempt from the skip — see `shouldSkipStaleAiChatUpdate`
  * for that separate guard (message-count heuristic, not editing state).
@@ -74,8 +64,7 @@ export function decideRemoteUpdate(
   incoming: Node,
   existingNode: Node | undefined,
   source: UpdateSource,
-  editingState: EditingState,
-  lastSentContent: string | undefined
+  editingState: EditingState
 ): RemoteUpdateDecision {
   const isDatabaseSource = source.type === 'database';
   const isActivelyEdited = editingState.isFocused || editingState.hasPending;
@@ -84,16 +73,7 @@ export function decideRemoteUpdate(
     return { apply: true };
   }
 
-  const stashVersion =
-    typeof incoming.version === 'number' && isPlausibleOwnEcho(incoming, lastSentContent);
-
-  return {
-    apply: false,
-    stashVersion,
-    // A foreign write (not our own echo) to an actively-edited node is
-    // skipped to protect the optimistic text, but must not be silent.
-    notifyConflict: !stashVersion
-  };
+  return { apply: false, notifyConflict: true };
 }
 
 /**
