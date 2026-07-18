@@ -145,102 +145,33 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     const after = store.getNode('n6');
     expect(after?.content).toBe('local-newer'); // content preserved
     expect(after?.version).toBe(3); // local version NOT touched
-    // The server-confirmed version (7) is stashed in a non-reactive cache
-    // and consumed by the persistence path; not observable via getNode.
   });
 
-  it('does NOT stash the server-confirmed version when the broadcast looks like a foreign write (preserves OCC)', () => {
-    // The guard's whole point is to avoid clobbering local optimistic
-    // content with the server-confirmed snapshot. But the broadcast
-    // mechanism doesn't distinguish "my-own-write echoing back" from
-    // "another client's write to the same node arriving via cloud
-    // round-trip". For the latter case, blindly stashing the foreign
-    // writer's version would defeat OCC: alice's next UpdateNode would
-    // carry bob's version against alice's content and the backend would
-    // silently overwrite bob's change.
-    //
-    // The "is plausibly an own echo" heuristic resolves this: stash only
-    // when `incoming.content` matches this client's recorded last-sent
-    // content for the node. For any other broadcast (including the
-    // alice="hello world" + bob="hello" prefix-compatible race the
-    // earlier startsWith heuristic mis-classified), treat as foreign.
+  it('never stashes a broadcast version, preserving OCC for every database-sourced event (ADR-026 C5 extension)', () => {
+    // Before the ADR-026 C5 extension, the guard tried to distinguish "my own write
+    // echoing back" from "a different client's write" by comparing the
+    // broadcast's content against what this client last sent, and stashed
+    // the broadcast version only for a plausible own-echo. The daemon now
+    // suppresses a connection's own write echoes before they ever reach
+    // WatchNodes (`packages/daemon/src/services/node_service.rs`), so every
+    // database-sourced broadcast the frontend receives is guaranteed
+    // foreign — there is no case left where stashing a broadcast version is
+    // safe, and the guard never does so. The next UpdateNode always carries
+    // this client's own local version, so a real conflict surfaces via OCC
+    // instead of silently overwriting the foreign write.
     const optimistic = makeNode('foreign', 'alice typed this', 3);
     store.setNode(optimistic, viewerSource);
     focusManager.focusNode('foreign', 'default');
-    // Alice last persisted "alice typed this" to backend.
-    store.__test_setLastPersistedContent('foreign', 'alice typed this');
 
-    // Foreign-looking broadcast (different writer altered the node).
     const foreignBroadcast = makeNode('foreign', 'bob wrote something else', 9);
     store.setNode(foreignBroadcast, databaseSource);
 
     // Local content is preserved (guard still fired — we keep optimistic).
     expect(store.getNode('foreign')?.content).toBe('alice typed this');
     expect(store.getNode('foreign')?.version).toBe(3);
-    // Foreign version was NOT stashed: next UpdateNode uses local v3,
-    // backend has v9, OCC conflict surfaces.
-    expect(store.peekServerConfirmedVersion('foreign')).toBeUndefined();
-  });
-
-  it('does NOT mis-classify a prefix-compatible foreign write as an own-echo (regression for the startsWith hole)', () => {
-    // Previously the heuristic was `localContent.startsWith(incomingContent)`.
-    // That would mis-classify the following case as own-echo and stash
-    // bob's version, defeating OCC for bob's change:
-    //
-    //   alice's optimistic state: "hello world"
-    //   bob writes (in a parallel window): "hello"
-    //   bob's broadcast hits alice with content="hello", version=v_bob
-    //
-    // `"hello world".startsWith("hello")` is true, so the old code
-    // stashed v_bob. Next UpdateNode from alice would have carried
-    // v_bob against "hello world" and silently overwritten bob.
-    //
-    // The current heuristic compares against this client's recorded
-    // last-sent content. Alice never sent "hello" — her last persisted
-    // value (if any) is whatever she actually persisted. So bob's
-    // broadcast is correctly classified as foreign.
-    const aliceOptimistic = makeNode('shared', 'hello world', 5);
-    store.setNode(aliceOptimistic, viewerSource);
-    focusManager.focusNode('shared', 'default');
-    // Alice has never persisted "hello" — only "hello world" via her
-    // own typing. (For the regression check the exact prior value
-    // doesn't matter — what matters is that it ISN'T "hello".)
-    store.__test_setLastPersistedContent('shared', 'hello world');
-
-    const bobsBroadcast = makeNode('shared', 'hello', 7);
-    store.setNode(bobsBroadcast, databaseSource);
-
-    // Bob's version must NOT be stashed.
-    expect(store.peekServerConfirmedVersion('shared')).toBeUndefined();
-    // Alice's content and version are preserved (no clobber).
-    expect(store.getNode('shared')?.content).toBe('hello world');
-    expect(store.getNode('shared')?.version).toBe(5);
-  });
-
-  it('persistence path uses the stashed server-confirmed version for OCC (not the stale local node.version)', () => {
-    // Contract test for the cache's read site. The actual persistence
-    // closure inside SharedNodeStore calls `computeOccVersionForUpdate`,
-    // which routes through the same `serverConfirmedVersions` cache the
-    // skip-while-editing guard populates. Without this test, a future
-    // refactor that drops that read would silently reintroduce the
-    // OCC-defeat from the typing-corruption bug — the unit tests above only
-    // assert cache *population*, not *consumption*.
-    store.setNode(makeNode('persist', 'abc', 1), databaseSource);
-    // Simulate that the local client just persisted 'abc' (own echo
-    // gate). Without this, the guard correctly treats the next
-    // broadcast as foreign and does NOT stash the version.
-    store.__test_setLastPersistedContent('persist', 'abc');
-
-    // Before the guard fires, the OCC version is the local one.
-    expect(store.computeOccVersionForUpdate('persist')).toBe(1);
-
-    // Guard fires for an own-echo broadcast (content matches what we sent).
-    focusManager.focusNode('persist', 'default');
-    store.setNode(makeNode('persist', 'abc', 5), databaseSource);
-
-    // Local .version unchanged, but the persistence path now picks 5.
-    expect(store.getNode('persist')?.version).toBe(1);
-    expect(store.computeOccVersionForUpdate('persist')).toBe(5);
+    // The next UpdateNode still uses the local version — an OCC conflict
+    // against the backend's v9 will surface it rather than silently losing it.
+    expect(store.computeOccVersionForUpdate('foreign')).toBe(3);
   });
 
   it('preserves insertAfterNodeId when structureTree agrees on parent (sync#77)', () => {
@@ -271,14 +202,10 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     structureTree.clear();
   });
 
-  it('clears the server-confirmed-version cache when a non-guarded setNode applies (no shadowing)', () => {
-    // Seed via the database path so no persistence is scheduled — we want
-    // to exercise just the focus/clear-cache flow without a pending op
-    // tripping the guard.
+  it('applies the next database event normally once the user blurs (guard only fires while actively editing)', () => {
     store.setNode(makeNode('n7', 'seed', 3), databaseSource);
 
-    // Focus the node so the next database event hits the guard and stashes
-    // its version in the non-reactive cache.
+    // Focus the node so the next database event hits the guard.
     focusManager.focusNode('n7', 'default');
     store.setNode(makeNode('n7', 'older', 9), databaseSource);
     // Verify the local view didn't change (guard fired).
@@ -286,9 +213,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     expect(store.getNode('n7')?.version).toBe(3);
 
     // User blurs. Subsequent database event no longer matches the guard;
-    // the normal setNode path runs, writes the new state, and MUST clear
-    // the cache so a stale stashed version can't shadow it on the next
-    // persistence.
+    // the normal setNode path runs and writes the new state.
     focusManager.clearEditing();
     store.setNode(makeNode('n7', 'cloud-current', 15), databaseSource);
 
@@ -365,9 +290,8 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     it('raises a version-mismatch notification when a foreign broadcast hits a focused node', () => {
       store.setNode(makeNode('shared', 'hello world', 5), viewerSource);
       focusManager.focusNode('shared', 'default');
-      store.__test_setLastPersistedContent('shared', 'hello world');
 
-      // Bob's foreign write (not a prefix/echo of alice's optimistic content).
+      // Bob's foreign write.
       store.setNode(makeNode('shared', 'totally different text', 7), databaseSource);
 
       expect(versionMismatchFor('shared')).toHaveLength(1);
@@ -375,22 +299,9 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(store.getNode('shared')?.content).toBe('hello world');
     });
 
-    it('does NOT notify for an own-echo broadcast', () => {
-      store.setNode(makeNode('echo', 'hello world', 5), viewerSource);
-      focusManager.focusNode('echo', 'default');
-      // isPlausibleOwnEcho is true iff the incoming content equals our last-sent
-      // content — the daemon echoing back exactly what we persisted.
-      store.__test_setLastPersistedContent('echo', 'hello world');
-
-      store.setNode(makeNode('echo', 'hello world', 6), databaseSource);
-
-      expect(versionMismatchFor('echo')).toHaveLength(0);
-    });
-
     it('dedupes repeated foreign broadcasts for the same node', () => {
       store.setNode(makeNode('dup', 'hello world', 5), viewerSource);
       focusManager.focusNode('dup', 'default');
-      store.__test_setLastPersistedContent('dup', 'hello world');
 
       store.setNode(makeNode('dup', 'foreign one', 7), databaseSource);
       store.setNode(makeNode('dup', 'foreign two', 8), databaseSource);
@@ -398,32 +309,28 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(versionMismatchFor('dup')).toHaveLength(1);
     });
 
-    // Regression for the "conflict toast on effectively every edit" bug: the
-    // own-echo test above pre-seeds lastPersistedContent through the __test_
-    // backdoor, so it never exercised the real cold path. Here a node is
-    // hydrated from the backend (database source) with NO backdoor — the accept
-    // path must prime the own-echo baseline itself, so the daemon's first echo
-    // after the subscription opens is not misread as a foreign write.
-    it('does NOT notify on a load-echo of a backend-hydrated node (real path, no backdoor)', () => {
-      // Node arrives from the backend/daemon; this alone must prime the baseline.
+    // ADR-026's C5 extension: the daemon suppresses a connection's own write echoes
+    // before they ever reach WatchNodes, so the frontend never receives a
+    // database-sourced broadcast that is its own echo — there is no "own
+    // echo, don't notify" case left to test here. Every database-sourced
+    // broadcast reaching an actively-edited node is a genuine foreign write
+    // and always raises the conflict notification, including one whose
+    // content happens to be identical to what the client last saw (the old
+    // content-comparison heuristic would have misclassified this as an echo
+    // — the daemon's authoritative signal does not need content at all).
+    it('still notifies even when the broadcast content is identical to what was last seen (no content-based echo guessing)', () => {
       store.setNode(makeNode('hydrated', 'hello world', 5), databaseSource);
       focusManager.focusNode('hydrated', 'default');
 
-      // The daemon streams the node's current state back after WatchNodes opens.
-      // Before this fix, that echo (no lastPersistedContent entry) fired a
-      // spurious version-mismatch toast even though nothing else changed.
       store.setNode(makeNode('hydrated', 'hello world', 6), databaseSource);
 
-      expect(versionMismatchFor('hydrated')).toHaveLength(0);
+      expect(versionMismatchFor('hydrated')).toHaveLength(1);
     });
 
-    it('still notifies on a genuine foreign write after real-path priming (no backdoor)', () => {
-      // Same real hydration priming as above — no __test_ backdoor.
+    it('notifies on a genuine foreign write to a focused node', () => {
       store.setNode(makeNode('hydrated2', 'hello world', 5), databaseSource);
       focusManager.focusNode('hydrated2', 'default');
 
-      // A DIFFERENT writer changes the node. The primed baseline ('hello world')
-      // does not match the incoming content, so the conflict is still surfaced.
       store.setNode(makeNode('hydrated2', 'a foreign edit', 7), databaseSource);
 
       expect(versionMismatchFor('hydrated2')).toHaveLength(1);

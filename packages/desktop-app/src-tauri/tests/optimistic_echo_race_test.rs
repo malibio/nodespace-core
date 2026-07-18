@@ -5,16 +5,27 @@
 //! unconditionally spawned).
 //!
 //! This is the regression class ADR-048 exists to catch: the frontend
-//! applies an edit optimistically to local state, the daemon later echoes
-//! the authoritative version back over the watch stream, and if that echo
-//! arrives out of order — or carries a value the user has already typed
-//! past — it must not overwrite newer local state. A synchronous mock
-//! cannot reproduce this: the race is between two independent clocks (the
-//! local optimistic write and the daemon's asynchronous echo), and a mock
-//! collapses them onto one tick. Here, `watcher::run` is driven for real
-//! against a real daemon, emitting real `node:updated` events on a real
-//! Tauri event bus (`tauri::test`'s `MockRuntime` — no webview, but a real
-//! `Emitter`/`Listener` implementation, not a stand-in).
+//! applies an edit optimistically to local state, and a broadcast for the
+//! SAME node arrives over the watch stream out of order — or carrying a
+//! value the user has already typed past — and it must not overwrite newer
+//! local state. Before the ADR-026 C5 extension (daemon-side same-origin
+//! echo suppression), a single window's own write always echoed back to
+//! itself, so this scenario was reachable purely from one client's own
+//! traffic. Under the C5 extension the daemon never echoes a connection's
+//! own writes back to it at all, so the only way this race remains reachable
+//! is a genuinely foreign write — a SECOND window/client editing the same
+//! node — landing on the first window's `WatchNodes` stream while its own
+//! newer write is in flight. This file drives exactly that: two independent
+//! `GrpcClient`s (via two `TauriTestApp::connect` calls against the same
+//! daemon, each generating its own stable `x-ns-client-id`), so window A's
+//! watcher observes window B's write as the late/out-of-order echo. A
+//! synchronous mock cannot reproduce this: the race is between two
+//! independent clocks (window A's local optimistic write and window B's
+//! asynchronous broadcast), and a mock collapses them onto one tick. Here,
+//! `watcher::run` is driven for real against a real daemon, emitting real
+//! `node:updated` events on a real Tauri event bus (`tauri::test`'s
+//! `MockRuntime` — no webview, but a real `Emitter`/`Listener`
+//! implementation, not a stand-in).
 //!
 //! `watcher::run` was made generic over `tauri::Runtime` (previously
 //! hardcoded to the real `Wry` runtime, like the rest of the module) SOLELY
@@ -75,47 +86,60 @@ async fn wait_for_updates(
     }
 }
 
-/// The core regression: apply a real update through the command layer, let
-/// the REAL watcher (real gRPC WatchNodes stream, real Tauri event bus)
-/// echo it back, then apply a NEWER update. A late-arriving stale echo for
-/// the first write must not be interpreted by a listener as more current
-/// than the second, already-applied write's own echo — asserted here by
-/// checking that get_node (the authoritative source) reflects the LATEST
-/// content after both echoes have had time to arrive, regardless of
-/// arrival order.
+/// The core regression: window A watches a node while window B (a genuinely
+/// different `GrpcClient`/`x-ns-client-id`, simulating a second desktop
+/// window) makes two real updates through the command layer. Window A's REAL
+/// watcher (real gRPC WatchNodes stream, real Tauri event bus) must observe
+/// both of window B's writes — and by the time both broadcasts have arrived,
+/// the authoritative source (`get_node`) must reflect window B's LATEST
+/// write, regardless of any transient reordering. Before the ADR-026 C5
+/// extension this scenario was reachable with a single client (its own write
+/// echoed back to itself); the daemon now suppresses a connection's own
+/// echoes, so a second, independently-connected client is required to
+/// reproduce it — see this file's module doc for the full rationale.
 #[tokio::test]
 async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     let daemon = SpawnedDaemon::spawn();
     // TauriTestApp::connect briefly acquires and releases CONNECT_MUTEX
-    // internally (it's safe on its own: the GrpcClient's channel is fixed to
+    // internally (it's safe on its own: each GrpcClient's channel is fixed to
     // whatever socket NODESPACED_SOCKET resolved to at connect() time and is
     // immune to later env changes). The guard acquired below is a SEPARATE,
-    // later, longer-held acquisition — for watcher::run, not for this
+    // later, longer-held acquisition — for watcher::run, not for either
     // connect() call.
-    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
-    let state = harness.client_state();
-    let handle = harness.handle();
+    //
+    // Two independent harnesses simulate two desktop windows: each
+    // TauriTestApp::connect call produces its own GrpcClient with its own
+    // stable x-ns-client-id, so the daemon treats window_b's writes as
+    // foreign to window_a's WatchNodes subscription — exactly the same
+    // identity split two real windows would have.
+    let window_a = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
+    let window_b = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
+    let state_a = window_a.client_state();
+    let state_b = window_b.client_state();
+    let handle_a = window_a.handle();
 
-    // The watcher rides the shared GrpcClient's channel (fixed to whatever
-    // socket NODESPACED_SOCKET resolved to at connect() time). Hold this guard
-    // for the watcher's lifetime anyway to serialize this test against every
-    // other test in the binary that touches the process-global NODESPACED_SOCKET
-    // env var while this test's daemon is the intended target.
+    // The watcher rides window A's shared GrpcClient channel (fixed to
+    // whatever socket NODESPACED_SOCKET resolved to at connect() time). Hold
+    // this guard for the watcher's lifetime anyway to serialize this test
+    // against every other test in the binary that touches the process-global
+    // NODESPACED_SOCKET env var while this test's daemon is the intended
+    // target.
     let _socket_guard = hold_connect_mutex_and_socket_env(&daemon).await;
 
     let cancel_token = CancellationToken::new();
     let watcher_handle = tokio::spawn(watcher::run(
-        handle.clone(),
-        (*state).clone(),
+        handle_a.clone(),
+        (*state_a).clone(),
         cancel_token.child_token(),
     ));
-    // Give the watcher a moment to open its WatchNodes stream before the
-    // first write, so its echo isn't lost to a stream that hasn't opened yet.
+    // Give window A's watcher a moment to open its WatchNodes stream before
+    // window B's first write, so the broadcast isn't lost to a stream that
+    // hasn't opened yet.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let received_clone = received.clone();
-    handle.listen("node:updated", move |event| {
+    handle_a.listen("node:updated", move |event| {
         // Payload is `{ "id": "...", "nodeType": ... }` (nodeType omitted for
         // updates) — extract just the id for this test's purposes.
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) {
@@ -125,15 +149,17 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
         }
     });
 
+    // Window B creates and edits the node — window A never writes to it, only
+    // watches.
     let id = uuid::Uuid::new_v4().to_string();
-    create_node(state.clone(), text_input(&id, "v0"))
+    create_node(state_b.clone(), text_input(&id, "v0"))
         .await
         .expect("create_node failed");
 
-    // First write: "optimistic" content the user has already typed past by
-    // the time its echo arrives.
+    // First write: content window A's watcher should see as an earlier
+    // broadcast for this node.
     update_node(
-        state.clone(),
+        state_b.clone(),
         id.clone(),
         1,
         NodeUpdate {
@@ -144,11 +170,10 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     .await
     .expect("first update_node failed");
 
-    // Second, newer write — sequenced correctly (using the confirmed
-    // version from the first commit), simulating the user continuing to
-    // type before the first echo has necessarily arrived.
+    // Second, newer write from window B — sequenced correctly (using the
+    // confirmed version from the first commit).
     update_node(
-        state.clone(),
+        state_b.clone(),
         id.clone(),
         2,
         NodeUpdate {
@@ -159,19 +184,20 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
     .await
     .expect("second update_node failed");
 
-    // Wait for both echoes to arrive over the real watch stream.
+    // Wait for both of window B's writes to arrive on window A's real watch
+    // stream.
     wait_for_updates(&received, &id, 2, Duration::from_secs(10)).await;
 
-    // The authoritative source must reflect the LATEST write — a real
-    // out-of-order or late echo of "stale content" must never win over it.
-    let node = nodespace_app_lib::commands::nodes::get_node(state.clone(), id.clone())
+    // The authoritative source must reflect window B's LATEST write — a real
+    // out-of-order or late broadcast of "stale content" must never win over it.
+    let node = nodespace_app_lib::commands::nodes::get_node(state_a.clone(), id.clone())
         .await
         .expect("get_node failed")
         .expect("node must exist");
     assert_eq!(
         node["content"],
         json!("newest content"),
-        "the newer write must not be clobbered by a late echo of the older write"
+        "the newer write must not be clobbered by a late broadcast of the older write"
     );
     assert_eq!(node["version"], json!(3));
 
@@ -181,26 +207,31 @@ async fn newer_local_write_is_not_clobbered_by_a_late_echo_of_an_older_write() {
 
 /// Confirms the watcher actually delivers `node:created` for a real create,
 /// over the real event bus — the minimal proof that this test file is
-/// exercising the live path (`watcher::run`), not a dead one.
+/// exercising the live path (`watcher::run`), not a dead one. Uses a second,
+/// independent `GrpcClient` (window B) to create the node — since the
+/// ADR-026 C5 extension, a window's own writes are suppressed on its own
+/// `WatchNodes` stream, so watching window A must observe a genuinely
+/// foreign creation for this to prove the live path is wired up.
 #[tokio::test]
 async fn watcher_delivers_a_real_node_created_event() {
     let daemon = SpawnedDaemon::spawn();
-    let harness = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
-    let state = harness.client_state();
-    let handle = harness.handle();
+    let window_a = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
+    let window_b = TauriTestApp::connect(&daemon, DAEMON_CONNECT_TIMEOUT).await;
+    let state_b = window_b.client_state();
+    let handle_a = window_a.handle();
     let _socket_guard = hold_connect_mutex_and_socket_env(&daemon).await;
 
     let cancel_token = CancellationToken::new();
     let watcher_handle = tokio::spawn(watcher::run(
-        handle.clone(),
-        (*state).clone(),
+        handle_a.clone(),
+        (*window_a.client_state()).clone(),
         cancel_token.child_token(),
     ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let created: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let created_clone = created.clone();
-    handle.listen("node:created", move |event| {
+    handle_a.listen("node:created", move |event| {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) {
             if let Some(id) = v["id"].as_str() {
                 created_clone.lock().unwrap().push(id.to_string());
@@ -209,7 +240,7 @@ async fn watcher_delivers_a_real_node_created_event() {
     });
 
     let id = uuid::Uuid::new_v4().to_string();
-    create_node(state.clone(), text_input(&id, "hello"))
+    create_node(state_b.clone(), text_input(&id, "hello"))
         .await
         .expect("create_node failed");
 

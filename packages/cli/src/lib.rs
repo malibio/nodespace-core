@@ -26,6 +26,17 @@ use tonic::transport::Channel;
 /// nothing, letting the daemon fall back to its default database; that variant
 /// is applied uniformly so a client's type is the same whether or not a
 /// database was selected.
+///
+/// Deliberately does NOT stamp `x-ns-client-id` (ADR-026 C5 extension,
+/// implemented in the desktop app's own `DatabaseIdInterceptor` at
+/// `packages/desktop-app/src-tauri/src/services/grpc_client.rs`) — a separate,
+/// same-named struct in a different crate. The CLI is a one-shot process per
+/// invocation that never opens `WatchNodes`, so it has no same-origin echo to
+/// suppress; leaving its writes untagged means they carry no
+/// `source_client_id` and are therefore always visible as foreign writes to
+/// any other subscriber (e.g. a desktop window), which is the correct
+/// behavior. If the CLI ever needs its own stable client id, add it here to
+/// this struct — the desktop-app copy is independent and not shared.
 #[derive(Clone)]
 pub struct DatabaseIdInterceptor {
     // Some(id) → stamp header on every request; None → stamp nothing (daemon

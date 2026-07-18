@@ -17,6 +17,23 @@ pub mod nodespace {
 /// daemon reference one canonical key.
 pub const DATABASE_ID_HEADER: &str = "x-ns-database-id";
 
+/// The gRPC metadata/header key a client sets to identify itself for
+/// same-origin write-echo suppression on the `WatchNodes` stream.
+///
+/// Every write RPC that carries this header is scoped through
+/// `NodeService::with_client(id)`, so its emitted events are stamped with
+/// `source_client_id = id`. `WatchNodes` reads the same header off the
+/// subscribing request and drops any event whose `source_client_id` matches —
+/// the daemon, not the frontend, is the authority on "is this my own echo".
+///
+/// Absent → writes emit no `source_client_id` and are never suppressed on any
+/// stream (unchanged pre-issue-1689 behavior). Each process that opens its own
+/// long-lived connection to the daemon (one desktop-app window, one CLI
+/// invocation, one local-agent session) should generate its own stable id for
+/// the lifetime of that connection — never share one across processes, or a
+/// genuinely foreign writer's events would be suppressed too.
+pub const CLIENT_ID_HEADER: &str = "x-ns-client-id";
+
 pub use nodespace::agent_session_service_client::AgentSessionServiceClient;
 pub use nodespace::agent_session_service_server::AgentSessionServiceServer;
 pub use nodespace::database_service_client::DatabaseServiceClient;

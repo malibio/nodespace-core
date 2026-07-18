@@ -14,7 +14,10 @@
 //!
 //! - Opens a `WatchNodes` stream over the shared [`GrpcClient`], so the stream
 //!   carries the active database's `x-ns-database-id` routing header (ADR-053)
-//!   and rides the same h2 connection as every other data-plane request.
+//!   and rides the same h2 connection as every other data-plane request. The
+//!   same client also stamps `x-ns-client-id` (ADR-026's C5 extension) on every request
+//!   including this one, so the daemon recognizes and drops this window's own
+//!   write echoes before they ever reach this stream — see ADR-026 C5.
 //! - Translates each proto `NodeEvent` to a Tauri event (id + optional
 //!   node_type + originating `database_id`).
 //! - On stream error or disconnection, reconnects with exponential backoff

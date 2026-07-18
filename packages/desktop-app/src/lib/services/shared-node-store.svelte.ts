@@ -589,55 +589,6 @@ export class SharedNodeStore {
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
 
-  // Non-reactive cache of the latest server-confirmed `node.version` per id.
-  // Populated by the skip-while-editing guard in setNode() instead of
-  // mutating the reactive `nodes` Map (which would trigger Svelte re-renders
-  // that remount the textarea and reset selectionStart). Consumed by the
-  // UpdateNode persistence path so the
-  // next OCC carries the freshest version.
-  private serverConfirmedVersions = new Map<string, number>();
-
-  // The content this client most-recently sent to the backend per node.
-  // Set by the UpdateNode/CreateNode persistence paths right before the RPC
-  // fires. Used by `isPlausibleOwnEcho` to recognise true own-write echoes
-  // (broadcast.content matches what WE just sent) rather than guessing
-  // from prefix relationships — the previous `local.startsWith(incoming)`
-  // heuristic mis-classified bob's `"hello"` write as alice's echo when
-  // alice's optimistic state was `"hello world"`.
-  private lastPersistedContent = new Map<string, string>();
-
-  /**
-   * Test-only helper to seed the "content this client last sent" cache
-   * without running the persistence path. Production code populates this
-   * cache from the UpdateNode/CreateNode RPC sites; tests don't have a
-   * backendAdapter mock running and need a way to assert the
-   * `isPlausibleOwnEcho` heuristic's gate on real own-write history.
-   * Marked `__test_` to keep it out of the production call surface.
-   */
-  __test_setLastPersistedContent(nodeId: string, content: string): void {
-    this.lastPersistedContent.set(nodeId, content);
-  }
-
-  /**
-   * Record a node's server-confirmed content as the own-echo baseline that
-   * `isPlausibleOwnEcho` compares against. Called whenever a node is accepted
-   * from the daemon broadcast or hydrated from the backend — i.e. whenever its
-   * content is known to equal the server state.
-   *
-   * Without this baseline, the FIRST broadcast for a node the user then starts
-   * editing has no `lastPersistedContent` entry, so `isPlausibleOwnEcho`
-   * false-classifies that echo (the daemon streaming a node's current state
-   * after the subscription opens) as a foreign write. The skip-while-editing
-   * guard then fires a spurious "Your edit conflicted with a remote change"
-   * notification even though nothing else touched the node. Priming here — not
-   * only after the first local edit — gives that echo a baseline to match. A
-   * genuinely different foreign write still fails the equality check and
-   * correctly surfaces the conflict.
-   */
-  private primeOwnEchoBaseline(node: Node): void {
-    this.lastPersistedContent.set(node.id, node.content ?? '');
-  }
-
   /**
    * Decide whether the persistence path should clear a CREATE's
    * `InsertPosition.After` hint as "stale" before talking to the backend.
@@ -672,32 +623,18 @@ export class SharedNodeStore {
   }
 
   /**
-   * Test-only accessor for the non-reactive server-confirmed-version cache.
-   * Production code consumes this cache via the persistence path
-   * (UpdateNode OCC version selection). Tests use this to assert the cache
-   * was populated/cleared as expected — see
-   * `shared-node-store-skip-while-editing.test.ts`.
-   */
-  peekServerConfirmedVersion(nodeId: string): number | undefined {
-    return this.serverConfirmedVersions.get(nodeId);
-  }
-
-  /**
-   * Returns the version the next UpdateNode RPC would send for this node,
-   * applying the same lookup the persistence closure uses:
+   * Returns the version the next UpdateNode RPC would send for this node.
    *
-   *   serverConfirmedVersions[nodeId] ?? localNode.version ?? 1
-   *
-   * Exposed so the skip-while-editing test suite can lock the contract in
-   * place — a future refactor that drops the cache read at the
-   * persistence call site would fail the corresponding test instead of
-   * silently re-introducing the OCC-defeat bug.
+   * Before ADR-026's C5 extension, this also consulted a server-confirmed-version cache
+   * the skip-while-editing guard populated for a broadcast plausibly
+   * classified as this client's own echo. That classification no longer
+   * exists (the daemon suppresses echoes before they reach the frontend at
+   * all — see `remote-update-policy.ts`), so every database-sourced
+   * broadcast to an actively-edited node is now always treated as foreign:
+   * this simply reads the local node's own version.
    */
   computeOccVersionForUpdate(nodeId: string): number {
-    const confirmed = this.serverConfirmedVersions.get(nodeId);
-    if (typeof confirmed === 'number') return confirmed;
-    const local = this.nodes.get(nodeId);
-    return local?.version ?? 1;
+    return this.nodes.get(nodeId)?.version ?? 1;
   }
 
   // Test error tracking (populated only in NODE_ENV='test', cleared between tests)
@@ -1460,8 +1397,10 @@ export class SharedNodeStore {
     // 'database') arriving for a node the user is actively editing — or has
     // unsaved local changes for — would otherwise overwrite the optimistic
     // store with the *older* server-confirmed state. The optimistic state is
-    // authoritative until persistence settles, so we keep the local content
-    // and stash the server-confirmed version in a non-reactive cache.
+    // authoritative until persistence settles, so we keep the local content.
+    // Every such event is a genuine foreign write: the daemon suppresses this
+    // client's own write echoes before they ever reach here (ADR-026's C5 extension),
+    // so there is nothing left to classify.
     //
     // CRITICAL: do NOT call `this.nodes.set()` or mutate any property of a
     // node inside the reactive Map. Either triggers Svelte re-renders that
@@ -1492,27 +1431,18 @@ export class SharedNodeStore {
       return;
     }
 
-    const decision = decideRemoteUpdate(
-      node,
-      existingNode,
-      source,
-      { isFocused, hasPending },
-      this.lastPersistedContent.get(node.id)
-    );
+    const decision = decideRemoteUpdate(node, existingNode, source, { isFocused, hasPending });
 
     if (!decision.apply) {
       log.debug(
         `setNode: skipping clobber of actively-edited node ${node.id} ` +
           `(focused=${isFocused}, pending=${hasPending})`
       );
-      if (decision.stashVersion && typeof node.version === 'number') {
-        this.serverConfirmedVersions.set(node.id, node.version);
-      }
       if (decision.notifyConflict) {
-        // A FOREIGN write to a node the user is actively editing (not
-        // our own echo). We skip the clobber to protect the optimistic text,
-        // but that must not be silent — raise a version-mismatch
-        // notification (deduped per node) so the conflict is visible.
+        // A foreign write to a node the user is actively editing. We skip
+        // the clobber to protect the optimistic text, but that must not be
+        // silent — raise a version-mismatch notification (deduped per node)
+        // so the conflict is visible.
         const alreadyFlagged = conflictNotifications.notifications.some(
           (n) => n.nodeId === node.id && n.conflictType === 'version-mismatch'
         );
@@ -1538,11 +1468,6 @@ export class SharedNodeStore {
 
     this.nodesSet(node.id, node);
     this.versions.set(node.id, this.getNextVersion(node.id));
-    // A non-guarded setNode means the local store has caught up with the
-    // server (either the user blurred, persistence settled, or the node is
-    // arriving fresh). Drop any stale entry from the skip-while-editing
-    // cache so it doesn't shadow a now-current node.version.
-    this.serverConfirmedVersions.delete(node.id);
     this.notifySubscribers(node.id, node, source);
 
     if (isHierarchyChange) {
@@ -1556,9 +1481,6 @@ export class SharedNodeStore {
     // Mark as persisted if explicitly requested or loaded from backend
     if (shouldMarkAsPersisted) {
       this.persistedNodeIds.add(node.id);
-      // This content came from the server (daemon broadcast / backend hydration),
-      // so record it as the own-echo baseline for the skip-while-editing guard.
-      this.primeOwnEchoBaseline(node);
     }
 
     // Phase 2.4: Persist to database
@@ -1632,16 +1554,7 @@ export class SharedNodeStore {
 
                 try {
                   // Get current version for optimistic concurrency control.
-                  // Routes through `computeOccVersionForUpdate` so the
-                  // skip-while-editing guard (see `setNode`) can stash a
-                  // server-confirmed version without mutating reactive
-                  // state. Test coverage:
-                  // `shared-node-store-skip-while-editing.test.ts`.
                   const currentVersion = this.computeOccVersionForUpdate(nodeId);
-                  // Record the content we are about to send so the next
-                  // database broadcast for this node can be classified as
-                  // an own-echo (see `isPlausibleOwnEcho`).
-                  this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                   const updatedFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
                   // Sync the backend-assigned version into the local node so the next
                   // OCC uses a fresh version rather than the now-stale pre-update value.
@@ -1674,7 +1587,6 @@ export class SharedNodeStore {
                       parentId: this.getParentId(nodeId),
                       insertPosition: null
                     };
-                    this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                     await backendAdapter.createNode(fallbackCreateInput);
                     this.persistedNodeIds.add(nodeId);
                   } else {
@@ -1706,7 +1618,6 @@ export class SharedNodeStore {
                   parentId: this.getParentId(nodeId),
                   insertPosition: nodeWithInsertPos.insertPosition ?? null
                 };
-                this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                 await backendAdapter.createNode(createInput);
                 this.persistedNodeIds.add(nodeId); // Track as persisted
 
@@ -1820,26 +1731,18 @@ export class SharedNodeStore {
       // would overwrite the child's optimistic content.
       const isFocused = focusManager.editingNodeId === node.id;
       const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
-      const decision = decideRemoteUpdate(
-        node,
-        existingNode,
-        source,
-        { isFocused, hasPending },
-        this.lastPersistedContent.get(node.id)
-      );
+      const decision = decideRemoteUpdate(node, existingNode, source, { isFocused, hasPending });
       if (!decision.apply) {
         log.debug(
           `batchSetNodes: skipping clobber of actively-edited node ${node.id} ` +
             `(focused=${isFocused}, pending=${hasPending})`
         );
-        // Stash the server-confirmed version only when the broadcast is plausibly
-        // an echo of THIS client's own write; otherwise leave it empty so the next
-        // RPC uses our local version, conflicts, and surfaces the foreign change
-        // (preserves OCC). Mirrors setNode's decision, but batchSetNodes does not
-        // raise conflict notifications (pre-existing behavior, unchanged here).
-        if (decision.stashVersion && typeof node.version === 'number') {
-          this.serverConfirmedVersions.set(node.id, node.version);
-        }
+        // Every database-sourced event reaching here is a genuine foreign
+        // write (the daemon suppresses this client's own echoes before they
+        // arrive — ADR-026's C5 extension): leave the node's version alone so the next
+        // RPC uses our local version, conflicts, and surfaces the foreign
+        // change (preserves OCC). batchSetNodes does not raise conflict
+        // notifications (pre-existing behavior, unchanged here).
         this.persistedNodeIds.add(node.id);
         continue;
       }
@@ -1862,10 +1765,6 @@ export class SharedNodeStore {
 
       if (shouldMarkAsPersisted) {
         this.persistedNodeIds.add(node.id);
-        // Bulk hydration (initial tree load) flows through here — prime the
-        // own-echo baseline so a subsequently-focused node's first daemon echo
-        // isn't misread as a foreign write (mirrors setNode).
-        this.primeOwnEchoBaseline(node);
       }
     }
 
@@ -2159,8 +2058,6 @@ export class SharedNodeStore {
     this.versions.clear();
     this.pendingUpdates.clear();
     this.persistedNodeIds.clear();
-    this.serverConfirmedVersions.clear();
-    this.lastPersistedContent.clear();
     this.batchedNotifications.clear();
     this.activeBatches.clear();
     this.pendingTreeLoads.clear();
