@@ -88,6 +88,50 @@ impl NodeService {
         let _ = self.embedding_waker.set(waker);
     }
 
+    /// Resolve the *embedding root* of `node_id`: walk up `has_child` parents but
+    /// STOP below a non-embeddable container.
+    ///
+    /// The plain tree root isn't always the embedding unit. A `date` page is a
+    /// non-embeddable container ([`DateNodeBehavior::get_embeddable_content`]
+    /// returns `None` and it does not aggregate its children) — its top-level
+    /// children (the journal bullets) each carry the real content and are their
+    /// OWN embedding roots. Resolving a bullet all the way up to the date meant
+    /// `is_embeddable_type(date)` was false, so the bullet was never queued and
+    /// journal content was never embedded (nor found by search, which resolved
+    /// hits to the out-of-scope date root). Stopping below the container makes the
+    /// top-level child the embedding root, matching the root-aggregate model.
+    pub async fn get_embedding_root_id(
+        &self,
+        node_id: &str,
+    ) -> Result<String, NodeServiceError> {
+        let mut current = node_id.to_string();
+        loop {
+            let parent_id = self
+                .store
+                .get_parent_id(&current)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            let Some(pid) = parent_id else {
+                return Ok(current); // absolute tree root
+            };
+            let parent_embeddable = match self
+                .store
+                .get_node_type(&pid)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+            {
+                Some(pt) => self.is_embeddable_type(&pt),
+                None => false,
+            };
+            if !parent_embeddable {
+                // The parent is a container / non-embeddable node, so `current` is
+                // the highest node that carries its own embeddable content.
+                return Ok(current);
+            }
+            current = pid;
+        }
+    }
+
     /// Queue a node's root for embedding regeneration
     ///
     /// Finds the root of the given node and marks its embedding as stale.
@@ -97,8 +141,9 @@ impl NodeService {
     /// This is a non-blocking operation - errors are logged but don't fail the caller.
     #[cfg(feature = "nlp")]
     pub async fn queue_root_for_embedding(&self, node_id: &str) {
-        // Find the root of this node's tree
-        let root_id = match self.get_root_id(node_id).await {
+        // Find the embedding root of this node (stops below non-embeddable
+        // containers like date pages so journal bullets embed as their own roots).
+        let root_id = match self.get_embedding_root_id(node_id).await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -195,13 +240,24 @@ impl NodeService {
         node_id: &str,
         embedding_waker: Option<&crate::services::EmbeddingWaker>,
     ) {
-        // Find the root of this node's tree using optimized parent ID traversal
+        // Find the EMBEDDING root: walk up `has_child` parents but stop below a
+        // non-embeddable container (e.g. a date page) so a journal bullet is its
+        // own embedding root — mirrors `NodeService::get_embedding_root_id`.
         let root_id = {
             let mut current_id = node_id.to_string();
             loop {
                 match store.get_parent_id(&current_id).await {
-                    Ok(Some(pid)) => current_id = pid,
-                    Ok(None) => break current_id, // Found root
+                    Ok(Some(pid)) => {
+                        let parent_embeddable = match store.get_node_type(&pid).await {
+                            Ok(Some(pt)) => behavior_is_embeddable(behaviors, &pt),
+                            _ => false,
+                        };
+                        if !parent_embeddable {
+                            break current_id; // parent is a container → current is the root
+                        }
+                        current_id = pid;
+                    }
+                    Ok(None) => break current_id, // absolute tree root
                     Err(e) => {
                         tracing::warn!(
                             "Failed to find root for node {} (embedding not queued): {}",

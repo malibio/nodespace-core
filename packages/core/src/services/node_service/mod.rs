@@ -1525,25 +1525,7 @@ impl NodeService {
     /// a probe node with non-empty content. If the behavior still returns `None`,
     /// the type is never embeddable.
     fn is_embeddable_type(&self, node_type: &str) -> bool {
-        let behavior: Arc<dyn crate::behaviors::NodeBehavior> = self
-            .behaviors
-            .get(node_type)
-            .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)));
-        // Probe with non-empty content to see if the behavior can ever return Some
-        let probe = Node {
-            id: "probe".to_string(),
-            node_type: node_type.to_string(),
-            content: "probe content".to_string(),
-            version: 1,
-            properties: serde_json::json!({}),
-            mentions: vec![],
-            mentioned_in: vec![],
-            created_at: chrono::Utc::now(),
-            modified_at: chrono::Utc::now(),
-            title: None,
-            lifecycle_status: "active".to_string(),
-        };
-        behavior.get_embeddable_content(&probe).is_some()
+        behavior_is_embeddable(&self.behaviors, node_type)
     }
 
     /// Create a new NodeService with a client identifier
@@ -1667,6 +1649,34 @@ impl NodeService {
             }
         }
     }
+}
+
+/// Whether `node_type`'s behavior can ever produce embeddable content (probed
+/// with non-empty content). Shared by [`NodeService::is_embeddable_type`] and the
+/// static spawned-task embedding path so both agree which types are embeddable
+/// vs. non-embeddable containers (e.g. `date` pages).
+pub(crate) fn behavior_is_embeddable(
+    behaviors: &crate::behaviors::NodeBehaviorRegistry,
+    node_type: &str,
+) -> bool {
+    let behavior: Arc<dyn crate::behaviors::NodeBehavior> = behaviors
+        .get(node_type)
+        .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)));
+    // Probe with non-empty content to see if the behavior can ever return Some.
+    let probe = Node {
+        id: "probe".to_string(),
+        node_type: node_type.to_string(),
+        content: "probe content".to_string(),
+        version: 1,
+        properties: serde_json::json!({}),
+        mentions: vec![],
+        mentioned_in: vec![],
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        title: None,
+        lifecycle_status: "active".to_string(),
+    };
+    behavior.get_embeddable_content(&probe).is_some()
 }
 
 /// Result of checking node completeness against its schema's required relationships

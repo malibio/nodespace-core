@@ -638,10 +638,18 @@ impl SqliteStore {
             return Ok(HashSet::new());
         }
 
-        // Resolve every match to its root in one set operation: seed the recursive
-        // CTE with the whole match set (depth 0), walk `has_child` parents, and for
-        // each seed keep the deepest ancestor reached (its root, or itself if it has
-        // no parent).
+        // Resolve every match to its EMBEDDING root in one set operation: seed the
+        // recursive CTE with the whole match set (depth 0), walk `has_child`
+        // parents, and for each seed keep the deepest ancestor reached.
+        //
+        // The walk stops BELOW a `date` container: a date page is a non-embeddable
+        // organizational root whose top-level children (journal bullets) each carry
+        // their own content and are their own embedding roots (mirrors
+        // `NodeService::get_embedding_root_id`). Without this, a bullet hit resolved
+        // up to the date node, which the default `Knowledge` search scope excludes —
+        // so journal content was silently unfindable. Refusing to traverse INTO a
+        // date parent leaves the top-level bullet (a `text` node, in scope) as the
+        // deepest ancestor.
         let placeholders: Vec<String> = (1..=matching_ids.len())
             .map(|i| format!("?{}", i))
             .collect();
@@ -651,7 +659,9 @@ impl SqliteStore {
                 UNION ALL
                 SELECT a.seed_id, r.in_node, a.depth + 1 FROM relationship r
                 JOIN ancestors a ON r.out_node = a.node_id
+                JOIN node pn ON pn.id = r.in_node
                 WHERE r.relationship_type = 'has_child' AND a.depth < 100
+                  AND pn.node_type != 'date'
             )
             SELECT seed_id, node_id FROM ancestors a
             WHERE a.depth = (SELECT MAX(depth) FROM ancestors WHERE seed_id = a.seed_id)"#,
