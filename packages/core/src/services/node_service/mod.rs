@@ -1525,25 +1525,7 @@ impl NodeService {
     /// a probe node with non-empty content. If the behavior still returns `None`,
     /// the type is never embeddable.
     fn is_embeddable_type(&self, node_type: &str) -> bool {
-        let behavior: Arc<dyn crate::behaviors::NodeBehavior> = self
-            .behaviors
-            .get(node_type)
-            .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)));
-        // Probe with non-empty content to see if the behavior can ever return Some
-        let probe = Node {
-            id: "probe".to_string(),
-            node_type: node_type.to_string(),
-            content: "probe content".to_string(),
-            version: 1,
-            properties: serde_json::json!({}),
-            mentions: vec![],
-            mentioned_in: vec![],
-            created_at: chrono::Utc::now(),
-            modified_at: chrono::Utc::now(),
-            title: None,
-            lifecycle_status: "active".to_string(),
-        };
-        behavior.get_embeddable_content(&probe).is_some()
+        behavior_is_embeddable(&self.behaviors, node_type)
     }
 
     /// Create a new NodeService with a client identifier
@@ -1669,6 +1651,34 @@ impl NodeService {
     }
 }
 
+/// Whether `node_type`'s behavior can ever produce embeddable content (probed
+/// with non-empty content). Shared by [`NodeService::is_embeddable_type`] and the
+/// static spawned-task embedding path so both agree which types are embeddable
+/// vs. non-embeddable containers (e.g. `date` pages).
+pub(crate) fn behavior_is_embeddable(
+    behaviors: &crate::behaviors::NodeBehaviorRegistry,
+    node_type: &str,
+) -> bool {
+    let behavior: Arc<dyn crate::behaviors::NodeBehavior> = behaviors
+        .get(node_type)
+        .unwrap_or_else(|| Arc::new(crate::behaviors::CustomNodeBehavior::new(node_type)));
+    // Probe with non-empty content to see if the behavior can ever return Some.
+    let probe = Node {
+        id: "probe".to_string(),
+        node_type: node_type.to_string(),
+        content: "probe content".to_string(),
+        version: 1,
+        properties: serde_json::json!({}),
+        mentions: vec![],
+        mentioned_in: vec![],
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        title: None,
+        lifecycle_status: "active".to_string(),
+    };
+    behavior.get_embeddable_content(&probe).is_some()
+}
+
 /// Result of checking node completeness against its schema's required relationships
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1748,6 +1758,46 @@ impl NodeAccessor for NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
         Ok(node_map.into_values().collect())
+    }
+}
+
+#[cfg(test)]
+mod container_type_parity_tests {
+    use super::behavior_is_embeddable;
+    use crate::behaviors::{NodeBehaviorRegistry, NON_EMBEDDABLE_CONTAINER_TYPES};
+    use std::collections::HashSet;
+
+    /// `NON_EMBEDDABLE_CONTAINER_TYPES` is the hand-maintained SQL twin of the
+    /// behavior probe: the BM25 ancestor CTE (`db/sqlite_store/embeddings.rs`) can't
+    /// run `behavior_is_embeddable`, so it hardcodes this list to decide which
+    /// parents to stop below. If a new built-in type is non-embeddable AND can bear
+    /// children but isn't in the const, the embedding-root walk (behavior-driven)
+    /// and the search-root walk (list-driven) diverge and that type's nested content
+    /// becomes silently unfindable. This test fails the moment they drift.
+    #[test]
+    fn non_embeddable_container_types_match_behaviors() {
+        let registry = NodeBehaviorRegistry::new();
+        let actual: HashSet<String> = registry
+            .get_all_types()
+            .into_iter()
+            .filter(|t| {
+                !behavior_is_embeddable(&registry, t)
+                    && registry
+                        .get(t)
+                        .map(|b| b.can_have_children())
+                        .unwrap_or(false)
+            })
+            .collect();
+        let expected: HashSet<String> = NON_EMBEDDABLE_CONTAINER_TYPES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "NON_EMBEDDABLE_CONTAINER_TYPES (behaviors/mod.rs) drifted from the \
+             non-embeddable child-bearing behaviors. Update BOTH the const and the \
+             BM25 CTE stop-set, or embedding-root and search-root resolution diverge."
+        );
     }
 }
 

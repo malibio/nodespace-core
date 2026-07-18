@@ -24,13 +24,17 @@ import { proSync, type SyncState } from '$lib/stores/pro-sync.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { DATABASE_SETTINGS_NODE_ID } from '$lib/plugins/ui-extensions';
 
-/** Seed the active database's settings singleton with the given namespaced props. */
+/**
+ * Seed the active database's settings singleton with the given props. The daemon
+ * serializes DatabaseSettingsNode with FLAT properties (`sync_enabled`/`auth_status`
+ * directly on `properties`), so mirror that shape here.
+ */
 function seedSettings(props: { sync_enabled?: boolean; auth_status?: string }): void {
   const node: Node = {
     id: DATABASE_SETTINGS_NODE_ID,
     nodeType: 'database-settings',
     content: '',
-    properties: { 'database-settings': props },
+    properties: props,
     mentions: [],
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),

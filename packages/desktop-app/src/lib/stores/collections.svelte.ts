@@ -46,6 +46,22 @@ export interface CollectionMember {
   nodeType: string;
 }
 
+/**
+ * Node types that are NOT user-authored content and so should never appear in a
+ * collection's contents list. `schema`/`person`/`database-settings` are system
+ * definition nodes; `collection` nodes are shown in the collection tree itself;
+ * `horizontal-line` is a purely decorative structural divider. Everything else
+ * (text, header, task, checkbox, code-block, quote-block, ordered-list,
+ * ai-chat, query, prompt, skill, date, …) is genuine content and kept.
+ */
+const NON_CONTENT_NODE_TYPES: ReadonlySet<string> = new Set([
+  'schema',
+  'person',
+  'database-settings',
+  'collection',
+  'horizontal-line',
+]);
+
 export interface CollectionsState {
   /** Currently selected collection ID (for sub-panel display) */
   selectedCollectionId: string | null;
@@ -101,6 +117,24 @@ class CollectionsDataStore {
       const message = err instanceof Error ? err.message : 'Failed to load collections';
       log.error('Failed to load collections', { error: message });
       this.state = { ...this.state, loading: false, error: message };
+    }
+  }
+
+  /**
+   * Create a new collection, then refresh the list so it appears immediately.
+   * Returns the new collection's id, or null on failure (error surfaced in state).
+   */
+  async createCollection(name: string, description?: string): Promise<string | null> {
+    try {
+      const id = await collectionService.createCollection(name, description);
+      log.debug('Created collection', { id, name });
+      await this.loadCollections();
+      return id;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create collection';
+      log.error('Failed to create collection', { name, error: message });
+      this.state = { ...this.state, error: message };
+      return null;
     }
   }
 
@@ -208,8 +242,9 @@ class CollectionsStore {
     if (members && members.length > 0) {
       return (
         members
-          // Filter out collection nodes - they're already shown in the collection tree
-          .filter((node) => node.nodeType !== 'collection')
+          // Keep user-authored content only; drop system/definition/decorative
+          // nodes (schema, person, database-settings, collection, horizontal-line).
+          .filter((node) => !NON_CONTENT_NODE_TYPES.has(node.nodeType))
           .map((node) => ({
             id: node.id,
             // Prefer the cleaned title; fall back to the node content with its
@@ -311,6 +346,15 @@ function pruneEmptyCollections(items: CollectionItem[]): CollectionItem[] {
 }
 
 /**
+ * The workspace root/default collection (ADR-053). Every node — including every
+ * other collection — is made `member_of` it for RLS visibility, so it is NOT a
+ * display parent: a collection whose only parent is the root is a TOP-LEVEL
+ * collection, not a sub-collection nested inside "Default Collection". Sub-
+ * collections (member_of a non-root collection) still nest normally.
+ */
+const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
+
+/**
  * Transform flat collections into tree structure for UI display.
  * Uses parentCollectionIds to build proper hierarchy.
  */
@@ -333,7 +377,10 @@ function buildCollectionsTree(collections: CollectionInfo[]): CollectionItem[] {
   // Note: A collection can have multiple parents, but for tree display
   // we only show it under the first parent to avoid duplication
   for (const c of collections) {
-    const parentIds = c.parentCollectionIds || [];
+    // Ignore the root/default collection as a parent — every collection is
+    // member_of it for visibility, so counting it would nest all collections
+    // under "Default Collection" instead of showing them as top-level peers.
+    const parentIds = (c.parentCollectionIds || []).filter((p) => p !== ROOT_COLLECTION_ID);
     if (parentIds.length > 0) {
       // Add to first parent only (to avoid showing same collection multiple times)
       const firstParentId = parentIds[0];

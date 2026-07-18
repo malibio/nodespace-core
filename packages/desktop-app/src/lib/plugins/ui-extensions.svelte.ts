@@ -30,22 +30,27 @@ import {
   type ProSyncVariant
 } from './ui-extensions';
 
-/** The `database-settings`-namespaced properties held on the settings singleton. */
+/** The FLAT properties the daemon serializes onto the settings singleton. */
 interface DatabaseSettings {
   sync_enabled?: boolean;
   auth_status?: string;
 }
 
 /**
- * Read the active database's `DatabaseSettingsNode` properties (the
- * `database-settings` sub-object), or `undefined` when the node isn't hydrated
- * yet. Reads the reactive `SharedNodeStore` map, so callers in a reactive context
- * re-run when the node lands or changes.
+ * Read the active database's `DatabaseSettingsNode` properties (the FLAT
+ * `sync_enabled`/`auth_status` fields), or `undefined` when the node isn't
+ * hydrated yet. Reads the reactive `SharedNodeStore` map, so callers in a
+ * reactive context re-run when the node lands or changes.
  */
 export function activeDatabaseSettings(): DatabaseSettings | undefined {
   const node = SharedNodeStore.getInstance().getNode(DATABASE_SETTINGS_NODE_ID);
-  const settings = (node?.properties as Record<string, unknown> | undefined)?.['database-settings'];
-  return settings && typeof settings === 'object' ? (settings as DatabaseSettings) : undefined;
+  // The daemon serializes DatabaseSettingsNode with FLAT properties —
+  // `sync_enabled`/`auth_status` sit directly on `properties` (per the Core
+  // schema), not nested under a `database-settings` sub-object. Reading the
+  // wrong (nested) path made `enabled` always false, so the pill could never
+  // resolve to `connected` no matter what merge did.
+  const props = node?.properties;
+  return props && typeof props === 'object' ? (props as DatabaseSettings) : undefined;
 }
 
 /**

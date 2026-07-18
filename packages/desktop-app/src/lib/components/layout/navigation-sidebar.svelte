@@ -35,6 +35,34 @@
   let collectionForPanel = $derived(collectionsState.selectedCollection);
   let collectionMembers = $derived(collectionsState.selectedCollectionMembers);
 
+  // Inline "New collection" form for the Collections section. New collections are
+  // created open (the app has no privacy toggle yet); the daemon makes the caller
+  // an admin member so it appears in this list on the loadCollections refresh.
+  let creatingCollection = $state(false);
+  let newCollectionName = $state('');
+  let createBusy = $state(false);
+
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus();
+  }
+
+  async function submitNewCollection() {
+    const name = newCollectionName.trim();
+    if (!name || createBusy) return;
+    createBusy = true;
+    const id = await collectionsData.createCollection(name);
+    createBusy = false;
+    if (id) {
+      newCollectionName = '';
+      creatingCollection = false;
+    }
+  }
+
+  function cancelNewCollection() {
+    newCollectionName = '';
+    creatingCollection = false;
+  }
+
   // Schema types from global store (reactive — updates when schemas are created/deleted externally)
   let builtInSchemas = $derived(schemasStore.builtInSchemas);
   let customSchemas = $derived(schemasStore.customSchemas);
@@ -425,6 +453,32 @@
                 {/each}
               {/if}
             {/each}
+
+            <!-- Create a new collection -->
+            {#if creatingCollection}
+              <div class="collection-item">
+                <div class="expand-area"></div>
+                <input
+                  class="new-collection-input"
+                  placeholder="Collection name…"
+                  bind:value={newCollectionName}
+                  disabled={createBusy}
+                  use:focusOnMount
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') submitNewCollection();
+                    else if (e.key === 'Escape') cancelNewCollection();
+                  }}
+                />
+              </div>
+            {:else}
+              <button
+                class="new-collection-btn"
+                onclick={() => (creatingCollection = true)}
+                title="Create a new collection"
+              >
+                + New collection
+              </button>
+            {/if}
           </div>
         </Collapsible.Content>
       </Collapsible.Root>
@@ -836,6 +890,33 @@
     padding: 0.4rem 0;
     font-size: inherit;
     white-space: nowrap; /* Keep on single line, scroll horizontally if needed */
+  }
+
+  .new-collection-btn {
+    width: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: hsl(var(--muted-foreground));
+    text-align: left;
+    padding: 0.4rem 0 0.4rem 1.5rem;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+
+  .new-collection-btn:hover {
+    color: hsl(var(--foreground));
+  }
+
+  .new-collection-input {
+    flex: 1;
+    min-width: 0;
+    background: hsl(var(--background));
+    border: 1px solid hsl(var(--border));
+    border-radius: 4px;
+    color: inherit;
+    padding: 0.25rem 0.4rem;
+    font-size: inherit;
   }
 
   /* Expand chevron inside collection item */
