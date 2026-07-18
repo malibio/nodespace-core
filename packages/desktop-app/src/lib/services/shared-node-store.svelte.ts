@@ -1089,7 +1089,18 @@ export class SharedNodeStore {
         // The persistence whitelist now includes type-specific property changes
         const isStructuralChange = false; // Structural changes now handled via backend moveNode()
         const isContentChange = 'content' in changes;
-        const isNodeTypeChange = 'nodeType' in changes;
+        // A VALUE comparison, not mere presence: `updateNodeContent` always
+        // bundles the current nodeType alongside content on every keystroke
+        // (see reactive-node-service.svelte.ts — issue #424 fix, so a
+        // slash-command type conversion can't race a content update and get
+        // silently reverted). Treating that presence alone as "changing type"
+        // forced immediate (non-debounced) persistence on every keystroke,
+        // which raced the broadcast against the next keystroke and produced
+        // spurious "conflicted with a remote change" toasts + content
+        // corruption under fast typing. Only a genuine type change should
+        // skip the debounce.
+        const isNodeTypeChange =
+          'nodeType' in changes && changes.nodeType !== existingNode.nodeType;
         const isPropertyChange = 'properties' in changes;
         // Check for type-specific property changes (status, priority, dueDate, assignee, etc.)
         // These are persisted via type-specific updaters registered in the plugin system
@@ -1643,11 +1654,32 @@ export class SharedNodeStore {
                   // an own-echo (see `isPlausibleOwnEcho`).
                   this.lastPersistedContent.set(nodeId, currentNode.content ?? '');
                   const updatedFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
-                  // Sync the backend-assigned version into the local node so the next
-                  // OCC uses a fresh version rather than the now-stale pre-update value.
+                  // Sync the backend-assigned version AND typed fields into the
+                  // local node. `node_to_typed_value` (the backend's single
+                  // flattening authority) promotes type-specific fields — ai-chat's
+                  // `provider`/`model`, task's `status`/`priority`, etc. — from the
+                  // namespaced storage shape to genuinely top-level fields on this
+                  // response. The optimistic write above sent the UN-flattened
+                  // `{ properties: {...} }` shape client-side (matching storage, not
+                  // the wire contract), so the local node's top-level typed fields —
+                  // read directly by viewers like AiChatNodeViewer's
+                  // `node?.provider` — never got corrected to match. Previously only
+                  // `.version` was synced here, so e.g. an ai-chat model selection
+                  // persisted correctly server-side but the local node never
+                  // observed `provider`/`model` becoming defined, leaving the UI
+                  // stuck on "Choose a model to get started" even after the write
+                  // succeeded.
+                  //
+                  // Spread the full response over the local node so every
+                  // type-specific top-level field is corrected, but re-assert
+                  // `content` from the local node afterward — a user may have kept
+                  // typing while this RPC was in flight, and clobbering their newer
+                  // local edit with the response for an older send would lose
+                  // keystrokes.
                   const latestNode = this.nodes.get(nodeId);
                   if (latestNode && updatedFromBackend) {
-                    latestNode.version = updatedFromBackend.version;
+                    const localContent = latestNode.content;
+                    Object.assign(latestNode, updatedFromBackend, { content: localContent });
                     this.nodesSet(nodeId, latestNode);
                   }
                 } catch (updateError) {
