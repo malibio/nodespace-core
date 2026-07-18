@@ -6,7 +6,7 @@
 -->
 
 <script lang="ts">
-  import Icon from '$lib/design/icons/icon.svelte';
+  import Icon, { type IconName } from '$lib/design/icons/icon.svelte';
   import type { CollectionMember } from '$lib/stores/collections.svelte';
 
   interface Props {
@@ -21,13 +21,58 @@
 
   let { open, collectionName, members, onClose, onNodeClick, onOpenCollection }: Props = $props();
 
-  function getNodeIcon(nodeType: string): 'calendar' | 'circle' | 'text' {
-    const iconMap: Record<string, 'calendar' | 'circle' | 'text'> = {
+  // Map content node types to the closest available icon (see icon.svelte for
+  // the full IconName set). Anything unmapped falls back to the generic text glyph.
+  function getNodeIcon(nodeType: string): IconName {
+    const iconMap: Record<string, IconName> = {
       date: 'calendar',
-      task: 'circle',
-      text: 'text'
+      task: 'taskIncomplete',
+      checkbox: 'taskIncomplete',
+      'ai-chat': 'aiSquare',
+      prompt: 'aiSquare',
+      skill: 'aiSquare',
+      query: 'aiSquare',
+      text: 'text',
+      header: 'text',
+      'code-block': 'text',
+      'quote-block': 'text',
+      'ordered-list': 'text'
     };
-    return iconMap[nodeType] || 'text';
+    return iconMap[nodeType] ?? 'text';
+  }
+
+  // Nicely-cased display labels for known content types; anything else is
+  // title-cased from its raw id (e.g. 'my-thing' -> 'My Thing').
+  const NODE_TYPE_LABELS: Record<string, string> = {
+    text: 'Text',
+    header: 'Header',
+    task: 'Task',
+    checkbox: 'Checkbox',
+    'code-block': 'Code',
+    'quote-block': 'Quote',
+    'ordered-list': 'List',
+    'ai-chat': 'AI Chat',
+    query: 'Query',
+    prompt: 'Prompt',
+    skill: 'Skill',
+    date: 'Date'
+  };
+
+  function humanizeNodeType(nodeType: string): string {
+    return (
+      NODE_TYPE_LABELS[nodeType] ??
+      nodeType
+        .split(/[-_]/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ')
+    );
+  }
+
+  // A muted placeholder for content with no name, so blank rows read as
+  // "Untitled text" / "Untitled task" instead of appearing empty/unclickable.
+  function fallbackName(nodeType: string): string {
+    return `Untitled ${humanizeNodeType(nodeType).toLowerCase()}`;
   }
 </script>
 
@@ -50,10 +95,14 @@
 
   <ul class="node-list">
     {#each members as member (member.id)}
+      {@const trimmedName = member.name.trim()}
       <li>
         <button class="node-item" onclick={() => onNodeClick(member.id, member.nodeType)}>
           <Icon name={getNodeIcon(member.nodeType)} size={16} />
-          <span class="node-name">{member.name}</span>
+          <span class="node-name" class:node-name--untitled={!trimmedName}>
+            {trimmedName || fallbackName(member.nodeType)}
+          </span>
+          <span class="node-type-tag">{humanizeNodeType(member.nodeType)}</span>
         </button>
       </li>
     {/each}
@@ -184,9 +233,27 @@
   }
 
   .node-name {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Muted placeholder styling for blank/untitled content. */
+  .node-name--untitled {
+    font-style: italic;
+    opacity: 0.7;
+  }
+
+  /* Small muted type tag so content types are distinguishable at a glance. */
+  .node-type-tag {
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: hsl(var(--muted-foreground));
+    opacity: 0.65;
   }
 
   .empty-state {
