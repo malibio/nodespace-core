@@ -21,15 +21,17 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::service::Interceptor;
 use tonic::transport::Channel;
 
-/// Stamps the ADR-053 `x-ns-database-id` routing header and the ADR-026's C5-extension
-/// `x-ns-client-id` identity header on every outgoing request.
+/// Stamps the ADR-053 `x-ns-database-id` routing header and the ADR-026 C5
+/// extension's `x-ns-client-id` identity header on every outgoing request.
 ///
 /// Concrete (not a closure) so the intercepted client types stay nameable and
 /// aliasable — see [`NodeClient`] and friends. `database_id: None` stamps
 /// nothing, letting the daemon fall back to its default database; the variant
 /// is applied uniformly so a routed client's type is the same whether or not a
-/// database is currently selected. Mirrors the CLI's interceptor of the same
-/// name.
+/// database is currently selected. Same-named struct as the CLI's interceptor
+/// (`packages/cli/src/lib.rs`) but an independent implementation in a
+/// different crate — the CLI's copy deliberately does not stamp
+/// `x-ns-client-id`; see its doc comment for why.
 ///
 /// `client_id` is always `Some` in production — generated once per
 /// `GrpcClient` (i.e. once per app process/window) in [`GrpcClient::from_channel`]
@@ -38,7 +40,7 @@ use tonic::transport::Channel;
 /// stop recognizing this window's own writes on echo suppression after every
 /// switch). Stamping it lets the daemon scope this connection's writes via
 /// `NodeService::with_client()` and drop their echo on this connection's own
-/// `WatchNodes` stream (see `watcher.rs`) — see ADR-026 C5.
+/// `WatchNodes` stream (see `watcher.rs`).
 #[derive(Clone)]
 pub struct DatabaseIdInterceptor {
     // Some(id) → stamp header on every request; None → stamp nothing (daemon

@@ -65,6 +65,17 @@ use crate::nodespace::{
 ///
 /// `embedding_state` is `None` while the model is loading or when the NLP
 /// engine is absent. Semantic search returns `UNAVAILABLE` in both cases.
+///
+/// **Adding a new unary RPC handler**: call `self.route(&request).await?`
+/// first, exactly like every existing handler — this both resolves ADR-053
+/// database routing and scopes the returned `node_service` for same-origin
+/// write tagging (ADR-026 C5 extension) via the `x-ns-client-id` header.
+/// **Adding a new streaming (subscribe-style) handler**: if it should also
+/// suppress the subscriber's own writes, read `x-ns-client-id` via the
+/// standalone `client_id_header()` helper *before* calling `route()` — see
+/// `watch_nodes` for the reference implementation. Do not rely on `route()`
+/// alone for a subscribing handler: `route()`'s use of the header scopes
+/// *writes*, which a read-only streaming handler never performs.
 #[derive(Clone)]
 pub struct NodeServiceImpl {
     node_service: Arc<CoreNodeService>,

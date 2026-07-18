@@ -480,9 +480,13 @@ async fn watch_nodes_over_real_transport_suppresses_own_echo_and_delivers_foreig
     let (client, shutdown, _tempdir) = spawn_test_daemon().await;
 
     // "window-a" and "window-b" simulate two independent GrpcClient instances
-    // (two desktop windows / a desktop window + a future second client),
-    // each with its own stable x-ns-client-id, exactly as production code
-    // stamps it via the interceptor.
+    // (two desktop windows / a desktop window + a future second client), each
+    // with its own stable x-ns-client-id, exactly as production code stamps
+    // it via the interceptor. Both handles below are clones of the SAME tonic
+    // client/channel — the daemon distinguishes them purely by the
+    // x-ns-client-id metadata header on each request, not by transport
+    // connection, so reusing one client with per-request headers is a
+    // faithful simulation of two separate GrpcClient processes.
     let mut window_a = client.clone();
     let mut window_b = client.clone();
 
