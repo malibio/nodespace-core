@@ -337,7 +337,7 @@ fn def_search_nodes() -> ToolDefinition {
                     "description": "Max results to return (default 50)"
                 }
             },
-            "required": ["query"]
+            "required": []
         }),
     }
 }
@@ -2033,10 +2033,12 @@ mod tests {
     }
 
     #[test]
-    fn search_nodes_params_missing_query_fails() {
+    fn search_nodes_params_missing_query_defaults_to_empty() {
+        // A caller that resolved everything into `filters` (e.g. resolve_query)
+        // should not have to remember to also echo back an empty `query`.
         let args = json!({});
-        let result: Result<SearchNodesParams, _> = serde_json::from_value(args);
-        assert!(result.is_err());
+        let params: SearchNodesParams = serde_json::from_value(args).unwrap();
+        assert_eq!(params.query, "");
     }
 
     #[test]
@@ -2145,12 +2147,14 @@ mod tests {
     }
 
     #[test]
-    fn search_nodes_schema_requires_query() {
+    fn search_nodes_schema_does_not_require_query() {
+        // query defaults to "" (skip title filter) so a filters-only call
+        // (e.g. following resolve_query's output) is valid without it.
         let def = def_search_nodes();
         let required = def.parameters_schema["required"]
             .as_array()
             .expect("required must be array");
-        assert!(required.contains(&json!("query")));
+        assert!(!required.contains(&json!("query")));
     }
 
     #[test]
@@ -2493,16 +2497,18 @@ mod tests {
     // -- Validation: tools requiring arguments fail gracefully without services --
 
     #[tokio::test]
-    async fn search_nodes_missing_query() {
+    async fn search_nodes_missing_query_fails_on_node_service_not_args() {
+        // query alone defaulting to "" no longer makes this an InvalidArguments
+        // case; test_executor() has no node service, so it now fails one layer
+        // deeper (ExecutionFailed), proving args parsing succeeded.
         let executor = test_executor();
         let result = executor.execute("search_nodes", json!({})).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            ToolError::InvalidArguments { tool, reason } => {
-                assert_eq!(tool, "search_nodes");
-                assert!(reason.contains("query"));
+            ToolError::ExecutionFailed(reason) => {
+                assert!(reason.contains("Node service unavailable"));
             }
-            other => panic!("Expected InvalidArguments, got {:?}", other),
+            other => panic!("Expected ExecutionFailed, got {:?}", other),
         }
     }
 
