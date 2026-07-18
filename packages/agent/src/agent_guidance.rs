@@ -45,11 +45,12 @@ pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - AMBIGUITY: If a search returns 0 results or multiple results that don't clearly match, ask the user one specific clarifying question (e.g. \"Are you looking for the invoice with amount $500?\") rather than retrying the search.\n\
     - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.\n\
     - ALWAYS search_nodes first before update_node or update_task_status — even if a node ID appeared earlier in the conversation. Never skip the search step.\n\
+    - READ-THEN-WRITE TURN COMPLETION: an instruction to change something (\"mark X as Y\", \"update X\", \"set X's status to Y\") is not finished when the search that finds X returns — it is finished when the write (update_node or update_task_status) succeeds. Once search_nodes returns a clear single match for a write instruction, your NEXT action MUST be that write call in the SAME turn — not a summary, not a question, not stopping. Searching and then stopping is a FAILED turn, not a completed one.\n\
     - search_nodes is the ONE tool for finding, listing, and filtering nodes. By keyword/title: search_nodes(query, node_type). To LIST ALL OF A TYPE (e.g. \"list all my invoices\", \"show all tasks\"): search_nodes(query=\"\", node_type=<type>) — empty query lists every node of that type. To FILTER BY A TYPED PROPERTY (status, due_date, amount, operators like gt/lt): add filters, e.g. search_nodes(node_type=<type>, filters=[{\"type\":\"property\",\"operator\":\"equals\",\"property\":\"status\",\"value\":\"open\"}]). search_nodes returns each node's properties. Use search_semantic(query, node_types, scope, threshold, graph_boost) ONLY for meaning-based / fuzzy questions.\n\
     - search_nodes filter \"type\" values: use \"property\" for schema/node fields (e.g. status, due_date, priority — anything defined on the node type). Use \"metadata\" ONLY for created_at, modified_at, node_type, or content. Using \"metadata\" for a property field (e.g. status) always fails with \"Invalid metadata field\".\n\
     - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
     - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-    - To update a CUSTOM schema node's property (e.g. mark invoice as paid): search_nodes(node_type=<type>, query=<ONE WORD ONLY>) then update_node(id=<found_id>, properties={\"status\": \"paid\"}). ONE WORD ONLY means exactly that — never pass the user's sentence as the query. Example: \"Mark the $500 invoice as paid\" → query=\"invoice\" (correct) — query=\"$500 invoice due next Friday\" or any other multi-word phrase is WRONG and returns zero results. Use update_task_status ONLY for built-in task nodes — NOT for custom types like invoice, contact, book.\n\
+    - To update a CUSTOM schema node's property (e.g. mark invoice as paid): if the request identifies the target by a paraphrased description, an implicit property reference (e.g. a dollar amount, without naming which field it is), or a relative date/status word (\"next Friday\", \"overdue\", \"recent\") — call resolve_query(request=<the user's request verbatim>, node_type=<type>) FIRST, then pass its returned \"query\" and \"filters\" directly into search_nodes, then update_node(id=<found_id>, properties={...}). Do NOT hand-write the search_nodes query yourself in these cases — resolve_query has looked up the schema's real fields and today's date, which you have not. Example: \"Mark the $500 invoice as paid\" → resolve_query(request=\"Mark the $500 invoice as paid\", node_type=\"invoice\") → use its output in search_nodes → update_node. Skip resolve_query only when the identifier is already simple and unambiguous (e.g. \"mark the Acme invoice as paid\" → search_nodes(node_type=\"invoice\", query=\"Acme\") directly). Use update_task_status ONLY for built-in task nodes — NOT for custom types like invoice, contact, book.\n\
     - To create a node: call search_skills first to get schema_metadata, then call create_node(content, node_type=<type_id>, properties=<fields from schema_metadata>). For built-in types (task, text, date), call create_node directly with no properties unless the user provides them.\n\
     - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
     - To connect nodes: create_relationship with names from schemas above.\n\
@@ -101,6 +102,30 @@ mod tests {
         assert!(
             TOOL_STRATEGY_RULES.contains("IDENTICAL TOOL CALLS"),
             "must prohibit identical repeated tool calls"
+        );
+    }
+
+    #[test]
+    fn tool_strategy_rules_cover_read_then_write_completion() {
+        assert!(
+            TOOL_STRATEGY_RULES.contains("READ-THEN-WRITE TURN COMPLETION"),
+            "must instruct the model to continue to the write call after a successful search, not stop"
+        );
+        assert!(
+            TOOL_STRATEGY_RULES.contains("FAILED turn"),
+            "must frame search-then-stop as a failed turn"
+        );
+    }
+
+    #[test]
+    fn tool_strategy_rules_reference_resolve_query_for_ambiguous_updates() {
+        assert!(
+            TOOL_STRATEGY_RULES.contains("resolve_query"),
+            "must instruct the model to call resolve_query for ambiguous update targets"
+        );
+        assert!(
+            !TOOL_STRATEGY_RULES.contains("ONE WORD ONLY"),
+            "the ineffective ONE-WORD-ONLY prompt workaround must be removed, not layered under resolve_query"
         );
     }
 

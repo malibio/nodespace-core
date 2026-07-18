@@ -152,6 +152,7 @@ impl LocalAgentServiceImpl {
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(node_service),
             embedding_service,
+            inference_engine: Some(engine.clone()),
         });
         LocalAgentService::new(engine, executor)
     }
@@ -166,9 +167,16 @@ impl LocalAgentServiceImpl {
         // search_skills work as soon as the embedding model finishes loading
         // in the background — no engine swap required, and no construction
         // site can wire a stale or `None` service.
+        //
+        // `inference_engine` is different: it's not a shared handle updated in
+        // place, just the plain engine this rebuilt executor should use for
+        // `resolve_query`'s nested decomposition call. Every engine swap already
+        // rebuilds the whole executor here, so there is no separate "wire once,
+        // update later" path to support for it.
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(self.inner.node_service.clone()),
             embedding_service: self.inner.embedding_service.clone(),
+            inference_engine: Some(engine.clone()),
         });
 
         let prompt_assembler = Some(Arc::new(

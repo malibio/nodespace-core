@@ -16,7 +16,11 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub struct SearchNodesParams {
     /// Keyword or phrase to search for in node titles. Pass an empty string to
-    /// skip the title filter (useful when filtering only by node_type).
+    /// skip the title filter (useful when filtering only by node_type). Defaults
+    /// to empty when omitted entirely — a caller that resolved everything into
+    /// `filters` (e.g. via `resolve_query`) should not have to remember to also
+    /// echo back an empty `query`.
+    #[serde(default)]
     pub query: String,
 
     /// Filter by node type (e.g., "task", "text").
