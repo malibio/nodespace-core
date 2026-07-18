@@ -29,6 +29,24 @@ describe('MembershipService', () => {
 		]);
 	});
 
+	it('listMembers dedupes repeated person rows, keeping the highest permission', async () => {
+		// A person can carry more than one member_of edge (a role-bearing edge plus
+		// a plain membership edge), so the roster RPC can return the same person_id
+		// more than once. Collapse to one row per person at the highest privilege,
+		// regardless of the order the rows arrive in.
+		mockInvoke.mockResolvedValue([
+			{ person_id: 'p1', permission: 'readOnly' },
+			{ person_id: 'p1', permission: 'admin' },
+			{ person_id: 'p2', permission: 'modify' },
+			{ person_id: 'p1', permission: 'modify' }
+		]);
+		const members = await membershipService.listMembers('c1');
+		expect(members).toEqual([
+			{ personId: 'p1', permission: 'admin' },
+			{ personId: 'p2', permission: 'modify' }
+		]);
+	});
+
 	it('setMember forwards camelCase args to pro_set_member', async () => {
 		mockInvoke.mockResolvedValue(undefined);
 		await membershipService.setMember('c1', 'p1', 'modify');
