@@ -139,6 +139,27 @@ describe('decideRemoteUpdate', () => {
     expect(decision.notifyConflict).toBe(true);
   });
 
+  it('does not notify for a stale self-echo whose version is not ahead of the local version', () => {
+    // During rapid typing, one of our own earlier keystrokes echoes back through
+    // the daemon after we've typed further, so its content no longer matches
+    // `lastSentContent` (not a plausible own-echo). But its version is not ahead
+    // of our optimistic local version, so it is not a foreign writer getting
+    // ahead of us either — the daemon assigns a strictly higher version to any
+    // change it applies. It must be dropped silently instead of raising a
+    // phantom conflict notification on every keystroke.
+    const decision = decideRemoteUpdate(
+      makeNode({ content: 'hell', version: 4 }),
+      makeNode({ content: 'hello world', version: 5 }),
+      databaseSource,
+      { isFocused: true, hasPending: false },
+      'hello world'
+    );
+    expect(decision.apply).toBe(false);
+    if (decision.apply) throw new Error('unreachable');
+    expect(decision.stashVersion).toBe(false);
+    expect(decision.notifyConflict).toBe(false);
+  });
+
   it('treats an incoming node with no numeric version as never stash-eligible', () => {
     const decision = decideRemoteUpdate(
       makeNode({ content: 'hello world', version: undefined as unknown as number }),

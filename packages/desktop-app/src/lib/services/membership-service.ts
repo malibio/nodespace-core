@@ -106,7 +106,22 @@ export class MembershipService {
 	async listMembers(collectionId: string): Promise<Member[]> {
 		log.debug('listMembers', { collectionId });
 		const rows = await invoke<RawMember[]>('pro_list_members', { collectionId });
-		return rows.map((r) => ({ personId: r.person_id, permission: r.permission as Permission }));
+		// Collapse duplicate rows for the same person: a person can carry more than
+		// one `member_of` edge (e.g. a role-bearing edge plus a plain membership
+		// edge), so the roster RPC can return the same `person_id` twice. Keep the
+		// highest-privilege permission and emit one row per person — otherwise the
+		// keyed `{#each … (personId)}` roster hits a duplicate-key crash and the
+		// whole Collaboration panel is stuck on "Loading members…".
+		const RANK: Record<Permission, number> = { readOnly: 0, modify: 1, admin: 2 };
+		const byPerson = new Map<string, Member>();
+		for (const r of rows) {
+			const permission = r.permission as Permission;
+			const existing = byPerson.get(r.person_id);
+			if (!existing || (RANK[permission] ?? 0) > (RANK[existing.permission] ?? 0)) {
+				byPerson.set(r.person_id, { personId: r.person_id, permission });
+			}
+		}
+		return [...byPerson.values()];
 	}
 
 	/** Add a member or change their role (admin only, server-gated). */

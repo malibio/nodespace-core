@@ -26,6 +26,7 @@ import {
 	type Person
 } from '$lib/services/membership-service';
 import { isProSyncActive } from '$lib/plugins/ui-extensions.svelte';
+import { backendAdapter } from '$lib/services/backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('MembershipStore');
@@ -51,6 +52,13 @@ class MembershipStore {
 
 	/** The caller's own identity, fetched lazily and cached (cleared on {@link reset}). */
 	currentPerson = $state<Person | null>(null);
+
+	/**
+	 * Resolved display labels for person ids (name → email → id), populated from
+	 * the locally-synced person nodes on roster load and read by {@link displayFor}.
+	 * Reassigned immutably so the reactive roster re-renders when a name lands.
+	 */
+	private personNames = $state<Record<string, string>>({});
 
 	/**
 	 * Collection discovery (browse & join): the collections the caller could join
@@ -116,7 +124,39 @@ class MembershipStore {
 	 * only). Kept here so the view layer has a single call site to upgrade.
 	 */
 	displayFor(personId: string): string {
-		return personId;
+		return this.personNames[personId] ?? personId;
+	}
+
+	/**
+	 * Resolve human-readable labels for the given person ids from their synced
+	 * person nodes and cache them for {@link displayFor}. The daemon FLATTENS the
+	 * type namespace when serving a node, so `name`/`email` come back at the top
+	 * level of `properties` (NOT nested under `person`, which is only the cloud's
+	 * on-disk shape). Prefer name, then email, then fall back to the id (also the
+	 * fallback when the node isn't synced or a non-co-member can't see the email,
+	 * which is `can_see_person`-gated server-side). Best-effort and fire-and-forget.
+	 */
+	private async resolvePersonNames(personIds: string[]): Promise<void> {
+		// Re-attempt ids not yet resolved OR still showing the id fallback (a prior
+		// lookup that failed / raced sync), so a later load self-heals the label.
+		const missing = personIds.filter(
+			(id) => this.personNames[id] === undefined || this.personNames[id] === id
+		);
+		if (missing.length === 0) return;
+		const resolved = await Promise.all(
+			missing.map(async (id) => {
+				try {
+					const node = await backendAdapter.getNode(id);
+					const props = node?.properties as Record<string, unknown> | undefined;
+					const name = typeof props?.['name'] === 'string' ? (props['name'] as string) : '';
+					const email = typeof props?.['email'] === 'string' ? (props['email'] as string) : '';
+					return [id, name || email || id] as const;
+				} catch {
+					return [id, id] as const;
+				}
+			})
+		);
+		this.personNames = { ...this.personNames, ...Object.fromEntries(resolved) };
 	}
 
 	/**
@@ -153,6 +193,9 @@ class MembershipStore {
 			// Commit the roster immediately so a failure of the admin-only listings
 			// below doesn't discard an already-fetched roster (patch merges).
 			this.patch(collectionId, { members, loading: false, error: null });
+			// Resolve display names in the background; the roster shows ids until the
+			// person nodes land, then re-renders (personNames is reactive).
+			void this.resolvePersonNames(members.map((m) => m.personId));
 			if (amAdmin) {
 				const [invites, requests] = await Promise.all([
 					membershipService.listInvites(collectionId),
