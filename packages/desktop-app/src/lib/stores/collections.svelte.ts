@@ -54,7 +54,7 @@ export interface CollectionMember {
  * (text, header, task, checkbox, code-block, quote-block, ordered-list,
  * ai-chat, query, prompt, skill, date, …) is genuine content and kept.
  */
-const NON_CONTENT_NODE_TYPES: ReadonlySet<string> = new Set([
+export const NON_CONTENT_NODE_TYPES: ReadonlySet<string> = new Set([
   'schema',
   'person',
   'database-settings',

@@ -630,12 +630,16 @@
   <div bind:this={subPanelElement}>
     <CollectionSubPanel
       open={subPanelOpen}
+      collectionId={collectionForPanel?.id ?? ''}
       collectionName={collectionForPanel?.content ?? collectionForPanel?.name ?? ''}
       members={collectionMembers}
       onClose={handleCloseSubPanel}
       onNodeClick={handleNodeClick}
       onOpenCollection={() => {
         if (collectionForPanel) handleNodeClick(collectionForPanel.id, 'collection');
+      }}
+      onChanged={() => {
+        if (collectionForPanel) collectionsState.selectCollection(collectionForPanel.id);
       }}
     />
   </div>

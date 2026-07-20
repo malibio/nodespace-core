@@ -14,11 +14,13 @@ import CollectionSubPanel from '$lib/components/layout/collection-sub-panel.svel
 function baseProps() {
   return {
     open: true,
+    collectionId: 'col-arch',
     collectionName: 'Architecture',
     members: [{ id: 'm1', name: 'System Overview', nodeType: 'header' }],
     onClose: vi.fn(),
     onNodeClick: vi.fn(),
-    onOpenCollection: vi.fn()
+    onOpenCollection: vi.fn(),
+    onChanged: vi.fn()
   };
 }
 
