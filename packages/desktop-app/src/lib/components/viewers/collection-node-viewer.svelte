@@ -18,7 +18,8 @@
   import { onMount } from 'svelte';
   import Icon from '$lib/design/icons/icon.svelte';
   import { collectionService } from '$lib/services/collection-service';
-  import { collectionsData } from '$lib/stores/collections.svelte';
+  import { collectionsData, NON_CONTENT_NODE_TYPES } from '$lib/stores/collections.svelte';
+  import { createNodeInCollection, searchAddableNodes } from '$lib/services/collection-authoring';
   import type { Node, CollectionNode } from '$lib/types';
   import { navigationStore, addTab, setActiveTab } from '$lib/stores/navigation.svelte';
   import { createLogger } from '$lib/utils/logger';
@@ -67,7 +68,12 @@
     try {
       // Get collection members (this also validates the collection exists)
       const memberNodes = await collectionService.getCollectionMembers(collectionId);
-      members = memberNodes;
+      // The Contents tab lists user-authored content only. `getCollectionMembers`
+      // also returns non-content members — chiefly the creator's `person` node
+      // (stamped as an admin member on collection creation) and system nodes —
+      // which belong in the Collaboration tab, not here. Filter them out (mirrors
+      // the sidebar sub-panel's `selectedCollectionMembers`).
+      members = memberNodes.filter((n) => !NON_CONTENT_NODE_TYPES.has(n.nodeType));
 
       // Try to get collection details from cached store data first (by ID)
       const cachedCollection = collectionsData.getCollectionById(collectionId);
@@ -155,15 +161,97 @@
     return currentState.panes[0]?.id ?? 'pane-1';
   }
 
+  // Reload the Contents list (user-authored members only — same filter as the
+  // initial load), used after any add/remove so the count and rows stay honest.
+  async function reloadContentMembers() {
+    members = (await collectionService.getCollectionMembers(nodeId)).filter(
+      (n) => !NON_CONTENT_NODE_TYPES.has(n.nodeType)
+    );
+  }
+
   async function handleRemoveMember(member: Node) {
     try {
       await collectionService.removeNodeFromCollection(member.id, nodeId);
-      // Reload members
-      members = await collectionService.getCollectionMembers(nodeId);
+      await reloadContentMembers();
       log.debug('Removed member from collection', { memberId: member.id, collectionId: nodeId });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to remove member';
       log.error('Failed to remove member', { memberId: member.id, error: message });
+    }
+  }
+
+  // --- Authoring into this collection -------------------------------------
+  // A collection is a `member_of` grouping over outliner nodes, so both actions
+  // below ultimately call `add_node_to_collection`. "New node" mints a fresh
+  // text node first (and opens it to edit); "Add existing" attaches a node the
+  // user already has. `authorBusy` serializes them so a double-click can't
+  // create two nodes or fire overlapping reloads.
+  let authorBusy = $state(false);
+  let showAddExisting = $state(false);
+  let addQuery = $state('');
+  let addResults: Node[] = $state([]);
+  let addSearching = $state(false);
+  let addSearchToken = 0;
+
+  async function handleNewNode() {
+    if (authorBusy) return;
+    authorBusy = true;
+    try {
+      const newId = await createNodeInCollection(nodeId);
+      await reloadContentMembers();
+      // Open the empty node so the user can type into it immediately.
+      handleMemberClick({ id: newId, nodeType: 'text', content: '' } as Node);
+      log.debug('Created node in collection', { newId, collectionId: nodeId });
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create node';
+      log.error('Failed to create node in collection', { collectionId: nodeId, error });
+    } finally {
+      authorBusy = false;
+    }
+  }
+
+  function toggleAddExisting() {
+    showAddExisting = !showAddExisting;
+    if (!showAddExisting) {
+      addQuery = '';
+      addResults = [];
+    }
+  }
+
+  async function runAddSearch() {
+    if (!addQuery.trim()) {
+      addResults = [];
+      return;
+    }
+    const token = ++addSearchToken;
+    addSearching = true;
+    try {
+      const excludeIds = new Set(members.map((m) => m.id));
+      const results = await searchAddableNodes(addQuery, nodeId, excludeIds);
+      if (token !== addSearchToken) return; // superseded by a newer keystroke
+      addResults = results;
+    } catch (err) {
+      if (token !== addSearchToken) return;
+      log.error('search_roots failed for add-existing', err);
+      addResults = [];
+    } finally {
+      if (token === addSearchToken) addSearching = false;
+    }
+  }
+
+  async function addExisting(node: Node) {
+    if (authorBusy) return;
+    authorBusy = true;
+    try {
+      await collectionService.addNodeToCollection(node.id, nodeId);
+      await reloadContentMembers();
+      addResults = addResults.filter((n) => n.id !== node.id);
+      log.debug('Added existing node to collection', { nodeId: node.id, collectionId: nodeId });
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to add node';
+      log.error('Failed to add existing node to collection', { memberId: node.id, error });
+    } finally {
+      authorBusy = false;
     }
   }
 </script>
@@ -227,13 +315,65 @@
           Try Again
         </button>
       </div>
-    {:else if members.length === 0}
-      <div class="empty-state">
-        <Icon name="circleRing" size={48} color="hsl(var(--muted-foreground))" />
-        <p>This collection is empty</p>
-        <span class="empty-hint">Add nodes to this collection using the /collection command or by dragging nodes here.</span>
-      </div>
     {:else}
+      <div class="collection-toolbar">
+        <button class="toolbar-btn" onclick={handleNewNode} disabled={authorBusy}>
+          <Icon name="text" size={14} color="currentColor" />
+          <span>New node</span>
+        </button>
+        <button
+          class="toolbar-btn"
+          class:active={showAddExisting}
+          onclick={toggleAddExisting}
+          disabled={authorBusy}
+        >
+          <Icon name="circleRing" size={14} color="currentColor" />
+          <span>Add existing</span>
+        </button>
+      </div>
+
+      {#if showAddExisting}
+        <div class="add-existing">
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="add-search"
+            type="text"
+            placeholder="Search your nodes to add…"
+            bind:value={addQuery}
+            oninput={runAddSearch}
+            autofocus
+          />
+          {#if addSearching}
+            <p class="add-hint">Searching…</p>
+          {:else if addResults.length > 0}
+            <ul class="add-results">
+              {#each addResults as r (r.id)}
+                <li>
+                  <button class="add-result" onclick={() => addExisting(r)} disabled={authorBusy}>
+                    <Icon name={getNodeIcon(r.nodeType)} size={14} color="currentColor" />
+                    <span class="add-result-name">{r.content || 'Untitled'}</span>
+                    <span class="add-result-type">{r.nodeType}</span>
+                    <span class="add-plus">+ Add</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else if addQuery.trim()}
+            <p class="add-hint">No matching nodes.</p>
+          {/if}
+        </div>
+      {/if}
+
+      {#if members.length === 0}
+        <div class="empty-state">
+          <Icon name="circleRing" size={48} color="hsl(var(--muted-foreground))" />
+          <p>This collection is empty</p>
+          <span class="empty-hint"
+            >Use “New node” to create content here, or “Add existing” to pull in a node you already
+            have.</span
+          >
+        </div>
+      {:else}
       <ul class="member-list">
         {#each members as member (member.id)}
           <li class="member-item">
@@ -259,6 +399,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   </div>
   {/if}
@@ -329,6 +470,105 @@
     flex: 1;
     overflow-y: auto;
     padding: 1rem 2rem;
+  }
+
+  .collection-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.8125rem;
+    color: hsl(var(--foreground));
+    background: hsl(var(--muted) / 0.4);
+    border: 1px solid hsl(var(--border));
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .toolbar-btn:hover:not(:disabled) {
+    background: hsl(var(--muted) / 0.7);
+  }
+  .toolbar-btn.active {
+    background: hsl(var(--muted) / 0.9);
+    border-color: hsl(var(--muted-foreground) / 0.4);
+  }
+  .toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .add-existing {
+    margin-bottom: 0.75rem;
+    padding: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 8px;
+    background: hsl(var(--muted) / 0.25);
+  }
+  .add-search {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.875rem;
+    color: hsl(var(--foreground));
+    background: hsl(var(--background));
+    border: 1px solid hsl(var(--border));
+    border-radius: 6px;
+    box-sizing: border-box;
+  }
+  .add-hint {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .add-results {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .add-result {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.875rem;
+    color: hsl(var(--foreground));
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .add-result:hover:not(:disabled) {
+    background: hsl(var(--muted) / 0.6);
+  }
+  .add-result:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .add-result-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .add-result-type {
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.6);
+    padding: 0.05rem 0.35rem;
+    border-radius: 4px;
+  }
+  .add-plus {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    flex-shrink: 0;
   }
 
   .loading-state,
