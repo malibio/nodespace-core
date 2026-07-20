@@ -7,6 +7,7 @@ import {
   collectionsState,
   collectionsData,
   findCollectionById,
+  NON_CONTENT_NODE_TYPES,
   type CollectionsState,
   type CollectionItem,
   type CollectionMember
@@ -514,6 +515,57 @@ describe('Collections Store', () => {
       collectionsData._setTestData(collections, new Map());
 
       expect(collectionsData.collectionsTree).toEqual([]);
+    });
+  });
+
+  describe('NON_CONTENT_NODE_TYPES member filter', () => {
+    // Build a full Node for a given type (only the fields the filter/mapper read).
+    function mkNode(id: string, nodeType: string, name: string): Node {
+      return {
+        id,
+        content: name,
+        title: name,
+        nodeType,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1,
+        properties: {}
+      };
+    }
+
+    it('exports the expected non-content node types', () => {
+      for (const t of ['schema', 'person', 'database-settings', 'collection', 'horizontal-line']) {
+        expect(NON_CONTENT_NODE_TYPES.has(t)).toBe(true);
+      }
+      // Genuine user-authored content types are NOT in the set.
+      for (const t of ['text', 'task', 'header', 'code-block', 'date']) {
+        expect(NON_CONTENT_NODE_TYPES.has(t)).toBe(false);
+      }
+    });
+
+    it('drops non-content members (creator person, system, sub-collection, divider) from Contents', () => {
+      const mixed = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            mkNode('text-1', 'text', 'A note'),
+            mkNode('creator', 'person', 'Alice'), // stamped creator — must drop
+            mkNode('task-1', 'task', 'Do the thing'),
+            mkNode('schema-1', 'schema', 'Schema'), // system definition — must drop
+            mkNode('sub-col', 'collection', 'Sub'), // shown in the tree — must drop
+            mkNode('divider', 'horizontal-line', ''), // decorative — must drop
+            mkNode('code-1', 'code-block', 'console.log()')
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), mixed);
+
+      collectionsState.selectCollection('col-1');
+
+      const members = collectionsState.selectedCollectionMembers;
+      // Only genuine content survives, in original order.
+      expect(members.map((m) => m.id)).toEqual(['text-1', 'task-1', 'code-1']);
+      expect(members.every((m) => !NON_CONTENT_NODE_TYPES.has(m.nodeType))).toBe(true);
     });
   });
 
