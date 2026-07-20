@@ -803,12 +803,14 @@ impl NodeService {
 
     /// Batched sibling of [`Self::create_parent_edge`] for the reconnect edge sweep
     /// (issue #345): attach many genuinely-unparented children under their parents in
-    /// ONE store transaction, then emit one `RelationshipCreated` per created edge
-    /// (matching the per-row path) — coalesced by the caller's `begin_batch_emit`
-    /// guard. `edges` is `(parent, child, order)` carrying the sender's sibling order;
-    /// a child that already has a parent is skipped in the store (see
-    /// `bulk_create_has_child`), so this only attaches genuinely-unparented children.
-    /// Returns the number of edges created.
+    /// ONE store transaction, then emit one `RelationshipCreated` per created edge —
+    /// exactly as the per-row `create_parent_edge` does. (Relationship events are not
+    /// node-keyed, so `begin_batch_emit` does NOT coalesce them; they broadcast
+    /// immediately, one per edge, matching the per-row path — the batching win is the
+    /// single DB transaction, not the events.) `edges` is `(parent, child, order)`
+    /// carrying the sender's sibling order; a child that already has a parent is
+    /// skipped in the store (see `bulk_create_has_child`), so this only attaches
+    /// genuinely-unparented children. Returns the number of edges created.
     ///
     /// Unlike `create_parent_edge` this does NOT reposition — it is intended for the
     /// from-scratch (cold) sweep where every parent is fresh, so the sender's `order`

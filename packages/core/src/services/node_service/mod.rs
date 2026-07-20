@@ -1880,6 +1880,46 @@ mod tests {
         );
     }
 
+    /// Within a SINGLE batch, a child listed under two parents attaches to the FIRST
+    /// only — the store's read-your-writes skip-check prevents a second parent edge
+    /// (a node has at most one parent).
+    #[tokio::test]
+    async fn bulk_create_has_child_edges_no_second_parent_within_one_batch() {
+        let (service, _temp) = create_test_service().await;
+        for id in ["p", "q", "x"] {
+            service
+                .create_node(Node::new_with_id(
+                    id.to_string(),
+                    "text".to_string(),
+                    id.to_string(),
+                    json!({}),
+                ))
+                .await
+                .unwrap();
+        }
+        // Same child x under p then q in one batch.
+        let n = service
+            .bulk_create_has_child_edges(&[
+                ("p".to_string(), "x".to_string(), 1.0),
+                ("q".to_string(), "x".to_string(), 2.0),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "only the first parent edge is created");
+        let p_kids: Vec<String> = service
+            .get_children("p")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.id)
+            .collect();
+        assert_eq!(p_kids, vec!["x"], "x attaches to the first parent p");
+        assert!(
+            service.get_children("q").await.unwrap().is_empty(),
+            "x is NOT also a child of q"
+        );
+    }
+
     #[tokio::test]
     async fn test_create_text_node() {
         let (service, _temp) = create_test_service().await;
