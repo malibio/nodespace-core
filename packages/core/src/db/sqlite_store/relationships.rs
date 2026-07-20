@@ -499,6 +499,65 @@ impl SqliteStore {
         .await
     }
 
+    /// Bulk-create `has_child` edges (parent → child) in ONE transaction, for the
+    /// batched reconnect edge sweep (issue #345). Each tuple is `(parent, child,
+    /// order)` where `order` is the sender's sibling order; `get_children` sorts by
+    /// `json_extract(properties, '$.order')` ASC, so a fresh parent's children
+    /// reproduce that order exactly.
+    ///
+    /// Idempotent and safe for a from-scratch sweep: a child that ALREADY has a
+    /// parent `has_child` edge is skipped (a node has at most one parent), so this
+    /// only ever attaches genuinely-unparented children — it never re-parents.
+    /// Direction matches `move_node`/`get_children`: `in_node = parent, out_node =
+    /// child`. Returns the edges actually inserted, so the caller can emit one
+    /// `RelationshipCreated` per edge.
+    pub async fn bulk_create_has_child(
+        &self,
+        edges: &[(String, String, f64)],
+    ) -> Result<Vec<(String, String, f64)>> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin bulk has_child transaction")?;
+
+        let mut created = Vec::with_capacity(edges.len());
+        for (parent, child, order) in edges {
+            // A node has at most one parent — skip if this child is already parented
+            // (idempotent re-run; never re-parent a child that landed via another path).
+            let mut rows = tx
+                .query(
+                    "SELECT 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child' LIMIT 1",
+                    libsql::params![child.clone()],
+                )
+                .await
+                .context("Failed to check existing parent edge")?;
+            if rows.next().await?.is_some() {
+                continue;
+            }
+
+            let rel_id = uuid::Uuid::new_v4().to_string();
+            let props = serde_json::json!({ "order": order }).to_string();
+            tx.execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                libsql::params![rel_id, parent.clone(), child.clone(), props, now.clone(), now.clone()],
+            )
+            .await
+            .context("Failed to insert has_child edge")?;
+            created.push((parent.clone(), child.clone(), *order));
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit bulk has_child")?;
+        Ok(created)
+    }
+
     pub async fn bulk_add_to_collections(&self, memberships: &[(String, String)]) -> Result<usize> {
         if memberships.is_empty() {
             return Ok(0);

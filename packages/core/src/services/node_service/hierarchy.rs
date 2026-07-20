@@ -801,6 +801,47 @@ impl NodeService {
         Ok(())
     }
 
+    /// Batched sibling of [`Self::create_parent_edge`] for the reconnect edge sweep
+    /// (issue #345): attach many genuinely-unparented children under their parents in
+    /// ONE store transaction, then emit one `RelationshipCreated` per created edge —
+    /// exactly as the per-row `create_parent_edge` does. (Relationship events are not
+    /// node-keyed, so `begin_batch_emit` does NOT coalesce them; they broadcast
+    /// immediately, one per edge, matching the per-row path — the batching win is the
+    /// single DB transaction, not the events.) `edges` is `(parent, child, order)`
+    /// carrying the sender's sibling order; a child that already has a parent is
+    /// skipped in the store (see `bulk_create_has_child`), so this only attaches
+    /// genuinely-unparented children. Returns the number of edges created.
+    ///
+    /// Unlike `create_parent_edge` this does NOT reposition — it is intended for the
+    /// from-scratch (cold) sweep where every parent is fresh, so the sender's `order`
+    /// values are the final sibling order. Repositioning / non-fresh parents stay on
+    /// the per-row path.
+    pub async fn bulk_create_has_child_edges(
+        &self,
+        edges: &[(String, String, f64)],
+    ) -> Result<usize, NodeServiceError> {
+        if edges.is_empty() {
+            return Ok(0);
+        }
+        let created = self
+            .store
+            .bulk_create_has_child(edges)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        for (parent, child, order) in &created {
+            self.emit_event(DomainEvent::RelationshipCreated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    format!("relationship:{}:{}", parent, child),
+                    parent,
+                    child,
+                    "has_child",
+                    serde_json::json!({ "order": order }),
+                ),
+            });
+        }
+        Ok(created.len())
+    }
+
     /// Reorder a child within its parent's children list.
     ///
     /// Updates the `has_child` edge `order` field to reposition a node among its siblings.
