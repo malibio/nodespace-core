@@ -203,8 +203,9 @@
       handleMemberClick({ id: newId, nodeType: 'text', content: '' } as Node);
       log.debug('Created node in collection', { newId, collectionId: nodeId });
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to create node';
-      log.error('Failed to create node in collection', { collectionId: nodeId, error });
+      // Log only — matches handleRemoveMember. Setting the shared `error` state
+      // would trip the full-screen error branch and wipe the whole Contents view.
+      log.error('Failed to create node in collection', { collectionId: nodeId, error: err });
     } finally {
       authorBusy = false;
     }
@@ -218,11 +219,23 @@
     }
   }
 
-  async function runAddSearch() {
+  let addSearchTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // `searchAddableNodes` runs a semantic/embedding query, so debounce keystrokes
+  // instead of firing one per character (mirrors search-pane.svelte). The
+  // `addSearchToken` check still drops a slow earlier request that lands late.
+  function runAddSearch() {
+    if (addSearchTimer) clearTimeout(addSearchTimer);
     if (!addQuery.trim()) {
       addResults = [];
+      addSearching = false;
       return;
     }
+    addSearching = true; // immediate feedback while the debounce settles
+    addSearchTimer = setTimeout(doAddSearch, 200);
+  }
+
+  async function doAddSearch() {
     const token = ++addSearchToken;
     addSearching = true;
     try {
@@ -248,8 +261,8 @@
       addResults = addResults.filter((n) => n.id !== node.id);
       log.debug('Added existing node to collection', { nodeId: node.id, collectionId: nodeId });
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to add node';
-      log.error('Failed to add existing node to collection', { memberId: node.id, error });
+      // Log only — do not wipe the Contents view on a transient add failure.
+      log.error('Failed to add existing node to collection', { memberId: node.id, error: err });
     } finally {
       authorBusy = false;
     }

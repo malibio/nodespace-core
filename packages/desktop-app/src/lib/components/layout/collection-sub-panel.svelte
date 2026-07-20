@@ -71,11 +71,22 @@
     }
   }
 
-  async function runAddSearch() {
+  let addSearchTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Debounce keystrokes — `searchAddableNodes` is a semantic/embedding query
+  // (mirrors search-pane.svelte). The token check still drops a late result.
+  function runAddSearch() {
+    if (addSearchTimer) clearTimeout(addSearchTimer);
     if (!addQuery.trim()) {
       addResults = [];
+      addSearching = false;
       return;
     }
+    addSearching = true; // immediate feedback while the debounce settles
+    addSearchTimer = setTimeout(doAddSearch, 200);
+  }
+
+  async function doAddSearch() {
     const token = ++addSearchToken;
     addSearching = true;
     try {
