@@ -254,6 +254,25 @@ pub fn normalize_collection_name(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
+/// Stable namespace for deterministic collection ids (UUIDv5). A fixed, arbitrary
+/// UUID — do NOT change it: it anchors collection identity across imports and devices.
+const COLLECTION_ID_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x8f5b2c1e_9a4d_4e6f_b3a7_1c2d3e4f5a6bu128);
+
+/// Deterministic collection node id from the (globally-unique) name, normalized so
+/// case variants converge. Collection names are globally unique, so deriving the id
+/// from the name makes independent imports / devices produce the SAME node id for a
+/// given collection instead of each minting a fresh random UUID (which synced up as
+/// duplicate collection nodes). It also makes a concurrent double-create of the same
+/// name resolve to one node.
+pub fn deterministic_collection_id(name: &str) -> String {
+    uuid::Uuid::new_v5(
+        &COLLECTION_ID_NAMESPACE,
+        normalize_collection_name(name).as_bytes(),
+    )
+    .to_string()
+}
+
 /// Build a path string from segments
 pub fn build_path_string(segments: &[&str]) -> String {
     segments.join(&COLLECTION_PATH_DELIMITER.to_string())
@@ -459,12 +478,33 @@ impl<'a> CollectionService<'a> {
     async fn create_collection(&self, name: &str) -> Result<Node, NodeServiceError> {
         let validated_name = validate_collection_name(name)?;
 
-        // Create the collection node
-        let node = Node::new("collection".to_string(), validated_name, json!({}));
-        let node_id = node.id.clone();
+        // Deterministic id from the normalized name so independent imports / devices
+        // converge on ONE collection node per name instead of minting a fresh random
+        // UUID each time (the duplicate-collections bug), and a concurrent
+        // double-create resolves to the same node.
+        let node_id = deterministic_collection_id(&validated_name);
+
+        // Get-or-create: reuse an existing node with this id (a prior create, a synced
+        // copy, or a race winner) rather than erroring on the duplicate id.
+        if let Some(existing) = self.node_service.get_node(&node_id).await? {
+            return Ok(existing);
+        }
 
         // Use NodeService for node creation (emits NodeCreated event)
-        self.node_service.create_node(node).await?;
+        let node = Node::new_with_id(
+            node_id.clone(),
+            "collection".to_string(),
+            validated_name,
+            json!({}),
+        );
+        if let Err(e) = self.node_service.create_node(node).await {
+            // A concurrent create of the same deterministic id may have won the race —
+            // reuse it rather than failing the import.
+            if let Some(existing) = self.node_service.get_node(&node_id).await? {
+                return Ok(existing);
+            }
+            return Err(e);
+        }
 
         // Fetch and return the created node
         self.node_service
@@ -1020,5 +1060,86 @@ mod tests {
         );
         assert_eq!(build_path_string(&["engineering"]), "engineering");
         assert_eq!(build_path_string(&[]), "");
+    }
+
+    // ---- deterministic collection ids (issue #1703 dedup) -------------------
+
+    #[test]
+    fn deterministic_collection_id_is_stable_and_case_insensitive() {
+        let a = deterministic_collection_id("Architecture");
+        assert_eq!(
+            a,
+            deterministic_collection_id("architecture"),
+            "case variants converge"
+        );
+        assert_eq!(
+            a,
+            deterministic_collection_id("  Architecture  "),
+            "surrounding whitespace is trimmed"
+        );
+        assert_ne!(
+            a,
+            deterministic_collection_id("Decisions"),
+            "distinct names → distinct ids"
+        );
+        assert!(uuid::Uuid::parse_str(&a).is_ok(), "id is a valid UUID");
+    }
+
+    async fn test_node_service() -> (crate::services::NodeService, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut store = Arc::new(SqliteStore::new(dir.path().join("db")).await.unwrap());
+        let ns = crate::services::NodeService::new(&mut store).await.unwrap();
+        (ns, dir)
+    }
+
+    /// The core of the dedup fix: two INDEPENDENT stores (two devices / re-import
+    /// runs) creating the same-named collection converge on ONE id, so sync upserts
+    /// them into a single node instead of accumulating duplicates.
+    #[tokio::test]
+    async fn create_collection_id_converges_across_independent_stores() {
+        let (ns_a, _a) = test_node_service().await;
+        let (ns_b, _b) = test_node_service().await;
+        let a = CollectionService::new(ns_a.store(), &ns_a)
+            .resolve_path("Architecture")
+            .await
+            .unwrap();
+        let b = CollectionService::new(ns_b.store(), &ns_b)
+            .resolve_path("Architecture")
+            .await
+            .unwrap();
+        assert_eq!(
+            a.leaf.id, b.leaf.id,
+            "independent stores mint the same collection id"
+        );
+        assert_eq!(a.leaf.id, deterministic_collection_id("Architecture"));
+    }
+
+    /// Re-resolving a path (and paths that share a segment) never creates duplicate
+    /// collection nodes — get-or-create by deterministic id is idempotent.
+    #[tokio::test]
+    async fn resolve_path_is_idempotent_no_duplicate_collections() {
+        let (ns, _dir) = test_node_service().await;
+        let svc = CollectionService::new(ns.store(), &ns);
+
+        let r1 = svc.resolve_path("Architecture:Decisions").await.unwrap();
+        let r2 = svc.resolve_path("Architecture:Alternatives").await.unwrap();
+        let r1b = svc.resolve_path("Architecture:Decisions").await.unwrap();
+
+        assert_eq!(
+            r1.collections[0].node.id, r2.collections[0].node.id,
+            "the shared 'Architecture' segment is one node"
+        );
+        assert_eq!(r1.leaf.id, r1b.leaf.id, "re-resolve is idempotent");
+        assert_eq!(
+            r1.collections[0].node.id,
+            deterministic_collection_id("Architecture")
+        );
+
+        let names = svc.get_all_collection_names().await.unwrap();
+        assert_eq!(
+            names.len(),
+            3,
+            "exactly Architecture/Decisions/Alternatives, no duplicates: {names:?}"
+        );
     }
 }
