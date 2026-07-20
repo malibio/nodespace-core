@@ -5,6 +5,7 @@
 
 use crate::models::{Node, NodeUpdate};
 use crate::ops::OpsError;
+use crate::services::collection_service::deterministic_collection_id;
 use crate::services::{
     CollectionService, CreateNodeParams, InsertPositionOwned, NodeService, NodeServiceError,
 };
@@ -308,9 +309,14 @@ pub async fn create_collection(
         serde_json::json!({ "description": input.description })
     };
 
+    // Deterministic id from the (globally-unique) name so a UI-created collection
+    // converges with the same-named collection created on another device or by import
+    // (`CollectionService::create_collection` derives the same id) instead of minting a
+    // random UUID that syncs up as a duplicate. The name-existence check above already
+    // rejects a local duplicate.
     let collection_id = node_service
         .create_node_with_parent(CreateNodeParams {
-            id: None,
+            id: Some(deterministic_collection_id(&input.name)),
             node_type: "collection".to_string(),
             content: input.name,
             parent_id: None,
@@ -401,6 +407,39 @@ mod tests {
             matches!(err, OpsError::AlreadyExists { ref id } if id == "my-collection"),
             "expected AlreadyExists, got {:?}",
             err
+        );
+    }
+
+    /// A collection created via the UI/gRPC op on one store must get the SAME id as the
+    /// same-named collection created via the import path (`resolve_path`) on another
+    /// store, so two devices converge instead of syncing up duplicate collection nodes.
+    #[tokio::test]
+    async fn ui_created_collection_id_matches_import_path_across_stores() {
+        let (svc_a, _a) = make_service().await;
+        let (svc_b, _b) = make_service().await;
+
+        let ui = create_collection(
+            &svc_a,
+            CreateCollectionInput {
+                name: "Architecture".to_string(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let imported = CollectionService::new(svc_b.store(), &svc_b)
+            .resolve_path("Architecture")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ui.collection_id, imported.leaf.id,
+            "UI-created and import-created collections of the same name converge on one id"
+        );
+        assert_eq!(
+            ui.collection_id,
+            deterministic_collection_id("Architecture")
         );
     }
 
