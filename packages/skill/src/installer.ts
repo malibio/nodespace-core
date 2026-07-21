@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -52,7 +52,13 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
       const dest = join(config.installDir, basename(shim));
       if (existsSync(src)) {
         mkdirSync(config.installDir, { recursive: true });
-        copyFileSync(src, dest);
+        // SKILL.md gets the agent's frontmatter prepended (Claude Code discovers
+        // a skill by its YAML frontmatter); everything else is copied verbatim.
+        if (config.skillFrontmatter && basename(shim) === 'SKILL.md') {
+          writeFileSync(dest, config.skillFrontmatter + '\n' + readFileSync(src, 'utf8'), 'utf8');
+        } else {
+          copyFileSync(src, dest);
+        }
         installed.push(dest);
       }
     }

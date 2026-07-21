@@ -11,6 +11,12 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP };
 });
 
+// Isolate from the ambient env: claude-code detection honors $CLAUDE_CONFIG_DIR,
+// so an inherited value (e.g. a `claude-ns` profile) would point the default
+// AGENTS at a real dir and break the mocked-home assumptions below. The dedicated
+// CLAUDE_CONFIG_DIR describe sets it explicitly where it needs to.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 const { install, uninstall, isNodespaceBinaryOnPath } = await import('../installer.js');
 const { AGENTS } = await import('../agents.js');
 
@@ -83,7 +89,27 @@ describe('install', () => {
     expect(results[0].agent).toBe(agentName);
     expect(results[0].installed).toHaveLength(1);
     expect(existsSync(join(config.installDir, 'SKILL.md'))).toBe(true);
-    expect(readFileSync(join(config.installDir, 'SKILL.md'), 'utf8')).toBe(SKILL_MD_CONTENT);
+    const expected = config.skillFrontmatter
+      ? config.skillFrontmatter + '\n' + SKILL_MD_CONTENT
+      : SKILL_MD_CONTENT;
+    expect(readFileSync(join(config.installDir, 'SKILL.md'), 'utf8')).toBe(expected);
+  });
+
+  it('prepends Claude Code frontmatter to SKILL.md but copies verbatim for other agents', () => {
+    const cc = AGENTS.find(a => a.name === 'claude-code')!;
+    expect(cc.skillFrontmatter).toBeTruthy();
+    mkdirSync(cc.detectionDir, { recursive: true });
+    install(['claude-code'], FAKE_PKG_ROOT);
+    const ccContent = readFileSync(join(cc.installDir, 'SKILL.md'), 'utf8');
+    expect(ccContent.startsWith('---\nname: nodespace')).toBe(true);
+    expect(ccContent).toContain('allowed-tools: Bash(nodespace:*)');
+    expect(ccContent).toContain(SKILL_MD_CONTENT);
+
+    const codex = AGENTS.find(a => a.name === 'codex')!;
+    expect(codex.skillFrontmatter).toBeUndefined();
+    mkdirSync(codex.detectionDir, { recursive: true });
+    install(['codex'], FAKE_PKG_ROOT);
+    expect(readFileSync(join(codex.installDir, 'SKILL.md'), 'utf8')).toBe(SKILL_MD_CONTENT);
   });
 
   it('installs all shims (SKILL.md + agent shim) when all source files exist', () => {
@@ -238,5 +264,30 @@ describe('install PATH warning', () => {
     stderrSpy.mockRestore();
     vi.doUnmock('node:child_process');
     vi.resetModules();
+  });
+});
+
+describe('CLAUDE_CONFIG_DIR', () => {
+  afterEach(() => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    vi.resetModules();
+  });
+
+  it('claude-code detects + installs into $CLAUDE_CONFIG_DIR when set', async () => {
+    const custom = join(TMP, 'custom-claude-profile');
+    process.env.CLAUDE_CONFIG_DIR = custom;
+    vi.resetModules();
+    const { AGENTS: A } = await import('../agents.js');
+    const cc = A.find(a => a.name === 'claude-code')!;
+    expect(cc.detectionDir).toBe(custom);
+    expect(cc.installDir).toBe(join(custom, 'skills', 'nodespace'));
+  });
+
+  it('claude-code falls back to ~/.claude when $CLAUDE_CONFIG_DIR is unset', async () => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    vi.resetModules();
+    const { AGENTS: A } = await import('../agents.js');
+    const cc = A.find(a => a.name === 'claude-code')!;
+    expect(cc.installDir).toBe(join(TMP, '.claude', 'skills', 'nodespace'));
   });
 });
