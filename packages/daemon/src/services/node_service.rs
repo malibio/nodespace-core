@@ -112,6 +112,15 @@ impl NodeServiceImpl {
         self
     }
 
+    /// The underlying `NodeService` this impl serves. Lets a caller that opens a
+    /// database through the registry (e.g. the Pro daemon binding cloud-sync to
+    /// the manager's default database) reuse the *same* `NodeService` the gRPC
+    /// handlers serve, rather than constructing a second one on the same file
+    /// (which would contend on the single-writer lock).
+    pub fn node_service(&self) -> Arc<CoreNodeService> {
+        self.node_service.clone()
+    }
+
     /// Resolve which database a request targets (ADR-053) and return that
     /// database's node service. The routing contract lives in
     /// [`crate::db_routing::routed_database_services`]: a header selects a
@@ -1812,6 +1821,23 @@ mod tests {
             Arc::new(EmbeddingScheduler::new()),
         ));
         (svc, tmp)
+    }
+
+    #[tokio::test]
+    async fn node_service_accessor_returns_the_same_underlying_service() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let core_svc = Arc::new(CoreNodeService::new(&mut store).await.unwrap());
+        let svc = NodeServiceImpl::new(
+            core_svc.clone(),
+            Arc::new(tokio::sync::RwLock::new(None)),
+            Arc::new(EmbeddingScheduler::new()),
+        );
+        // The accessor must hand back the exact same NodeService (same allocation)
+        // the impl serves, so a caller like the Pro daemon can bind cloud-sync to
+        // it without opening a second store on the same file.
+        assert!(Arc::ptr_eq(&svc.node_service(), &core_svc));
     }
 
     /// A model-less shared build context for constructing a `DatabaseManager`
