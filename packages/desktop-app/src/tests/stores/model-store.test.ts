@@ -40,11 +40,18 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 function mockTauriEnvironment(isTauri: boolean) {
   interface WindowWithTauri extends Window {
+    __TAURI__?: Record<string, unknown>;
     __TAURI_INTERNALS__?: Record<string, unknown>;
   }
   if (isTauri) {
     (window as WindowWithTauri).__TAURI_INTERNALS__ = {};
   } else {
+    // Clear BOTH markers `isTauri()` checks. Under vitest's `forks` pool the
+    // environment is reused across test files, so another file that set either
+    // marker (and didn't clear it) would otherwise leak into these mock-path
+    // tests and flip them onto the Tauri branch — the cause of the parallel-suite
+    // flakiness where refreshModels()/downloadModel() take the unmocked Tauri path.
+    delete (window as WindowWithTauri).__TAURI__;
     delete (window as WindowWithTauri).__TAURI_INTERNALS__;
   }
 }
@@ -52,6 +59,10 @@ function mockTauriEnvironment(isTauri: boolean) {
 describe('ModelStore', () => {
   beforeEach(() => {
     modelStore.reset();
+    // Establish the non-Tauri (mock) environment deterministically so these tests
+    // don't depend on the absence of Tauri globals a prior test file may have left
+    // on the shared window. The Tauri sub-block below opts back into Tauri mode.
+    mockTauriEnvironment(false);
     vi.useFakeTimers();
   });
 
