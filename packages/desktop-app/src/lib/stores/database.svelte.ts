@@ -165,6 +165,17 @@ class DatabaseStore {
       if (seq !== this.switchSeq) return;
       this.activeDatabaseId = id;
 
+      // Re-target Pro cloud-sync to follow the newly-active database (ADR-053
+      // single-active sync): switching database in the app switches which tenant
+      // syncs, not just which one is read/written. No-ops in community mode (the
+      // Tauri command returns early without a ProClient). Best-effort — a
+      // re-target failure must not abort the already-committed routing switch.
+      try {
+        await invoke('pro_activate_database', { databaseId: id });
+      } catch (err) {
+        log.warn('Failed to re-target sync to the switched database', { id, error: err });
+      }
+
       // Evict the previous database's cached data. `clearAll()` also bumps the
       // store's database epoch, which closes the in-flight-read window: a read
       // (e.g. loadChildren/getNode) dispatched against the previous database

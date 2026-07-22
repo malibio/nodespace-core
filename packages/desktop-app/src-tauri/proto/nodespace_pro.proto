@@ -45,6 +45,13 @@ service CloudSyncService {
   // can advance from the enable prompt to sign-in. Idempotent.
   rpc EnableSync (EnableSyncRequest) returns (EnableSyncResponse);
 
+  // Switch the cloud-sync session to follow a different local database (ADR-053
+  // single-active sync). The desktop calls this from its switch-database action,
+  // right after re-pointing routing, so switching database also switches which
+  // tenant syncs — not just which one is read/written. An empty database_id
+  // deactivates (local-only). Idempotent for the already-active database.
+  rpc ActivateDatabase (ActivateDatabaseRequest) returns (ActivateDatabaseResponse);
+
   // --- Team membership (M5, #147). Thin adapters over the cloud
   // membership RPCs; the daemon forwards the signed-in user's JWT, so
   // the same admin / last-admin / open-vs-restricted gates apply
@@ -161,6 +168,19 @@ message SignOutResponse {}
 
 message EnableSyncRequest {}
 message EnableSyncResponse {}
+
+message ActivateDatabaseRequest {
+  // Registry id of the database to make the active cloud-sync target. Empty =
+  // deactivate the current session (go local-only).
+  string database_id = 1;
+}
+message ActivateDatabaseResponse {
+  // True when a cloud-sync session was started (the target is bound to a
+  // tenant); false when the target is local-only or sync was deactivated.
+  bool synced = 1;
+  // The tenant schema now syncing; empty when local-only / deactivated.
+  string schema = 2;
+}
 
 // --- Team membership (M5, #147) ----------------------------------
 // permission is "admin" | "modify" | "readOnly". collection_id / person_id are
