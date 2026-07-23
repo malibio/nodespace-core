@@ -1142,4 +1142,91 @@ mod tests {
             "exactly Architecture/Decisions/Alternatives, no duplicates: {names:?}"
         );
     }
+
+    /// `member_count` must reflect CONTENT members only. The sidebar uses it to
+    /// decide whether a collection is empty (and to prune empty ones), so it has
+    /// to agree with what the collection viewer actually lists — user-authored
+    /// content, never the system/roster members the viewer filters out. The
+    /// seeded demo collections held only a `person` roster and so wrongly counted
+    /// as non-empty, then opened blank. Here a decorative `horizontal-line` stands
+    /// in for such a non-content member: it must NOT inflate the count.
+    #[tokio::test]
+    async fn member_count_excludes_non_content_members() {
+        let (ns, _dir) = test_node_service().await;
+        let svc = CollectionService::new(ns.store(), &ns);
+
+        let research = svc.resolve_path("Research").await.unwrap().leaf.id;
+
+        // One genuine content node and one non-content member, both member_of
+        // "Research".
+        let text_id = ns
+            .create_node(Node::new(
+                "text".to_string(),
+                "A research note".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        let divider_id = ns
+            .create_node(Node::new(
+                "horizontal-line".to_string(),
+                "---".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        svc.add_to_collection(&text_id, &research).await.unwrap();
+        svc.add_to_collection(&divider_id, &research).await.unwrap();
+
+        let counts = svc.get_all_collections_with_counts().await.unwrap();
+        let (_, research_count, _) = counts
+            .iter()
+            .find(|(node, _, _)| node.id == research)
+            .expect("Research collection present in listing");
+
+        assert_eq!(
+            *research_count, 1,
+            "only the text node counts; the horizontal-line member is excluded"
+        );
+    }
+
+    /// The membership sweep only replicates SECONDARY memberships.
+    /// `get_multi_membership_edges` returns every edge of a node in >1 collection
+    /// and excludes single-membership nodes (their one membership rides the atomic
+    /// node insert), so the sweep stays bounded to the nodes that actually need it.
+    #[tokio::test]
+    async fn get_multi_membership_edges_only_multi_membership_nodes() {
+        let (ns, _dir) = test_node_service().await;
+        let svc = CollectionService::new(ns.store(), &ns);
+        let default = svc.resolve_path("Default").await.unwrap().leaf.id;
+        let topic = svc.resolve_path("Architecture").await.unwrap().leaf.id;
+
+        // Multi-membership node: member_of BOTH collections.
+        let multi = ns
+            .create_node(Node::new("text".to_string(), "multi".to_string(), json!({})))
+            .await
+            .unwrap();
+        svc.add_to_collection(&multi, &default).await.unwrap();
+        svc.add_to_collection(&multi, &topic).await.unwrap();
+        // Single-membership node: member_of only one collection.
+        let single = ns
+            .create_node(Node::new("text".to_string(), "single".to_string(), json!({})))
+            .await
+            .unwrap();
+        svc.add_to_collection(&single, &default).await.unwrap();
+
+        let edges = ns.store().get_multi_membership_edges().await.unwrap();
+        assert_eq!(
+            edges.len(),
+            2,
+            "only the multi-membership node's two edges, not the single node's: {edges:?}"
+        );
+        assert!(
+            edges.iter().all(|(m, _)| m == &multi),
+            "the single-membership node is excluded entirely"
+        );
+        let colls: std::collections::HashSet<&str> =
+            edges.iter().map(|(_, c)| c.as_str()).collect();
+        assert!(colls.contains(default.as_str()) && colls.contains(topic.as_str()));
+    }
 }

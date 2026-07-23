@@ -306,6 +306,46 @@ impl SqliteStore {
         Ok(ids)
     }
 
+    /// Every `member_of` edge belonging to a node that is a member of MORE THAN
+    /// ONE collection, as `(member_id, collection_id)` pairs. A node's first
+    /// membership rides its atomic cloud node insert, so only these SECONDARY
+    /// memberships need a separate push; the cloud-sync membership sweep uses this
+    /// to converge them. Bounding to multi-membership nodes keeps the sweep cheap
+    /// — the single-membership majority (already covered atomically) is never
+    /// enumerated. Idempotent re-push of the one atomic-covered edge among a
+    /// multi-membership node's edges is a benign no-op on the cloud side.
+    ///
+    /// `person` members are excluded: their collection memberships are RBAC state
+    /// managed server-side by the membership RPCs (invite / set_member) and are
+    /// not the sweep's concern — re-asserting them would bypass those gates and
+    /// waste round-trips. Content and nested-collection memberships are kept.
+    pub async fn get_multi_membership_edges(&self) -> Result<Vec<(String, String)>> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT r.in_node, r.out_node FROM relationship r \
+                 JOIN node n ON n.id = r.in_node \
+                 WHERE r.relationship_type = 'member_of' \
+                   AND n.node_type != 'person' \
+                   AND r.in_node IN ( \
+                     SELECT in_node FROM relationship \
+                     WHERE relationship_type = 'member_of' \
+                     GROUP BY in_node HAVING COUNT(*) > 1 \
+                   )",
+                (),
+            )
+            .await
+            .context("Failed to get multi-membership edges")?;
+
+        let mut edges = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let member: String = row.get(0)?;
+            let collection: String = row.get(1)?;
+            edges.push((member, collection));
+        }
+        Ok(edges)
+    }
+
     pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<Node>> {
         let start = std::time::Instant::now();
 
@@ -455,9 +495,26 @@ impl SqliteStore {
             return Ok(vec![]);
         }
 
-        // Count members per collection
+        // Count CONTENT members per collection. This count drives the sidebar's
+        // member badge AND its empty-collection pruning, so it must match what the
+        // collection viewer actually lists — user-authored content only. Counting
+        // raw `member_of` edges instead let a collection whose only members are the
+        // person roster (or other system nodes) report a non-zero count, show in the
+        // sidebar, then open empty because the viewer filters those members out.
+        //
+        // The excluded types mirror the frontend's NON_CONTENT_NODE_TYPES
+        // (collections.svelte.ts): `person`/`schema`/`database-settings` are
+        // system/definition nodes, `collection` members are shown in the tree
+        // itself, and `horizontal-line` is a decorative divider. Keep the two lists
+        // in sync.
         let mut rows = self.db.query(
-            "SELECT out_node, COUNT(*) FROM relationship WHERE relationship_type = 'member_of' GROUP BY out_node",
+            "SELECT r.out_node, COUNT(*) \
+             FROM relationship r \
+             JOIN node n ON n.id = r.in_node \
+             WHERE r.relationship_type = 'member_of' \
+               AND n.node_type NOT IN \
+                 ('schema', 'person', 'database-settings', 'collection', 'horizontal-line') \
+             GROUP BY r.out_node",
             (),
         ).await.context("Failed to get member counts")?;
 
@@ -558,9 +615,18 @@ impl SqliteStore {
         Ok(created)
     }
 
-    pub async fn bulk_add_to_collections(&self, memberships: &[(String, String)]) -> Result<usize> {
+    /// Bulk-insert `member_of` edges, returning the edges actually created
+    /// (skipping ones that already existed) as `(rel_id, node_id, collection_id,
+    /// order)`. Callers that need cloud sync route through
+    /// [`crate::services::NodeService::bulk_add_to_collections_notify`], which
+    /// emits a `RelationshipCreated` event per returned edge — this raw store
+    /// method emits nothing, so on its own the edges never push to cloud.
+    pub async fn bulk_add_to_collections(
+        &self,
+        memberships: &[(String, String)],
+    ) -> Result<Vec<(String, String, String, f64)>> {
         if memberships.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         let start = std::time::Instant::now();
@@ -593,7 +659,7 @@ impl SqliteStore {
             .await
             .context("Failed to begin bulk add transaction")?;
 
-        let mut created = 0;
+        let mut created: Vec<(String, String, String, f64)> = Vec::new();
         for (node_id, collection_id, order) in &ordered {
             let mut rows = tx.query(
                 "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
@@ -608,16 +674,16 @@ impl SqliteStore {
             let props = serde_json::json!({"order": order}).to_string();
             tx.execute(
                 "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'member_of', ?4, 1, ?5, ?6)",
-                libsql::params![rel_id, node_id.clone(), collection_id.clone(), props, now.clone(), now.clone()],
+                libsql::params![rel_id.clone(), node_id.clone(), collection_id.clone(), props, now.clone(), now.clone()],
             ).await.context("Failed to insert membership")?;
-            created += 1;
+            created.push((rel_id, node_id.clone(), collection_id.clone(), *order));
         }
 
         tx.commit().await.context("Failed to commit bulk add")?;
 
         tracing::debug!(
             "bulk_add_to_collections: {} memberships in {:?}",
-            created,
+            created.len(),
             start.elapsed()
         );
 

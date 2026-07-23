@@ -21,6 +21,10 @@ pub struct GetAllCollectionsInput;
 #[derive(Debug)]
 pub struct CollectionEntry {
     pub node: Node,
+    /// Number of **content** members (user-authored nodes) in this collection.
+    /// System/definition/decorative members (person, schema, database-settings,
+    /// nested collection nodes, horizontal-line) are NOT counted, so this matches
+    /// what the collection viewer lists and the sidebar's empty-collection pruning.
     pub member_count: usize,
     pub parent_collection_ids: Vec<String>,
 }
