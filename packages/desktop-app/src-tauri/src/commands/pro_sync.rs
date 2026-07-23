@@ -12,11 +12,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::services::pro_client::pb::cloud_sync_service_client::CloudSyncServiceClient;
 use crate::services::pro_client::pb::sync_status_event::State as PbState;
 use crate::services::pro_client::pb::{
-    AcceptInviteRequest, ApproveRequestRequest, CreateInviteRequest, EnableSyncRequest,
-    GetIdentityRequest, InitiateOAuthRequest, JoinCollectionRequest, LeaveCollectionRequest,
-    ListInvitesRequest, ListJoinableCollectionsRequest, ListMembersRequest, ListRequestsRequest,
-    RemoveMemberRequest, RequestJoinRequest, RevokeInviteRequest, SetMemberRequest, SignOutRequest,
-    WatchSyncStatusRequest,
+    AcceptInviteRequest, ActivateDatabaseRequest, ApproveRequestRequest, CreateInviteRequest,
+    EnableSyncRequest, GetIdentityRequest, InitiateOAuthRequest, JoinCollectionRequest,
+    LeaveCollectionRequest, ListInvitesRequest, ListJoinableCollectionsRequest, ListMembersRequest,
+    ListRequestsRequest, RemoveMemberRequest, RequestJoinRequest, RevokeInviteRequest,
+    SetMemberRequest, SignOutRequest, WatchSyncStatusRequest,
 };
 use crate::services::{ProClient, ProTier};
 use tonic::transport::Channel;
@@ -235,6 +235,27 @@ pub async fn pro_enable_sync(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("EnableSync failed: {e}"))?;
     tracing::info!("Pro: EnableSync");
+    Ok(())
+}
+
+/// Re-target the Pro cloud-sync session to follow the newly-active database
+/// (ADR-053 single-active sync). The frontend calls this right after
+/// `set_active_database` re-points routing, so switching databases in the app
+/// also switches which tenant syncs — not just which one is read/written. Empty
+/// `database_id` deactivates (local-only). No-ops in community mode (no
+/// `ProClient`), matching the other Pro commands' side-effect-free contract, so
+/// the community database switcher is unaffected.
+#[tauri::command]
+pub async fn pro_activate_database(app: AppHandle, database_id: String) -> Result<(), String> {
+    let Some(pro) = app.try_state::<ProClient>() else {
+        return Ok(());
+    };
+    let mut client = pro.client().await;
+    client
+        .activate_database(ActivateDatabaseRequest { database_id })
+        .await
+        .map_err(|e| format!("ActivateDatabase failed: {e}"))?;
+    tracing::info!("Pro: ActivateDatabase");
     Ok(())
 }
 

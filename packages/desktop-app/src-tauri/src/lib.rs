@@ -442,6 +442,7 @@ pub fn run() {
             commands::pro_sync::pro_initiate_oauth,
             commands::pro_sync::pro_signout,
             commands::pro_sync::pro_enable_sync,
+            commands::pro_sync::pro_activate_database,
             commands::pro_sync::pro_set_member,
             commands::pro_sync::pro_remove_member,
             commands::pro_sync::pro_leave_collection,

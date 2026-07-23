@@ -193,12 +193,14 @@ describe('Database Store', () => {
     });
 
     it('flushes, switches, clears caches, resets tabs, and reloads', async () => {
-      mockInvoke.mockResolvedValueOnce(undefined); // set_active_database
+      mockInvoke.mockResolvedValue(undefined); // set_active_database + pro_activate_database
 
       await databaseStore.switchTo('b');
 
       expect(flushAllPendingSaves).toHaveBeenCalledOnce();
       expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'b' });
+      // The switch also re-targets Pro cloud-sync to the new database (ADR-053).
+      expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' });
       expect(databaseStore.activeDatabaseId).toBe('b');
       expect(clearAll).toHaveBeenCalledOnce();
       expect(structureTreeClear).toHaveBeenCalledOnce();
@@ -206,6 +208,21 @@ describe('Database Store', () => {
       expect(addTab).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
       expect(loadSchemas).toHaveBeenCalledOnce();
+    });
+
+    it('completes the switch even if the Pro sync re-target fails', async () => {
+      mockInvoke
+        .mockResolvedValueOnce(undefined) // set_active_database
+        .mockRejectedValueOnce(new Error('daemon unavailable')); // pro_activate_database
+
+      await databaseStore.switchTo('b');
+
+      // A sync re-target failure is best-effort: the already-committed routing
+      // switch still lands (caches cleared, tabs reset), never left half-done.
+      expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' });
+      expect(databaseStore.activeDatabaseId).toBe('b');
+      expect(clearAll).toHaveBeenCalledOnce();
+      expect(clearAllTabs).toHaveBeenCalledOnce();
     });
 
     it('no-ops when switching to the already-active database', async () => {
