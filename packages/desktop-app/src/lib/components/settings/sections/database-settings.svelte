@@ -35,6 +35,12 @@
     }
   }
 
+  /** Friendly display name for a tenant schema, e.g. "tenant_demo" → "Demo". */
+  function tenantLabel(schema: string): string {
+    const bare = schema.replace(/^tenant_/, '').replace(/_/g, ' ').trim();
+    return bare.length ? bare.charAt(0).toUpperCase() + bare.slice(1) : schema;
+  }
+
   async function createDatabase(name: string) {
     const entry = await databaseStore.create(name);
     if (entry) {
@@ -89,13 +95,19 @@
 </script>
 
 <div class="max-w-[720px]">
-  <div class="mb-6 flex items-center justify-between">
+  <div class="mb-2 flex items-center justify-between">
     <h2 class="text-foreground text-xl font-semibold">Databases</h2>
     <div class="flex gap-2">
       <Button variant="outline" size="sm" onclick={() => (newDialogOpen = true)}>New</Button>
       <Button variant="outline" size="sm" onclick={openExisting}>Open existing…</Button>
     </div>
   </div>
+  <p class="text-muted-foreground mb-6 text-sm leading-relaxed">
+    A <span class="text-foreground font-medium">database</span> is a local store on this
+    machine — <span class="text-foreground font-medium">not</span> a tenant. Each database
+    can sync to one cloud <span class="text-foreground font-medium">tenant</span> (its
+    workspace) or stay local-only. Opening a database also switches which tenant syncs.
+  </p>
 
   {#if databaseStore.error}
     <div
@@ -133,9 +145,26 @@
           </div>
           <div class="text-muted-foreground mt-1 break-all font-mono text-xs">{db.path}</div>
           <div class="text-muted-foreground mt-1 text-xs">{statusLabel(db.status)}</div>
+          <div class="mt-1.5 text-xs">
+            {#if db.boundTenantSchema}
+              <span class="text-primary bg-primary/10 rounded px-1.5 py-0.5 font-medium">
+                Syncs to tenant · {tenantLabel(db.boundTenantSchema)}
+              </span>
+              <span class="text-muted-foreground/60 ml-1 font-mono">{db.boundTenantSchema}</span>
+            {:else}
+              <span class="text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                Local only · not synced
+              </span>
+            {/if}
+          </div>
         </div>
 
         <div class="flex shrink-0 flex-col gap-1.5">
+          {#if db.id !== activeDatabaseId}
+            <Button variant="default" size="sm" onclick={() => databaseStore.switchTo(db.id)}>
+              Open
+            </Button>
+          {/if}
           {#if !db.isDefault}
             <Button variant="ghost" size="sm" onclick={() => setDefault(db)}>Set as default</Button>
           {/if}

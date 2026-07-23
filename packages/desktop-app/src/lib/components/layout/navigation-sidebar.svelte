@@ -7,6 +7,7 @@
     setSchemaTypesExpanded
   } from '$lib/stores/layout.svelte';
   import { navigationStore, setActiveTab, addTab } from '$lib/stores/navigation.svelte';
+  import { openSettings } from '$lib/utils/open-settings';
   import { collectionsState, collectionsData } from '$lib/stores/collections.svelte';
   import { formatDateISO } from '$lib/utils/date-formatting.js';
   import { v4 as uuidv4 } from 'uuid';
@@ -281,6 +282,9 @@
       handleDailyJournalClick();
     } else if (itemId === 'search') {
       openSearchTab();
+    } else if (itemId === 'settings') {
+      // Shared singleton tab (same one the File menu + database indicator open).
+      openSettings();
     }
 
     // Update active state in navigation items

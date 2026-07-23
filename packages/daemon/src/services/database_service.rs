@@ -65,6 +65,7 @@ fn listing_to_info(listing: &DatabaseListing) -> DatabaseInfo {
         last_opened_at: entry.last_opened_at.map(|t| t.to_rfc3339()),
         is_default: listing.is_default,
         status: proto_status(listing.status) as i32,
+        bound_tenant_schema: entry.bound_tenant_schema.clone(),
     }
 }
 
