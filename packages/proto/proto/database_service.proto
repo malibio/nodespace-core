@@ -66,6 +66,10 @@ message DatabaseInfo {
   bool is_default = 6;
   // Current open/closed/missing status.
   DatabaseStatus status = 7;
+  // The cloud tenant schema this database is bound to (ADR-053 per-database cloud
+  // sync), mirrored from the registry. Absent/empty when the database is
+  // local-only (not bound to any tenant).
+  optional string bound_tenant_schema = 8;
 }
 
 message ListDatabasesRequest {}

@@ -26,6 +26,9 @@ pub struct DatabaseEntry {
     pub status: String,
     pub created_at: String,
     pub last_opened_at: Option<String>,
+    /// The cloud tenant schema this database is bound to (ADR-053); `None` when
+    /// the database is local-only (not bound to any tenant).
+    pub bound_tenant_schema: Option<String>,
 }
 
 /// The full registry listing plus the daemon-wide default id.
@@ -57,6 +60,7 @@ fn to_entry(info: DatabaseInfo) -> DatabaseEntry {
         status: status_str(info.status),
         created_at: info.created_at,
         last_opened_at: info.last_opened_at,
+        bound_tenant_schema: info.bound_tenant_schema,
     }
 }
 

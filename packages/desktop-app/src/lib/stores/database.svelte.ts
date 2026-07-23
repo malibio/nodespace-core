@@ -31,6 +31,9 @@ export interface DatabaseInfo {
   status: string;
   createdAt: string;
   lastOpenedAt: string | null;
+  /** Cloud tenant schema this database syncs to (ADR-053); null/empty when the
+   * database is local-only (not bound to any tenant). */
+  boundTenantSchema: string | null;
 }
 
 interface DatabaseListing {
@@ -63,8 +66,34 @@ const IMPLICIT_BROWSER_DATABASE: DatabaseInfo = {
   isDefault: true,
   status: 'open',
   createdAt: '',
-  lastOpenedAt: null
+  lastOpenedAt: null,
+  boundTenantSchema: null
 };
+
+/**
+ * The active-database selection is desktop-local (not a daemon concept), so it
+ * is persisted in the webview's localStorage. This survives a reload (Cmd+R) and
+ * an app restart, so the user stays on the database they switched to instead of
+ * snapping back to the daemon's registry default.
+ */
+const ACTIVE_DB_STORAGE_KEY = 'nodespace.activeDatabaseId';
+
+function rememberActiveDatabaseId(id: string): void {
+  try {
+    localStorage.setItem(ACTIVE_DB_STORAGE_KEY, id);
+  } catch {
+    // localStorage unavailable (e.g. some sandboxed contexts) — persistence is
+    // best-effort; the selection simply won't survive a reload.
+  }
+}
+
+function readRememberedActiveDatabaseId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_DB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Manages the daemon's registry of local databases and the desktop-local
@@ -129,9 +158,18 @@ class DatabaseStore {
       this.defaultDatabaseId = listing.defaultDatabaseId || null;
 
       if (this.activeDatabaseId === null) {
-        // Prefer the daemon default; fall back to the first registered database
-        // so the switcher always shows a concrete selection.
-        this.activeDatabaseId = this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
+        // Restore the last-active database across webview reloads / restarts.
+        // Fall back to the daemon default, then the first registered database, so
+        // the switcher always shows a concrete selection. Ignore a remembered id
+        // that is no longer registered (e.g. the database was deleted).
+        const remembered = readRememberedActiveDatabaseId();
+        const rememberedValid =
+          remembered !== null && this.databases.some((db) => db.id === remembered);
+        this.activeDatabaseId =
+          (rememberedValid ? remembered : null) ??
+          this.defaultDatabaseId ??
+          this.databases[0]?.id ??
+          null;
         // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
         // variant machine can read sync_enabled/auth_status.
         this.refreshDatabaseSettings();
@@ -164,6 +202,9 @@ class DatabaseStore {
       await invoke('set_active_database', { id });
       if (seq !== this.switchSeq) return;
       this.activeDatabaseId = id;
+      // Remember the selection so a webview reload / app restart restores it
+      // instead of snapping back to the daemon's registry default.
+      rememberActiveDatabaseId(id);
 
       // Re-target Pro cloud-sync to follow the newly-active database (ADR-053
       // single-active sync): switching database in the app switches which tenant

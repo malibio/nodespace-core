@@ -85,6 +85,7 @@ function db(id: string, overrides: Partial<DatabaseInfo> = {}): DatabaseInfo {
     status: 'closed',
     createdAt: '2026-01-01T00:00:00Z',
     lastOpenedAt: null,
+    boundTenantSchema: null,
     ...overrides
   };
 }
