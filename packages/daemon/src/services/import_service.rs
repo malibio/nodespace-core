@@ -694,7 +694,15 @@ async fn run_batch_import(
         .await;
 
         if !bulk_insert_failed && !collection_assignments.is_empty() {
-            match store.bulk_add_to_collections(&collection_assignments).await {
+            // Route through the notifying variant so each new `member_of` edge
+            // emits a RelationshipCreated event and thus PUSHES to cloud. The raw
+            // `store.bulk_add_to_collections` writes the rows but emits nothing, so
+            // the memberships would land only in the local DB — every other device
+            // (and any first-time puller) would then see these collections empty.
+            match node_service_clone
+                .bulk_add_to_collections_notify(&collection_assignments)
+                .await
+            {
                 Ok(count) => tracing::info!("Bulk assigned {} collection memberships", count),
                 Err(e) => {
                     tracing::error!("Failed to bulk add to collections: {:?}", e);
@@ -1546,6 +1554,73 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "collection membership survives replace",
+        );
+    }
+
+    /// The demo-repair case: a document already in the store but MISSING its
+    /// topic-collection membership (its content landed only in the default
+    /// collection) regains that membership from a plain re-import — no
+    /// `--replace`, no duplication. This is the self-heal path the demo re-seed
+    /// relies on: routing is re-derived and every root's membership is
+    /// re-asserted, so a root that lost (or never had) its topic edge gets wired
+    /// up in place.
+    #[tokio::test]
+    async fn reimport_reasserts_missing_collection_membership() {
+        let (ns, dir) = new_service_and_dir().await;
+        let ns = Arc::new(ns);
+        // base_directory is the repo root; the file under architecture/ routes to
+        // the "Architecture" collection.
+        let arch = dir.path().join("architecture");
+        std::fs::create_dir_all(&arch).unwrap();
+        std::fs::write(arch.join("overview.md"), "# Overview\n\nBody.\n").unwrap();
+        let files = vec![arch.join("overview.md").to_str().unwrap().to_string()];
+        let opts = ImportOptions {
+            base_directory: dir.path().to_str().unwrap().to_string(),
+            auto_collection_routing: true,
+            ..Default::default()
+        };
+
+        // First import: the doc root joins its topic collection.
+        run_batch_and_wait(Arc::clone(&ns), files.clone(), opts.clone()).await;
+        let root_id = deterministic_root_id("architecture/overview.md");
+        let memberships_before = ns.store().get_node_memberships(&root_id).await.unwrap();
+        assert!(
+            !memberships_before.is_empty(),
+            "doc routed into a collection on first import",
+        );
+        let topic_coll = memberships_before[0].clone();
+
+        // Simulate the broken demo state: strip the topic membership so the root
+        // is present but orphaned from its collection (unbrowsable there).
+        CollectionService::new(ns.store(), &ns)
+            .remove_from_collection(&root_id, &topic_coll)
+            .await
+            .unwrap();
+        assert!(
+            ns.store()
+                .get_node_memberships(&root_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "membership removed — the root is now orphaned from its collection",
+        );
+        let headers_before = ns.store().count_nodes_by_type("header").await.unwrap();
+
+        // Plain re-import (no --replace) must re-assert the lost membership and
+        // create no new node.
+        run_batch_and_wait(Arc::clone(&ns), files.clone(), opts.clone()).await;
+        assert!(
+            ns.store()
+                .get_node_memberships(&root_id)
+                .await
+                .unwrap()
+                .contains(&topic_coll),
+            "plain re-import re-asserts the lost topic-collection membership (self-heal)",
+        );
+        assert_eq!(
+            ns.store().count_nodes_by_type("header").await.unwrap(),
+            headers_before,
+            "self-heal adds only the missing edge — it must not duplicate any node",
         );
     }
 }

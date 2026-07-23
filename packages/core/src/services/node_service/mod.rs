@@ -433,12 +433,21 @@ pub struct CreateNodeParams {
     pub properties: Value,
 }
 
-/// Broadcast channel capacity for domain events.
+/// Broadcast channel capacity for domain events — the LIVE channel `emit_event`
+/// publishes on and every consumer (`subscribe_to_events`) reads, including the
+/// cloud-sync push consumer.
 ///
-/// 128 provides sufficient headroom for burst operations (bulk node creation)
-/// while limiting memory overhead. Observer lag is acceptable - we only track
-/// the current state, not historical events.
-const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 128;
+/// It must comfortably buffer a bulk import's burst: relationship events are not
+/// node-keyed, so they broadcast immediately (they bypass the batch guard), and
+/// the push consumer replicates each `member_of` edge with its own network
+/// round-trip, so it drains slower than a batch import emits. A broadcast
+/// receiver only misses events if it falls MORE than this many behind, so a burst
+/// larger than the buffer makes the push consumer lag and DROP edges (memberships
+/// then never reach cloud, leaving those collections empty on other devices). 128
+/// overflowed on a ~320-edge collection import; 4096 covers a realistic
+/// multi-collection import while staying tiny in memory (each envelope is a few
+/// small ids).
+const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 4096;
 
 /// Internal state shared between the store notifier closure and `BatchEmitGuard`.
 ///
@@ -3343,6 +3352,127 @@ mod tests {
         assert!(node_ids.contains(&root_id), "root event missing");
         assert!(node_ids.contains(&child1_id), "child1 event missing");
         assert!(node_ids.contains(&child2_id), "child2 event missing");
+    }
+
+    /// The batch importer assigns collection membership via
+    /// `bulk_add_to_collections_notify`, and each newly created `member_of` edge
+    /// MUST emit a RelationshipCreated event so the cloud-sync push replicates it.
+    /// The raw store insert emits nothing — that gap is why imported collections
+    /// showed up populated only on the importing device and empty on a fresh pull.
+    #[tokio::test]
+    async fn bulk_add_to_collections_notify_emits_push_events() {
+        let (service, _temp) = create_test_service().await;
+
+        // A stand-in collection plus two content nodes. The store bulk-insert does
+        // not type-check the target, so plain nodes suffice to exercise emission.
+        let coll = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "Docs collection".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        let a = service
+            .create_node(Node::new("text".to_string(), "A".to_string(), json!({})))
+            .await
+            .unwrap();
+        let b = service
+            .create_node(Node::new("text".to_string(), "B".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        // Subscribe after node creation so only the membership events are captured.
+        let mut rx = service.subscribe_to_events();
+
+        let created = service
+            .bulk_add_to_collections_notify(&[(a.clone(), coll.clone()), (b.clone(), coll.clone())])
+            .await
+            .unwrap();
+        assert_eq!(created, 2, "two new memberships created");
+
+        let mut member_of_events = 0;
+        while let Ok(env) = rx.try_recv() {
+            if let DomainEvent::RelationshipCreated { relationship } = &env.event {
+                if relationship.relationship_type == "member_of" {
+                    member_of_events += 1;
+                }
+            }
+        }
+        assert_eq!(
+            member_of_events, 2,
+            "each new member_of edge must emit a RelationshipCreated event so it pushes to cloud",
+        );
+
+        // Idempotent re-assert: an already-present edge creates nothing and, so,
+        // emits nothing (no spurious re-push).
+        let mut rx2 = service.subscribe_to_events();
+        let again = service
+            .bulk_add_to_collections_notify(&[(a.clone(), coll.clone())])
+            .await
+            .unwrap();
+        assert_eq!(again, 0, "existing membership is not recreated");
+        assert!(
+            rx2.try_recv().is_err(),
+            "no event fires for an already-present edge",
+        );
+    }
+
+    /// A bulk import's membership burst must not overflow the domain-event
+    /// broadcast and drop edges — the exact failure that leaves a collection empty
+    /// on other devices. Emit a burst LARGER than the old 128 capacity and assert a
+    /// subscriber receives every event (no `Lagged`). This guards the channel
+    /// capacity: at 128 this burst would drop events; at 4096 it does not.
+    #[tokio::test]
+    async fn bulk_membership_burst_does_not_overflow_the_event_channel() {
+        use tokio::sync::broadcast::error::TryRecvError;
+        let (service, _temp) = create_test_service().await;
+
+        // One collection plus a burst of content nodes, all created BEFORE the
+        // subscription so only the membership events land in the receiver's buffer.
+        let coll = service
+            .create_node(Node::new("text".to_string(), "coll".to_string(), json!({})))
+            .await
+            .unwrap();
+        const BURST: usize = 300; // > 128 (old cap), < 4096 (new cap)
+        let mut memberships = Vec::with_capacity(BURST);
+        for i in 0..BURST {
+            let id = service
+                .create_node(Node::new("text".to_string(), format!("n{i}"), json!({})))
+                .await
+                .unwrap();
+            memberships.push((id, coll.clone()));
+        }
+
+        // Subscribe AFTER node creation → the receiver's buffer starts empty and
+        // only accumulates the membership burst.
+        let mut rx = service.subscribe_to_events();
+        let created = service
+            .bulk_add_to_collections_notify(&memberships)
+            .await
+            .unwrap();
+        assert_eq!(created, BURST, "all memberships created");
+
+        let mut member_of_events = 0usize;
+        loop {
+            match rx.try_recv() {
+                Ok(env) => {
+                    if let DomainEvent::RelationshipCreated { relationship } = &env.event {
+                        if relationship.relationship_type == "member_of" {
+                            member_of_events += 1;
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(n)) => {
+                    panic!("event channel lagged by {n} — capacity too small for the burst")
+                }
+            }
+        }
+        assert_eq!(
+            member_of_events, BURST,
+            "every membership event was buffered — none dropped by a too-small channel",
+        );
     }
 
     /// Single-node creation via `create_node` must still emit immediately (not
