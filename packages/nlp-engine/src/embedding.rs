@@ -367,6 +367,15 @@ impl EmbeddingService {
 
             tracing::info!("Model path resolved to: {:?}", model_path);
 
+            // Load-time integrity gate (ADR-058): refuse to load a model whose
+            // bytes don't match the pinned SHA-256. This closes the post-install
+            // tamper window — a swapped GGUF is parsed by native llama.cpp with
+            // full daemon authority, so a hostile artifact must never reach it.
+            crate::config::verify_model_integrity(&model_path).map_err(|e| {
+                tracing::error!("{}", e);
+                EmbeddingError::IntegrityError(e)
+            })?;
+
             // Initialize llama.cpp backend (uses global singleton)
             // BackendGuard holds the Mutex lock for the duration of model loading
             let backend = get_or_init_backend().map_err(EmbeddingError::ModelLoadError)?;
