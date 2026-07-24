@@ -93,10 +93,14 @@ export function updateSchemaField(
         [targetNode.nodeType]: updatedNamespace
       };
 
-  // Persist via sharedNodeStore
+  // Persist via sharedNodeStore. This builds the full intended properties bag
+  // itself (and the old-format branch deliberately drops flat keys), so replace
+  // rather than deep-merge — otherwise the dropped flat keys would reappear on
+  // the local optimistic node.
   sharedNodeStore.updateNode(
     targetNodeId,
     { properties: updatedProperties },
-    { type: 'viewer', viewerId }
+    { type: 'viewer', viewerId },
+    { replaceProperties: true }
   );
 }

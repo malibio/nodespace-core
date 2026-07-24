@@ -26,7 +26,12 @@
   import { Input } from '$lib/components/ui/input';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { type SchemaNode, type SchemaField, type EnumValue, isSchemaNode } from '$lib/types/schema-node';
+  import {
+    type SchemaNode,
+    type SchemaField,
+    type EnumValue,
+    isSchemaNode
+  } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
@@ -123,7 +128,10 @@
 
     // For strongly-typed nodes (TaskNode, etc.), check top-level fields first
     // Type-specific fields like status, priority, dueDate are at the top level
-    if (fieldName in node && (node as unknown as Record<string, unknown>)[fieldName] !== undefined) {
+    if (
+      fieldName in node &&
+      (node as unknown as Record<string, unknown>)[fieldName] !== undefined
+    ) {
       return (node as unknown as Record<string, unknown>)[fieldName];
     }
 
@@ -184,7 +192,7 @@
       // Look up label from enum values
       if (statusField && status) {
         const enumValues = getEnumValues(statusField);
-        const enumValue = enumValues.find(ev => ev.value === status);
+        const enumValue = enumValues.find((ev) => ev.value === status);
         statusLabel = enumValue?.label || formatEnumLabel(status);
       }
     }
@@ -249,10 +257,13 @@
       ? { title: evaluateTitleTemplate(schema.titleTemplate, migratedNamespace) || null }
       : {};
 
+    // updatedProperties is the full intended bag (the old-format branch above
+    // deliberately drops flat keys), so replace rather than deep-merge.
     sharedNodeStore.updateNode(
       nodeId,
       { properties: updatedProperties, ...titleUpdate },
-      { type: 'viewer', viewerId: 'schema-property-form' }
+      { type: 'viewer', viewerId: 'schema-property-form' },
+      { replaceProperties: true }
     );
   }
 
@@ -392,7 +403,9 @@
                 <!-- Enum Field → shadcn Select Component (Fixed with bind:value) -->
                 {@const enumValues = getEnumValues(field)}
                 {@const currentEnumValue = getEnumValue(field)}
-                {@const currentLabel = enumValues.find(ev => ev.value === currentEnumValue)?.label || formatEnumLabel(currentEnumValue)}
+                {@const currentLabel =
+                  enumValues.find((ev) => ev.value === currentEnumValue)?.label ||
+                  formatEnumLabel(currentEnumValue)}
                 <Select.Root
                   type="single"
                   value={currentEnumValue}

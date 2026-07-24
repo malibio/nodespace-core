@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeNodeData } from '$lib/services/node-normalize';
+import {
+  normalizeNodeData,
+  deepMergeProperties,
+  promoteTypedFields,
+  OPTIMISTIC_TYPED_FIELDS
+} from '$lib/services/node-normalize';
 import type { Node } from '$lib/types/node';
 
 function makeNode(overrides: Partial<Node> = {}): Node {
@@ -65,5 +70,63 @@ describe('normalizeNodeData', () => {
     expect(r.dueDate).toBe('2024-12-31');
     expect(r.id).toBe('test-id');
     expect(r.content).toBe('test content');
+  });
+});
+
+describe('deepMergeProperties', () => {
+  it('merges one level and keeps sibling keys', () => {
+    const merged = deepMergeProperties(
+      { 'capture:x': 'keep', provider: 'native' },
+      { model: 'm1' },
+      'ai-chat'
+    );
+    expect(merged).toEqual({ 'capture:x': 'keep', provider: 'native', model: 'm1' });
+  });
+
+  it('merges one level deeper into the type namespace', () => {
+    const merged = deepMergeProperties(
+      { task: { status: 'open', priority: 'high' } },
+      { task: { status: 'done' } },
+      'task'
+    );
+    expect(merged.task).toEqual({ status: 'done', priority: 'high' });
+  });
+
+  it('treats a missing existing bag as empty', () => {
+    expect(deepMergeProperties(undefined, { model: 'm1' }, 'ai-chat')).toEqual({ model: 'm1' });
+  });
+});
+
+describe('promoteTypedFields', () => {
+  it('promotes only fields present in a flat ai-chat write', () => {
+    const changes = { messages: [{ role: 'user', content: 'hi' }], status: 'processing' };
+    const promoted = promoteTypedFields('ai-chat', changes, changes);
+    // provider/model omitted → not promoted (guards against undefined-clobber)
+    expect(promoted).toEqual({ messages: changes.messages, status: 'processing' });
+    expect('provider' in promoted).toBe(false);
+    expect('model' in promoted).toBe(false);
+  });
+
+  it('promotes nested task fields from the type namespace', () => {
+    const changes = { task: { status: 'done' } };
+    const merged = { task: { status: 'done', priority: 'high' } };
+    const promoted = promoteTypedFields('task', changes, merged);
+    expect(promoted).toEqual({ status: 'done' });
+  });
+
+  it('returns nothing for a node type with no typed-field map', () => {
+    expect(promoteTypedFields('text', { foo: 'bar' }, { foo: 'bar' })).toEqual({});
+  });
+
+  it('promotes an explicit null value (present but null)', () => {
+    const changes = { model: null };
+    const promoted = promoteTypedFields('ai-chat', changes, changes);
+    expect('model' in promoted).toBe(true);
+    expect(promoted.model).toBeNull();
+  });
+
+  it('map stays aligned with the documented promoted types', () => {
+    expect(Object.keys(OPTIMISTIC_TYPED_FIELDS).sort()).toEqual(['ai-chat', 'task']);
+    expect(OPTIMISTIC_TYPED_FIELDS['ai-chat']).toEqual(['status', 'provider', 'model', 'messages']);
   });
 });

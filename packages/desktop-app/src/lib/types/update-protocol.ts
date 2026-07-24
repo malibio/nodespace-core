@@ -103,6 +103,15 @@ export interface BatchOptions {
 export interface UpdateOptions {
   /** Skip persistence (for temporary UI-only updates) */
   skipPersistence?: boolean;
+  /**
+   * Replace `properties` wholesale instead of deep-merging the incoming patch
+   * onto the existing bag. Default (false/undefined) deep-merges so a partial
+   * `{ properties: {...} }` write doesn't drop sibling keys. Set true when the
+   * caller has already computed the full intended `properties` bag (e.g.
+   * `updateNodeProperties`, which does its own merge) and must not have it
+   * re-merged.
+   */
+  replaceProperties?: boolean;
   /** Force update even if version mismatch (dangerous) */
   force?: boolean;
   /** Notify subscribers even if no actual changes */

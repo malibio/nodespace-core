@@ -52,6 +52,113 @@ describe('SharedNodeStore', () => {
   });
 
   // ========================================================================
+  // Optimistic property flattening (updateNode)
+  // ========================================================================
+
+  describe('Optimistic property flattening (updateNode)', () => {
+    const aiChatNode: Node = {
+      ...mockNode,
+      id: 'ai-chat-1',
+      nodeType: 'ai-chat',
+      properties: {}
+    };
+    const taskNode: Node = {
+      ...mockNode,
+      id: 'task-1',
+      nodeType: 'task',
+      properties: {}
+    };
+    const skip = { skipPersistence: true };
+
+    it('promotes flat ai-chat properties.* to top-level fields synchronously', () => {
+      store.setNode(aiChatNode, viewerSource);
+
+      store.updateNode(
+        aiChatNode.id,
+        { properties: { messages: [], status: 'active', provider: 'native', model: 'm1' } },
+        viewerSource,
+        skip
+      );
+
+      const node = store.getNode(aiChatNode.id) as unknown as Record<string, unknown>;
+      expect(node.provider).toBe('native');
+      expect(node.model).toBe('m1');
+      expect(node.status).toBe('active');
+      expect(Array.isArray(node.messages)).toBe(true);
+    });
+
+    it('preserves top-level provider/model when a later write omits them', () => {
+      store.setNode(aiChatNode, viewerSource);
+      store.updateNode(
+        aiChatNode.id,
+        { properties: { provider: 'native', model: 'm1' } },
+        viewerSource,
+        skip
+      );
+
+      // Sending a message writes messages+status but NOT provider/model
+      store.updateNode(
+        aiChatNode.id,
+        { properties: { messages: [{ role: 'user', content: 'hi' }], status: 'processing' } },
+        viewerSource,
+        skip
+      );
+
+      const node = store.getNode(aiChatNode.id) as unknown as Record<string, unknown>;
+      expect((node.messages as unknown[]).length).toBe(1);
+      expect(node.status).toBe('processing');
+      // The omitted-field guard must leave these intact
+      expect(node.provider).toBe('native');
+      expect(node.model).toBe('m1');
+    });
+
+    it('deep-merges properties so a partial write keeps sibling keys', () => {
+      store.setNode(
+        { ...aiChatNode, properties: { 'capture:x': 'keep', provider: 'native' } },
+        viewerSource
+      );
+
+      store.updateNode(
+        aiChatNode.id,
+        { properties: { messages: [{ role: 'user', content: 'hi' }] } },
+        viewerSource,
+        skip
+      );
+
+      const node = store.getNode(aiChatNode.id) as unknown as Node;
+      expect(node.properties['capture:x']).toBe('keep');
+      expect(node.properties.provider).toBe('native');
+    });
+
+    it('promotes nested task properties.task.* to the top level', () => {
+      store.setNode(taskNode, viewerSource);
+
+      store.updateNode(
+        taskNode.id,
+        { properties: { task: { status: 'done' } } },
+        viewerSource,
+        skip
+      );
+
+      const node = store.getNode(taskNode.id) as unknown as Record<string, unknown>;
+      expect(node.status).toBe('done');
+      expect((node.properties as Record<string, Record<string, unknown>>).task.status).toBe('done');
+    });
+
+    it('leaves non-typed node types unaffected', () => {
+      store.setNode(mockNode, viewerSource); // text node
+
+      store.updateNode(mockNode.id, { properties: { foo: 'bar' } }, viewerSource, skip);
+
+      const node = store.getNode(mockNode.id) as unknown as Record<string, unknown>;
+      expect((node.properties as Record<string, unknown>).foo).toBe('bar');
+      // No typed field was invented on a plain text node
+      expect(node.status).toBeUndefined();
+      expect(node.model).toBeUndefined();
+    });
+  });
+
+  // ========================================================================
   // Singleton Behavior
   // ========================================================================
 
@@ -433,9 +540,7 @@ describe('SharedNodeStore', () => {
         store.setNode(parentNode, viewerSource);
 
         const getNodeSpy = vi.spyOn(backendAdapter, 'getNode');
-        const getChildrenSpy = vi
-          .spyOn(backendAdapter, 'getChildren')
-          .mockResolvedValue([]);
+        const getChildrenSpy = vi.spyOn(backendAdapter, 'getChildren').mockResolvedValue([]);
 
         await store.loadChildrenForParent('parent-already-loaded');
 
@@ -453,12 +558,8 @@ describe('SharedNodeStore', () => {
           content: 'Fetched parent'
         };
 
-        const getNodeSpy = vi
-          .spyOn(backendAdapter, 'getNode')
-          .mockResolvedValue(parentNode);
-        const getChildrenSpy = vi
-          .spyOn(backendAdapter, 'getChildren')
-          .mockResolvedValue([]);
+        const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(parentNode);
+        const getChildrenSpy = vi.spyOn(backendAdapter, 'getChildren').mockResolvedValue([]);
 
         await store.loadChildrenForParent('parent-not-in-store');
 
@@ -479,9 +580,7 @@ describe('SharedNodeStore', () => {
           content: 'Child content'
         };
 
-        const getNodeSpy = vi
-          .spyOn(backendAdapter, 'getNode')
-          .mockResolvedValue(null);
+        const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(null);
         const getChildrenSpy = vi
           .spyOn(backendAdapter, 'getChildren')
           .mockResolvedValue([childNode]);
@@ -520,7 +619,6 @@ describe('SharedNodeStore', () => {
     // Note: hasPendingSave tests removed (PersistenceCoordinator deleted)
 
     // Note: waitForNodeSaves tests removed (PersistenceCoordinator deleted)
-
   });
 
   // ========================================================================
@@ -1459,12 +1557,9 @@ describe('SharedNodeStore', () => {
       store.setNode(mockNode, viewerSource);
 
       // Update with isComputedField should skip persistence and conflict detection
-      store.updateNode(
-        mockNode.id,
-        { mentions: ['node-1', 'node-2'] },
-        viewerSource,
-        { isComputedField: true }
-      );
+      store.updateNode(mockNode.id, { mentions: ['node-1', 'node-2'] }, viewerSource, {
+        isComputedField: true
+      });
 
       const node = store.getNode(mockNode.id);
       expect(node?.mentions).toEqual(['node-1', 'node-2']);
@@ -1473,17 +1568,12 @@ describe('SharedNodeStore', () => {
     it('should handle batch updates with commitImmediately option', () => {
       store.setNode(mockNode, viewerSource);
 
-      store.updateNode(
-        mockNode.id,
-        { content: 'Immediate batch' },
-        viewerSource,
-        {
-          batch: {
-            autoBatch: true,
-            commitImmediately: true
-          }
+      store.updateNode(mockNode.id, { content: 'Immediate batch' }, viewerSource, {
+        batch: {
+          autoBatch: true,
+          commitImmediately: true
         }
-      );
+      });
 
       // Should have updated
       const node = store.getNode(mockNode.id);
@@ -1512,7 +1602,6 @@ describe('SharedNodeStore', () => {
       expect(typeof count).toBe('number');
       expect(count).toBeGreaterThanOrEqual(0);
     });
-
   });
 
   // ========================================================================
@@ -1543,9 +1632,7 @@ describe('SharedNodeStore', () => {
       store.setNode(localNode, viewerSource, true);
 
       // Mock tauriCommands.getNode to return server state
-      const getNodeSpy = vi
-        .spyOn(backendAdapter, 'getNode')
-        .mockResolvedValue(mockServerNode);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(mockServerNode);
 
       // Trigger resync
       await store.resyncNodeFromServer('test-node-occ');
@@ -1581,9 +1668,7 @@ describe('SharedNodeStore', () => {
       store.setNode(localNode, viewerSource, true);
 
       // Mock tauriCommands.getNode
-      const getNodeSpy = vi
-        .spyOn(backendAdapter, 'getNode')
-        .mockResolvedValue(mockServerNode);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(mockServerNode);
 
       // Trigger resync
       await store.resyncNodeFromServer('test-node-occ');
@@ -1623,9 +1708,7 @@ describe('SharedNodeStore', () => {
       notificationCount = 0;
 
       // Mock tauriCommands.getNode
-      const getNodeSpy = vi
-        .spyOn(backendAdapter, 'getNode')
-        .mockResolvedValue(mockServerNode);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(mockServerNode);
 
       // Trigger resync
       await store.resyncNodeFromServer('test-node-occ');
@@ -1657,9 +1740,7 @@ describe('SharedNodeStore', () => {
       store.setNode(localNode, viewerSource, true);
 
       // Mock tauriCommands.getNode to return null (node not found)
-      const getNodeSpy = vi
-        .spyOn(backendAdapter, 'getNode')
-        .mockResolvedValue(null);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(null);
 
       // Trigger resync - should not throw
       await expect(store.resyncNodeFromServer('test-node-occ')).resolves.not.toThrow();
@@ -1707,20 +1788,15 @@ describe('SharedNodeStore', () => {
       store.setNode(localNode, viewerSource, true);
 
       // Mock tauriCommands.getNode to return server state (version 5)
-      const getNodeSpy = vi
-        .spyOn(backendAdapter, 'getNode')
-        .mockResolvedValue(mockServerNode);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(mockServerNode);
 
       // Resync to version 5
       await store.resyncNodeFromServer('test-node-occ');
 
       // Now try to update with the correct version (5)
-      store.updateNode(
-        'test-node-occ',
-        { content: 'New edit after resync' },
-        viewerSource,
-        { skipPersistence: true }
-      );
+      store.updateNode('test-node-occ', { content: 'New edit after resync' }, viewerSource, {
+        skipPersistence: true
+      });
 
       // Verify update succeeded
       const updatedNode = store.getNode('test-node-occ');
@@ -2085,12 +2161,9 @@ describe('SharedNodeStore', () => {
         const testNode = createTestNode('conflict-test-1');
         store.setNode(testNode, viewerSource);
 
-        store.updateNode(
-          testNode.id,
-          { content: 'First update' },
-          viewerSource,
-          { skipPersistence: true }
-        );
+        store.updateNode(testNode.id, { content: 'First update' }, viewerSource, {
+          skipPersistence: true
+        });
 
         const currentVersion = store.getVersion(testNode.id);
         expect(currentVersion).toBeGreaterThan(0);
@@ -2112,12 +2185,7 @@ describe('SharedNodeStore', () => {
         const testNode = createTestNode('nodetype-conversion-test');
         store.setNode(testNode, viewerSource);
 
-        store.updateNode(
-          testNode.id,
-          { content: '> ' },
-          viewerSource,
-          { skipPersistence: true }
-        );
+        store.updateNode(testNode.id, { content: '> ' }, viewerSource, { skipPersistence: true });
 
         // NodeType conversion with content — must not conflict
         store.updateNode(
@@ -2183,10 +2251,7 @@ describe('SharedNodeStore', () => {
         const callback = vi.fn();
         store.subscribeAll(callback);
 
-        const nodes = [
-          createTestNode('batch-notify-1'),
-          createTestNode('batch-notify-2')
-        ];
+        const nodes = [createTestNode('batch-notify-1'), createTestNode('batch-notify-2')];
 
         store.batchSetNodes(nodes, viewerSource);
 

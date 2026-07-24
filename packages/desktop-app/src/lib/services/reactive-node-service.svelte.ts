@@ -270,7 +270,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     if (newParentId) {
       // Calculate order: insert right after afterNodeId in the sibling list
       const childrenWithOrder = structureTree.getChildrenWithOrder(newParentId);
-      const afterNodeIndex = childrenWithOrder.findIndex(c => c.nodeId === afterNodeId);
+      const afterNodeIndex = childrenWithOrder.findIndex((c) => c.nodeId === afterNodeId);
 
       let order: number;
       if (insertAtBeginning) {
@@ -303,9 +303,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         }
       } else {
         // afterNodeId not found in children, append at end
-        order = childrenWithOrder.length > 0
-          ? childrenWithOrder[childrenWithOrder.length - 1].order + 1.0
-          : 1.0;
+        order =
+          childrenWithOrder.length > 0
+            ? childrenWithOrder[childrenWithOrder.length - 1].order + 1.0
+            : 1.0;
       }
 
       structureTree.addInMemoryRelationship(newParentId, nodeId, order);
@@ -333,7 +334,7 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       isExpanded,
       sharedNodeStoreChildren: children.length,
       structureTreeChildren: structureChildren.length,
-      children: children.map(c => c.id),
+      children: children.map((c) => c.id),
       structureIds: structureChildren
     });
 
@@ -342,47 +343,47 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     // 2. Parent has children
     // 3. Parent is EXPANDED (collapsed parents keep their children)
     if (!insertAtBeginning && children.length > 0 && isExpanded) {
-        // OPTIMISTIC UI: Update structure tree IMMEDIATELY for instant visual feedback
-        // This ensures the UI shows the correct hierarchy without waiting for database
-        for (const child of children) {
-          structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
-        }
+      // OPTIMISTIC UI: Update structure tree IMMEDIATELY for instant visual feedback
+      // This ensures the UI shows the correct hierarchy without waiting for database
+      for (const child of children) {
+        structureTree.moveInMemoryRelationship(afterNodeId, nodeId, child.id);
+      }
 
-        // BACKGROUND PERSISTENCE: Atomically transfer all children in one RPC (C3c).
-        // Structure tree already updated above; this persists to the daemon.
-        Promise.resolve().then(async () => {
-          try {
-            // Wait for newNode to be persisted so children can reference it as parent.
-            await sharedNodeStore.waitForNodeSaves([nodeId]);
+      // BACKGROUND PERSISTENCE: Atomically transfer all children in one RPC (C3c).
+      // Structure tree already updated above; this persists to the daemon.
+      Promise.resolve().then(async () => {
+        try {
+          // Wait for newNode to be persisted so children can reference it as parent.
+          await sharedNodeStore.waitForNodeSaves([nodeId]);
 
-            // Single atomic RPC — all-or-nothing OCC, one transaction in the daemon.
-            const updatedChildren = await backendAdapter.moveChildrenToParent(
-              nodeId,
-              children.map(c => ({ id: c.id, version: c.version }))
+          // Single atomic RPC — all-or-nothing OCC, one transaction in the daemon.
+          const updatedChildren = await backendAdapter.moveChildrenToParent(
+            nodeId,
+            children.map((c) => ({ id: c.id, version: c.version }))
+          );
+
+          // Sync versions from the response (order reconciles via RelationshipUpdated events).
+          for (const updated of updatedChildren) {
+            sharedNodeStore.updateNode(
+              updated.id,
+              { version: updated.version },
+              { type: 'database', reason: 'move-version-sync' },
+              { skipPersistence: true }
             );
-
-            // Sync versions from the response (order reconciles via RelationshipUpdated events).
-            for (const updated of updatedChildren) {
-              sharedNodeStore.updateNode(
-                updated.id,
-                { version: updated.version },
-                { type: 'database', reason: 'move-version-sync' },
-                { skipPersistence: true }
-              );
-            }
-          } catch (error) {
-            // ROLLBACK: Revert optimistic UI changes on failure (preserves the move-rejected notification).
-            log.error('[createNode] Failed to transfer children to database, rolling back:', error);
-            for (const child of children) {
-              structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
-            }
-            conflictNotifications.add({
-              nodeId,
-              message: "Changes couldn't be saved. Please try again.",
-              conflictType: 'child-transfer-failure'
-            });
           }
-        });
+        } catch (error) {
+          // ROLLBACK: Revert optimistic UI changes on failure (preserves the move-rejected notification).
+          log.error('[createNode] Failed to transfer children to database, rolling back:', error);
+          for (const child of children) {
+            structureTree.moveInMemoryRelationship(nodeId, afterNodeId, child.id);
+          }
+          conflictNotifications.add({
+            nodeId,
+            message: "Changes couldn't be saved. Please try again.",
+            conflictType: 'child-transfer-failure'
+          });
+        }
+      });
     }
 
     // Handle hierarchy positioning
@@ -502,7 +503,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     sharedNodeStore.updateNode(nodeId, { mentions: [...mentions] }, viewerSource, {
       skipPersistence: true
     });
-
   }
 
   function updateNodeProperties(
@@ -513,12 +513,15 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
     const node = sharedNodeStore.getNode(nodeId);
     if (!node) return;
 
+    // This function computes the full intended properties bag itself (merged or
+    // replaced), so tell the store to use it as-is rather than deep-merging it
+    // again onto the existing bag.
     sharedNodeStore.updateNode(
       nodeId,
       { properties: merge ? { ...node.properties, ...properties } : { ...properties } },
-      viewerSource
+      viewerSource,
+      { replaceProperties: true }
     );
-
   }
 
   function scheduleContentProcessing(nodeId: string, content: string): void {
@@ -831,7 +834,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       // 3. The CREATE will happen with the correct parent - no MOVE needed!
       //
       // This is more efficient and avoids race conditions entirely.
-      log.debug(`[indentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`);
+      log.debug(
+        `[indentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`
+      );
 
       // structureTree already updated above — at CREATE time, persistence path will derive
       // parentId from structureTree.getParent(nodeId). Re-trigger setNode to cancel the pending
@@ -881,7 +886,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
         // Now safe to move the node (with OCC)
         // Backend returns updated node with new version
-        const updatedNode = await backendAdapter.moveNode(nodeId, freshNode.version, targetParentId, null);
+        const updatedNode = await backendAdapter.moveNode(
+          nodeId,
+          freshNode.version,
+          targetParentId,
+          null
+        );
 
         // Sync local version from backend response
         sharedNodeStore.updateNode(
@@ -963,7 +973,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         //
         // This is more efficient and avoids race conditions where the CREATE
         // fires with stale insertAfterNodeId while parentId has been updated.
-        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`);
+        log.debug(
+          `[outdentNode] Node ${nodeId.substring(0, 8)} not persisted yet, re-triggering CREATE with new parent`
+        );
 
         // Update structure tree first so persistence path can derive parentId from structureTree
         if (newParentId) {
@@ -978,7 +990,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
             ...updatedNode,
             insertPosition: { type: 'end' } as InsertPosition // clear stale sibling ref — append to new parent
           } as typeof updatedNode & { insertPosition?: InsertPosition | null };
-          sharedNodeStore.setNode(nodeWithClearedInsert, { type: 'database', reason: 'outdent-node' });
+          sharedNodeStore.setNode(nodeWithClearedInsert, {
+            type: 'database',
+            reason: 'outdent-node'
+          });
         }
 
         events.hierarchyChanged();
@@ -988,7 +1003,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       } else {
         // CREATE is in-flight! Update structureTree now so the in-flight CREATE closure reads
         // the correct parentId from structureTree.getParent(nodeId) at execution time.
-        log.debug(`[outdentNode] Node ${nodeId.substring(0, 8)} CREATE in-flight, updating structureTree for in-flight CREATE`);
+        log.debug(
+          `[outdentNode] Node ${nodeId.substring(0, 8)} CREATE in-flight, updating structureTree for in-flight CREATE`
+        );
 
         // Update structure tree so in-flight CREATE derives correct parentId
         if (newParentId) {
@@ -998,7 +1015,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         // Clear stale insertPosition on the in-store node (references sibling under OLD parent)
         const currentNode = sharedNodeStore.getNode(nodeId);
         if (currentNode) {
-          (currentNode as typeof currentNode & { insertPosition?: InsertPosition | null }).insertPosition = { type: 'end' } as InsertPosition;
+          (
+            currentNode as typeof currentNode & { insertPosition?: InsertPosition | null }
+          ).insertPosition = { type: 'end' } as InsertPosition;
         }
 
         events.hierarchyChanged();
@@ -1068,7 +1087,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
         const outdentPosition: InsertPosition = oldParentId
           ? { type: 'after', siblingId: oldParentId }
           : { type: 'end' };
-        const updatedNode = await backendAdapter.moveNode(nodeId, freshNode.version, newParentId, outdentPosition);
+        const updatedNode = await backendAdapter.moveNode(
+          nodeId,
+          freshNode.version,
+          newParentId,
+          outdentPosition
+        );
 
         // Sync local version from backend response
         sharedNodeStore.updateNode(
@@ -1086,7 +1110,12 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           const freshSibling = sharedNodeStore.getNode(siblingId);
           if (freshSibling) {
             // Backend returns updated sibling with new version
-            const updatedSibling = await backendAdapter.moveNode(siblingId, freshSibling.version, nodeId, null);
+            const updatedSibling = await backendAdapter.moveNode(
+              siblingId,
+              freshSibling.version,
+              nodeId,
+              null
+            );
             // Sync sibling's version from backend response
             sharedNodeStore.updateNode(
               siblingId,
@@ -1189,9 +1218,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       }
 
       // Calculate the depth this child should have
-      const newChildDepth = newParentForChild !== null
-        ? (_uiState[newParentForChild]?.depth ?? 0) + 1
-        : 0;
+      const newChildDepth =
+        newParentForChild !== null ? (_uiState[newParentForChild]?.depth ?? 0) + 1 : 0;
 
       const insertPosition: InsertPosition = insertAfterSiblingId
         ? { type: 'after', siblingId: insertAfterSiblingId }
@@ -1199,7 +1227,8 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
       // Use moveNodeCommand to properly update the has_child edge in the backend (with OCC)
       const childVersion = child.version;
-      backendAdapter.moveNode(child.id, childVersion, newParentForChild, insertPosition)
+      backendAdapter
+        .moveNode(child.id, childVersion, newParentForChild, insertPosition)
         .then((updatedChild) => {
           // Sync child's local version from backend response
           sharedNodeStore.updateNode(
@@ -1210,7 +1239,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
           );
         })
         .catch((error) => {
-          log.error(`[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChild}:`, error);
+          log.error(
+            `[promoteChildren] Failed to move child ${child.id} to parent ${newParentForChild}:`,
+            error
+          );
         });
 
       // Update ReactiveStructureTree for immediate UI update
@@ -1233,7 +1265,6 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       updateDescendantDepths(child.id);
     }
   }
-
 
   /**
    * Deletes a node and its entire subtree (cascade).

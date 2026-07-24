@@ -39,8 +39,11 @@ import type {
   StoreMetrics,
   UpdateOptions
 } from '$lib/types/update-protocol';
-import { conflictNotifications, type ConflictNotification } from '$lib/stores/conflict-notifications.svelte';
-import { normalizeNodeData } from './node-normalize';
+import {
+  conflictNotifications,
+  type ConflictNotification
+} from '$lib/stores/conflict-notifications.svelte';
+import { normalizeNodeData, deepMergeProperties, promoteTypedFields } from './node-normalize';
 import { decideRemoteUpdate, shouldSkipStaleAiChatUpdate } from './remote-update-policy';
 
 const CONFLICT_MESSAGE: Record<ConflictNotification['conflictType'], string> = {
@@ -104,7 +107,10 @@ class SimplePersistenceCoordinator {
   persist(
     nodeId: string,
     operation: () => Promise<void>,
-    options: { mode: 'immediate' | 'debounce'; dependencies?: Array<string | (() => Promise<void>)> } = { mode: 'debounce' }
+    options: {
+      mode: 'immediate' | 'debounce';
+      dependencies?: Array<string | (() => Promise<void>)>;
+    } = { mode: 'debounce' }
   ): { promise: Promise<void> } {
     const opId = ++this.operationCounter;
     const shortNodeId = nodeId.substring(0, 8);
@@ -115,7 +121,7 @@ class SimplePersistenceCoordinator {
 
     coordLog.debug(
       `[op#${opId}] persist() called for ${shortNodeId}: mode=${options.mode}, ` +
-      `hasPending=${hasPending}, isExecuting=${isExecuting}`
+        `hasPending=${hasPending}, isExecuting=${isExecuting}`
     );
 
     // If an operation is already executing for this node, collapse the new
@@ -228,11 +234,17 @@ class SimplePersistenceCoordinator {
           // onDone/onError, which are queued.resolve/reject.
           this.pendingOperations.set(nodeId, {
             nodeId,
-            operation: () => runOperation(queued.operation, queued.options.dependencies, queued.resolve, queued.reject),
+            operation: () =>
+              runOperation(
+                queued.operation,
+                queued.options.dependencies,
+                queued.resolve,
+                queued.reject
+              ),
             resolve: () => {},
             reject: () => {},
             promise: queued.promise,
-            timeoutId: setTimeout(() => {}, 0),
+            timeoutId: setTimeout(() => {}, 0)
           });
           coordLog.debug(
             `[op#${opId}] queued operation taking over for ${shortNodeId} (mode=${queued.options.mode})`
@@ -247,7 +259,12 @@ class SimplePersistenceCoordinator {
           // avoid unbounded stack growth while still running as soon as
           // possible after confirmation, never re-debounced.
           void Promise.resolve().then(() => {
-            void runOperation(queued.operation, queued.options.dependencies, queued.resolve, queued.reject);
+            void runOperation(
+              queued.operation,
+              queued.options.dependencies,
+              queued.resolve,
+              queued.reject
+            );
           });
         }
       }
@@ -270,7 +287,9 @@ class SimplePersistenceCoordinator {
       this.pendingOperations.set(nodeId, pending);
       executeOperation();
     } else {
-      coordLog.debug(`[op#${opId}] scheduling DEBOUNCED (${this.DEBOUNCE_MS}ms) for ${shortNodeId}`);
+      coordLog.debug(
+        `[op#${opId}] scheduling DEBOUNCED (${this.DEBOUNCE_MS}ms) for ${shortNodeId}`
+      );
       const timeoutId = setTimeout(executeOperation, this.DEBOUNCE_MS);
       const pending: PendingOperation = {
         nodeId,
@@ -295,7 +314,7 @@ class SimplePersistenceCoordinator {
       const isExecuting = this.executingOperations.has(nodeId);
       coordLog.debug(
         `[op#${opId ?? '?'}] cancelPending() for ${shortNodeId}: ` +
-        `isExecuting=${isExecuting} (cancel ${isExecuting ? 'INEFFECTIVE' : 'effective'})`
+          `isExecuting=${isExecuting} (cancel ${isExecuting ? 'INEFFECTIVE' : 'effective'})`
       );
       clearTimeout(pending.timeoutId);
       this.pendingOperations.delete(nodeId);
@@ -316,7 +335,9 @@ class SimplePersistenceCoordinator {
     if (queued) {
       coordLog.debug(`Cleared queued operation for ${nodeId.substring(0, 8)} (OCC conflict)`);
       this.queuedOperations.delete(nodeId);
-      queued.reject(new OperationCancelledError('Queued write cancelled: prior write hit an OCC conflict'));
+      queued.reject(
+        new OperationCancelledError('Queued write cancelled: prior write hit an OCC conflict')
+      );
       const pending = this.pendingOperations.get(nodeId);
       if (pending && pending.promise === queued.promise) {
         this.pendingOperations.delete(nodeId);
@@ -353,12 +374,15 @@ class SimplePersistenceCoordinator {
       // data-loss-sensitive moment. Mirror flushAndWaitForNodes: skip the
       // re-execute, but still await the in-flight promise either way.
       if (!this.executingOperations.has(nodeId)) {
-        pending.operation().then(
-          () => pending.resolve(),
-          (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
-        ).finally(() => {
-          this.pendingOperations.delete(nodeId);
-        });
+        pending
+          .operation()
+          .then(
+            () => pending.resolve(),
+            (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
+          )
+          .finally(() => {
+            this.pendingOperations.delete(nodeId);
+          });
       }
       promises.push(pending.promise.catch(() => {})); // Ignore errors, just wait for completion
     }
@@ -378,7 +402,9 @@ class SimplePersistenceCoordinator {
         try {
           await Promise.race([
             pending.promise,
-            new Promise<void>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('Timeout')), timeoutMs)
+            )
           ]);
         } catch {
           failed.add(nodeId);
@@ -416,12 +442,15 @@ class SimplePersistenceCoordinator {
         // This prevents double-execution when the timeout fires just before clearTimeout
         if (!this.executingOperations.has(nodeId)) {
           // Start the operation now
-          pending.operation().then(
-            () => pending.resolve(),
-            (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
-          ).finally(() => {
-            this.pendingOperations.delete(nodeId);
-          });
+          pending
+            .operation()
+            .then(
+              () => pending.resolve(),
+              (error) => pending.reject(error instanceof Error ? error : new Error(String(error)))
+            )
+            .finally(() => {
+              this.pendingOperations.delete(nodeId);
+            });
         }
 
         // Wait for completion with timeout (whether we started it or it was already running)
@@ -797,7 +826,7 @@ export class SharedNodeStore {
     if (!structureTree) return [];
     const cacheKey = parentId ?? '__root__';
     const childIds = structureTree.getChildren(cacheKey);
-    return childIds.map(id => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
+    return childIds.map((id) => this.nodes.get(id)).filter((n): n is Node => n !== undefined);
   }
 
   /**
@@ -986,10 +1015,26 @@ export class SharedNodeStore {
         previousVersion: this.versions.get(nodeId)
       };
 
-      // Apply update optimistically
+      // Apply update optimistically.
+      // A namespaced `properties` patch is deep-merged (so a partial write
+      // doesn't drop sibling keys) and its type-specific fields are promoted to
+      // the top level immediately — mirroring what the backend's
+      // `node_to_typed_value` does on the round-trip response. Without this,
+      // viewers reading top-level fields (e.g. ai-chat's `model`/`messages`)
+      // stay stale until the RPC resolves, making the UI appear to hang.
+      const mergedProperties = changes.properties
+        ? options.replaceProperties
+          ? changes.properties
+          : deepMergeProperties(existingNode.properties, changes.properties, existingNode.nodeType)
+        : existingNode.properties;
+      const promotedFields = changes.properties
+        ? promoteTypedFields(existingNode.nodeType, changes.properties, mergedProperties)
+        : {};
       const updatedNode: Node = {
         ...existingNode,
         ...changes,
+        ...(changes.properties ? { properties: mergedProperties } : {}),
+        ...promotedFields,
         modifiedAt: new Date().toISOString()
       };
 
@@ -1098,7 +1143,9 @@ export class SharedNodeStore {
           const capturedNonContentFields: Record<string, unknown> = {};
           for (const field of changedFields) {
             if (field !== 'content') {
-              capturedNonContentFields[field] = (changes as unknown as Record<string, unknown>)[field];
+              capturedNonContentFields[field] = (changes as unknown as Record<string, unknown>)[
+                field
+              ];
             }
           }
           const handle = PersistenceCoordinator.getInstance().persist(
@@ -1116,7 +1163,9 @@ export class SharedNodeStore {
                   // This ensures we persist the latest content, not stale content from when persist() was called
                   let currentNode = this.nodes.get(nodeId);
                   if (!currentNode) {
-                    log.warn(`Node ${nodeId} no longer exists in store, skipping update persistence`);
+                    log.warn(
+                      `Node ${nodeId} no longer exists in store, skipping update persistence`
+                    );
                     return;
                   }
 
@@ -1125,7 +1174,9 @@ export class SharedNodeStore {
                   // If we UPDATE before the move completes, we'll have a version mismatch.
                   const pendingMove = getPendingMoveOperation(nodeId);
                   if (pendingMove) {
-                    log.debug(`[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                    log.debug(
+                      `[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`
+                    );
                     await pendingMove;
                     // Re-read current node to get updated version after move
                     const refreshedNode = this.nodes.get(nodeId);
@@ -1146,12 +1197,13 @@ export class SharedNodeStore {
 
                   // Debug: Log version being sent
                   const shortNodeId = nodeId.substring(0, 8);
-                  const contentPreview = 'content' in updatePayload
-                    ? `"${String(updatePayload.content).substring(0, 20)}"`
-                    : '(no content)';
+                  const contentPreview =
+                    'content' in updatePayload
+                      ? `"${String(updatePayload.content).substring(0, 20)}"`
+                      : '(no content)';
                   log.debug(
                     `[UPDATE] ${shortNodeId}: sending version=${currentVersion}, ` +
-                    `content=${contentPreview}`
+                      `content=${contentPreview}`
                   );
 
                   try {
@@ -1165,7 +1217,9 @@ export class SharedNodeStore {
                     const nodeType = currentNode?.nodeType;
                     const isNodeTypeChanging = 'nodeType' in updatePayload;
                     const typeUpdater =
-                      nodeType && !isNodeTypeChanging ? pluginRegistry.getNodeUpdater(nodeType) : null;
+                      nodeType && !isNodeTypeChanging
+                        ? pluginRegistry.getNodeUpdater(nodeType)
+                        : null;
 
                     let updatedNodeFromBackend: Node | null = null;
 
@@ -1221,12 +1275,14 @@ export class SharedNodeStore {
                       // clobber a defined local value.
                       const localHasMovedOn =
                         localNode.properties !== currentNode.properties &&
-                        JSON.stringify(localNode.properties) !== JSON.stringify(currentNode.properties);
+                        JSON.stringify(localNode.properties) !==
+                          JSON.stringify(currentNode.properties);
                       const localProperties =
                         localHasMovedOn || updatedNodeFromBackend.properties === undefined
                           ? localNode.properties
                           : updatedNodeFromBackend.properties;
-                      const titleChanged = updatedNodeFromBackend.title !== undefined &&
+                      const titleChanged =
+                        updatedNodeFromBackend.title !== undefined &&
                         updatedNodeFromBackend.title !== localNode.title;
                       Object.assign(localNode, updatedNodeFromBackend, {
                         content: localContent,
@@ -1245,7 +1301,8 @@ export class SharedNodeStore {
                     // If UPDATE fails because node doesn't exist, try CREATE instead
                     // This handles cases where persistedNodeIds is out of sync (page reload, database reset)
                     // Match various error message formats for "node not found"
-                    const errorMsg = updateError instanceof Error ? updateError.message.toLowerCase() : '';
+                    const errorMsg =
+                      updateError instanceof Error ? updateError.message.toLowerCase() : '';
                     const isNodeNotFound =
                       errorMsg.includes('not found') ||
                       errorMsg.includes('does not exist') ||
@@ -1255,15 +1312,16 @@ export class SharedNodeStore {
                       log.warn(
                         `Node ${nodeId} not found in database, creating instead of updating (error: ${updateError.message})`
                       );
-                      const updateFallbackInput: import('$lib/services/backend-adapter').CreateNodeInput = {
-                        id: currentNode.id,
-                        nodeType: currentNode.nodeType,
-                        content: currentNode.content,
-                        properties: currentNode.properties,
-                        mentions: currentNode.mentions,
-                        parentId: this.getParentId(nodeId),
-                        insertPosition: null
-                      };
+                      const updateFallbackInput: import('$lib/services/backend-adapter').CreateNodeInput =
+                        {
+                          id: currentNode.id,
+                          nodeType: currentNode.nodeType,
+                          content: currentNode.content,
+                          properties: currentNode.properties,
+                          mentions: currentNode.mentions,
+                          parentId: this.getParentId(nodeId),
+                          insertPosition: null
+                        };
                       await backendAdapter.createNode(updateFallbackInput);
                       this.persistedNodeIds.add(nodeId); // Now it's persisted
                     } else {
@@ -1276,18 +1334,21 @@ export class SharedNodeStore {
                   // CRITICAL: Read current node state at execution time
                   const currentNode = this.nodes.get(nodeId);
                   if (!currentNode) {
-                    log.warn(`Node ${nodeId} no longer exists in store, skipping create persistence`);
+                    log.warn(
+                      `Node ${nodeId} no longer exists in store, skipping create persistence`
+                    );
                     return;
                   }
-                  const updatePathCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
-                    id: currentNode.id,
-                    nodeType: currentNode.nodeType,
-                    content: currentNode.content,
-                    properties: currentNode.properties,
-                    mentions: currentNode.mentions,
-                    parentId: this.getParentId(nodeId),
-                    insertPosition: null
-                  };
+                  const updatePathCreateInput: import('$lib/services/backend-adapter').CreateNodeInput =
+                    {
+                      id: currentNode.id,
+                      nodeType: currentNode.nodeType,
+                      content: currentNode.content,
+                      properties: currentNode.properties,
+                      mentions: currentNode.mentions,
+                      parentId: this.getParentId(nodeId),
+                      insertPosition: null
+                    };
                   await backendAdapter.createNode(updatePathCreateInput);
                   this.persistedNodeIds.add(nodeId); // Track as persisted
 
@@ -1301,7 +1362,6 @@ export class SharedNodeStore {
                       this.nodesSet(nodeId, localNode); // Update local node with backend version
                     }
                   }
-
                 }
 
                 // Update mentionedIn on target nodes after successful persistence
@@ -1325,10 +1385,10 @@ export class SharedNodeStore {
 
                 // Suppress expected errors in in-memory test mode
                 if (shouldLogDatabaseErrors()) {
-                  log.error(
-                    `Database write failed for node ${nodeId}:`,
-                    { error, fullError: dbError }
-                  );
+                  log.error(`Database write failed for node ${nodeId}:`, {
+                    error,
+                    fullError: dbError
+                  });
                 }
 
                 // Always track errors in test environment for verification
@@ -1341,7 +1401,7 @@ export class SharedNodeStore {
                 if (occError) {
                   log.warn(
                     `OCC conflict for node ${nodeId}: ` +
-                    `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
+                      `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
                   );
 
                   // Clear queued operations to prevent stale-version retries
@@ -1354,7 +1414,10 @@ export class SharedNodeStore {
                     this.versions.set(nodeId, currentNode.version ?? 1);
                     this.persistedNodeIds.add(nodeId);
                     this.pendingUpdates.delete(nodeId);
-                    this.notifySubscribers(nodeId, currentNode, { type: 'database', reason: 'occ-resync' });
+                    this.notifySubscribers(nodeId, currentNode, {
+                      type: 'database',
+                      reason: 'occ-resync'
+                    });
                   } else {
                     // Fallback: fetch from server if daemon didn't embed current_node
                     this.resyncNodeFromServer(nodeId).catch((resyncError) => {
@@ -1376,7 +1439,10 @@ export class SharedNodeStore {
               }
             },
             {
-              mode: (isStructuralChange || isPropertyChange || isNodeTypeChange || isTypeSpecificChange) ? 'immediate' : 'debounce',
+              mode:
+                isStructuralChange || isPropertyChange || isNodeTypeChange || isTypeSpecificChange
+                  ? 'immediate'
+                  : 'debounce',
               dependencies: dependencies.length > 0 ? dependencies : undefined
             }
           );
@@ -1470,7 +1536,9 @@ export class SharedNodeStore {
     const hasPending = PersistenceCoordinator.getInstance().hasPending(node.id);
 
     if (shouldSkipStaleAiChatUpdate(node, existingNode, source)) {
-      log.debug(`setNode: skipping ai-chat database update with fewer messages`, { nodeId: node.id });
+      log.debug(`setNode: skipping ai-chat database update with fewer messages`, {
+        nodeId: node.id
+      });
       return;
     }
 
@@ -1549,7 +1617,8 @@ export class SharedNodeStore {
         const dependencies: Array<string | (() => Promise<void>)> = [];
 
         // If this node inserts After a sibling, wait for that sibling to be persisted first
-        const insertPos = (node as Node & { insertPosition?: InsertPosition | null }).insertPosition;
+        const insertPos = (node as Node & { insertPosition?: InsertPosition | null })
+          .insertPosition;
         const afterSiblingId = insertPos?.type === 'after' ? insertPos.siblingId : undefined;
         if (afterSiblingId && !this.persistedNodeIds.has(afterSiblingId)) {
           dependencies.push(afterSiblingId);
@@ -1586,7 +1655,9 @@ export class SharedNodeStore {
                 // If we UPDATE before the move completes, we'll have a version mismatch.
                 const pendingMove = getPendingMoveOperation(nodeId);
                 if (pendingMove) {
-                  log.debug(`[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                  log.debug(
+                    `[UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`
+                  );
                   await pendingMove;
                   // Re-read current node to get updated version after move
                   const refreshedNode = this.nodes.get(nodeId);
@@ -1598,7 +1669,11 @@ export class SharedNodeStore {
                 try {
                   // Get current version for optimistic concurrency control.
                   const currentVersion = this.computeOccVersionForUpdate(nodeId);
-                  const updatedFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, currentNode);
+                  const updatedFromBackend = await backendAdapter.updateNode(
+                    nodeId,
+                    currentVersion,
+                    currentNode
+                  );
                   // Sync the backend-assigned version AND typed fields into the
                   // local node. `node_to_typed_value` (the backend's single
                   // flattening authority) promotes type-specific fields — ai-chat's
@@ -1632,7 +1707,8 @@ export class SharedNodeStore {
                     // defined local value.
                     const localHasMovedOn =
                       latestNode.properties !== currentNode.properties &&
-                      JSON.stringify(latestNode.properties) !== JSON.stringify(currentNode.properties);
+                      JSON.stringify(latestNode.properties) !==
+                        JSON.stringify(currentNode.properties);
                     const localProperties =
                       localHasMovedOn || updatedFromBackend.properties === undefined
                         ? latestNode.properties
@@ -1658,15 +1734,16 @@ export class SharedNodeStore {
                     log.warn(
                       `Node ${nodeId} not found in database, creating instead of updating (error: ${errorMessage})`
                     );
-                    const fallbackCreateInput: import('$lib/services/backend-adapter').CreateNodeInput = {
-                      id: currentNode.id,
-                      nodeType: currentNode.nodeType,
-                      content: currentNode.content,
-                      properties: currentNode.properties,
-                      mentions: currentNode.mentions,
-                      parentId: this.getParentId(nodeId),
-                      insertPosition: null
-                    };
+                    const fallbackCreateInput: import('$lib/services/backend-adapter').CreateNodeInput =
+                      {
+                        id: currentNode.id,
+                        nodeType: currentNode.nodeType,
+                        content: currentNode.content,
+                        properties: currentNode.properties,
+                        mentions: currentNode.mentions,
+                        parentId: this.getParentId(nodeId),
+                        insertPosition: null
+                      };
                     await backendAdapter.createNode(fallbackCreateInput);
                     this.persistedNodeIds.add(nodeId);
                   } else {
@@ -1674,8 +1751,13 @@ export class SharedNodeStore {
                   }
                 }
               } else {
-                const nodeWithInsertPos = currentNode as Node & { insertPosition?: InsertPosition | null };
-                if (nodeWithInsertPos.insertPosition?.type === 'after' && nodeWithInsertPos.insertPosition.siblingId) {
+                const nodeWithInsertPos = currentNode as Node & {
+                  insertPosition?: InsertPosition | null;
+                };
+                if (
+                  nodeWithInsertPos.insertPosition?.type === 'after' &&
+                  nodeWithInsertPos.insertPosition.siblingId
+                ) {
                   const siblingId = nodeWithInsertPos.insertPosition.siblingId;
                   const currentParentId = this.getParentId(nodeId);
                   if (this.shouldClearStaleInsertAfter(siblingId, currentParentId)) {
@@ -1717,11 +1799,12 @@ export class SharedNodeStore {
               }
             } catch (dbError) {
               // Properly stringify Tauri errors which come as plain objects
-              const errorMessage = dbError instanceof Error
-                ? dbError.message
-                : typeof dbError === 'object' && dbError !== null
-                  ? JSON.stringify(dbError)
-                  : String(dbError);
+              const errorMessage =
+                dbError instanceof Error
+                  ? dbError.message
+                  : typeof dbError === 'object' && dbError !== null
+                    ? JSON.stringify(dbError)
+                    : String(dbError);
               const error = dbError instanceof Error ? dbError : new Error(errorMessage);
 
               // Suppress expected errors in in-memory test mode
@@ -1970,7 +2053,9 @@ export class SharedNodeStore {
     }
 
     if (existingNode.nodeType !== 'task') {
-      log.warn(`updateTaskNode called on non-task node: ${nodeId} (type: ${existingNode.nodeType})`);
+      log.warn(
+        `updateTaskNode called on non-task node: ${nodeId} (type: ${existingNode.nodeType})`
+      );
       return;
     }
 
@@ -2061,7 +2146,7 @@ export class SharedNodeStore {
           if (occError) {
             log.warn(
               `OCC conflict for task node ${nodeId}: ` +
-              `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
+                `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
             );
             PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
@@ -2071,13 +2156,13 @@ export class SharedNodeStore {
               this.versions.set(nodeId, currentNode.version ?? 1);
               this.persistedNodeIds.add(nodeId);
               this.pendingUpdates.delete(nodeId);
-              this.notifySubscribers(nodeId, currentNode, { type: 'database', reason: 'occ-resync' });
+              this.notifySubscribers(nodeId, currentNode, {
+                type: 'database',
+                reason: 'occ-resync'
+              });
             } else {
               this.resyncNodeFromServer(nodeId).catch((resyncError) => {
-                log.error(
-                  `Failed to resync after OCC error for task node ${nodeId}:`,
-                  resyncError
-                );
+                log.error(`Failed to resync after OCC error for task node ${nodeId}:`, resyncError);
               });
             }
 
@@ -2284,7 +2369,7 @@ export class SharedNodeStore {
       }
 
       const allNodes: Node[] = [];
-      const allRelationships: Array<{parentId: string, childId: string, order: number}> = [];
+      const allRelationships: Array<{ parentId: string; childId: string; order: number }> = [];
       const databaseSource = { type: 'database' as const, reason: 'loaded-from-db' };
 
       // OPTIMIZATION: Add parent node itself to the store
@@ -2304,7 +2389,11 @@ export class SharedNodeStore {
 
       // Helper to recursively process NodeWithChildren and collect nodes + edges
       // OPTIMIZED: Collects all nodes first, then batch adds them
-      const processNode = (nodeWithChildren: import('$lib/types').NodeWithChildren, nodeParentId: string, order: number) => {
+      const processNode = (
+        nodeWithChildren: import('$lib/types').NodeWithChildren,
+        nodeParentId: string,
+        order: number
+      ) => {
         // Extract Node fields (exclude 'children' property)
 
         const { children, ...nodeFields } = nodeWithChildren;
@@ -2593,7 +2682,7 @@ export class SharedNodeStore {
 
         log.warn(
           `Node ${nodeId} resynced from server after OCC error ` +
-          `(server version: ${serverNode.version ?? 1})`
+            `(server version: ${serverNode.version ?? 1})`
         );
       } else {
         log.error(`Failed to resync node ${nodeId}: Node not found on server`);
@@ -2749,15 +2838,15 @@ export class SharedNodeStore {
 
     // Extract mentions from old and new content
     const oldMentions = new Set(
-      contentProcessor.detectNodespaceURIs(oldContent ?? '').map(link => link.nodeId)
+      contentProcessor.detectNodespaceURIs(oldContent ?? '').map((link) => link.nodeId)
     );
     const newMentions = new Set(
-      contentProcessor.detectNodespaceURIs(newContent ?? '').map(link => link.nodeId)
+      contentProcessor.detectNodespaceURIs(newContent ?? '').map((link) => link.nodeId)
     );
 
     // Calculate added and removed mentions
-    const added = [...newMentions].filter(id => !oldMentions.has(id));
-    const removed = [...oldMentions].filter(id => !newMentions.has(id));
+    const added = [...newMentions].filter((id) => !oldMentions.has(id));
+    const removed = [...oldMentions].filter((id) => !newMentions.has(id));
 
     // Skip if no changes
     if (added.length === 0 && removed.length === 0) return;
@@ -2766,14 +2855,17 @@ export class SharedNodeStore {
     // The container is what appears in backlinks - it's the navigable entry point
     const sourceContainer = this.findContainer(sourceNodeId);
     if (!sourceContainer) {
-      log.debug(`Could not find container for source node ${sourceNodeId}, skipping mentionedIn update`);
+      log.debug(
+        `Could not find container for source node ${sourceNodeId}, skipping mentionedIn update`
+      );
       return;
     }
 
     // Build NodeReference for the container
     const containerRef: NodeReference = {
       id: sourceContainer.id,
-      title: sourceContainer.title ?? (stripMarkdown(sourceContainer.content).substring(0, 50) || null),
+      title:
+        sourceContainer.title ?? (stripMarkdown(sourceContainer.content).substring(0, 50) || null),
       nodeType: sourceContainer.nodeType
     };
 
@@ -2786,11 +2878,14 @@ export class SharedNodeStore {
       if (targetNode) {
         const mentionedIn = [...(targetNode.mentionedIn ?? [])];
         // Avoid duplicates (same container can mention via multiple child nodes)
-        if (!mentionedIn.some(ref => ref.id === containerRef.id)) {
+        if (!mentionedIn.some((ref) => ref.id === containerRef.id)) {
           mentionedIn.push(containerRef);
           const updatedTarget = { ...targetNode, mentionedIn };
           this.nodesSet(targetId, updatedTarget);
-          this.notifySubscribers(targetId, updatedTarget, { type: 'database', reason: 'mention-added' });
+          this.notifySubscribers(targetId, updatedTarget, {
+            type: 'database',
+            reason: 'mention-added'
+          });
           log.debug(`Added ${containerRef.id} to mentionedIn of ${targetId}`);
         }
       }
@@ -2803,12 +2898,15 @@ export class SharedNodeStore {
 
       const targetNode = this.nodes.get(targetId);
       if (targetNode?.mentionedIn) {
-        const mentionedIn = targetNode.mentionedIn.filter(ref => ref.id !== containerRef.id);
+        const mentionedIn = targetNode.mentionedIn.filter((ref) => ref.id !== containerRef.id);
         // Only update if actually changed
         if (mentionedIn.length !== targetNode.mentionedIn.length) {
           const updatedTarget = { ...targetNode, mentionedIn };
           this.nodesSet(targetId, updatedTarget);
-          this.notifySubscribers(targetId, updatedTarget, { type: 'database', reason: 'mention-removed' });
+          this.notifySubscribers(targetId, updatedTarget, {
+            type: 'database',
+            reason: 'mention-removed'
+          });
           log.debug(`Removed ${containerRef.id} from mentionedIn of ${targetId}`);
         }
       }
@@ -3224,7 +3322,9 @@ export class SharedNodeStore {
             let currentNode = this.nodes.get(nodeId);
             const pendingMove = getPendingMoveOperation(nodeId);
             if (pendingMove) {
-              log.debug(`[BATCH UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+              log.debug(
+                `[BATCH UPDATE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`
+              );
               await pendingMove;
               // Re-read current node to get updated version after move
               const refreshedNode = this.nodes.get(nodeId);
@@ -3238,7 +3338,11 @@ export class SharedNodeStore {
 
             // CRITICAL: Capture updated node to get new version from backend
             // This prevents version conflicts on subsequent updates
-            const updatedNodeFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, changes);
+            const updatedNodeFromBackend = await backendAdapter.updateNode(
+              nodeId,
+              currentVersion,
+              changes
+            );
 
             // Update local node with backend version
             const localNode = this.nodes.get(nodeId);
@@ -3287,7 +3391,9 @@ export class SharedNodeStore {
                 let raceCurrentNode = this.nodes.get(nodeId);
                 const raceMove = getPendingMoveOperation(nodeId);
                 if (raceMove) {
-                  log.debug(`[BATCH RACE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`);
+                  log.debug(
+                    `[BATCH RACE] Waiting for pending move operation on ${nodeId.substring(0, 8)}`
+                  );
                   await raceMove;
                   const refreshed = this.nodes.get(nodeId);
                   if (refreshed) {
@@ -3295,7 +3401,11 @@ export class SharedNodeStore {
                   }
                 }
                 const currentVersion = raceCurrentNode?.version ?? finalNode.version ?? 1;
-                const updatedNodeFromBackend = await backendAdapter.updateNode(nodeId, currentVersion, changes);
+                const updatedNodeFromBackend = await backendAdapter.updateNode(
+                  nodeId,
+                  currentVersion,
+                  changes
+                );
                 this.persistedNodeIds.add(nodeId);
 
                 // Update local node with backend version
@@ -3314,11 +3424,7 @@ export class SharedNodeStore {
           // This enables immediate backlinks reactivity without requiring navigation
           if (originalContent !== undefined && 'content' in changes) {
             const persistedNode = this.nodes.get(nodeId);
-            this.updateMentionedInOnContentChange(
-              nodeId,
-              originalContent,
-              persistedNode?.content
-            );
+            this.updateMentionedInOnContentChange(nodeId, originalContent, persistedNode?.content);
           }
         } catch (dbError) {
           const error = dbError instanceof Error ? dbError : new Error(String(dbError));
