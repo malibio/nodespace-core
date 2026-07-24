@@ -26,6 +26,9 @@ sysinfo = { version = "0.33", optional = true }
 # Caching layer
 lru = "0.12"
 
+# SHA-256 for load-time model-integrity verification (ADR-058)
+sha2 = "0.10"
+
 # Workspace dependencies
 serde = { workspace = true }
 serde_json = { workspace = true }

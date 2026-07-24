@@ -27,6 +27,9 @@ pub enum EmbeddingError {
     #[error("Model file not found at path: {0}")]
     ModelNotFound(String),
 
+    #[error("Model integrity verification failed: {0}")]
+    IntegrityError(String),
+
     #[error("Device initialization failed: {0}")]
     DeviceError(String),
 }
