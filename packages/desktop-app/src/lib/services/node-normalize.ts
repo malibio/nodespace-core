@@ -18,3 +18,86 @@ export function normalizeNodeData(nodeData: Node): Node {
   }
   return nodeData;
 }
+
+/**
+ * Optimistic-only mirror of the backend's typed-field promotion
+ * (`node_to_typed_value` / `flatten_properties_for_api` in
+ * `packages/nodespace-types/src/convert.rs`). For each node type, lists the
+ * type-specific fields the backend lifts from the stored `properties` bag up to
+ * the TOP LEVEL of the node (the fields viewers actually read).
+ *
+ * Used ONLY so an optimistic (pre-round-trip) `updateNode` reflects these fields
+ * immediately instead of waiting a full RPC round trip. The backend response is
+ * always spread over the node afterward, so any drift between this map and
+ * convert.rs degrades optimistic latency only — never correctness. Keep in sync
+ * with convert.rs when the promoted field set changes.
+ */
+export const OPTIMISTIC_TYPED_FIELDS: Record<string, readonly string[]> = {
+  'ai-chat': ['status', 'provider', 'model', 'messages'],
+  task: ['status', 'priority', 'dueDate', 'assignee', 'startedAt', 'completedAt']
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge an incoming `properties` patch onto the existing `properties` bag so a
+ * partial write doesn't drop sibling keys. Merges one level, plus one level
+ * deeper into the type namespace (e.g. `properties.task.*`) so a nested patch
+ * like `{ task: { status } }` doesn't clobber `properties.task.priority`.
+ */
+export function deepMergeProperties(
+  existing: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>,
+  nodeType: string
+): Record<string, unknown> {
+  const base = existing ?? {};
+  const merged: Record<string, unknown> = { ...base, ...incoming };
+
+  const baseNs = base[nodeType];
+  const incomingNs = incoming[nodeType];
+  if (isPlainObject(baseNs) && isPlainObject(incomingNs)) {
+    merged[nodeType] = { ...baseNs, ...incomingNs };
+  }
+
+  return merged;
+}
+
+/**
+ * Compute the top-level typed fields to promote for an optimistic update.
+ *
+ * Only promotes a field that is actually present in this write — either flat
+ * under `properties` (ai-chat stores `properties.model`) or nested under the
+ * type namespace (`properties.task.status`). The "present in this write" guard
+ * is load-bearing: it prevents overwriting an existing top-level value with
+ * `undefined` when a caller omits a field (e.g. sending a message writes
+ * `properties.messages` but not `properties.model`).
+ */
+export function promoteTypedFields(
+  nodeType: string,
+  changesProperties: Record<string, unknown>,
+  mergedProperties: Record<string, unknown>
+): Record<string, unknown> {
+  const fields = OPTIMISTIC_TYPED_FIELDS[nodeType];
+  if (!fields) return {};
+
+  const nestedChanges = changesProperties[nodeType];
+  const nestedMerged = mergedProperties[nodeType];
+  const promoted: Record<string, unknown> = {};
+
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(changesProperties, field)) {
+      // Flat shape (e.g. ai-chat: properties.model)
+      promoted[field] = mergedProperties[field];
+    } else if (
+      isPlainObject(nestedChanges) &&
+      Object.prototype.hasOwnProperty.call(nestedChanges, field)
+    ) {
+      // Nested shape (e.g. task schema form: properties.task.status)
+      promoted[field] = isPlainObject(nestedMerged) ? nestedMerged[field] : undefined;
+    }
+  }
+
+  return promoted;
+}
