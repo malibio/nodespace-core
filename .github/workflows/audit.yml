@@ -1,0 +1,44 @@
+name: Dependency audit
+
+# Advisory scanning for known-vulnerable dependencies (Threat T9, supply chain —
+# nodespace-docs/architecture/security-posture.md). The dependency graph is fully
+# pinned (no git/path/wildcard deps; Cargo.lock + bun.lock committed), so this is
+# the missing DETECTION layer: cargo audit (RustSec DB) + bun audit on every PR.
+# A live advisory fails its job here and surfaces as a red check on the PR.
+
+on:
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install cargo-audit (prebuilt binary)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        run: cargo audit
+
+  bun-audit:
+    name: bun audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - name: bun install (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: bun audit
+        run: bun audit
