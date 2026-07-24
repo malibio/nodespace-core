@@ -1490,8 +1490,8 @@ impl NodeBehavior for CollectionNodeBehavior {
 ///
 /// AI chat nodes store conversations (user messages, assistant responses, tool calls)
 /// as nested properties following the same pattern as playbook `rules[]`.
-/// Conversations are stored as nodes to enable semantic search, Stamped ACL
-/// permissions, cloud sync, and development traceability.
+/// Conversations are stored as nodes for Stamped ACL permissions, cloud sync,
+/// and development traceability. They are deliberately NOT embedded (see below).
 ///
 /// # Storage Architecture (ADR-028)
 ///
@@ -1501,10 +1501,10 @@ impl NodeBehavior for CollectionNodeBehavior {
 /// - **Tool calls**: Stored as messages with role "tool_call", result_summary preserved,
 ///   full result nulled at write time for storage efficiency
 ///
-/// # Embedding (ADR-029)
+/// # Embedding (ADR-029, as revised)
 ///
-/// `get_embeddable_content()` extracts user + assistant text from `properties.messages[]`,
-/// skipping tool_call messages. This enables semantic search over chat history.
+/// `get_embeddable_content()` always returns `None`: ai-chat conversations are
+/// never embedded or made semantically searchable.
 ///
 /// # Examples
 ///
@@ -1600,27 +1600,15 @@ impl NodeBehavior for AiChatNodeBehavior {
         })
     }
 
-    /// Extract user and assistant message content for semantic search embedding.
+    /// AI-chat nodes are intentionally NOT embedded.
     ///
-    /// Iterates over `properties.messages[]`, includes only messages with
-    /// role "user" or "assistant", and joins their content with double newlines.
-    /// Tool call messages (role "tool_call") are skipped as they contain
-    /// structured data rather than semantic text.
-    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
-        let messages = node.properties.get("messages")?.as_array()?;
-        let text: Vec<&str> = messages
-            .iter()
-            .filter_map(|m| match m.get("role")?.as_str()? {
-                "user" | "assistant" => m.get("content")?.as_str(),
-                _ => None,
-            })
-            .filter(|s| !s.trim().is_empty())
-            .collect();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text.join("\n\n"))
-        }
+    /// Conversations are not general knowledge and must never surface in
+    /// semantic search, so this always returns `None` — no embedding is ever
+    /// produced for an ai-chat node regardless of its messages. This reverses
+    /// the original ADR-029 decision (which embedded chat text but hid it from
+    /// default search); `SearchScope::Conversations` is consequently a no-op.
+    fn get_embeddable_content(&self, _node: &Node) -> Option<String> {
+        None
     }
 
     /// AI chat nodes don't contribute to parent embeddings.
@@ -4276,58 +4264,38 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_chat_node_embeddable_content() {
+    fn test_ai_chat_node_never_embeddable() {
         let behavior = AiChatNodeBehavior;
 
-        // Node with user and assistant messages
+        // Rich conversation with user + assistant messages: still not embeddable.
         let node = Node::new(
             "ai-chat".to_string(),
             "Chat about webhooks".to_string(),
             json!({
                 "messages": [
                     {"role": "user", "content": "Help me implement the webhook handler"},
-                    {"role": "tool_call", "tool": "search_semantic", "result_summary": "Found 3 nodes"},
                     {"role": "assistant", "content": "Based on the spec, here is my approach"},
                     {"role": "user", "content": "Looks good, please proceed"}
                 ]
             }),
         );
-        let content = behavior.get_embeddable_content(&node).unwrap();
-        assert!(content.contains("Help me implement the webhook handler"));
-        assert!(content.contains("Based on the spec, here is my approach"));
-        assert!(content.contains("Looks good, please proceed"));
-        // Tool call messages should be excluded
-        assert!(!content.contains("search_semantic"));
-        assert!(!content.contains("Found 3 nodes"));
-    }
+        assert!(
+            behavior.get_embeddable_content(&node).is_none(),
+            "ai-chat with messages must not be embeddable"
+        );
 
-    #[test]
-    fn test_ai_chat_node_embeddable_content_empty_messages() {
-        let behavior = AiChatNodeBehavior;
-
-        // Empty messages array
-        let node = Node::new(
-            "ai-chat".to_string(),
-            "Empty chat".to_string(),
+        // Empty messages array, tool-only messages, and no messages property are
+        // all likewise never embeddable.
+        for props in [
             json!({"messages": []}),
-        );
-        assert!(behavior.get_embeddable_content(&node).is_none());
-
-        // Only tool call messages (no user/assistant text)
-        let node = Node::new(
-            "ai-chat".to_string(),
-            "Tool-only chat".to_string(),
-            json!({
-                "messages": [
-                    {"role": "tool_call", "tool": "search_semantic", "result_summary": "Found 3 nodes"}
-                ]
-            }),
-        );
-        assert!(behavior.get_embeddable_content(&node).is_none());
-
-        // No messages property
-        let node = Node::new("ai-chat".to_string(), "No messages".to_string(), json!({}));
-        assert!(behavior.get_embeddable_content(&node).is_none());
+            json!({"messages": [
+                {"role": "tool_call", "tool": "search_semantic", "result_summary": "Found 3 nodes"}
+            ]}),
+            json!({}),
+        ] {
+            let node = Node::new("ai-chat".to_string(), "Chat".to_string(), props);
+            assert!(behavior.get_embeddable_content(&node).is_none());
+        }
     }
 
     #[test]
@@ -4462,7 +4430,7 @@ mod tests {
             "schema nodes with content should be embeddable"
         );
 
-        // ai-chat: extracts user/assistant messages from properties
+        // ai-chat: conversations are deliberately NOT embedded, even with messages
         let chat_node = Node::new(
             "ai-chat".to_string(),
             "Chat about webhooks".to_string(),
@@ -4478,12 +4446,9 @@ mod tests {
             .unwrap()
             .get_embeddable_content(&chat_node);
         assert!(
-            chat_content.is_some(),
-            "ai-chat with messages should be embeddable"
+            chat_content.is_none(),
+            "ai-chat should never be embeddable, even with messages"
         );
-        let chat_text = chat_content.unwrap();
-        assert!(chat_text.contains("How do I implement webhooks?"));
-        assert!(chat_text.contains("Here is an approach..."));
 
         // --- Types that should NOT be embeddable (return None) ---
 
@@ -4559,7 +4524,7 @@ mod tests {
             "collection nodes should NOT be embeddable"
         );
 
-        // --- Edge case: ai-chat with no messages returns None ---
+        // --- ai-chat with no messages also returns None (never embeddable) ---
         let empty_chat = Node::new("ai-chat".to_string(), "Empty".to_string(), json!({}));
         assert!(
             registry
@@ -4567,7 +4532,7 @@ mod tests {
                 .unwrap()
                 .get_embeddable_content(&empty_chat)
                 .is_none(),
-            "ai-chat without messages property should NOT be embeddable"
+            "ai-chat is never embeddable, with or without messages"
         );
     }
 
