@@ -33,19 +33,11 @@ export interface DecorationContext {
   displayContext: 'inline' | 'popup' | 'preview';
 }
 
-export interface DecorationResult {
-  html: string;
-  cssClasses: string[];
-  ariaLabel: string;
-  metadata: Record<string, unknown>;
-  interactive: boolean;
-}
-
 export interface NodeTypeConfig {
   icon: string;
   label: string;
   color: string;
-  defaultDecoration: (context: DecorationContext) => DecorationResult | ComponentDecoration;
+  defaultDecoration: (context: DecorationContext) => ComponentDecoration;
 }
 
 // ============================================================================
@@ -66,32 +58,6 @@ export abstract class BaseNodeDecorator {
    * This is the core decorateReference() pattern for component-based decorations
    */
   public abstract decorateReference(context: DecorationContext): ComponentDecoration;
-
-  /**
-   * Base implementation with safe defaults (HTML-based decoration)
-   */
-  protected getBaseDecoration(context: DecorationContext): DecorationResult {
-    const { nodeType, title, uri } = context;
-    const safeTitle = this.sanitizeText(title);
-    const nodeConfig = this.getNodeTypeConfig(nodeType);
-
-    return {
-      html: `
-        <span class="ns-noderef ns-noderef--${nodeType}" 
-              data-node-id="${context.nodeId}" 
-              data-uri="${uri}"
-              role="link"
-              tabindex="0">
-          <span class="ns-noderef__icon">${nodeConfig.icon}</span>
-          <span class="ns-noderef__title">${safeTitle}</span>
-        </span>
-      `,
-      cssClasses: [`ns-noderef`, `ns-noderef--${nodeType}`],
-      ariaLabel: `Reference to ${nodeConfig.label}: ${safeTitle}`,
-      metadata: { nodeType, decorationType: this.decorationType },
-      interactive: true
-    };
-  }
 
   /**
    * Creates a base component decoration for any node type

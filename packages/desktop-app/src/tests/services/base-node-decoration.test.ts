@@ -19,7 +19,6 @@ import {
 } from '$lib/services/base-node-decoration';
 import type {
   DecorationContext,
-  DecorationResult,
   NodeTypeConfig
 } from '$lib/services/base-node-decoration';
 import type { ComponentDecoration } from '$lib/types/component-decoration';
@@ -64,10 +63,6 @@ describe('BaseNodeDecorator', () => {
     }
 
     // Expose protected methods for testing
-    public testGetBaseDecoration(context: DecorationContext): DecorationResult {
-      return this.getBaseDecoration(context);
-    }
-
     public testSanitizeText(text: string): string {
       return this.sanitizeText(text);
     }
@@ -96,52 +91,6 @@ describe('BaseNodeDecorator', () => {
       expect(decorator).toBeDefined();
       expect(decorator['decorationType']).toBe('test');
       expect(decorator['nodeReferenceService']).toBe(mockService);
-    });
-  });
-
-  describe('getBaseDecoration', () => {
-    it('should create basic HTML decoration with default node type', () => {
-      const decorator = new TestDecorator(mockService);
-      const context = createContext();
-      const result = decorator.testGetBaseDecoration(context);
-
-      expect(result.html).toContain('ns-noderef');
-      expect(result.html).toContain('ns-noderef--text');
-      expect(result.html).toContain('Test Node');
-      expect(result.html).toContain('data-node-id="test-node-123"');
-      expect(result.cssClasses).toEqual(['ns-noderef', 'ns-noderef--text']);
-      expect(result.ariaLabel).toContain('Text');
-      expect(result.ariaLabel).toContain('Test Node');
-      expect(result.interactive).toBe(true);
-    });
-
-    it('should handle empty title gracefully', () => {
-      const decorator = new TestDecorator(mockService);
-      const context = createContext({ title: '' });
-
-      // Should not throw when creating decoration
-      expect(() => decorator.testGetBaseDecoration(context)).not.toThrow();
-
-      const result = decorator.testGetBaseDecoration(context);
-      expect(result.html).toContain('ns-noderef');
-    });
-
-    it('should sanitize title to prevent XSS', () => {
-      const decorator = new TestDecorator(mockService);
-      const context = createContext({ title: '<script>alert("xss")</script>' });
-      const result = decorator.testGetBaseDecoration(context);
-
-      expect(result.html).not.toContain('<script>');
-      expect(result.html).toContain('&lt;script&gt;');
-    });
-
-    it('should include correct metadata', () => {
-      const decorator = new TestDecorator(mockService);
-      const context = createContext({ nodeType: 'task' });
-      const result = decorator.testGetBaseDecoration(context);
-
-      expect(result.metadata.nodeType).toBe('task');
-      expect(result.metadata.decorationType).toBe('test');
     });
   });
 

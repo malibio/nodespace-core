@@ -4,8 +4,8 @@
   Renders markdown content for view mode WITHOUT using {@html}.
   Parses markdown into structured nodes and renders using Svelte components.
 
-  This component produces identical visual output to markdownToHtml() but avoids
-  the ESLint svelte/no-at-html-tags warning by using structured rendering.
+  This component produces identical visual output to raw marked/HTML rendering but
+  avoids the ESLint svelte/no-at-html-tags warning by using structured rendering.
 
   Supports:
   - Bold (**text** or __text__) → <span class="markdown-bold">

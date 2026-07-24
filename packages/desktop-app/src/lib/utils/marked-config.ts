@@ -32,9 +32,6 @@
 
 import { marked } from 'marked';
 import type { Tokens } from 'marked';
-import { createLogger } from '$lib/utils/logger';
-
-const log = createLogger('MarkedConfig');
 
 // Configure marked with custom renderer that uses NodeSpace CSS classes
 marked.use({
@@ -112,87 +109,3 @@ marked.use({
   breaks: true, // Convert \n to <br> for proper line break rendering
   gfm: true // GitHub Flavored Markdown
 });
-
-/**
- * Convert markdown to HTML using marked.js with NodeSpace styling
- *
- * This replaces the custom regex-based parser in ContentEditableController
- * and handles edge cases like nested formatting correctly.
- */
-export function markdownToHtml(markdown: string): string {
-  try {
-    const html = marked(markdown);
-    // Handle both sync and async returns from marked()
-    if (typeof html === 'string') {
-      // Strip <p> tags but preserve leading/trailing whitespace
-      return html.replace(/^<p>|<\/p>$/g, '');
-    } else {
-      // If marked returns a Promise (shouldn't happen with our config, but handle it)
-      log.warn('marked() returned Promise unexpectedly, falling back to plain text');
-      return escapeHtml(markdown);
-    }
-  } catch (error) {
-    log.warn('marked.js parsing error:', error);
-    // Fallback to plain text if parsing fails
-    return escapeHtml(markdown);
-  }
-}
-
-/**
- * Convert HTML back to markdown
- * This handles both standard formatting and mixed syntax patterns
- * that NodeSpace uses (bold, italic, and combinations including mixed markers)
- */
-export function htmlToMarkdown(html: string): string {
-  let markdown = html;
-
-  // Handle the edit-mode format with syntax preservation first
-  // This regex matches the edit-mode format: <span class="markdown-syntax">MARKER<span class="...">content</span>MARKER</span>
-  markdown = markdown.replace(
-    /<span class="markdown-syntax">([^<]+)<span class="[^"]*">(.*?)<\/span>([^<]+)<\/span>/g,
-    (match, openMarker, content, closeMarker) => {
-      // Return the original markdown syntax
-      return openMarker + content + closeMarker;
-    }
-  );
-
-  // Handle nested combinations for non-edit mode (order matters)
-  // Bold + Italic combinations
-  markdown = markdown.replace(
-    /<span class="markdown-bold markdown-italic">(.*?)<\/span>/g,
-    '***$1***'
-  );
-  markdown = markdown.replace(
-    /<span class="markdown-italic markdown-bold">(.*?)<\/span>/g,
-    '***$1***'
-  );
-
-  // Handle individual formatting for non-edit mode
-  markdown = markdown.replace(/<span class="markdown-bold">(.*?)<\/span>/g, '**$1**');
-  markdown = markdown.replace(/<span class="markdown-italic">(.*?)<\/span>/g, '*$1*');
-
-  // Handle standard HTML tags in case they slip through
-  markdown = markdown.replace(/<strong>(.*?)<\/strong>/g, '**$1**');
-  markdown = markdown.replace(/<em>(.*?)<\/em>/g, '*$1*');
-
-  // CRITICAL: Handle HTML headers that shouldn't have been created
-  // Convert back to markdown header syntax (failsafe for any edge cases)
-  markdown = markdown.replace(/<h([1-6])>(.*?)<\/h[1-6]>/g, (match, level, content) => {
-    const headerSymbols = '#'.repeat(parseInt(level));
-    return `${headerSymbols} ${content}`;
-  });
-
-  // Clean up any remaining HTML tags
-  markdown = markdown.replace(/<[^>]*>/g, '');
-
-  return markdown;
-}
-
-/**
- * Escape HTML characters to prevent XSS
- */
-function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
