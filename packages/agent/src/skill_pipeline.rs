@@ -257,7 +257,6 @@ FETCH ADDITIONAL CONTENT: Only call get_node with format=markdown if you need fu
 PARAMETER GUIDANCE:
 - Use 'collection' to narrow search to a namespace/folder (e.g. collection="Architecture").
 - Use 'node_types' to filter by type (e.g. node_types=["task"]) — prefer over 'collection' for type-based filtering.
-- Use 'scope'="conversations" when the user asks about past chats or conversation history.
 - Use 'threshold' to tune precision: default 0.3. Lower to 0.1-0.2 for broader recall when results are sparse.
 - Use 'include_archived'=true only when the user explicitly asks for archived or historical content.
 - Use 'exclude_collections' to suppress noisy collections (e.g. exclude_collections=["Archived"]).

@@ -838,6 +838,9 @@ impl NodeEmbeddingService {
                 node_type,
                 "text" | "header" | "code-block" | "schema" | "table"
             ),
+            // ai-chat nodes are no longer embedded (ADR-029, as revised), so no
+            // ai-chat rows exist in the vector index — this scope is effectively
+            // a no-op that returns no results.
             SearchScope::Conversations => node_type == "ai-chat",
             SearchScope::Everything => true,
             SearchScope::Custom {
@@ -1260,8 +1263,7 @@ mod tests {
 
     /// Verify that extract_content_for_embedding respects behavior decisions:
     /// - Embeddable types (text, header, code-block) return Some
-    /// - Non-embeddable types (task, date, collection) return None
-    /// - ai-chat extracts messages, not node content
+    /// - Non-embeddable types (task, date, collection, ai-chat) return None
     #[tokio::test]
     async fn test_behavior_driven_embedding_decision() {
         let _accessor = Arc::new(MockNodeAccessor::new());
@@ -1345,7 +1347,7 @@ mod tests {
             "collection should NOT be embeddable — behavior returns None"
         );
 
-        // --- ai-chat: message-based extraction ---
+        // --- ai-chat: never embeddable (conversations excluded from vectorization) ---
 
         let chat_node = Node::new(
             "ai-chat".to_string(),
@@ -1359,23 +1361,9 @@ mod tests {
             }),
         );
         let chat_behavior = behaviors.get("ai-chat").unwrap();
-        let chat_content = chat_behavior.get_embeddable_content(&chat_node);
         assert!(
-            chat_content.is_some(),
-            "ai-chat with messages should be embeddable"
-        );
-        let text = chat_content.unwrap();
-        assert!(
-            text.contains("How do I write tests?"),
-            "Should include user message"
-        );
-        assert!(
-            text.contains("Here is a testing guide."),
-            "Should include assistant message"
-        );
-        assert!(
-            !text.contains("search"),
-            "Should exclude tool_call messages"
+            chat_behavior.get_embeddable_content(&chat_node).is_none(),
+            "ai-chat should never be embeddable, even with messages"
         );
 
         // --- CustomNodeBehavior fallback ---

@@ -407,8 +407,8 @@ fn def_search_semantic() -> ToolDefinition {
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["knowledge", "conversations", "everything"],
-                    "description": "Search scope: 'knowledge' (default, searches text/header/code/schema nodes), 'conversations' (searches conversation messages), 'everything' (all node types). Use 'conversations' when the user asks about past chats or conversation history."
+                    "enum": ["knowledge", "everything"],
+                    "description": "Search scope: 'knowledge' (default, searches text/header/code/schema nodes) or 'everything' (all embedded node types). Note: ai-chat conversations are not embedded, so they are never returned by search regardless of scope."
                 },
                 "include_archived": {
                     "type": "boolean",
