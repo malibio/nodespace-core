@@ -345,9 +345,7 @@ export class PluginRegistry {
       // New: derive PatternDetectionConfig from plugin.pattern
       if (plugin.pattern) {
         // Get slash command for additional config (desiredCursorPosition)
-        const slashCommand = plugin.config.slashCommands.find(
-          cmd => cmd.nodeType === pluginId
-        );
+        const slashCommand = plugin.config.slashCommands.find((cmd) => cmd.nodeType === pluginId);
 
         const derivedConfig: PatternDetectionConfig = {
           pattern: plugin.pattern.detect,
@@ -358,9 +356,10 @@ export class PluginRegistry {
           desiredCursorPosition: slashCommand?.desiredCursorPosition,
           // Only include contentTemplate if desiredCursorPosition is set
           // This indicates auto-completion behavior (e.g., code-block's closing fence)
-          contentTemplate: slashCommand?.desiredCursorPosition !== undefined
-            ? slashCommand.contentTemplate
-            : undefined
+          contentTemplate:
+            slashCommand?.desiredCursorPosition !== undefined
+              ? slashCommand.contentTemplate
+              : undefined
         };
         patterns.push(derivedConfig);
       }
@@ -386,11 +385,11 @@ export class PluginRegistry {
     // Get all plugins with patterns, sorted by explicit priority (higher = checked first)
     // Uses the same priority system as getAllPatternDetectionConfigs for consistency
     const pluginsWithPatterns = Array.from(this.plugins.values())
-      .filter(p => this.enabledPlugins.has(p.id) && p.pattern)
+      .filter((p) => this.enabledPlugins.has(p.id) && p.pattern)
       .sort((a, b) => {
         // Use explicit priority from slash command config, fallback to default
-        const aSlashCmd = a.config.slashCommands.find(cmd => cmd.nodeType === a.id);
-        const bSlashCmd = b.config.slashCommands.find(cmd => cmd.nodeType === b.id);
+        const aSlashCmd = a.config.slashCommands.find((cmd) => cmd.nodeType === a.id);
+        const bSlashCmd = b.config.slashCommands.find((cmd) => cmd.nodeType === b.id);
         const aPriority = aSlashCmd?.priority ?? DEFAULT_PATTERN_PRIORITY;
         const bPriority = bSlashCmd?.priority ?? DEFAULT_PATTERN_PRIORITY;
         return bPriority - aPriority;
@@ -407,9 +406,7 @@ export class PluginRegistry {
         // Get slash command for additional config (desiredCursorPosition)
         // NOTE: contentTemplate is NOT used for pattern detection when canRevert is true
         // because we want to preserve the user's typed content for bidirectional conversion
-        const slashCommand = plugin.config.slashCommands.find(
-          cmd => cmd.nodeType === plugin.id
-        );
+        const slashCommand = plugin.config.slashCommands.find((cmd) => cmd.nodeType === plugin.id);
 
         // Create backward-compatible PatternDetectionConfig
         // NOTE: contentTemplate should NEVER be used for pattern detection.
@@ -511,6 +508,24 @@ export class PluginRegistry {
       return true; // Default to true for unknown or disabled plugins
     }
     return plugin.acceptsContentMerge ?? true; // Default to true if not specified
+  }
+
+  /**
+   * Check if a node type may be deleted or merged away by a start-of-node Backspace
+   * Returns true by default if plugin not found or deletableViaBackspace not specified
+   *
+   * Protects node types whose data lives outside `.content` (e.g. ai-chat) from
+   * silent whole-node loss when Backspace is pressed at the start of the node.
+   *
+   * @param nodeType - Node type to check
+   * @returns true if the node type may be deleted via Backspace, false otherwise
+   */
+  deletableViaBackspace(nodeType: string): boolean {
+    const plugin = this.plugins.get(nodeType);
+    if (!plugin || !this.enabledPlugins.has(nodeType)) {
+      return true; // Default to true for unknown or disabled plugins
+    }
+    return plugin.deletableViaBackspace ?? true; // Default to true if not specified
   }
 
   /**

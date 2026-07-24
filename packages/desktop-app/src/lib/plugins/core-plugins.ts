@@ -61,7 +61,7 @@ export const headerNodePlugin: PluginDefinition = {
   pattern: {
     detect: /^(#{1,6})\s/,
     canRevert: true,
-    revert: /^#{1,6}$/,  // "# " → "#" should revert to text
+    revert: /^#{1,6}$/, // "# " → "#" should revert to text
     onEnter: 'inherit',
     prefixToInherit: (content: string) => content.match(/^(#{1,6})\s/)?.[0],
     splittingStrategy: 'prefix-inheritance',
@@ -146,7 +146,12 @@ export const taskNodePlugin: PluginDefinition = {
   // Type-specific metadata extraction
   // Backend returns TaskNode with status at TOP LEVEL (flat type-specific fields)
   // Also supports generic Node where status is in properties (for SSE events)
-  extractMetadata: (node: { nodeType: string; status?: string; priority?: string | number; properties?: Record<string, unknown> }) => {
+  extractMetadata: (node: {
+    nodeType: string;
+    status?: string;
+    priority?: string | number;
+    properties?: Record<string, unknown>;
+  }) => {
     const properties = node.properties || {};
     // Check top-level status first (TaskNode format), fall back to properties.status
     // TaskNode has status at node.status, generic Node has it at node.properties.status
@@ -190,13 +195,17 @@ export const taskNodePlugin: PluginDefinition = {
       // Convert changes to TaskNodeUpdate format
       // The caller provides type-safe changes, we map to the backend format
       const update: TaskNodeUpdate = {};
-      if ('status' in changes && changes.status !== undefined) update.status = changes.status as TaskNodeUpdate['status'];
+      if ('status' in changes && changes.status !== undefined)
+        update.status = changes.status as TaskNodeUpdate['status'];
       if ('priority' in changes) update.priority = changes.priority as TaskNodeUpdate['priority'];
       if ('dueDate' in changes) update.dueDate = changes.dueDate as TaskNodeUpdate['dueDate'];
       if ('assignee' in changes) update.assignee = changes.assignee as TaskNodeUpdate['assignee'];
-      if ('startedAt' in changes) update.startedAt = changes.startedAt as TaskNodeUpdate['startedAt'];
-      if ('completedAt' in changes) update.completedAt = changes.completedAt as TaskNodeUpdate['completedAt'];
-      if ('content' in changes && changes.content !== undefined) update.content = changes.content as string;
+      if ('startedAt' in changes)
+        update.startedAt = changes.startedAt as TaskNodeUpdate['startedAt'];
+      if ('completedAt' in changes)
+        update.completedAt = changes.completedAt as TaskNodeUpdate['completedAt'];
+      if ('content' in changes && changes.content !== undefined)
+        update.content = changes.content as string;
 
       // Returns TaskNode which has node fields but not properties (flat structure)
       // Cast to Node for interface compatibility - sharedNodeStore will handle appropriately
@@ -292,14 +301,14 @@ export const codeBlockNodePlugin: PluginDefinition = {
   version: '1.0.0',
   // Plugin-owned pattern behavior
   pattern: {
-    detect: /^```\n/,  // Matches ``` followed immediately by newline (language set via dropdown only)
+    detect: /^```\n/, // Matches ``` followed immediately by newline (language set via dropdown only)
     canRevert: true,
-    revert: /^```$/,  // "```" alone should revert to text
-    onEnter: 'none',  // Code blocks don't inherit on Enter
+    revert: /^```$/, // "```" alone should revert to text
+    onEnter: 'none', // Code blocks don't inherit on Enter
     splittingStrategy: 'simple-split',
     cursorPlacement: 'start',
     extractMetadata: () => ({
-      language: 'plaintext'  // Default language; user selects via dropdown
+      language: 'plaintext' // Default language; user selects via dropdown
     })
   },
   config: {
@@ -338,7 +347,7 @@ export const quoteBlockNodePlugin: PluginDefinition = {
   pattern: {
     detect: /^>\s/,
     canRevert: true,
-    revert: /^>$/,  // "> " → ">" should revert to text
+    revert: /^>$/, // "> " → ">" should revert to text
     onEnter: 'inherit',
     prefixToInherit: '> ',
     splittingStrategy: 'prefix-inheritance',
@@ -381,7 +390,7 @@ export const orderedListNodePlugin: PluginDefinition = {
   pattern: {
     detect: /^1\.\s/,
     canRevert: true,
-    revert: /^1\.$/,  // "1. " → "1." should revert to text
+    revert: /^1\.$/, // "1. " → "1." should revert to text
     onEnter: 'inherit',
     prefixToInherit: '1. ',
     splittingStrategy: 'prefix-inheritance',
@@ -614,6 +623,13 @@ export const aiChatNodePlugin: PluginDefinition = {
   name: 'AI Chat',
   description: 'AI conversation node',
   version: '1.0.0',
+  // The conversation lives in properties.messages, not .content — a start-of-node
+  // Backspace must never silently delete or merge it away (enforced in
+  // handleDeleteNode / handleCombineWithPrevious in base-node-viewer.svelte).
+  deletableViaBackspace: false,
+  // ai-chat's .content is not a normal editable text field, so (like code-block /
+  // quote-block) it must not absorb a Backspace-merge from the node below it.
+  acceptsContentMerge: false,
   config: {
     slashCommands: [
       {
@@ -713,9 +729,10 @@ export function registerCorePlugins(registry: import('./plugin-registry').Plugin
         priority: 10, // Default priority
         splittingStrategy: plugin.pattern.splittingStrategy,
         // For headers with function-based prefix, PatternRegistry will extract from regex
-        prefixToInherit: typeof plugin.pattern.prefixToInherit === 'string'
-          ? plugin.pattern.prefixToInherit
-          : undefined,
+        prefixToInherit:
+          typeof plugin.pattern.prefixToInherit === 'string'
+            ? plugin.pattern.prefixToInherit
+            : undefined,
         cursorPlacement: plugin.pattern.cursorPlacement,
         cleanContent: false, // Not used anymore
         extractMetadata: plugin.pattern.extractMetadata

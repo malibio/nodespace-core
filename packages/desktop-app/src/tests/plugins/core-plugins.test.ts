@@ -95,6 +95,11 @@ describe('Core Plugins Integration', () => {
       expect(aiChatNodePlugin.config.slashCommands).toHaveLength(1);
       expect(aiChatNodePlugin.config.canHaveChildren).toBe(false);
       expect(aiChatNodePlugin.config.canBeChild).toBe(true);
+      // Conversation lives in properties.messages, not .content — must be
+      // protected from a start-of-node Backspace deleting the whole node, and
+      // from absorbing a Backspace-merge from the node below.
+      expect(aiChatNodePlugin.deletableViaBackspace).toBe(false);
+      expect(aiChatNodePlugin.acceptsContentMerge).toBe(false);
       expect(aiChatNodePlugin.viewer).toBeDefined();
       expect(aiChatNodePlugin.viewer?.lazyLoad).toBeDefined();
       expect(aiChatNodePlugin.reference).toBeDefined();
@@ -551,7 +556,15 @@ describe('Core Plugins Integration', () => {
 
       // Verify currently implemented reference types have references
       // Note: 'user' and 'document' are not yet implemented - will be added when reference system is built
-      const expectedReferenceTypes = ['text', 'task', 'date', 'header', 'code-block', 'quote-block', 'ordered-list'];
+      const expectedReferenceTypes = [
+        'text',
+        'task',
+        'date',
+        'header',
+        'code-block',
+        'quote-block',
+        'ordered-list'
+      ];
 
       for (const referenceType of expectedReferenceTypes) {
         expect(registry.hasReferenceComponent(referenceType)).toBe(true);
@@ -579,7 +592,7 @@ describe('Core Plugins Integration', () => {
       'horizontal-line': false,
       table: false,
       query: false,
-      'ai-chat': false,
+      'ai-chat': false
     };
 
     it('every registered core plugin canHaveChildren matches Rust can_have_children()', () => {
@@ -587,7 +600,10 @@ describe('Core Plugins Integration', () => {
 
       for (const [nodeType, rustValue] of Object.entries(RUST_CAN_HAVE_CHILDREN)) {
         const frontendValue = registry.canHaveChildren(nodeType);
-        expect(frontendValue, `canHaveChildren parity failed for '${nodeType}': frontend=${frontendValue} rust=${rustValue}`).toBe(rustValue);
+        expect(
+          frontendValue,
+          `canHaveChildren parity failed for '${nodeType}': frontend=${frontendValue} rust=${rustValue}`
+        ).toBe(rustValue);
       }
     });
   });
