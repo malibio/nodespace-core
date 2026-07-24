@@ -453,7 +453,6 @@
       if (allNodes.length === 0) {
         // No persisted children - create initial placeholder if needed
         // Note: We already checked cache/DB above, so if allNodes is empty, no persisted children exist
-
         // No children at all - placeholder will be created automatically by viewerPlaceholder derived
         // Removed manual ID creation - getOrCreatePlaceholderId() handles it lazily
         // Focus is handled by BaseNode's onMount when autoFocus=true
@@ -819,6 +818,14 @@
         return;
       }
 
+      // Protect node types whose data lives outside `.content` (e.g. ai-chat,
+      // whose conversation is in properties.messages) from being merged away by
+      // a start-of-node Backspace. Guards the current/event node's own type.
+      const eventNode = nodeManager.nodes.get(eventNodeId);
+      if (eventNode && !pluginRegistry.deletableViaBackspace(eventNode.nodeType)) {
+        return;
+      }
+
       const currentVisibleNodes = visibleNodesFromStores;
       const currentIndex = currentVisibleNodes.findIndex((n) => n.id === eventNodeId);
 
@@ -867,6 +874,14 @@
       // Validate node exists before deletion
       if (!nodeManager.nodes.has(eventNodeId)) {
         log.error('Cannot delete non-existent node:', eventNodeId);
+        return;
+      }
+
+      // Protect node types whose data lives outside `.content` (e.g. ai-chat,
+      // whose conversation is in properties.messages) from being deleted away by
+      // a start-of-node Backspace. Guards the current/event node's own type.
+      const eventNode = nodeManager.nodes.get(eventNodeId);
+      if (eventNode && !pluginRegistry.deletableViaBackspace(eventNode.nodeType)) {
         return;
       }
 
@@ -1303,8 +1318,9 @@
         id="viewer-header-{paneId}-{nodeId ?? 'default'}"
         class="header-input"
         class:header-input--readonly={schemaFormLoader.hasTitleTemplate}
-        value={isHeaderBeingEdited ? (currentViewedNode?.content || '') : headerDisplayValue}
-        oninput={(e) => !schemaFormLoader.hasTitleTemplate && handleHeaderInput(e.currentTarget.value)}
+        value={isHeaderBeingEdited ? currentViewedNode?.content || '' : headerDisplayValue}
+        oninput={(e) =>
+          !schemaFormLoader.hasTitleTemplate && handleHeaderInput(e.currentTarget.value)}
         onfocus={() => {
           if (!schemaFormLoader.hasTitleTemplate) isHeaderBeingEdited = true;
         }}

@@ -1006,7 +1006,10 @@ describe('PluginRegistry - Core Functionality', () => {
         version: '1.0.0',
         config: { slashCommands: [] },
         node: {
-          lazyLoad: () => Promise.resolve({ default: MockViewerComponent as unknown as import('$lib/plugins/types').NodeComponent }),
+          lazyLoad: () =>
+            Promise.resolve({
+              default: MockViewerComponent as unknown as import('$lib/plugins/types').NodeComponent
+            }),
           priority: 1
         }
       };
@@ -1080,7 +1083,11 @@ describe('PluginRegistry - Core Functionality', () => {
     });
 
     it('should cache loaded node components', async () => {
-      const lazyLoad = vi.fn().mockResolvedValue({ default: MockViewerComponent as unknown as import('$lib/plugins/types').NodeComponent });
+      const lazyLoad = vi
+        .fn()
+        .mockResolvedValue({
+          default: MockViewerComponent as unknown as import('$lib/plugins/types').NodeComponent
+        });
       const plugin: PluginDefinition = {
         id: 'cached-node',
         name: 'Cached Node',
@@ -1555,7 +1562,10 @@ describe('PluginRegistry - Core Functionality', () => {
       registry.register(plugin);
 
       // createTestNode() doesn't copy `title` from options, so set it directly.
-      const node = { ...createTestNode({ nodeType: 'task', content: 'raw content' }), title: 'Interpolated Title' };
+      const node = {
+        ...createTestNode({ nodeType: 'task', content: 'raw content' }),
+        title: 'Interpolated Title'
+      };
       const title = registry.getNodeTitle(node);
 
       expect(title).toBe('Interpolated Title');
@@ -1677,6 +1687,80 @@ describe('PluginRegistry - Core Functionality', () => {
       registry.setEnabled('disabled-merge', false);
 
       expect(registry.acceptsContentMerge('disabled-merge')).toBe(true);
+    });
+  });
+
+  describe('Backspace Deletion Protection', () => {
+    it('should return false for plugins with deletableViaBackspace: false', () => {
+      const plugin: PluginDefinition = {
+        id: 'ai-chat',
+        name: 'AI Chat',
+        description: 'AI conversation node',
+        version: '1.0.0',
+        config: {
+          slashCommands: []
+        },
+        deletableViaBackspace: false
+      };
+
+      registry.register(plugin);
+
+      expect(registry.deletableViaBackspace('ai-chat')).toBe(false);
+    });
+
+    it('should return true for plugins with deletableViaBackspace: true', () => {
+      const plugin: PluginDefinition = {
+        id: 'text',
+        name: 'Text Node',
+        description: 'Text node',
+        version: '1.0.0',
+        config: {
+          slashCommands: []
+        },
+        deletableViaBackspace: true
+      };
+
+      registry.register(plugin);
+
+      expect(registry.deletableViaBackspace('text')).toBe(true);
+    });
+
+    it('should return true by default when deletableViaBackspace is not specified', () => {
+      const plugin: PluginDefinition = {
+        id: 'default-deletable',
+        name: 'Default Deletable',
+        description: 'Node without deletableViaBackspace specified',
+        version: '1.0.0',
+        config: {
+          slashCommands: []
+        }
+      };
+
+      registry.register(plugin);
+
+      expect(registry.deletableViaBackspace('default-deletable')).toBe(true);
+    });
+
+    it('should return true for unknown/unregistered plugins', () => {
+      expect(registry.deletableViaBackspace('unknown-plugin')).toBe(true);
+    });
+
+    it('should return true for disabled plugins', () => {
+      const plugin: PluginDefinition = {
+        id: 'disabled-deletable',
+        name: 'Disabled Deletable',
+        description: 'A disabled plugin',
+        version: '1.0.0',
+        config: {
+          slashCommands: []
+        },
+        deletableViaBackspace: false
+      };
+
+      registry.register(plugin);
+      registry.setEnabled('disabled-deletable', false);
+
+      expect(registry.deletableViaBackspace('disabled-deletable')).toBe(true);
     });
   });
 
@@ -1903,7 +1987,7 @@ describe('PluginRegistry - Core Functionality', () => {
 
       // Matches both "Create Task" (name contains 't') and cmd1 (shortcut 't')
       expect(filtered.length).toBeGreaterThanOrEqual(1);
-      expect(filtered.some(cmd => cmd.shortcut === 't')).toBe(true);
+      expect(filtered.some((cmd) => cmd.shortcut === 't')).toBe(true);
     });
 
     it('should handle whitespace-only query', () => {
