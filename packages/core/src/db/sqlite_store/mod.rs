@@ -127,6 +127,16 @@ pub struct SqliteStore {
     event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
     valid_node_types: HashSet<String>,
     notifier: Option<StoreNotifier>,
+    /// Serializes `move_node`'s sibling-order read → fractional-key compute →
+    /// write-back. That sequence spans several `await`s on the single shared
+    /// `db` connection, so two concurrent moves would otherwise interleave and
+    /// compute new order keys against the same stale sibling snapshot, corrupting
+    /// the final order. A DB `BEGIN IMMEDIATE` can't serialize them here — every
+    /// task shares one connection, so the second would hit "cannot start a
+    /// transaction within a transaction" rather than waiting — so we serialize at
+    /// the application level. Reorders are infrequent (user-driven), so the
+    /// contention cost is negligible.
+    reorder_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SqliteStore {
@@ -154,6 +164,7 @@ impl SqliteStore {
             event_tx,
             valid_node_types,
             notifier: None,
+            reorder_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -1271,6 +1282,82 @@ mod tests {
             .await
             .context("writer task panicked")?
             .context("store_b write should retry and succeed, not error with SQLITE_BUSY")?;
+
+        Ok(())
+    }
+
+    /// Regression for the concurrent-reorder race (#1561): many sibling reorders
+    /// running at once must all succeed and leave the parent with exactly N
+    /// children carrying N distinct fractional-order keys. Before `reorder_lock`,
+    /// the read → compute → write-back interleaved across the shared connection,
+    /// so concurrent moves computed order keys against the same stale snapshot —
+    /// producing errored moves and/or colliding order values.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_reorders_keep_all_children_with_distinct_order() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        const N: usize = 16;
+        let mut child_ids = Vec::new();
+        for i in 0..N {
+            let c = Node::new("text".to_string(), format!("c{i}"), json!({}));
+            let cid = c.id.clone();
+            store.create_node(c, None, None).await?;
+            // Wire under the parent (move_node with a None sibling inserts at the
+            // beginning; exact position doesn't matter for this setup).
+            store.move_node(&cid, Some(&parent_id), None).await?;
+            child_ids.push(cid);
+        }
+
+        // Concurrently move every child to the beginning — maximum contention on
+        // the sibling-order read/compute/write.
+        let mut handles = Vec::new();
+        for cid in &child_ids {
+            let store = store.clone();
+            let cid = cid.clone();
+            let parent_id = parent_id.clone();
+            handles.push(tokio::spawn(async move {
+                store.move_node(&cid, Some(&parent_id), None).await
+            }));
+        }
+        for h in handles {
+            h.await
+                .expect("reorder task panicked")
+                .expect("a concurrent reorder returned an error");
+        }
+
+        // No child was lost or duplicated.
+        let children = store.get_children(&parent_id).await?;
+        assert_eq!(
+            children.len(),
+            N,
+            "concurrent reorders lost/duplicated a child"
+        );
+
+        // Every sibling still has a distinct order key (no colliding writes).
+        let mut rows = store
+            .db
+            .query(
+                "SELECT json_extract(properties, '$.order') FROM relationship \
+                 WHERE in_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![parent_id.clone()],
+            )
+            .await?;
+        let mut orders: Vec<f64> = Vec::new();
+        while let Some(r) = rows.next().await? {
+            orders.push(r.get::<f64>(0)?);
+        }
+        assert_eq!(orders.len(), N, "expected {N} sibling edges");
+        orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for pair in orders.windows(2) {
+            assert!(
+                (pair[1] - pair[0]).abs() > f64::EPSILON,
+                "colliding sibling order keys after concurrent reorders: {orders:?}"
+            );
+        }
 
         Ok(())
     }

@@ -180,8 +180,7 @@ impl SqliteStore {
         const ID_CHUNK: usize = 900;
         let mut result = HashMap::new();
         for chunk in ids.chunks(ID_CHUNK) {
-            let placeholders: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
             let sql = format!(
                 "SELECT * FROM node WHERE id IN ({})",
                 placeholders.join(", ")
@@ -664,8 +663,7 @@ impl SqliteStore {
         // Chunk under SQLite's ~999 bound-parameter ceiling.
         const ID_CHUNK: usize = 900;
         for chunk in ids.chunks(ID_CHUNK) {
-            let placeholders: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
             let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
             let params: Vec<libsql::Value> = chunk
                 .iter()
@@ -1221,6 +1219,13 @@ impl SqliteStore {
             }
             self.validate_no_cycle(parent_id, &node_id).await?;
         }
+
+        // Serialize the sibling-order read → fractional-key compute → write-back
+        // (including any rebalance). Held until the function returns. Without this,
+        // two concurrent same-parent reorders interleave their reads/writes on the
+        // shared connection and compute overlapping order keys against the same
+        // stale snapshot, corrupting the final sibling order. See `reorder_lock`.
+        let _reorder_guard = self.reorder_lock.lock().await;
 
         let new_order = if let Some(ref parent_id) = new_parent_id {
             // Get ordered siblings excluding the moving node
