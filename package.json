@@ -83,7 +83,8 @@
     "release:delete": "bun run scripts/release.ts delete",
     "release:bump": "bun run scripts/release.ts bump",
     "release:help": "bun run scripts/release.ts --help",
-    "prepare": "husky"
+    "prepare": "husky",
+    "audit": "bun scripts/audit-npm.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^21.1.7",
@@ -110,7 +111,21 @@
     "eslint-plugin-unicorn": "^62.0.0"
   },
   "overrides": {
-    "baseline-browser-mapping": "^2.9.18"
+    "baseline-browser-mapping": "^2.9.18",
+    "@grpc/grpc-js": "1.14.4",
+    "@sveltejs/kit": "2.70.1",
+    "devalue": "5.8.2",
+    "dompurify": "3.4.7",
+    "form-data": "4.0.6",
+    "js-yaml": "4.3.0",
+    "lodash-es": "4.18.1",
+    "mermaid": "11.16.0",
+    "postcss": "8.5.23",
+    "protobufjs": "7.6.5",
+    "shell-quote": "1.10.0",
+    "svelte": "5.56.8",
+    "uuid": "11.1.1",
+    "ws": "8.21.1"
   },
   "resolutions": {
     "baseline-browser-mapping": "^2.9.18"
