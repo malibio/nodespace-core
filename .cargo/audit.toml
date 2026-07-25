@@ -1,0 +1,31 @@
+# cargo-audit configuration (RustSec). Read by `cargo audit` in the CI audit gate.
+#
+# The `ignore` list holds advisories we have assessed and accepted-with-tracking
+# because the only fix is a major upstream bump that is out of scope for a
+# dependency-audit change. Each entry names the blocker and its tracking issue.
+# Everything NOT listed here still fails the gate — including any NEW advisory.
+#
+# Directly-fixable vulnerabilities are resolved in Cargo.lock, not ignored:
+#   - crossbeam-epoch  RUSTSEC-2026-0204  -> 0.9.20
+#   - quinn-proto      RUSTSEC-2026-0185  -> 0.11.16
+
+[advisories]
+ignore = [
+    # quick-xml 0.39.4 — memory-exhaustion + quadratic-runtime DoS. Fix is >=0.41.0,
+    # but quick-xml is transitively pinned to ^0.39 by `plist` <- `tauri 2.11.2`; it
+    # is only used to parse our own bundled Info.plist at build/package time (not a
+    # hostile-input path). Resolves when tauri's plist dep advances. Tracked upstream.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # rustls-webpki 0.102.8 — certificate name-constraint / CRL validation issues and a
+    # reachable CRL-parse panic. Fixed in 0.103.x, which the tree ALREADY carries
+    # (0.103.13) on the rustls 0.23 line. The vulnerable 0.102.8 line is pinned solely
+    # by `libsql 0.6.0` (rustls 0.22), whose only TLS peer is the pinned Supabase
+    # endpoint. The fix requires a major `libsql` bump (rustls 0.23) — a breaking change
+    # tracked separately. Accepted-with-tracking until then.
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0049",
+]
