@@ -3,10 +3,10 @@
 //! Shared logic for skill search used by the local agent's `search_skills`
 //! tool and the MCP `find_skills` handler exposed to external agents.
 
-use crate::models::Node;
-use crate::services::{NodeEmbeddingService, NodeService, SearchNodeFilters};
+use crate::services::{
+    flatten_subtree_content, NodeEmbeddingService, NodeService, SearchNodeFilters,
+};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::OpsError;
@@ -75,30 +75,7 @@ async fn render_skill_instructions(node_service: &NodeService, skill_id: &str) -
 
     // One get_subtree_data query per skill. Acceptable under MAX_SKILL_LIMIT = 10;
     // a batch API would eliminate serial round trips if the limit grows.
-    let mut parts: Vec<String> = Vec::with_capacity(node_map.len());
-    render_subtree_dfs(skill_id, &node_map, &adjacency_list, &mut parts);
-    parts.join("\n\n")
-}
-
-/// Depth-first walk of the subtree adjacency list, collecting node content.
-/// Skips the root (skill node itself); visits all descendants in child order.
-fn render_subtree_dfs(
-    parent_id: &str,
-    node_map: &HashMap<String, Node>,
-    adjacency_list: &HashMap<String, Vec<String>>,
-    parts: &mut Vec<String>,
-) {
-    let Some(children) = adjacency_list.get(parent_id) else {
-        return;
-    };
-    for child_id in children {
-        if let Some(node) = node_map.get(child_id) {
-            if !node.content.is_empty() {
-                parts.push(node.content.clone());
-            }
-            render_subtree_dfs(child_id, node_map, adjacency_list, parts);
-        }
-    }
+    flatten_subtree_content(skill_id, &node_map, &adjacency_list).join("\n\n")
 }
 
 /// Search for skill nodes via semantic search and return flat results with
@@ -272,6 +249,7 @@ mod tests {
     use super::*;
     use crate::models::Node;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn make_node(id: &str, content: &str) -> Node {
         Node {
@@ -290,16 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn render_subtree_dfs_empty_skill() {
+    fn flatten_subtree_content_empty_skill() {
         let node_map: HashMap<String, Node> = HashMap::new();
         let adjacency_list: HashMap<String, Vec<String>> = HashMap::new();
-        let mut parts = Vec::new();
-        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let parts = flatten_subtree_content("skill-root", &node_map, &adjacency_list);
         assert!(parts.is_empty());
     }
 
     #[test]
-    fn render_subtree_dfs_flat_children() {
+    fn flatten_subtree_content_flat_children() {
         let mut node_map = HashMap::new();
         node_map.insert("c1".to_string(), make_node("c1", "Step one"));
         node_map.insert("c2".to_string(), make_node("c2", "Step two"));
@@ -308,13 +285,12 @@ mod tests {
             "skill-root".to_string(),
             vec!["c1".to_string(), "c2".to_string()],
         );
-        let mut parts = Vec::new();
-        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let parts = flatten_subtree_content("skill-root", &node_map, &adjacency_list);
         assert_eq!(parts, vec!["Step one", "Step two"]);
     }
 
     #[test]
-    fn render_subtree_dfs_nested_children() {
+    fn flatten_subtree_content_nested_children() {
         let mut node_map = HashMap::new();
         node_map.insert("c1".to_string(), make_node("c1", "Section header"));
         node_map.insert("c1a".to_string(), make_node("c1a", "Sub-step A"));
@@ -325,8 +301,7 @@ mod tests {
             vec!["c1".to_string(), "c2".to_string()],
         );
         adjacency_list.insert("c1".to_string(), vec!["c1a".to_string()]);
-        let mut parts = Vec::new();
-        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let parts = flatten_subtree_content("skill-root", &node_map, &adjacency_list);
         assert_eq!(
             parts,
             vec!["Section header", "Sub-step A", "Another section"]
@@ -334,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn render_subtree_dfs_skips_empty_content() {
+    fn flatten_subtree_content_skips_empty_content() {
         let mut node_map = HashMap::new();
         node_map.insert("c1".to_string(), make_node("c1", ""));
         node_map.insert("c2".to_string(), make_node("c2", "Has content"));
@@ -343,8 +318,7 @@ mod tests {
             "skill-root".to_string(),
             vec!["c1".to_string(), "c2".to_string()],
         );
-        let mut parts = Vec::new();
-        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
+        let parts = flatten_subtree_content("skill-root", &node_map, &adjacency_list);
         assert_eq!(parts, vec!["Has content"]);
     }
 
@@ -368,10 +342,10 @@ mod tests {
     }
 
     #[test]
-    fn render_subtree_dfs_join_produces_instructions_string() {
-        // Verify the full render_subtree_dfs → join pipeline that produces the
-        // `instructions` value delivered to the model. A regression in either
-        // function (e.g. wrong separator, missing DFS step) breaks this test.
+    fn flatten_subtree_content_join_produces_instructions_string() {
+        // Verify the full flatten_subtree_content → join pipeline that produces the
+        // `instructions` value delivered to the model. A regression in the flatten
+        // logic (e.g. wrong separator, missing DFS step) breaks this test.
         let mut node_map = HashMap::new();
         node_map.insert("c1".to_string(), make_node("c1", "Step one"));
         node_map.insert("c2".to_string(), make_node("c2", "Step two"));
@@ -380,9 +354,8 @@ mod tests {
             "skill-root".to_string(),
             vec!["c1".to_string(), "c2".to_string()],
         );
-        let mut parts = Vec::new();
-        render_subtree_dfs("skill-root", &node_map, &adjacency_list, &mut parts);
-        let instructions = parts.join("\n\n");
+        let instructions =
+            flatten_subtree_content("skill-root", &node_map, &adjacency_list).join("\n\n");
         assert_eq!(instructions, "Step one\n\nStep two");
     }
 }

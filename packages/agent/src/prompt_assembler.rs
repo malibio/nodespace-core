@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use nodespace_core::markdown::NodeTemplate;
 use nodespace_core::models::Node;
-use nodespace_core::services::NodeService;
+use nodespace_core::services::{flatten_subtree_content, NodeService};
 
 use crate::agent_guidance::{NODE_REFERENCE_FORMAT, SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES};
 use crate::agent_types::ToolDefinition;
@@ -196,37 +196,7 @@ impl PromptAssembler {
         // children, following adjacency_list which is already sorted by
         // fractional order. The prompt node itself is excluded (its content is
         // the short title/label, not prompt body).
-        let mut sections: Vec<String> = Vec::new();
-        let mut stack: Vec<String> = adjacency_list
-            .get(&node.id)
-            .map(|children| children.iter().rev().cloned().collect())
-            .unwrap_or_default();
-
-        while let Some(id) = stack.pop() {
-            if let Some(child) = node_map.get(&id) {
-                sections.push(child.content.clone());
-            } else {
-                // adjacency_list and node_map come from one consolidated
-                // get_subtree_data query, so they should never disagree. If they
-                // ever drift, an id with children but no node would silently drop
-                // its own content while still emitting descendants — a quieter
-                // version of the body-drop bug this method fixes. Surface it.
-                tracing::warn!(
-                    node_id = %id,
-                    "prompt_dump subtree: id in adjacency_list missing from node_map"
-                );
-            }
-            // Push this node's children (reversed so first child is popped first).
-            // The subtree is a single-parent `has_child` tree (acyclic by
-            // construction), so no visited-set is needed.
-            if let Some(grandchildren) = adjacency_list.get(&id) {
-                for gc in grandchildren.iter().rev() {
-                    stack.push(gc.clone());
-                }
-            }
-        }
-
-        sections.join("\n\n")
+        flatten_subtree_content(&node.id, &node_map, &adjacency_list).join("\n\n")
     }
 
     /// Render a Minijinja template with the given context.
@@ -248,39 +218,6 @@ impl PromptAssembler {
                 template_str.to_string()
             }
         }
-    }
-
-    /// Assemble prompt with an active skill context injected.
-    ///
-    /// When a skill is active:
-    /// 1. Graph-only prompt assembly (same as regular)
-    /// 2. Skill header with name and description
-    /// 3. Tool whitelist applied to tool schemas
-    pub async fn assemble_with_skill(
-        &self,
-        template_ctx: &TemplateContext,
-        tools: Vec<ToolDefinition>,
-        skill: &Node,
-    ) -> AssembledPrompt {
-        // Regular assembly first
-        let mut assembled = self.assemble(template_ctx, tools).await;
-
-        // Add skill context
-        let skill_name = &skill.content;
-        let skill_desc = skill
-            .properties
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let skill_section = format!(
-            "\n\nACTIVE SKILL: {}\n{}\n\
-             Focus on this skill's capabilities. Use only the tools provided.",
-            skill_name, skill_desc
-        );
-
-        assembled.system_prompt.push_str(&skill_section);
-        assembled
     }
 
     /// Assemble the base system prompt from seed nodes without a database.

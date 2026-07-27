@@ -951,3 +951,38 @@ impl NodeService {
         Ok(false)
     }
 }
+
+/// Flatten a node's child subtree into ordered content sections: a depth-first
+/// pre-order walk of `adjacency_list` (children already in fractional order, then
+/// their descendants), collecting each node's non-empty `content`. The root itself
+/// is excluded. `node_map`/`adjacency_list` come from `get_subtree_data`.
+pub fn flatten_subtree_content(
+    root_id: &str,
+    node_map: &std::collections::HashMap<String, crate::models::Node>,
+    adjacency_list: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut stack: Vec<String> = adjacency_list
+        .get(root_id)
+        .map(|c| c.iter().rev().cloned().collect())
+        .unwrap_or_default();
+    while let Some(id) = stack.pop() {
+        match node_map.get(&id) {
+            Some(node) => {
+                if !node.content.is_empty() {
+                    parts.push(node.content.clone());
+                }
+            }
+            None => tracing::warn!(
+                node_id = %id,
+                "flatten_subtree_content: id in adjacency_list missing from node_map"
+            ),
+        }
+        if let Some(children) = adjacency_list.get(&id) {
+            for c in children.iter().rev() {
+                stack.push(c.clone());
+            }
+        }
+    }
+    parts
+}
