@@ -42,6 +42,8 @@ pub(crate) mod query;
 pub(crate) mod relationship;
 pub(crate) mod schema;
 
+pub use hierarchy::flatten_subtree_content;
+
 /// Reserved ID for the DatabaseSettingsNode singleton instance.
 ///
 /// The `database-settings` schema node stores its own id as the slug
