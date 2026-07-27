@@ -744,6 +744,150 @@ impl NodeBehavior for TaskNodeBehavior {
     }
 }
 
+/// True if `s` is an ISO calendar date `YYYY-MM-DD` (zero-padded), so plain
+/// string comparison orders two such dates correctly. Anything else returns
+/// false, in which case the project date-range check is skipped (per spec:
+/// enforce only when both dates parse as ISO).
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter().enumerate().all(|(i, &c)| {
+            if i == 4 || i == 7 {
+                c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+}
+
+/// Built-in behavior for project nodes
+///
+/// A ProjectNode (`node_type = "project"`) is a container for tasks, milestones,
+/// and related work. Its name is the node `content` (like Collection and Task);
+/// typed data lives under the `properties.project.*` namespace. Children are real
+/// graph nodes attached via `has_child` edges, and ownership/membership are graph
+/// edges — never property blobs (Universal Graph model).
+///
+/// Validation split (matches `TaskNodeBehavior`): this behavior does TYPE checks
+/// plus the cross-field `start_date <= end_date` rule; the schema system validates
+/// enum membership and values, so enum-value checks are not duplicated here.
+///
+/// # Examples
+///
+/// ```rust
+/// use nodespace_core::behaviors::{NodeBehavior, ProjectNodeBehavior};
+/// use nodespace_core::models::Node;
+/// use serde_json::json;
+///
+/// let behavior = ProjectNodeBehavior;
+/// let node = Node::new(
+///     "project".to_string(),
+///     "Launch v1".to_string(),
+///     json!({ "project": { "status": "active" } }),
+/// );
+/// assert!(behavior.validate(&node).is_ok());
+/// ```
+pub struct ProjectNodeBehavior;
+
+impl NodeBehavior for ProjectNodeBehavior {
+    fn type_name(&self) -> &'static str {
+        "project"
+    }
+
+    fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
+        // Project name is the node content — required.
+        if node.content.trim().is_empty() {
+            return Err(NodeValidationError::MissingField(
+                "content (project name)".to_string(),
+            ));
+        }
+
+        // Typed fields live under `properties.project.*`. TYPE checks only —
+        // the schema system validates enum membership and allowed values.
+        if let Some(props) = node.properties.get("project") {
+            // status / priority must be strings if present.
+            for field in ["status", "priority"] {
+                if let Some(v) = props.get(field) {
+                    if !v.is_string() && !v.is_null() {
+                        return Err(NodeValidationError::InvalidProperties(format!(
+                            "{} must be a string",
+                            field
+                        )));
+                    }
+                }
+            }
+
+            // start_date / end_date must be strings if present; when both are
+            // present and both parse as ISO YYYY-MM-DD, enforce start <= end
+            // (string comparison is valid for zero-padded ISO dates).
+            let read_date = |name: &str| -> Result<Option<String>, NodeValidationError> {
+                match props.get(name) {
+                    None | Some(serde_json::Value::Null) => Ok(None),
+                    Some(v) => match v.as_str() {
+                        Some(s) => Ok(Some(s.to_string())),
+                        None => Err(NodeValidationError::InvalidProperties(format!(
+                            "{} must be a string",
+                            name
+                        ))),
+                    },
+                }
+            };
+            let start = read_date("start_date")?;
+            let end = read_date("end_date")?;
+            if let (Some(s), Some(e)) = (&start, &end) {
+                if is_iso_date(s) && is_iso_date(e) && s > e {
+                    return Err(NodeValidationError::InvalidProperties(
+                        "start_date must be on or before end_date".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn can_have_children(&self) -> bool {
+        true // Projects contain tasks, milestones, and related work
+    }
+
+    fn supports_markdown(&self) -> bool {
+        true // Projects carry rich descriptions
+    }
+
+    fn default_metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "project": {
+                "status": "planning",
+                "start_date": null,
+                "end_date": null,
+                "priority": null
+            }
+        })
+    }
+
+    /// Projects carry semantic content (their name/description) worth embedding as
+    /// a standalone root — unlike Task, which overrides these to `None`. This is an
+    /// intentional divergence, so it is stated explicitly here rather than left to
+    /// the trait default.
+    fn get_embeddable_content(&self, node: &Node) -> Option<String> {
+        if node.content.trim().is_empty() {
+            None
+        } else {
+            Some(node.content.clone())
+        }
+    }
+
+    fn get_parent_contribution(&self, node: &Node) -> Option<String> {
+        if node.content.trim().is_empty() {
+            None
+        } else {
+            Some(node.content.clone())
+        }
+    }
+}
+
 /// Built-in behavior for code block nodes
 ///
 /// Code block nodes contain code snippets with language selection.
@@ -2254,6 +2398,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(TextNodeBehavior));
         registry.register(Arc::new(HeaderNodeBehavior));
         registry.register(Arc::new(TaskNodeBehavior));
+        registry.register(Arc::new(ProjectNodeBehavior));
         registry.register(Arc::new(CodeBlockNodeBehavior));
         registry.register(Arc::new(QuoteBlockNodeBehavior));
         registry.register(Arc::new(OrderedListNodeBehavior));
@@ -2704,6 +2849,107 @@ mod tests {
     }
 
     #[test]
+    fn test_project_node_behavior_valid() {
+        let behavior = ProjectNodeBehavior;
+        assert_eq!(behavior.type_name(), "project");
+        assert!(behavior.can_have_children());
+        assert!(behavior.supports_markdown());
+
+        // Full project: name + all typed fields, valid date range.
+        let full = Node::new(
+            "project".to_string(),
+            "Launch v1".to_string(),
+            json!({
+                "project": {
+                    "status": "active",
+                    "priority": "high",
+                    "start_date": "2026-01-01",
+                    "end_date": "2026-06-30"
+                }
+            }),
+        );
+        assert!(behavior.validate(&full).is_ok());
+
+        // Minimal project: name only (no properties).
+        let minimal = Node::new("project".to_string(), "Untitled project".to_string(), json!({}));
+        assert!(behavior.validate(&minimal).is_ok());
+
+        // Equal start/end dates are allowed (start <= end).
+        let same_day = Node::new(
+            "project".to_string(),
+            "One-day sprint".to_string(),
+            json!({ "project": { "start_date": "2026-03-03", "end_date": "2026-03-03" } }),
+        );
+        assert!(behavior.validate(&same_day).is_ok());
+
+        // Projects are embeddable roots (unlike Task): content is returned.
+        assert_eq!(behavior.get_embeddable_content(&full), Some("Launch v1".to_string()));
+    }
+
+    #[test]
+    fn test_project_node_behavior_rejects_empty_name() {
+        let behavior = ProjectNodeBehavior;
+        let node = Node::new(
+            "project".to_string(),
+            "   ".to_string(),
+            json!({ "project": { "status": "planning" } }),
+        );
+        assert!(matches!(
+            behavior.validate(&node),
+            Err(NodeValidationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn test_project_node_behavior_rejects_non_string_fields() {
+        let behavior = ProjectNodeBehavior;
+        for bad in [
+            json!({ "project": { "status": 3 } }),
+            json!({ "project": { "priority": true } }),
+            json!({ "project": { "start_date": 20260101 } }),
+        ] {
+            let node = Node::new("project".to_string(), "P".to_string(), bad);
+            assert!(matches!(
+                behavior.validate(&node),
+                Err(NodeValidationError::InvalidProperties(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn test_project_node_behavior_rejects_inverted_date_range() {
+        let behavior = ProjectNodeBehavior;
+        let node = Node::new(
+            "project".to_string(),
+            "Time-travel project".to_string(),
+            json!({ "project": { "start_date": "2026-06-30", "end_date": "2026-01-01" } }),
+        );
+        assert!(matches!(
+            behavior.validate(&node),
+            Err(NodeValidationError::InvalidProperties(_))
+        ));
+
+        // Non-ISO dates skip the range check (spec: enforce only when both parse).
+        let non_iso = Node::new(
+            "project".to_string(),
+            "Loose dates".to_string(),
+            json!({ "project": { "start_date": "June 2026", "end_date": "Jan 2026" } }),
+        );
+        assert!(behavior.validate(&non_iso).is_ok());
+    }
+
+    #[test]
+    fn test_project_node_behavior_default_metadata() {
+        let behavior = ProjectNodeBehavior;
+        let meta = behavior.default_metadata();
+        let p = &meta["project"];
+        assert_eq!(p["status"], json!("planning"));
+        assert_eq!(p["start_date"], json!(null));
+        assert_eq!(p["end_date"], json!(null));
+        assert_eq!(p["priority"], json!(null));
+    }
+
+    #[test]
     fn test_task_node_behavior_validation() {
         let behavior = TaskNodeBehavior;
 
@@ -2969,7 +3215,8 @@ mod tests {
         assert!(types.contains(&"tool".to_string()));
         assert!(types.contains(&"person".to_string()));
         assert!(types.contains(&"database-settings".to_string()));
-        assert_eq!(types.len(), 18);
+        assert!(types.contains(&"project".to_string()));
+        assert_eq!(types.len(), 19);
     }
 
     #[test]

@@ -171,6 +171,117 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
+        // Project schema - container for tasks, milestones, related work.
+        // Name is the node `content`; ownership/membership are graph edges, not
+        // properties (Universal Graph). Enum values validated by the schema system.
+        SchemaNode {
+            id: "project".to_string(),
+            content: "Project".to_string(),
+            version: 1,
+            created_at: now,
+            modified_at: now,
+            is_core: true,
+            schema_version: 1,
+            fields: vec![
+                SchemaField {
+                    name: "status".to_string(),
+                    field_type: "enum".to_string(),
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: Some(vec![
+                        EnumValue {
+                            value: "planning".to_string(),
+                            label: "Planning".to_string(),
+                        },
+                        EnumValue {
+                            value: "active".to_string(),
+                            label: "Active".to_string(),
+                        },
+                        EnumValue {
+                            value: "completed".to_string(),
+                            label: "Completed".to_string(),
+                        },
+                        EnumValue {
+                            value: "archived".to_string(),
+                            label: "Archived".to_string(),
+                        },
+                        EnumValue {
+                            value: "cancelled".to_string(),
+                            label: "Cancelled".to_string(),
+                        },
+                    ]),
+                    user_values: Some(vec![]),
+                    indexed: true,
+                    required: Some(true),
+                    extensible: Some(true),
+                    default: Some(serde_json::json!("planning")),
+                    description: Some("Project status".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "priority".to_string(),
+                    field_type: "enum".to_string(),
+                    protection: SchemaProtectionLevel::User,
+                    core_values: Some(vec![
+                        EnumValue {
+                            value: "low".to_string(),
+                            label: "Low".to_string(),
+                        },
+                        EnumValue {
+                            value: "medium".to_string(),
+                            label: "Medium".to_string(),
+                        },
+                        EnumValue {
+                            value: "high".to_string(),
+                            label: "High".to_string(),
+                        },
+                    ]),
+                    user_values: Some(vec![]),
+                    indexed: true,
+                    required: Some(false),
+                    extensible: Some(true),
+                    default: None,
+                    description: Some("Project priority".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "start_date".to_string(),
+                    field_type: "date".to_string(),
+                    protection: SchemaProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Project start date".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+                SchemaField {
+                    name: "end_date".to_string(),
+                    field_type: "date".to_string(),
+                    protection: SchemaProtectionLevel::User,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Project end date".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                },
+            ],
+            relationships: vec![],
+            title_template: None,
+            properties_header_summary_template: None,
+        },
         // Text schema - plain text content (no extra fields)
         SchemaNode {
             id: "text".to_string(),
@@ -1054,7 +1165,7 @@ mod tests {
     #[test]
     fn test_get_core_schemas_returns_all() {
         let schemas = get_core_schemas();
-        assert_eq!(schemas.len(), 17);
+        assert_eq!(schemas.len(), 18);
     }
 
     #[test]
