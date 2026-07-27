@@ -1221,6 +1221,92 @@ mod tests {
         Ok(())
     }
 
+    /// Moving children into a NON-EMPTY parent must APPEND after its existing
+    /// children, not restart at 1.0, 2.0… The existing children are seeded via
+    /// `create_child_node_atomic` (which appends at 1.0, 2.0), so the old code —
+    /// which assigned the moved children a fresh 1.0, 2.0 ignoring existing
+    /// siblings — collided their order keys. Deterministic, single-threaded.
+    #[tokio::test]
+    async fn move_children_into_non_empty_parent_appends_without_collision() -> Result<()> {
+        let (store, _temp) = create_test_store().await?;
+
+        // new_parent already holds two children at orders 1.0 and 2.0.
+        let new_parent = Node::new("text".to_string(), "New Parent".to_string(), json!({}));
+        let new_parent_id = new_parent.id.clone();
+        store.create_node(new_parent, None, None).await?;
+        for i in 0..2 {
+            store
+                .create_child_node_atomic(
+                    &new_parent_id,
+                    "text",
+                    &format!("existing {i}"),
+                    json!({}),
+                    None,
+                )
+                .await?;
+        }
+
+        // Two children under a source parent, to be moved across.
+        let src = Node::new("text".to_string(), "Src".to_string(), json!({}));
+        let src_id = src.id.clone();
+        store.create_node(src, None, None).await?;
+        let mut moved_ids = Vec::new();
+        let mut moved_vers = Vec::new();
+        for i in 0..2 {
+            let c = Node::new("text".to_string(), format!("moving {i}"), json!({}));
+            let cid = c.id.clone();
+            let ver = c.version;
+            store.create_node(c, None, None).await?;
+            store.move_node(&cid, Some(&src_id), None).await?;
+            moved_ids.push(cid);
+            moved_vers.push(ver);
+        }
+        let pairs: Vec<(&str, i64)> = moved_ids
+            .iter()
+            .zip(moved_vers.iter())
+            .map(|(id, &v)| (id.as_str(), v))
+            .collect();
+        let mut moved_orders = store.move_children_to_parent(&new_parent_id, &pairs).await?;
+
+        // All four children now live under new_parent.
+        let children = store.get_children(&new_parent_id).await?;
+        assert_eq!(children.len(), 4, "new_parent should hold 2 existing + 2 moved");
+
+        // Every sibling order key is distinct — no collision with the existing
+        // children (the old code produced 1.0, 1.0, 2.0, 2.0 here).
+        let mut rows = store
+            .db
+            .query(
+                "SELECT json_extract(properties, '$.order') FROM relationship \
+                 WHERE in_node = ?1 AND relationship_type = 'has_child'",
+                libsql::params![new_parent_id.clone()],
+            )
+            .await?;
+        let mut orders: Vec<f64> = Vec::new();
+        while let Some(r) = rows.next().await? {
+            orders.push(r.get::<f64>(0)?);
+        }
+        assert_eq!(orders.len(), 4);
+        orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for pair in orders.windows(2) {
+            assert!(
+                (pair[1] - pair[0]).abs() > f64::EPSILON,
+                "colliding sibling order keys after move into non-empty parent: {orders:?}"
+            );
+        }
+
+        // The moved children hold the two LARGEST order keys — appended after the
+        // existing children rather than overlapping them.
+        moved_orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(
+            moved_orders,
+            vec![orders[2], orders[3]],
+            "moved children should be appended after existing (orders: {orders:?})"
+        );
+
+        Ok(())
+    }
+
     /// two `SqliteStore`s opened against the same file (simulating a dev +
     /// production daemon both holding the DB) must not surface SQLITE_BUSY as a
     /// hard error on the loser of a write race. `busy_timeout` (set by migration 1,

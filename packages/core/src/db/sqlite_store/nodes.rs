@@ -75,6 +75,13 @@ impl SqliteStore {
 
         self.validate_no_cycle(parent_id, &node_id).await?;
 
+        // Serialize the sibling-order read → compute → write against move_node and
+        // other order mutations on the shared connection (held until return).
+        // Without it a concurrent create/move under the same parent reads the same
+        // max order and assigns a colliding key. No re-entrancy: this method calls
+        // no other reorder_lock-taking path. See `reorder_lock`.
+        let _reorder_guard = self.reorder_lock.lock().await;
+
         // Get last child order
         let mut rows = self.db.query(
             "SELECT json_extract(r.properties, '$.order') as ord FROM relationship r WHERE r.in_node = ?1 AND r.relationship_type = 'has_child' ORDER BY json_extract(r.properties, '$.order') DESC LIMIT 1",
@@ -1352,12 +1359,35 @@ impl SqliteStore {
 
         let now = Utc::now().to_rfc3339();
 
-        // Compute sequential fractional orders iteratively so each step uses the
-        // previously assigned order as its `prev`, producing a properly spaced
-        // sequence (e.g. [1.0, 2.0, 3.0]) rather than arbitrary constants.
+        // Serialize the sibling-order read → compute → write against move_node and
+        // other order mutations on the shared connection (held until return). No
+        // re-entrancy: the transaction below issues raw DELETE/INSERT and calls no
+        // other reorder_lock-taking path. See `reorder_lock`.
+        let _reorder_guard = self.reorder_lock.lock().await;
+
+        // Append the moved children AFTER new_parent_id's existing children: read
+        // the current max has_child order under the new parent and seed the
+        // sequence from it. Previously this assigned 1.0, 2.0, 3.0… ignoring
+        // existing siblings, so moving into a NON-EMPTY parent collided their
+        // order keys even single-threaded.
+        let existing_max: Option<f64> = {
+            let mut rows = self.db.query(
+                "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' ORDER BY json_extract(properties, '$.order') DESC LIMIT 1",
+                libsql::params![new_parent_id.to_string()],
+            ).await.context("Failed to read existing child order for move_children_to_parent")?;
+            if let Some(row) = rows.next().await? {
+                Some(row.get::<Option<f64>>(0)?.unwrap_or(0.0))
+            } else {
+                None
+            }
+        };
+
+        // Compute sequential fractional orders: the first appended after
+        // `existing_max` (or from scratch when the parent is empty), each
+        // subsequent after the previously assigned order.
         let mut orders: Vec<f64> = Vec::with_capacity(children.len());
         for _ in 0..children.len() {
-            let prev = orders.last().copied();
+            let prev = orders.last().copied().or(existing_max);
             orders.push(FractionalOrderCalculator::calculate_order(prev, None));
         }
 
