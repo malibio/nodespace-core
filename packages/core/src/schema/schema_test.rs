@@ -568,8 +568,8 @@ async fn test_create_schema_description_not_in_properties() {
     handle_create_schema(
         &svc,
         json!({
-            "name": "Project",
-            "description": "Organizes work into milestones and tasks.",
+            "name": "Campaign",
+            "description": "Organizes outreach into phases and channels.",
             "fields": []
         }),
     )
@@ -577,7 +577,7 @@ async fn test_create_schema_description_not_in_properties() {
     .expect("create_schema should succeed");
 
     let node = svc
-        .get_node("project")
+        .get_node("campaign")
         .await
         .expect("get_node failed")
         .expect("schema node not found");
