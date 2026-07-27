@@ -3356,6 +3356,88 @@ mod tests {
         assert!(node_ids.contains(&child2_id), "child2 event missing");
     }
 
+    /// ADR-059 §2: a content node may hold a `member_of` edge only if it is a
+    /// root. Enforced on every membership-write path; person (grantee) and
+    /// collection (nesting) sources are exempt.
+    #[tokio::test]
+    async fn root_only_content_membership_is_enforced() {
+        let (service, _temp) = create_test_service().await;
+        let coll = service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "Docs".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+
+        // A ROOT content node may be a member.
+        let root_doc = service
+            .create_node(Node::new("text".to_string(), "Root doc".to_string(), json!({})))
+            .await
+            .unwrap();
+        service
+            .create_relationship(&root_doc, "member_of", &coll, json!({}))
+            .await
+            .expect("a root content node may be a collection member");
+
+        // A NON-ROOT content node (has a has_child parent) is rejected.
+        let parent = service
+            .create_node(Node::new("text".to_string(), "Parent".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child = service
+            .create_node(Node::new("text".to_string(), "Child".to_string(), json!({})))
+            .await
+            .unwrap();
+        service
+            .create_relationship(&parent, "has_child", &child, json!({}))
+            .await
+            .unwrap();
+        let err = service
+            .create_relationship(&child, "member_of", &coll, json!({}))
+            .await
+            .expect_err("an interior content node must not hold a member_of edge");
+        assert!(
+            format!("{err}").contains("root"),
+            "error should cite the root-only rule: {err}"
+        );
+
+        // Person `member_of` (grantee membership) is exempt.
+        let person = service
+            .create_node(Node::new("person".to_string(), "Alice".to_string(), json!({})))
+            .await
+            .unwrap();
+        service
+            .create_relationship(&person, "member_of", &coll, json!({}))
+            .await
+            .expect("person member_of (grantee) is exempt");
+
+        // Collection nesting is exempt.
+        let sub = service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "Sub".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_relationship(&sub, "member_of", &coll, json!({}))
+            .await
+            .expect("collection nesting is exempt");
+
+        // The bulk import path enforces the same rule.
+        let bulk_err = service
+            .bulk_add_to_collections_notify(&[(child.clone(), coll.clone())])
+            .await
+            .expect_err("bulk import must reject an interior content node");
+        assert!(
+            format!("{bulk_err}").contains("root"),
+            "bulk error should cite the root-only rule: {bulk_err}"
+        );
+    }
+
     /// The batch importer assigns collection membership via
     /// `bulk_add_to_collections_notify`, and each newly created `member_of` edge
     /// MUST emit a RelationshipCreated event so the cloud-sync push replicates it.

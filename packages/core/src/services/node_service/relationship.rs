@@ -473,6 +473,30 @@ impl NodeService {
     /// # Ok(())
     /// # }
     /// ```
+    /// Enforce ADR-059 §2 root-only content membership: a content node may hold a
+    /// `member_of` edge only if it is a root (no `has_child` parent). Membership
+    /// carries access classification (ADR-037), so an interior node carrying
+    /// independent classification would make access a property of outline
+    /// position — the conflation ADR-059 exists to remove. Person `member_of`
+    /// edges (grantee membership, ADR-037 §4) and collection nesting are EXEMPT.
+    /// One validation shared by every membership-write path (`create_relationship`
+    /// and the bulk import path), so the invariant can't be broken by whichever
+    /// surface wrote the edge — including a remote edge applied by sync, which
+    /// routes through `create_relationship`.
+    async fn assert_root_only_membership(&self, source: &Node) -> Result<(), NodeServiceError> {
+        if source.node_type == "collection" || source.node_type == "person" {
+            return Ok(());
+        }
+        if !self.is_root_node(&source.id).await? {
+            return Err(NodeServiceError::invalid_update(format!(
+                "content node '{}' has a parent, so it cannot be a collection member; \
+                 only root nodes may hold a member_of edge (ADR-059 root-only membership)",
+                source.id
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn create_relationship(
         &self,
         source_id: &str,
@@ -518,6 +542,9 @@ impl NodeService {
                         .await
                         .map_err(|e| NodeServiceError::collection_cycle(e.to_string()))?;
                 }
+                // Root-only content membership (ADR-059 §2). No-op for collection
+                // (nesting) and person (grantee) sources; enforced for content.
+                self.assert_root_only_membership(&source).await?;
             }
         } else {
             // Custom relationship: validate against source node's schema
@@ -704,6 +731,17 @@ impl NodeService {
         &self,
         memberships: &[(String, String)],
     ) -> Result<usize, NodeServiceError> {
+        // Root-only content membership (ADR-059 §2), same rule the single-add path
+        // enforces. Validate the whole batch before writing any edge so an interior
+        // content node can't be filed into a collection via bulk import.
+        for (node_id, _collection_id) in memberships {
+            let source = self
+                .get_node(node_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+            self.assert_root_only_membership(&source).await?;
+        }
+
         let created = self
             .store
             .bulk_add_to_collections(memberships)
