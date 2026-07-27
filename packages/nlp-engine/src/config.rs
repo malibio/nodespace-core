@@ -34,13 +34,14 @@ pub fn compute_file_sha256(path: &Path) -> std::io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Verify the on-disk model at `path` against the pinned [`EMBEDDING_MODEL_SHA256`].
+/// Verify the on-disk file at `path` against an expected SHA-256 digest.
 ///
 /// Returns `Err` describing the mismatch (or read failure) so the caller can
 /// refuse to load a tampered or corrupt artifact. This closes the post-install
 /// tamper window: even a correctly-downloaded model that is later swapped on
-/// disk is rejected at load time.
-pub fn verify_model_integrity(path: &Path) -> Result<(), String> {
+/// disk is rejected at load time. Shared by the embedding model (fixed pinned
+/// digest) and the chat models (per-catalog-entry digest).
+pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
     let actual = compute_file_sha256(path).map_err(|e| {
         format!(
             "failed to read model for integrity check {}: {}",
@@ -48,15 +49,23 @@ pub fn verify_model_integrity(path: &Path) -> Result<(), String> {
             e
         )
     })?;
-    if actual != EMBEDDING_MODEL_SHA256 {
+    // Case-insensitive: a hex digest is semantically case-agnostic, so a correctly
+    // pinned digest entered in any case still matches (`actual` is lowercase). This
+    // keeps a legitimate model from being refused over digest casing.
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
         return Err(format!(
             "model integrity check FAILED for {}: expected SHA-256 {}, got {}",
             path.display(),
-            EMBEDDING_MODEL_SHA256,
+            expected_sha256,
             actual
         ));
     }
     Ok(())
+}
+
+/// Verify the on-disk model at `path` against the pinned [`EMBEDDING_MODEL_SHA256`].
+pub fn verify_model_integrity(path: &Path) -> Result<(), String> {
+    verify_file_sha256(path, EMBEDDING_MODEL_SHA256)
 }
 
 /// Configuration for llama.cpp embedding model
@@ -257,5 +266,19 @@ mod tests {
         let result = verify_model_integrity(Path::new("/nonexistent/model.gguf"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("failed to read model"));
+    }
+
+    #[test]
+    fn test_verify_file_sha256_accepts_match_rejects_mismatch() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"chat model bytes").unwrap();
+        let digest = compute_file_sha256(f.path()).unwrap();
+        // Matching digest passes.
+        assert!(verify_file_sha256(f.path(), &digest).is_ok());
+        // A wrong digest is rejected with a descriptive error.
+        let result = verify_file_sha256(f.path(), &"0".repeat(64));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("integrity check FAILED"));
     }
 }

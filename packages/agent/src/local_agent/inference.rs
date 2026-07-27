@@ -42,8 +42,17 @@ impl LlamaChatInferenceEngine {
         let engine = ChatEngine::new(config)
             .map_err(|e| InferenceError::Engine(format!("Failed to create ChatEngine: {e}")))?;
 
+        // Look up the pinned digest for this model file so the load-time integrity
+        // gate refuses a swapped-on-disk GGUF before native llama.cpp parses it. A
+        // path outside the catalog (a user-supplied model) resolves to None and
+        // loads without the gate — there is nothing to verify against.
+        let expected_sha256 = std::path::Path::new(model_path)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .and_then(super::model_manager::expected_sha256_for_filename);
+
         engine
-            .load_model(model_path)
+            .load_model(model_path, expected_sha256)
             .map_err(|e| InferenceError::Engine(format!("Failed to load model: {e}")))?;
 
         Ok(Self {

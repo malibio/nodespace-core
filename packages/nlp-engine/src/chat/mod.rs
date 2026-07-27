@@ -180,7 +180,14 @@ impl ChatEngine {
     ///
     /// The model file must exist and be a valid GGUF file with an embedded
     /// chat template. GPU layers are offloaded according to `ChatConfig`.
-    pub fn load_model(&self, model_path: &str) -> Result<()> {
+    ///
+    /// When `expected_sha256` is `Some`, the on-disk file is verified against
+    /// that digest before it is handed to native llama.cpp — closing the
+    /// post-install tamper window (a model correctly downloaded but later
+    /// swapped on disk is refused). `None` is the escape hatch for a
+    /// user-supplied / non-catalog model with no pinned digest: it loads with a
+    /// warning rather than failing, since there is nothing to verify against.
+    pub fn load_model(&self, model_path: &str, expected_sha256: Option<&str>) -> Result<()> {
         #[cfg(feature = "chat-service")]
         {
             tracing::info!("Loading chat model: {}", model_path);
@@ -191,6 +198,24 @@ impl ChatEngine {
                     "Model file not found: {}",
                     model_path
                 )));
+            }
+
+            // Integrity gate: reject a tampered/substituted artifact before native
+            // llama.cpp parses it with full authority. Mirrors the embedding-model
+            // load gate; the digest is the selected catalog entry's pinned SHA-256.
+            match expected_sha256 {
+                Some(expected) => {
+                    crate::config::verify_file_sha256(path, expected)
+                        .map_err(ChatError::IntegrityError)?;
+                    tracing::info!("Chat model integrity verified: {}", model_path);
+                }
+                None => {
+                    tracing::warn!(
+                        "Loading chat model WITHOUT integrity verification (no pinned \
+                         digest for a user-supplied / non-catalog model): {}",
+                        model_path
+                    );
+                }
             }
 
             // Get global backend (shares with embedding service)
@@ -242,6 +267,7 @@ impl ChatEngine {
         #[cfg(not(feature = "chat-service"))]
         {
             let _ = model_path;
+            let _ = expected_sha256;
             tracing::info!("STUB: Chat model load (feature disabled)");
         }
 
@@ -1304,6 +1330,26 @@ mod tests {
             split_all(&["Done.<|channel>I should add the node.<channel|>Added it!"]);
         assert_eq!(answer, "Done.Added it!");
         assert_eq!(reasoning, "I should add the node.");
+    }
+
+    // --- Load-time integrity gate ---
+
+    #[cfg(feature = "chat-service")]
+    #[test]
+    fn load_model_refuses_a_mismatched_digest_before_native_load() {
+        use std::io::Write;
+        let engine = ChatEngine::new(ChatConfig::default()).expect("engine constructs");
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"tampered / substituted model bytes").unwrap();
+        // A wrong expected digest is refused with IntegrityError — this returns
+        // before the file is handed to native llama.cpp (no backend/model needed).
+        let err = engine
+            .load_model(f.path().to_str().unwrap(), Some(&"0".repeat(64)))
+            .expect_err("mismatched digest must be refused");
+        assert!(
+            matches!(err, ChatError::IntegrityError(_)),
+            "expected IntegrityError, got {err:?}"
+        );
     }
 
     #[test]

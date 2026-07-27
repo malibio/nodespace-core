@@ -1010,6 +1010,18 @@ fn find_catalog_entry(model_id: &str) -> Result<&'static CatalogEntry, ModelErro
         .ok_or_else(|| ModelError::NotFound(model_id.to_string()))
 }
 
+/// The pinned SHA-256 for a catalog chat model, looked up by its GGUF file name
+/// (basename). Returns `None` for a file that is not in the catalog — a
+/// user-supplied / custom model with no pinned digest, which the load path then
+/// loads without an integrity gate. Used at load time to hand the expected
+/// digest to the inference engine so a swapped-on-disk GGUF is refused.
+pub fn expected_sha256_for_filename(filename: &str) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|e| e.filename == filename)
+        .map(|e| e.sha256)
+}
+
 /// Detect total system RAM in bytes using `sysinfo`.
 pub fn detect_system_ram() -> u64 {
     let mut sys = sysinfo::System::new();
@@ -1453,6 +1465,44 @@ mod tests {
             assert!(
                 !entry.sha256.is_empty(),
                 "catalog entry '{}' must carry a sha256",
+                entry.id
+            );
+        }
+    }
+
+    #[test]
+    fn expected_sha256_for_filename_matches_catalog_and_none_for_unknown() {
+        let entry = CATALOG.iter().next().expect("catalog is non-empty");
+        // A real catalog filename resolves to its pinned 64-hex digest — this is
+        // what the chat load gate verifies the on-disk GGUF against.
+        assert_eq!(
+            expected_sha256_for_filename(entry.filename),
+            Some(entry.sha256)
+        );
+        assert_eq!(
+            expected_sha256_for_filename(entry.filename).unwrap().len(),
+            64
+        );
+        // An unknown / user-supplied filename resolves to None — the documented
+        // escape hatch (load without a digest to verify against).
+        assert_eq!(
+            expected_sha256_for_filename("not-a-catalog-model.gguf"),
+            None
+        );
+    }
+
+    #[test]
+    fn every_catalog_model_basename_resolves_to_its_pinned_digest() {
+        // The chat load gate resolves the expected digest from the model file's
+        // basename, and model_path() builds `models_dir.join(entry.filename)` — so
+        // the basename is always the catalog filename. This guards the wiring
+        // invariant: a regression that dropped the lookup (loading a catalog model
+        // unverified) would break here, not slip through.
+        for entry in CATALOG {
+            assert_eq!(
+                expected_sha256_for_filename(entry.filename),
+                Some(entry.sha256),
+                "catalog model '{}' basename must resolve to its pinned digest",
                 entry.id
             );
         }
