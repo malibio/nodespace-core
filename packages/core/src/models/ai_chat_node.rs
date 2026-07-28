@@ -30,6 +30,32 @@ fn default_version() -> i64 {
     1
 }
 
+/// A graph write completed during an assistant turn.
+///
+/// Only successful, state-changing tool calls are recorded. This is the durable
+/// evidence that a turn's write actually happened: the agent session is rebuilt
+/// from scratch on every turn, so without it the next turn sees the user's
+/// original instruction alongside a prose claim of completion and no proof the
+/// write occurred — and may repeat it.
+///
+/// Deliberately narrow: the tool name, the affected node, and a short label.
+/// Full arguments and tool results are not persisted, since the purpose is to
+/// establish *that* the write happened, not to replay it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatCompletedWrite {
+    /// Name of the tool that performed the write (e.g. `"create_node"`).
+    pub tool: String,
+
+    /// ID of the node the write produced or affected, when the tool reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+
+    /// Short human-readable label for the written node, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 /// A single message in an ai-chat conversation.
 ///
 /// Mirrors the frontend `AiChatMessage` TypeScript interface.
@@ -49,6 +75,11 @@ pub struct AiChatMessage {
     /// Model chain-of-thought reasoning toward the answer, when captured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+
+    /// Graph writes this assistant turn completed. Empty for user messages and
+    /// for assistant turns that only read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_writes: Vec<AiChatCompletedWrite>,
 }
 
 /// Strongly-typed view of an `ai-chat` node.
