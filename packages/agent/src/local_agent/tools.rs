@@ -847,6 +847,12 @@ pub enum Tool {
 impl Tool {
     /// Every tool in registry order. The order here is the order tools are
     /// presented to the model, so keep retrieval/discovery tools first.
+    ///
+    /// Completeness is compiler-enforced via [`Tool::ALL_IS_COMPLETE`]: a
+    /// variant added to the enum but omitted here fails to build. Without that
+    /// check this list is just another hand-maintained list, and everything
+    /// derived from it — including the duplicate-write guard — would silently
+    /// ignore the missing tool.
     pub const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
         Tool::ResolveQuery,
@@ -863,6 +869,46 @@ impl Tool {
         Tool::DeleteNode,
         Tool::CreateNodesFromMarkdown,
     ];
+
+    /// Compile-time proof that [`Tool::ALL`] lists every variant.
+    ///
+    /// The match is exhaustive, so a new variant must be given a position here;
+    /// the assertion then fails to compile unless that position also holds it
+    /// in `ALL`. A test could only check the variants it was told about, which
+    /// is exactly the blind spot — the omitted one.
+    const ALL_IS_COMPLETE: () = {
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            // Each variant maps to its own index; any duplicate or missing
+            // entry shifts the rest and trips the comparison below.
+            let expected = match Self::ALL[i] {
+                Tool::SearchNodes => 0,
+                Tool::ResolveQuery => 1,
+                Tool::SearchSemantic => 2,
+                Tool::GetNode => 3,
+                Tool::CreateNode => 4,
+                Tool::UpdateNode => 5,
+                Tool::CreateSchema => 6,
+                Tool::UpdateSchema => 7,
+                Tool::UpdateTaskStatus => 8,
+                Tool::CreateRelationship => 9,
+                Tool::GetRelatedNodes => 10,
+                Tool::SearchSkills => 11,
+                Tool::DeleteNode => 12,
+                Tool::CreateNodesFromMarkdown => 13,
+            };
+            assert!(expected == i, "Tool::ALL lists a variant out of order");
+            i += 1;
+        }
+        // The loop above only proves the listed entries sit at their own index;
+        // a variant left out entirely shortens the list without disturbing the
+        // rest. The count is what catches that, and the exhaustive match above
+        // is what forces this number to be revisited when a variant is added.
+        assert!(
+            Self::ALL.len() == 14,
+            "Tool::ALL is missing a variant — every variant must be listed"
+        );
+    };
 
     /// The wire/identifier name the model uses to call this tool.
     pub fn name(self) -> &'static str {
@@ -955,9 +1001,20 @@ impl Tool {
             // to the same status, twice is a no-op — the second call is not a
             // duplicate, and refusing it would break a user legitimately
             // re-asserting a value.
-            Tool::UpdateNode | Tool::UpdateSchema | Tool::UpdateTaskStatus => {
-                WriteSemantics::IdempotentWrite
-            }
+            Tool::UpdateNode | Tool::UpdateTaskStatus => WriteSemantics::IdempotentWrite,
+
+            // Not idempotent, but not guarded either. A repeated `add_fields`
+            // or `add_relationships` rejects the field as already present, and
+            // a repeated `rename_fields` fails because the source name is gone
+            // — so a repeat is self-limiting rather than duplicating data.
+            //
+            // Left unguarded because the guard keys on whole-call arguments,
+            // and `update_schema` batches independent edits: a call repeating
+            // one already-applied rename alongside a new field is not the same
+            // write, yet would be refused wholesale. Refusing a legitimate
+            // schema edit is worse than the error the schema layer already
+            // returns for the redundant part.
+            Tool::UpdateSchema => WriteSemantics::SelfLimitingWrite,
 
             // Writes whose repeat produces a second, unwanted copy of the
             // user's data — or, for a delete, re-attacks a node the record
@@ -984,11 +1041,17 @@ impl Tool {
 /// What a repeat of a tool call means for graph state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteSemantics {
-    /// Does not change state. A repeat wastes an iteration, nothing more.
+    /// Does not change user-visible graph state. A repeat wastes an iteration,
+    /// nothing more. (Reads may still persist internal upkeep such as lazy
+    /// schema migration, which is convergent and invisible to the caller.)
     Read,
     /// Changes state, but a repeat with identical arguments converges on the
     /// same result rather than producing a second copy.
     IdempotentWrite,
+    /// Changes state, and a repeat is rejected by the tool's own validation
+    /// rather than converging or duplicating. Not guarded: the tool already
+    /// refuses the redundant work itself.
+    SelfLimitingWrite,
     /// Changes state, and a repeat with identical arguments produces a second
     /// copy of the user's data. These are what the cross-turn guard refuses.
     DuplicableWrite,
@@ -1010,6 +1073,9 @@ pub fn is_write_tool(tool: &str) -> bool {
 
 /// All tool definitions for the graph executor, derived from the registry.
 pub fn all_tool_definitions() -> Vec<ToolDefinition> {
+    // Force evaluation of the completeness proof; an associated const is only
+    // checked where it is used.
+    const _: () = Tool::ALL_IS_COMPLETE;
     Tool::ALL.iter().map(|t| t.definition()).collect()
 }
 

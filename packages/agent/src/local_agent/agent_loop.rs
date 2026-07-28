@@ -57,8 +57,12 @@ pub const CANONICAL_ARGS_MAX_CHARS: usize = 4096;
 /// string. Unparseable arguments are returned unchanged: they cannot be
 /// normalised, and an exact-match comparison on the raw text is still correct.
 ///
-/// Shared by the per-turn duplicate detector and the cross-turn write guard so
-/// the two cannot drift into disagreeing about what "the same call" means.
+/// Shared by the per-turn duplicate detector and the cross-turn write guard, so
+/// the normalisation rules cannot drift apart. Note the two feed it different
+/// inputs: the loop-breaker canonicalises the raw emitted text, while the guard
+/// canonicalises the parsed arguments to match what the write record persists.
+/// That difference is deliberate — the loop-breaker only needs to recognise a
+/// stuck model, whereas the guard's comparison must be exact.
 pub fn canonical_args(args_json: &str) -> String {
     serde_json::from_str::<serde_json::Value>(args_json)
         .map(|v| v.to_string())
