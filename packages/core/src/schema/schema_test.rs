@@ -899,12 +899,11 @@ async fn test_create_schema_without_fields_key_is_unaffected() {
     // Description-only creation infers its own fields; the locating pass must
     // not intercept a payload that has no `fields` array at all.
     //
-    // This asserts only that the locating pass stays out of the way. It does NOT
-    // assert overall success: description-only creation is separately broken on
-    // main — `normalize_and_namespace_fields` emits `custom:<name>`, which the
-    // field-name validator then rejects for containing ':'. That is unrelated to
-    // argument locating and is tracked separately; pinning success here would
-    // couple this test to that bug's fix.
+    // This originally asserted only that the locating pass stayed out of the way,
+    // guarded behind `if let Err`, because description-only creation was broken
+    // at the time: namespaced field names contained ':' and the field-name
+    // validator rejected them. That is now fixed, so the guard would make this
+    // test vacuous — it would pass without asserting anything at all.
     let result = handle_create_schema(
         &svc,
         json!({
@@ -914,14 +913,8 @@ async fn test_create_schema_without_fields_key_is_unaffected() {
     )
     .await;
 
-    if let Err(e) = &result {
-        let msg = e.to_string();
-        assert!(
-            !msg.contains("fields["),
-            "a payload with no `fields` array must not be reported by the \
-             field-locating pass: {msg}"
-        );
-    }
+    let output = result.expect("description-only create_schema must succeed");
+    assert_eq!(output["schemaId"], "venue");
 }
 
 #[tokio::test]
