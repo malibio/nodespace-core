@@ -640,29 +640,41 @@ impl NodeService {
             return Ok(());
         }
 
-        // Auto-calculate order for built-in ordered relationships if not provided
-        let final_edge_data = if is_builtin {
-            let mut data = edge_data.as_object().cloned().unwrap_or_default();
+        // Auto-ordered `has_child` with no caller-supplied order: the next
+        // fractional key MUST be read and written as one atomic unit, or a
+        // concurrent reorder can interleave between the read and the write and
+        // collide the order key. The store method does the read → compute →
+        // write under `reorder_lock`. (member_of auto-order is likewise handled
+        // atomically above via add_to_collection.) Explicit-order has_child and
+        // the unordered builtins fall through to the generic path below.
+        if relationship_name == "has_child" && edge_data.get("order").is_none() {
+            let (order, rel_id) = self
+                .store
+                .append_child_edge(source_id, target_id)
+                .await
+                .map_err(|e| {
+                    NodeServiceError::query_failed(format!("Failed to append child edge: {}", e))
+                })?;
 
-            // Auto-calculate order if not provided for ordered relationship types
-            // Note: member_of with auto-order is handled above via atomic add_to_collection
-            if data.get("order").is_none() {
-                let order = match relationship_name {
-                    "has_child" => Some(self.store.get_next_child_order(source_id).await.map_err(
-                        |e| {
-                            NodeServiceError::query_failed(format!(
-                                "Failed to calculate child order: {}",
-                                e
-                            ))
-                        },
-                    )?),
-                    _ => None, // "mentions" doesn't need ordering, member_of handled above
-                };
-                if let Some(ord) = order {
-                    data.insert("order".to_string(), serde_json::json!(ord));
-                }
-            }
-            serde_json::json!(data)
+            self.emit_event(DomainEvent::RelationshipCreated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id,
+                    source_id,
+                    target_id,
+                    "has_child",
+                    serde_json::json!({ "order": order }),
+                ),
+            });
+
+            return Ok(());
+        }
+
+        // Remaining relationships carry the caller's edge_data as-is: the two
+        // auto-ordered builtins (member_of, has_child) returned early above, and
+        // mentions / has_role are unordered. Builtins normalize a non-object
+        // payload to an empty object; custom relationships pass through verbatim.
+        let final_edge_data = if is_builtin {
+            serde_json::json!(edge_data.as_object().cloned().unwrap_or_default())
         } else {
             edge_data.clone()
         };
