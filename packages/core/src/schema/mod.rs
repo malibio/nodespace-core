@@ -1438,8 +1438,9 @@ mod tests {
         // "status" collides with a reserved core property, so the caller is warned
         // rather than having the name silently rewritten.
         assert!(
-            warnings.iter().any(|w| w.contains("status")
-                && w.contains("reserved core property")),
+            warnings
+                .iter()
+                .any(|w| w.contains("status") && w.contains("reserved core property")),
             "Expected a reserved-core-property warning for 'status', got {warnings:?}"
         );
     }
