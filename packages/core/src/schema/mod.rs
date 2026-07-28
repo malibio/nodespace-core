@@ -63,14 +63,17 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
             .map(|n| format!("{key}[{idx}] (\"{n}\")"))
             .unwrap_or_else(|| format!("{key}[{idx}]"));
 
-        for key in ["name", "type"] {
-            let missing = match obj.get(key) {
+        // Not `key` — that names the array being checked, and shadowing it here
+        // with a per-entry property name gives one identifier two meanings in a
+        // function whose whole job is naming things precisely.
+        for required_key in ["name", "type"] {
+            let missing = match obj.get(required_key) {
                 None => true,
                 Some(Value::String(s)) => s.trim().is_empty(),
                 Some(_) => false,
             };
             if missing {
-                problems.push(format!("{label} is missing \"{key}\""));
+                problems.push(format!("{label} is missing \"{required_key}\""));
             }
         }
     }
