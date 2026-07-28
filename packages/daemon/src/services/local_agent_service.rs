@@ -1345,11 +1345,16 @@ const SUMMARY_MAX_CHARS: usize = 120;
 fn write_summary_arg(tool: &str) -> Option<&'static [&'static str]> {
     match tool {
         "create_node" | "update_node" | "update_task_status" | "delete_node" => {
-            Some(&["content", "title", "id"])
+            Some(&["content", "title", "id", "node_id"])
         }
-        "create_schema" | "update_schema" => Some(&["name"]),
+        // `create_schema` is keyed on the display name it declares; `update_schema`
+        // identifies its target by `schema_id` and has no top-level `name` (the
+        // only `name` keys sit nested inside `add_fields[]`, out of reach here).
+        "create_schema" => Some(&["name"]),
+        "update_schema" => Some(&["schema_id"]),
         "create_nodes_from_markdown" => Some(&["markdown"]),
-        "create_relationship" => None,
+        // `create_relationship` has no single describing argument; the call site
+        // renders the edge from its own fields instead.
         _ => None,
     }
 }
@@ -2078,6 +2083,20 @@ mod tests {
             serde_json::json!({"created": true}),
         )]);
         assert_eq!(schema[0].summary.as_deref(), Some("album_to_listen"));
+
+        // `update_schema` identifies its target by `schema_id`, not `name`. A
+        // repeat here is destructive — `rename_fields` rekeys property data on
+        // every existing node of the type — so it must not degrade to a bare
+        // tool name.
+        let updated = completed_writes_from(&[exec(
+            "update_schema",
+            serde_json::json!({
+                "schema_id": "album_to_listen",
+                "add_fields": [{"name": "rating", "field_type": "number"}]
+            }),
+            serde_json::json!({"updated": true}),
+        )]);
+        assert_eq!(updated[0].summary.as_deref(), Some("album_to_listen"));
     }
 
     /// The node id is stored as the `nodespace://` URI the tools actually
