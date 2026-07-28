@@ -171,6 +171,69 @@ impl std::ops::Deref for BackendGuard {
     }
 }
 
+/// Maximum time to wait for the process-global backend to initialize and the
+/// model to load onto the GPU.
+///
+/// A normal load completes in a few seconds. A genuinely stuck first-time
+/// backend/Metal init would otherwise hang the process at 0% CPU forever.
+/// Exceeding this budget returns an error so the caller fails fast with a
+/// diagnostic instead of hanging silently. The budget is generous so it never
+/// trips on a slow-but-progressing load on a cold or constrained machine.
+#[cfg(feature = "embedding-service")]
+const MODEL_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Initialize the global backend (if needed) and load a model from `model_path`,
+/// bounded by `timeout`.
+///
+/// The blocking backend-init + model-load runs on a dedicated worker thread so a
+/// genuinely stuck load fails fast with an error instead of hanging the process
+/// at 0% CPU. The worker acquires the global backend Mutex via
+/// [`get_or_init_backend`] — serializing loads across services exactly as
+/// before — and returns the loaded `LlamaModel`, which is `Send`. The backend
+/// `MutexGuard` is created and dropped entirely within the worker thread, so it
+/// never crosses a thread boundary.
+///
+/// NOTE: if a load genuinely deadlocks, the abandoned worker thread still holds
+/// the backend Mutex, so subsequent loads in the same process would block on it.
+/// That is an acceptable tradeoff for this pathological case — the point is that
+/// the *first* stuck load returns an error instead of hanging the process
+/// forever at 0% CPU.
+#[cfg(feature = "embedding-service")]
+fn load_model_with_timeout(
+    model_path: std::path::PathBuf,
+    n_gpu_layers: u32,
+    timeout: std::time::Duration,
+) -> std::result::Result<LlamaModel, String> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("llama-model-load".to_string())
+        .spawn(move || {
+            let result = (|| {
+                // Holds the backend Mutex for the duration of the load.
+                let backend = get_or_init_backend()?;
+                let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers);
+                LlamaModel::load_from_file(&backend, &model_path, &model_params)
+                    .map_err(|e| format!("Model load failed: {}", e))
+            })();
+            // Receiver may have already timed out and dropped; ignore send errors.
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("Failed to spawn model-load thread: {}", e))?;
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "Model load timed out after {}s (possible Metal/GPU backend deadlock)",
+            timeout.as_secs()
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Model-load thread terminated without returning a result".to_string())
+        }
+    }
+}
+
 /// Explicitly release the global llama backend to prevent SIGABRT on process exit.
 ///
 /// This drops the `LlamaBackend` while we still have full control of the process,
@@ -376,16 +439,13 @@ impl EmbeddingService {
                 EmbeddingError::IntegrityError(e)
             })?;
 
-            // Initialize llama.cpp backend (uses global singleton)
-            // BackendGuard holds the Mutex lock for the duration of model loading
-            let backend = get_or_init_backend().map_err(EmbeddingError::ModelLoadError)?;
-
-            // Load model with GPU offloading
-            let model_params =
-                LlamaModelParams::default().with_n_gpu_layers(self.config.n_gpu_layers);
-
-            let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
-                .map_err(|e| EmbeddingError::ModelLoadError(format!("Model load failed: {}", e)))?;
+            // Initialize the llama.cpp backend (global singleton) and load the
+            // model onto the GPU. This runs on a dedicated worker thread bounded
+            // by a timeout so a genuinely stuck first-time Metal/GPU init fails
+            // fast with an error instead of hanging the process at 0% CPU.
+            let model =
+                load_model_with_timeout(model_path, self.config.n_gpu_layers, MODEL_LOAD_TIMEOUT)
+                    .map_err(EmbeddingError::ModelLoadError)?;
 
             // Get actual embedding dimension from model
             self.embedding_dimension = model.n_embd() as usize;
