@@ -1210,6 +1210,63 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// ADR-059 §2 (reparent side of the root-only content-membership rule): a node
+    /// that holds a `member_of` edge is a root member and must not be given a
+    /// `has_child` parent — that would make it a forbidden interior member with no
+    /// `member_of` write for the store's forward guard to catch. Called at BOTH
+    /// store-level sites that attach an *existing* node to a parent — `move_node`
+    /// (the service `move_node` and `upsert_node_with_parent` reparent paths) and
+    /// `bulk_create_has_child` (the sync-apply cold-sweep) — so every reparent
+    /// path is covered, symmetrically with the forward guard `assert_root_only_
+    /// membership` on the `member_of` INSERT sites. (Fresh-node attach sites can't
+    /// pre-hold a membership; `move_children_to_parent` only moves already-interior
+    /// nodes.) Rejects rather than dropping the membership (a node can hold several
+    /// grants, each an independent access path). `collection` (nesting) and
+    /// `person` (grantee, ADR-037 §4) nodes are exempt. A single chunked query
+    /// keeps the bulk/cold-sweep path a single round trip.
+    pub(crate) async fn assert_may_gain_parent(&self, node_ids: &[&str]) -> Result<()> {
+        if node_ids.is_empty() {
+            return Ok(());
+        }
+        let mut unique: Vec<&str> = node_ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+
+        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        const ID_CHUNK: usize = 900;
+        for chunk in unique.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            // Offenders: non-exempt nodes that already hold a `member_of` edge.
+            let sql = format!(
+                "SELECT n.id FROM node n \
+                 WHERE n.id IN ({}) \
+                   AND n.node_type NOT IN ('collection', 'person') \
+                   AND EXISTS(SELECT 1 FROM relationship r \
+                              WHERE r.in_node = n.id AND r.relationship_type = 'member_of')",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.to_string()))
+                .collect();
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to validate root-only membership on reparent")?;
+            if let Some(row) = rows.next().await? {
+                let offender: String = row.get(0)?;
+                let memberships = self.get_node_memberships(&offender).await?;
+                return Err(anyhow::anyhow!(
+                    "member_of_not_root: node '{}' holds collection membership ({}) and cannot be moved under a parent — only root nodes may hold collection membership (ADR-059 §2). Remove it from the collection(s) first, or move its root instead.",
+                    offender,
+                    memberships.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub async fn move_node(
         &self,
         node_id: &str,
@@ -1236,6 +1293,8 @@ impl SqliteStore {
                 return Err(anyhow::anyhow!("Parent node not found: {}", parent_id));
             }
             self.validate_no_cycle(parent_id, &node_id).await?;
+            // ADR-059 §2: a member cannot be moved into an interior position.
+            self.assert_may_gain_parent(&[node_id.as_str()]).await?;
         }
 
         // Serialize the sibling-order read → fractional-key compute → write-back
