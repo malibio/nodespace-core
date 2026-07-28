@@ -26,6 +26,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { proSync, type SyncState } from '$lib/stores/pro-sync.svelte';
   import { membership } from '$lib/stores/membership.svelte';
+  import { collectionsData } from '$lib/stores/collections.svelte';
   import { isProSyncActive } from '$lib/plugins/ui-extensions.svelte';
   import InvitationsInbox from '$lib/components/collaboration/invitations-inbox.svelte';
   import { createLogger } from '$lib/utils/logger';
@@ -64,31 +65,19 @@
   let menuOpen = $state(false);
   let signingOut = $state(false);
 
-  // Invitations inbox (onboarding). Opened from the account menu and,
-  // once per device, automatically on the first sign-in.
+  // Invitations inbox. Opened explicitly from the account menu, and auto-shown
+  // for the one case that genuinely needs it: a signed-in user with sync active
+  // who is a member of no collection yet (nothing to redeem/join otherwise).
   //
-  // `inboxOpenedManually` tracks explicit opens (account menu). The first-run
-  // auto-open is derived from proSync.signedInEpisode instead of pushed by an effect:
-  // when a fresh sign-in episode arrives on a device that hasn't seen the onboarding,
-  // the inbox shows until dismissed — no $effect reading/writing its own seen flag.
+  // `inboxOpenedManually` tracks explicit opens (account menu). There is NO
+  // launch/first-run auto-open — the auto-prompt is derived purely from live
+  // store state (signed-in + no collection access), so it never appears for a
+  // signed-out user and never queries the daemon while signed out.
   let inboxOpenedManually = $state(false);
-  let dismissedSignInEpisode = $state(0);
-
-  const FIRST_RUN_KEY = 'ns:invitations-firstrun-seen';
-  function firstRunSeen(): boolean {
-    try {
-      return typeof localStorage !== 'undefined' && localStorage.getItem(FIRST_RUN_KEY) === '1';
-    } catch {
-      return true; // storage unavailable — don't pester
-    }
-  }
-  function markFirstRunSeen() {
-    try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(FIRST_RUN_KEY, '1');
-    } catch {
-      /* ignore */
-    }
-  }
+  // Set once the user dismisses the auto-prompt, so it doesn't immediately
+  // reopen while they still have no access this session. Cleared on sign-out so
+  // a later fresh sign-in re-evaluates.
+  let noAccessDismissed = $state(false);
 
   // Signed in = the daemon surfaced an identity. When set, clicking the
   // pill opens the account menu ("signed in as <email>" + Sign out) instead of
@@ -122,22 +111,27 @@
       : proSync.detail || label
   );
 
-  // The inbox is open when explicitly opened, or auto-opened for a fresh, undismissed
-  // first sign-in on a device that hasn't seen onboarding yet.
-  const firstRunAutoOpen = $derived(
+  // Auto-prompt condition: genuinely signed in (realtime session, cleared on
+  // sign-out) AND sync is active for the active database (so redeem/join work)
+  // AND — after collections have actually loaded — the user can see no
+  // collection at all. That last clause is the "no tenant/collection access
+  // yet" case; `collectionsData.hasLoaded` keeps it from flashing during the
+  // pre-load window for users who do have access. Reactive, so it clears the
+  // moment access lands (redeem, join, or sync).
+  const signedInNoAccess = $derived(
     signedIn &&
-      !firstRunSeen() &&
-      proSync.signedInEpisode > 0 &&
-      proSync.signedInEpisode !== dismissedSignInEpisode
+      syncEnabled &&
+      collectionsData.hasLoaded &&
+      collectionsData.collectionsTree.length === 0
   );
-  const inboxOpen = $derived(inboxOpenedManually || firstRunAutoOpen);
+  // The inbox is open when explicitly opened, or auto-shown for a signed-in
+  // user with no access who hasn't dismissed the prompt this session.
+  const inboxOpen = $derived(inboxOpenedManually || (signedInNoAccess && !noAccessDismissed));
 
   function closeInbox() {
     inboxOpenedManually = false;
-    // Dismiss the current first-run episode and remember it device-wide so it
-    // doesn't reopen for this sign-in or on future launches.
-    dismissedSignInEpisode = proSync.signedInEpisode;
-    markFirstRunSeen();
+    // Suppress the auto-prompt for the rest of this session; a sign-out resets it.
+    noAccessDismissed = true;
   }
 
   // A pill click opens a menu — the account menu when signed in, the
@@ -187,6 +181,8 @@
       // Drop cached membership state so the next user doesn't inherit this
       // session's roster/identity (identity is per-session).
       membership.reset();
+      // Re-arm the no-access auto-prompt for whoever signs in next.
+      noAccessDismissed = false;
       log.info('signed out');
     } finally {
       signingOut = false;
