@@ -34,8 +34,21 @@
  * baseline and fail on regression (a scenario that was passing and is now failing).
  *
  * Scenarios 4/6/8 depend on earlier turns, so the script keeps groups of turns on
- * the same chat node. Scenario 6 ("Mark invoice ... as paid") has no stable id up
- * front, so it is phrased to let the agent search-then-update by description.
+ * the same chat node. Scenario 6 has no stable id up front, so it is phrased to let
+ * the agent search-then-update by description.
+ *
+ * CONTAMINATION: scenario prompts must NOT appear in the agent's compiled guidance
+ * (packages/agent/src/agent_guidance.rs, skill_rules.rs) — otherwise a pass measures
+ * recall of a planted example rather than generalization. The Rust test
+ * `guidance_is_not_contaminated_by_eval_prompts` parses the prompts out of this file
+ * and fails the build if any reappears in guidance. When editing prompts here, keep
+ * them phrased unlike the guidance rules; when editing guidance, don't paste prompts
+ * from this file in as worked examples.
+ *
+ * Scenario 8's sub-labels ("book", "contact") name each step's ROLE in the
+ * multi-type flow (first type, second type, instance of each) — not the literal
+ * entity in the prompt. They are stable IDs for baseline diffing; the prompt wording
+ * underneath them is free to change.
  */
 
 import { dirname, join, resolve } from "node:path";
@@ -212,31 +225,33 @@ export function assertExpectation(
 const GROUPS: ScenarioStep[][] = [
   [{ scenario: "1. Greeting", prompt: "Hi there", expect: { kind: "noTools" } }],
   [{ scenario: "2. Capability", prompt: "What can you do?", expect: { kind: "noTools" } }],
-  // Invoice CRUD chain (scenarios 3-7) shares one chat node.
+  // Single-custom-type CRUD chain (scenarios 3-7) shares one chat node.
+  // Wording here must stay independent of packages/agent/src/agent_guidance.rs —
+  // guidance_is_not_contaminated_by_eval_prompts (agent_guidance.rs) enforces it.
   [
     {
       scenario: "3. Schema creation",
-      prompt: "Create an invoice tracking database",
+      prompt: "I want to keep a record of the equipment my team checks out",
       expect: { kind: "noExtraTypes" },
     },
     {
       scenario: "4. Instance creation",
-      prompt: "Add an invoice for $500 due next Friday",
+      prompt: "Log a laser cutter checked out on the 12th, replacement cost 2400",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
       scenario: "5. List/query",
-      prompt: "List all my invoices",
+      prompt: "What equipment is on the books?",
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
     {
       scenario: "6. Update",
-      prompt: "Mark the $500 invoice as paid",
+      prompt: "The 2400 one came back — set it to returned",
       expect: { kind: "toolSequence", tools: ["search_nodes", "update_node"] },
     },
     {
       scenario: "7. Empty-result query",
-      prompt: "Find my invoice for one million dollars",
+      prompt: "Do we have anything worth 90000 sitting out?",
       expect: { kind: "noRetry", tool: "search_nodes" },
     },
   ],
@@ -244,27 +259,27 @@ const GROUPS: ScenarioStep[][] = [
   [
     {
       scenario: "8a. Create type: book",
-      prompt: "Create a database to track books I want to read",
+      prompt: "Set up somewhere to note down albums I mean to listen to",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
       scenario: "8b. Create type: contact",
-      prompt: "Create a database for my contacts",
+      prompt: "I also need to keep track of the venues I book",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
       scenario: "8c. Instance: book",
-      prompt: 'Add a book called "Dune" by Frank Herbert',
+      prompt: "Put down Kind of Blue, it's by Miles Davis",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
       scenario: "8d. Instance: contact",
-      prompt: "Add a contact named Jane Doe, email jane@example.com",
+      prompt: "New venue: the Blue Note, they can be reached at booking@example.com",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
       scenario: "8e. Query across types",
-      prompt: "Show me all my books",
+      prompt: "Run through the albums for me",
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
   ],
