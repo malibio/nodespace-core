@@ -38,17 +38,17 @@
  * the agent search-then-update by description.
  *
  * CONTAMINATION: scenario prompts must NOT appear in the agent's compiled guidance
- * (packages/agent/src/agent_guidance.rs, skill_rules.rs) — otherwise a pass measures
+ * (agent_guidance.rs, skill_rules.rs, and every seeded skill's markdown_content in
+ * skill_pipeline.rs — all of it reaches the model) — otherwise a pass measures
  * recall of a planted example rather than generalization. The Rust test
  * `guidance_is_not_contaminated_by_eval_prompts` parses the prompts out of this file
  * and fails the build if any reappears in guidance. When editing prompts here, keep
  * them phrased unlike the guidance rules; when editing guidance, don't paste prompts
  * from this file in as worked examples.
  *
- * Scenario 8's sub-labels ("book", "contact") name each step's ROLE in the
- * multi-type flow (first type, second type, instance of each) — not the literal
- * entity in the prompt. They are stable IDs for baseline diffing; the prompt wording
- * underneath them is free to change.
+ * Scenario 8's sub-labels name each step's ROLE in the multi-type flow (first type,
+ * second type, instance of each), not the entity in the prompt. They are stable IDs
+ * for baseline diffing; the prompt wording underneath them is free to change.
  */
 
 import { dirname, join, resolve } from "node:path";
@@ -231,7 +231,11 @@ const GROUPS: ScenarioStep[][] = [
   [
     {
       scenario: "3. Schema creation",
-      prompt: "I want to keep a record of the equipment my team checks out",
+      // Mentions checked-out vs returned so the schema plausibly carries a
+      // status field — scenario 6 then tests resolve_query routing on an
+      // indirect reference, not whether the model guessed a status value.
+      prompt:
+        "I want to keep a record of the equipment my team checks out and whether it's been returned",
       expect: { kind: "noExtraTypes" },
     },
     {
@@ -258,22 +262,22 @@ const GROUPS: ScenarioStep[][] = [
   // Multi-custom-type CRUD (scenario 8) shares its own chat node.
   [
     {
-      scenario: "8a. Create type: book",
+      scenario: "8a. Create type: first",
       prompt: "Set up somewhere to note down albums I mean to listen to",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
-      scenario: "8b. Create type: contact",
+      scenario: "8b. Create type: second",
       prompt: "I also need to keep track of the venues I book",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
-      scenario: "8c. Instance: book",
+      scenario: "8c. Instance: first type",
       prompt: "Put down Kind of Blue, it's by Miles Davis",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
-      scenario: "8d. Instance: contact",
+      scenario: "8d. Instance: second type",
       prompt: "New venue: the Blue Note, they can be reached at booking@example.com",
       expect: { kind: "toolOnce", tool: "create_node" },
     },

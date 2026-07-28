@@ -34,7 +34,7 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// detail is intentionally deferred to tool schemas to avoid duplication.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - NODE_TYPE COMES FROM RELEVANT ENTITY TYPES: Every node_type argument (search_nodes, create_node, update_node, resolve_query) MUST be an id copied exactly from the RELEVANT ENTITY TYPES block in this prompt — character for character, including any underscores. Never shorten, singularize, paraphrase, or guess it from the user's wording: the user's noun is usually NOT the id, because the id was derived from whatever the type was named when its schema was created. If the type you need is not listed in RELEVANT ENTITY TYPES, it does not exist yet — do not invent an id for it.\n\
-    - CONVERSATIONAL TURNS USE NO TOOLS. Greetings (\"hi\", \"hello\"), thanks, small talk, capability questions (\"what can you do?\"), and meta questions about yourself — answer directly in text. Do NOT call any tool.\n\
+    - CONVERSATIONAL TURNS USE NO TOOLS. Greetings, thanks, small talk, questions about your own capabilities or limits, and other meta questions about yourself — answer directly in text. Do NOT call any tool: nothing in the user's graph needs to be read to answer them.\n\
     - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
     - SCHEMA CLAIMS WITHOUT VERIFICATION: Never state that a node type has or lacks a specific property (e.g. \"task has no due_date field\") without first calling a tool to verify. If you have not called get_node or search_nodes on the schema in this turn, you do not know its fields — say so.\n\
     - IDENTICAL TOOL CALLS: Never call the same tool with the exact same arguments twice in one turn. If a tool returned a result and you are about to call it again identically, you already have the answer — produce your response using the result you have.\n\
@@ -184,6 +184,17 @@ mod tests {
         for r in crate::skill_rules::INTERACTION_RULES {
             corpus.push(("skill_rules::INTERACTION_RULES", r.imperative.to_string()));
         }
+        // Every seeded skill's markdown_content is injected as skill
+        // instructions when search_skills routes to it, so it is model-facing
+        // guidance and equally contaminable. Pulling these from
+        // seed_skill_nodes() rather than naming constants means a skill added
+        // later is covered automatically — a hand-maintained file list is
+        // exactly how the skill_pipeline.rs contamination went unnoticed.
+        for t in crate::skill_pipeline::seed_skill_nodes() {
+            if !t.markdown_content.is_empty() {
+                corpus.push(("skill_pipeline::seed_skill_nodes", t.markdown_content));
+            }
+        }
         corpus
     }
 
@@ -191,28 +202,57 @@ mod tests {
     /// script. Parsing the real file (rather than keeping a copy here) is the
     /// point: a reworded scenario is picked up automatically, so this guard
     /// cannot silently go stale against the eval it protects.
-    fn eval_prompts(source: &str) -> Vec<String> {
+    /// Returns (parsed prompts, number of `prompt:` literal sites seen). The
+    /// caller compares the two: a parser that silently skips a literal shape
+    /// it does not understand fails OPEN — that prompt simply goes unchecked —
+    /// so coverage is asserted rather than assumed.
+    fn eval_prompts(source: &str) -> (Vec<String>, usize) {
         let mut prompts = Vec::new();
+        let mut sites = 0usize;
         for (idx, _) in source.match_indices("prompt:") {
-            let rest = &source[idx + "prompt:".len()..];
-            let rest = rest.trim_start();
+            // Only treat this as an object key. `prompt:` also appears inside
+            // identifiers/field access (e.g. `fixture.prompt:`) and prose.
+            if source[..idx]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            {
+                continue;
+            }
+            let rest = source[idx + "prompt:".len()..].trim_start();
             let quote = match rest.chars().next() {
-                Some(q @ ('"' | '\'')) => q,
-                // e.g. `prompt: fixture.prompt` — not a literal, skip.
+                Some(q @ ('"' | '\'' | '`')) => q,
+                // e.g. `prompt: fixture.prompt` — a reference, not a literal;
+                // nothing to parse, so it is not counted as a site.
                 _ => continue,
             };
+            sites += 1;
             let body = &rest[quote.len_utf8()..];
-            // Scenario prompts contain no escaped quotes; stop at the first
-            // matching quote and skip anything that runs past end-of-line.
-            let Some(end) = body.find(quote) else {
-                continue;
-            };
+            // Locate the closing quote, honoring backslash escapes so an
+            // embedded \" does not truncate the literal early.
+            let mut end = None;
+            let mut escaped = false;
+            for (i, c) in body.char_indices() {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match c {
+                    '\\' => escaped = true,
+                    c if c == quote => {
+                        end = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { continue };
             let literal = &body[..end];
-            if !literal.contains('\n') && !literal.is_empty() {
+            if !literal.is_empty() {
                 prompts.push(literal.to_string());
             }
         }
-        prompts
+        (prompts, sites)
     }
 
     fn normalize(s: &str) -> Vec<String> {
@@ -283,12 +323,23 @@ mod tests {
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
-            let prompts = eval_prompts(&source);
+            let (prompts, sites) = eval_prompts(&source);
             assert!(
                 !prompts.is_empty(),
                 "no `prompt:` literals parsed out of {script} — the parser has \
                  drifted from the eval's format and this guard is now vacuous; \
                  fix eval_prompts() rather than deleting this assertion"
+            );
+            // A parser that skips a literal shape it does not understand fails
+            // OPEN: the prompt goes unchecked and the guard still passes. So
+            // every site it saw must have produced a prompt.
+            assert_eq!(
+                prompts.len(),
+                sites,
+                "parsed only {} of {sites} `prompt:` literals in {script} — the \
+                 unparsed ones are silently exempt from this guard; teach \
+                 eval_prompts() the shape it missed",
+                prompts.len()
             );
 
             for prompt in prompts {
@@ -299,9 +350,18 @@ mod tests {
                 }
                 for (const_name, guidance_words) in &tokenized {
                     let (run, phrase) = longest_shared_run(&prompt_words, guidance_words);
-                    if run > MAX_SHARED_RUN {
+                    // A short prompt can be quoted in full without ever
+                    // exceeding a fixed run length, so also flag any prompt
+                    // reproduced in its entirety.
+                    let quoted_whole = run == prompt_words.len();
+                    if run > MAX_SHARED_RUN || quoted_whole {
+                        let why = if quoted_whole {
+                            "the ENTIRE prompt appears"
+                        } else {
+                            "shares a long phrase"
+                        };
                         violations.push(format!(
-                            "  {const_name} shares {run} consecutive words with \
+                            "  {const_name} {why} ({run} consecutive words) from \
                              {script} prompt {prompt:?}\n      shared phrase: {phrase:?}"
                         ));
                     }
@@ -344,9 +404,29 @@ mod tests {
             { scenario: "b", prompt: 'Add a book called "Dune"', expect: y },
             { scenario: "c", prompt: fixture.prompt },
         "#;
-        let got = eval_prompts(src);
+        let (got, sites) = eval_prompts(src);
         // The single-quoted literal keeps its embedded double quotes; the
-        // non-literal `fixture.prompt` reference is skipped.
+        // non-literal `fixture.prompt` reference is skipped and not counted
+        // as a site, so coverage stays exact.
         assert_eq!(got, vec!["Hi there", "Add a book called \"Dune\""]);
+        assert_eq!(sites, got.len(), "every counted site must be parsed");
+    }
+
+    #[test]
+    fn eval_prompt_parser_handles_backticks_and_escapes() {
+        let src = r#"
+            { prompt: `a template literal prompt` },
+            { prompt: "an \"escaped\" quote inside" },
+        "#;
+        let (got, sites) = eval_prompts(src);
+        assert_eq!(sites, 2, "both literal shapes must be counted as sites");
+        assert_eq!(
+            got,
+            vec![
+                "a template literal prompt",
+                "an \\\"escaped\\\" quote inside"
+            ],
+            "backticked and escaped literals must parse in full, not truncate"
+        );
     }
 }
