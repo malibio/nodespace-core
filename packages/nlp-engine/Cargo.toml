@@ -50,6 +50,9 @@ tokio-test = { workspace = true }
 criterion = { workspace = true }
 tempfile = "3.0"
 futures = "0.3"
+# Serializes the model-loading integration tests so concurrent first-time
+# llama.cpp/Metal backend initialization cannot happen under the parallel harness.
+serial_test = "3.2"
 
 [features]
 default = ["embedding-service", "chat-service"]

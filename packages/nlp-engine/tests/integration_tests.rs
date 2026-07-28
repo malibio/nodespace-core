@@ -4,6 +4,13 @@
 #[cfg(all(test, feature = "embedding-service"))]
 mod integration_tests {
     use nodespace_nlp_engine::{EmbeddingConfig, EmbeddingService, EMBEDDING_DIMENSION};
+    use serial_test::serial;
+
+    // These tests each build an embedding service and load a real GGUF onto the
+    // GPU, racing to initialize the process-global llama.cpp/Metal backend. Under
+    // the parallel test harness that race deadlocks (0% CPU hang). `#[serial]`
+    // forces them to run one at a time so first-time backend init never races,
+    // letting the whole binary run in parallel with other test binaries.
 
     fn model_exists() -> bool {
         let config = EmbeddingConfig::default();
@@ -11,6 +18,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_service_initialization() {
         if !model_exists() {
             eprintln!(
@@ -29,6 +37,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_single_embedding_generation() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -60,6 +69,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_asymmetric_embeddings() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -89,6 +99,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_embedding_generation() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -117,6 +128,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_cache_functionality() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -155,6 +167,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_semantic_similarity() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -194,6 +207,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_blob_roundtrip() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -227,6 +241,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_empty_text_handling() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -243,6 +258,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_long_text_handling() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -264,6 +280,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_device_info() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -285,6 +302,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_concurrent_requests() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
