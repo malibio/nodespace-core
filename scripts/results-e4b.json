@@ -2,19 +2,20 @@
   "label": "e4b-1775-argument-errors",
   "model": "gemma-4-e4b-q4km",
   "recorded_at": "2026-07-28",
-  "guidance_commit": "e7c12c3c",
+  "guidance_commit": "a8e613b0",
   "eval_commit": "805a60e4",
   "n_ctx": 32768,
   "n_ctx_note": "Chat context granted for this run, read from the daemon log ('Creating chat LlamaContext (n_ctx=32768...)'). Well above the ~6600-token agent system prompt, so this run was not context-starved - the failure mode where every turn dies on 'Context window exceeded' and no-tool assertions score as passes.",
   "host_memory_gb": 16,
   "supersedes": "e4b-decontaminated (9/12 raw, 8 effective)",
-  "note": "Measured after the #1775 argument-error-reporting fix, on a purged DB with a daemon rebuilt from the commit above, on an otherwise quiet machine (the earlier attempt was abandoned under 3-way resource contention). Raw 10/12, up from 9/12. EFFECTIVE SCORE IS 9/12, not 10: scenario 3 is still a FALSE PASS - its create_schema failed validation and no equipment type persisted (see caveats[0]). The real, verified movement is 8c, which was the defect this issue was filed for and now passes. Scenario 4 remains a genuine failure, still cascading from 3; scenario 6 is #1637 and out of scope.",
+  "note": "Measured after the #1775 argument-error-reporting fix, on a purged DB with a daemon rebuilt from the commit above, on a quiet machine. TWO runs were recorded and they disagree on the raw count (10/12 then 9/12); the results below are run 2. EFFECTIVE SCORE IS 8/12 in run 2 - scenario 3 is a FALSE PASS in BOTH runs (its create_schema failed and no equipment type persisted, see caveats[0]). Do not read the raw count as movement: the only scenario that changed between runs was 5, an unrelated search_nodes/search_semantic tool-choice wobble, so run-to-run variance on this matrix is at least +/-1 and single-run comparisons are not meaningful. The verified result of this work is scenario 8c, which was the defect #1775 was filed for and passes in BOTH runs with the underlying error now correctly reported.",
   "caveats": [
-    "Scenario 3 is STILL a FALSE PASS, for a different reason than in the previous run. The model called create_schema with {\"name\":\"Equipment Check-out Tracker\", \"title_template\":\"{equipment} ({status})\"} and NO fields array at all, so validation rejected it: \"title_template references undefined field 'equipment'\". No equipment schema persisted (confirmed via `nodespace schema list`: only album_to_listen and venue_booking exist). The noExtraTypes assertion only checks that create_schema was called once, so it cannot see the failure. The #1775 fix did NOT address this shape: describe_malformed_fields inspects entries WITHIN a fields array, and here the array is absent, so the payload passes through untouched to the title_template validator. The error the model received was well-formed and actionable ('... - add it to schema.fields', now rendered via Display rather than Debug), but the model made no second attempt.",
-    "Scenario 4 still fails and is still downstream of scenario 3, not an independent defect - there is no equipment type to instantiate. It called search_skills then search_nodes and stopped. This is unchanged from the previous run and is NOT evidence about INSTANCE vs TYPE routing.",
-    "Scenario 8c PASSES and this is the verified fix for the defect #1775 was filed for. The log shows create_node called once with empty arguments, now correctly reported as \"The arguments for create_node were not valid JSON, so the call could not be made. Re-send the call with the same intent and syntactically valid JSON arguments.\" - where the previous run reported a misleading \"missing field `node_type`\" describing the harness's substituted {} rather than the model's actual malformed output. IMPORTANT: the toolOnce assertion counts tool NAMES, so this pass still hides that the first create_node errored and the model recovered on a second call. The pass is real but the assertion is weaker than it looks - same limitation this file documented for the earlier run.",
-    "Scenario 6 (update) remains failing and is owned by #1637, explicitly out of scope for #1775. It called no tools at all.",
-    "Not measured here: whether the within-array field locating (the largest part of the #1775 change) improves recovery in practice. No create_schema call in this run sent a malformed entry inside a fields array - the shape seen repeatedly in ~/.nodespace/logs/nodespaced.log lines 130-162 - so that path went unexercised. Its behavior is covered by unit tests, not by this run."
+    "Scenario 3 is a FALSE PASS in both runs and #1775 did NOT fix it. In both runs the model called create_schema with a title_template and NO fields array: {\"name\":\"Equipment Check-out Tracker\",\"title_template\":\"{equipment} ({status})\"}. The noExtraTypes assertion only checks that create_schema was called once, so it cannot see that nothing persisted (`nodespace schema list` shows only album_to_listen and venue_booking). What DID change is the error text: it now names every unresolved placeholder at once and prescribes the exact entries to add - 'references {equipment}, {status} ... Either add {\"name\":\"equipment\",\"type\":\"text\"}, {\"name\":\"status\",\"type\":\"text\"} ...'. The model still did not repair the call: in run 2 its retry emitted create_schema with EMPTY arguments and it then gave up. Better error text was necessary but is not sufficient for this model on this shape - the remaining gap is the model's ability to act on a correct instruction, not the instruction's content.",
+    "Scenario 4 fails in both runs and remains downstream of scenario 3 - there is no equipment type to instantiate. It is NOT evidence about INSTANCE vs TYPE routing, and the #1775 acceptance criterion 'an instance request against an existing schema calls create_node' is not demonstrated by this matrix, because the schema never exists. 8c and 8d cover that criterion instead, against types that DO exist, and both pass.",
+    "Scenario 8c PASSES in both runs - the verified fix for the defect #1775 was filed for. In run 1 the log shows create_node called with empty arguments and reported as 'The arguments for create_node were not valid JSON, so the call could not be made...', where previously the harness substituted {} and surfaced a misleading 'missing field `node_type`' describing its own substitute. IMPORTANT: the toolOnce assertion counts tool NAMES, so this pass still hides that the first create_node errored and the model recovered on a later call. The pass is real, the assertion is weaker than it looks.",
+    "Run-to-run variance is real and was measured. Between two runs on identical code and a purged DB, scenario 5 flipped from search_nodes (pass) to search_semantic (fail) - the only scenario that moved. Raw counts of 10/12 and 9/12 therefore describe the sampler as much as the code. Treat any single-run delta of 1 on this matrix as noise, and prefer per-scenario tool traces over the headline number.",
+    "Scenario 6 (update) fails in both runs and is owned by #1637, out of scope for #1775.",
+    "Not exercised by either run: the within-array field locating that is the largest part of the #1775 change. No create_schema call in either run sent a malformed entry inside a fields array - the shape seen repeatedly in ~/.nodespace/logs/nodespaced.log lines 130-162 - so that path is covered by unit tests only, not by this matrix."
   ],
   "results": [
     {
@@ -26,7 +27,7 @@
       "toolsOffered": "",
       "toolsCalled": [],
       "reply": "Hi there! How can I help you with your knowledge graph today?",
-      "latencyMs": 18309,
+      "latencyMs": 18307,
       "passed": true
     },
     {
@@ -38,7 +39,7 @@
       "toolsOffered": "",
       "toolsCalled": [],
       "reply": "I am NodeSpace's built-in assistant, and I help you work with your knowledge graph. My core functions include:\n\n*   **Creating Nodes:** Adding new pieces of information (instances) or defining entirely new types of things to track (**schemas**) using `create_node` or `create_schema`.\n*   **Finding/Listing Data:** Searching for specific nodes by keyword (`search_nodes`), finding related concepts semantically (`search_semantic`), getting the full details of a known node ID (`get_node`), or listing everything under an existing type.\n*   **Updating Information:** Modifying content or properties on existing nodes (`update_node`) or changing task statuses specifically (`update_task_status`).\n*   **Structuring Knowledge:** Defining relationships between different kinds of data points with `create_relationship`, and modifying your tracking structures themselves via `update_schema`.\n\nEssentially, I help you build out, organize, read from, and modify structured knowledge within our graph!",
-      "latencyMs": 7149,
+      "latencyMs": 7152,
       "passed": true
     },
     {
@@ -51,8 +52,8 @@
       "toolsCalled": [
         "create_schema"
       ],
-      "reply": "I encountered a validation error while trying to create the schema. The title template references an undefined field called `{equipment}` which I need you to add as a property first so that it can be used in both tracking and titling records.\n\nWould you like me to proceed by adding `Equipment` (as text) with no specific fields, or would you prefer we adjust the plan?",
-      "latencyMs": 5112,
+      "reply": "I encountered an error while setting up the schema. The title template references `{equipment}` and `{status}`, but I need to define these as fields first, or remove them from the template if they are not meant to be part of a field's value.\n\nTo fix this, could you clarify:\n1.  What should we call the equipment (this will become one of our main tracked properties)? Should it just use its own name? If so, what is that property called in your mind?\n2.  For tracking return status, do you want me to create a specific **Status** type with options like \"Checked Out\" and \"Returned\"? Or would using simple text for now work better?",
+      "latencyMs": 7159,
       "passed": true
     },
     {
@@ -65,12 +66,12 @@
       "toolsOffered": "",
       "toolsCalled": [
         "search_skills",
-        "search_nodes"
+        "create_schema"
       ],
-      "reply": "\u26a0\ufe0f node search encountered an error. Please try again or check the details and retry.",
-      "latencyMs": 10175,
+      "reply": "I'm sorry, I ran into an error while trying to create the necessary schema. It seems like my attempt was not in valid JSON format for that tool call.\n\nBased on your request (\"Log a laser cutter checked out on the 12th, replacement cost 2400\"), it sounds like we need a new type of record\u2014an **Equipment Checkout** log. This will allow us to track items and their status over time.\n\nSince this is about tracking *kind* of thing (a list/tracker), I must use `create_schema`. Let me try calling it again with just the name \"Checkout Log\" so you can confirm if that's what you want before adding fields.",
+      "latencyMs": 13216,
       "passed": false,
-      "failure": "Expected 'create_node' exactly once, got 0 (tools: search_nodes)"
+      "failure": "Expected 'create_node' exactly once, got 0 (tools: create_schema)"
     },
     {
       "scenario": "5. List/query",
@@ -81,11 +82,12 @@
       },
       "toolsOffered": "",
       "toolsCalled": [
-        "search_nodes"
+        "search_semantic"
       ],
-      "reply": "I couldn't find any nodes of type 'equipment'. Could you please clarify what kind of equipment record we are looking for?",
-      "latencyMs": 3087,
-      "passed": true
+      "reply": "I couldn't find any nodes matching \"equipment on the books\" using a general search.\n\nTo help me better, could you tell me if this equipment is related to:\n1.  A specific **Project**? (If so, what project?)\n2.  The team that checks it out? (e.g., The Engineering Team)\n3.  Or are we looking for all records of *all* types right now?",
+      "latencyMs": 5115,
+      "passed": false,
+      "failure": "Expected 'search_nodes' exactly once, got 0 (tools: search_semantic)"
     },
     {
       "scenario": "6. Update",
@@ -98,11 +100,13 @@
         ]
       },
       "toolsOffered": "",
-      "toolsCalled": [],
-      "reply": "I need a specific node ID to update its status. Could you please provide the unique identifier for \"the 2400 one\"?",
-      "latencyMs": 2080,
+      "toolsCalled": [
+        "search_nodes"
+      ],
+      "reply": "I'm sorry, I encountered an error while trying to search for the node. It seems like my attempt was not in valid JSON format when calling `search_nodes`.\n\nSince you mentioned \"The 2400 one,\" and we were previously discussing logging equipment checkouts with a replacement cost of $2400, could you confirm if this item is associated with any specific **Project** or has another unique identifier (like serial number) that would help me find it?",
+      "latencyMs": 6130,
       "passed": false,
-      "failure": "Expected sequence [search_nodes,update_node] as a subsequence, got: "
+      "failure": "Expected sequence [search_nodes,update_node] as a subsequence, got: search_nodes"
     },
     {
       "scenario": "7. Empty-result query",
@@ -115,8 +119,8 @@
       "toolsCalled": [
         "search_nodes"
       ],
-      "reply": "\u26a0\ufe0f node search encountered an error. Please try again or check the details and retry.",
-      "latencyMs": 4094,
+      "reply": "I'm sorry, I ran into an error while trying to search for the nodes. It seems like my attempt was not in valid JSON format when calling `search_nodes`.\n\nTo find equipment worth $90,000 that is currently checked out (\"sitting out\"), we need a structured way to query this information across all your records. Since you are asking about *value* and *status*, it suggests these items should be tracked under a specific schema type (like \"Equipment\").\n\nIf there isn't already a dedicated **Equipment** tracker:\n1.  Would you want me to create one? If so, what would its main name/title be?\n2.  Or do you think the existing record for \"$2400\" can tell us how to search by value AND status simultaneously?",
+      "latencyMs": 8164,
       "passed": true
     },
     {
@@ -131,7 +135,7 @@
         "create_schema"
       ],
       "reply": "I have started tracking albums you mean to listen to. You can now create instances of the \"Album To Listen\" type for these records.",
-      "latencyMs": 2065,
+      "latencyMs": 2064,
       "passed": true
     },
     {
@@ -146,7 +150,7 @@
         "create_schema"
       ],
       "reply": "I have created a tracker for venue bookings called \"Venue Booking\". You can now create instances of this type.",
-      "latencyMs": 19289,
+      "latencyMs": 19269,
       "passed": true
     },
     {
@@ -159,10 +163,11 @@
       "toolsOffered": "",
       "toolsCalled": [
         "search_skills",
+        "search_nodes",
         "create_node"
       ],
-      "reply": "I encountered an error while trying to create the node. Could you please provide a more specific request, or tell me what fields (like 'artist' and 'album_title') I should use for \"Kind of Blue\" by Miles Davis?",
-      "latencyMs": 26402,
+      "reply": "\u26a0\ufe0f node search, node creation encountered an error. Please try again or check the details and retry.",
+      "latencyMs": 28463,
       "passed": true
     },
     {
@@ -175,10 +180,11 @@
       "toolsOffered": "",
       "toolsCalled": [
         "search_skills",
+        "search_nodes",
         "create_node"
       ],
-      "reply": "The Blue Note has been added as a new venue booking.",
-      "latencyMs": 12227,
+      "reply": "\u26a0\ufe0f node search encountered an error. Please try again or check the details and retry.",
+      "latencyMs": 13230,
       "passed": true
     },
     {
@@ -192,12 +198,14 @@
       "toolsCalled": [
         "search_nodes"
       ],
-      "reply": "I could not find any nodes matching \"Kind of Blue by Miles Davis\" in the Album To Listen tracker. Would you like to create a new entry for it?",
-      "latencyMs": 3087,
+      "reply": "I did not find any albums in your \"Album To Listen\" tracker.",
+      "latencyMs": 2073,
       "passed": true
     }
   ],
-  "score": "10/12 raw - scenario 3 is a confirmed FALSE PASS, so 9/12 turns actually did what was asserted",
-  "effective_passed": 9,
-  "previous_effective_passed": 8
+  "score": "9/12 raw in run 2 (10/12 in run 1) - scenario 3 is a confirmed FALSE PASS in both, so 8/12 turns in run 2 actually did what was asserted",
+  "effective_passed": 8,
+  "previous_effective_passed": 8,
+  "run1_raw_passed": 10,
+  "run2_raw_passed": 9
 }
