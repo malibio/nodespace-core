@@ -19,7 +19,9 @@
 
 use crate::models::SchemaNode;
 use crate::playbook::path_extractor;
-use crate::playbook::types::{ActionType, ParsedAction, ParsedRule, ParsedTrigger};
+use crate::playbook::types::{
+    ActionType, GraphEventType, ParsedAction, ParsedRule, ParsedTrigger, RuleClass,
+};
 use crate::services::NodeService;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -66,6 +68,31 @@ pub enum PlaybookValidationError {
     InvalidCronExpression {
         cron: String,
         message: String,
+        location: String,
+    },
+    /// An invariant rule (ADR-060) contains an action that is not a local graph
+    /// write. Invariant rules run inside the creating transaction, which cannot
+    /// await an LLM call, network request, PTY, or external service.
+    InvariantNonLocalAction { action: String, location: String },
+    /// An invariant rule's condition uses a non-deterministic function (a
+    /// wall-clock read such as `today`/`days_since`/`days_until`). Two devices
+    /// reasoning about the same node must agree on what the invariant requires.
+    InvariantNonDeterministic { function: String, location: String },
+    /// An invariant rule's action addresses a node outside the trigger's graph
+    /// scope — a literal/arbitrary node id rather than a binding derived from the
+    /// trigger node or a prior action's output.
+    InvariantOutOfScopeTarget {
+        action: String,
+        param: String,
+        value: String,
+        location: String,
+    },
+    /// An invariant rule's own action would re-satisfy its own trigger, forming a
+    /// chain. Invariant rules must be non-chaining (depth 1) — unbounded
+    /// recursion inside a transaction is unacceptable.
+    InvariantChaining {
+        action: String,
+        trigger: String,
         location: String,
     },
 }
@@ -119,6 +146,40 @@ impl std::fmt::Display for PlaybookValidationError {
                 f,
                 "invalid cron expression '{}' at {}: {}",
                 cron, location, message
+            ),
+            Self::InvariantNonLocalAction { action, location } => write!(
+                f,
+                "invariant rule action '{}' at {} is not a local write \
+                 (invariant rules may not call an LLM, the network, a PTY, or an external service)",
+                action, location
+            ),
+            Self::InvariantNonDeterministic { function, location } => write!(
+                f,
+                "invariant rule uses non-deterministic function '{}' at {} \
+                 (invariant rules must be deterministic — no wall-clock reads or random values)",
+                function, location
+            ),
+            Self::InvariantOutOfScopeTarget {
+                action,
+                param,
+                value,
+                location,
+            } => write!(
+                f,
+                "invariant rule action '{}' at {} targets an out-of-scope node via {} = '{}' \
+                 (invariant actions may only address the trigger node or nodes it references, \
+                 not a literal/arbitrary node id)",
+                action, location, param, value
+            ),
+            Self::InvariantChaining {
+                action,
+                trigger,
+                location,
+            } => write!(
+                f,
+                "invariant rule action '{}' at {} would re-satisfy its own '{}' trigger \
+                 (invariant rules must be non-chaining, depth 1)",
+                action, location, trigger
             ),
         }
     }
@@ -230,6 +291,16 @@ pub async fn validate_playbook(
                 &mut errors,
             )
             .await;
+        }
+
+        // -- Validate invariant-rule eligibility (ADR-060 §2) --
+        //
+        // Only invariant rules are gated; reactive rules (the default, and every
+        // rule authored so far) are unaffected. All checks are static — they
+        // inspect the parsed rule, not the schema graph — so no DB lookup is
+        // needed here.
+        if rule.class == RuleClass::Invariant {
+            validate_invariant_eligibility(rule, rule_idx, &mut errors);
         }
     }
 
@@ -528,6 +599,195 @@ async fn validate_relationship_action(
 }
 
 // ---------------------------------------------------------------------------
+// Invariant-rule eligibility (ADR-060 §2)
+// ---------------------------------------------------------------------------
+
+/// Validate that an invariant rule provably terminates inside a transaction, per
+/// ADR-060 §2. Any violation is pushed to `errors`, naming the offending action
+/// or function. All checks are static (they read the parsed rule only).
+///
+/// # What is enforced statically here vs. deferred to the runtime guard
+///
+/// - **Local writes only** — fully enforced via [`ActionType::is_local_write`].
+///   Every current action type is a local write, so this passes today; it is a
+///   forward-looking gate that rejects any future non-local action type (LLM,
+///   network, PTY, external) added to an invariant rule.
+/// - **Deterministic** — fully enforced against the only surface that can
+///   express non-determinism today: wall-clock CEL functions in the rule's
+///   conditions (`today`/`days_since`/`days_until`, see
+///   [`crate::playbook::cel::NON_DETERMINISTIC_FUNCTIONS`]). Action params are
+///   pure `{binding}` data references (see `actions.rs`) with no function-call
+///   surface, and no random-value function is registered anywhere, so conditions
+///   are the complete non-deterministic surface.
+/// - **Same-graph scope** — enforced by requiring every action *target* node id
+///   (`node_id`, `source_id`, `target_id`) to be a `{binding}` derived from the
+///   trigger node or a prior action, rejecting a literal/arbitrary node id.
+/// - **Non-chaining, depth 1** — the statically decidable *self-chaining* case
+///   is enforced here: an action that would re-satisfy the rule's **own**
+///   trigger. The fully general form — an action output matching a *different*
+///   rule's trigger (in this or another playbook), and multi-device causal
+///   cycles — needs whole-corpus analysis plus the causal depth carried on the
+///   event, so it is deferred to the runtime causal-depth guard (ADR-060 §5),
+///   built in a later slice. `validate_playbook` sees only the rules of the
+///   playbook being saved, so cross-playbook chains are not even visible here.
+fn validate_invariant_eligibility(
+    rule: &ParsedRule,
+    rule_idx: usize,
+    errors: &mut Vec<PlaybookValidationError>,
+) {
+    // Local writes only.
+    for (action_idx, action) in rule.actions.iter().enumerate() {
+        if !action.action_type.is_local_write() {
+            errors.push(PlaybookValidationError::InvariantNonLocalAction {
+                action: action.action_type.as_str().to_string(),
+                location: format!("rule[{}].action[{}]", rule_idx, action_idx),
+            });
+        }
+    }
+
+    // Deterministic — no wall-clock reads in conditions.
+    for (cond_idx, condition) in rule.conditions.iter().enumerate() {
+        // `condition.source` already compiled successfully to reach a
+        // `ParsedRule`, so a parse error here is not expected; if it somehow
+        // occurs we simply skip (the determinism check adds no false positives).
+        if let Ok(functions) = path_extractor::extract_function_names(&condition.source) {
+            for function in functions {
+                if crate::playbook::cel::NON_DETERMINISTIC_FUNCTIONS.contains(&function.as_str()) {
+                    errors.push(PlaybookValidationError::InvariantNonDeterministic {
+                        function,
+                        location: format!("rule[{}].condition[{}]", rule_idx, cond_idx),
+                    });
+                }
+            }
+        }
+    }
+
+    // Same-graph scope — action targets must be trigger-derived bindings.
+    for (action_idx, action) in rule.actions.iter().enumerate() {
+        let location = format!("rule[{}].action[{}]", rule_idx, action_idx);
+        for param in target_id_params(&action.action_type) {
+            if let Some(value) = action.params.get(param).and_then(|v| v.as_str()) {
+                if !is_binding_template(value) {
+                    errors.push(PlaybookValidationError::InvariantOutOfScopeTarget {
+                        action: action.action_type.as_str().to_string(),
+                        param: param.to_string(),
+                        value: value.to_string(),
+                        location: location.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Non-chaining, depth 1 — self-trigger detection (statically checkable part).
+    check_invariant_self_chaining(rule, rule_idx, errors);
+}
+
+/// The action params that name an *existing* node the action addresses.
+///
+/// `create_node` addresses no existing node (it makes one), so it contributes no
+/// target and cannot violate same-graph scope through a target id.
+fn target_id_params(action_type: &ActionType) -> &'static [&'static str] {
+    match action_type {
+        ActionType::CreateNode => &[],
+        ActionType::UpdateNode => &["node_id"],
+        ActionType::AddRelationship | ActionType::RemoveRelationship => &["source_id", "target_id"],
+    }
+}
+
+/// Whether a param value references graph state via a `{dot.path}` binding.
+///
+/// Bindings are rooted at `trigger`, `actions`, or `item` (see `actions.rs`) —
+/// all derived from the trigger node or the rule's own prior outputs, so a
+/// binding stays within the trigger's graph scope. A plain literal id addresses
+/// an arbitrary node whose presence depends on sync state, which ADR-060 §2
+/// forbids for invariant rules.
+fn is_binding_template(value: &str) -> bool {
+    value.contains('{') && value.contains('}')
+}
+
+/// Detect the statically checkable case of ADR-060 §2's "non-chaining, depth 1":
+/// an invariant rule whose own action re-satisfies its own graph-event trigger.
+///
+/// Scheduled triggers are not re-satisfied by graph writes, so they are exempt.
+/// The general cross-rule / multi-device chaining case is deferred to the runtime
+/// causal-depth guard (see [`validate_invariant_eligibility`] docs).
+fn check_invariant_self_chaining(
+    rule: &ParsedRule,
+    rule_idx: usize,
+    errors: &mut Vec<PlaybookValidationError>,
+) {
+    let ParsedTrigger::GraphEvent { on, node_type, .. } = &rule.trigger else {
+        return;
+    };
+
+    for (action_idx, action) in rule.actions.iter().enumerate() {
+        let re_satisfies = match (on, &action.action_type) {
+            // Creating a node of the trigger's own type re-fires `node_created`.
+            (GraphEventType::NodeCreated, ActionType::CreateNode) => {
+                action_creates_node_type(action, node_type)
+            }
+            // Updating the trigger node re-fires `property_changed` on it. This is
+            // conservative: it flags any update to the trigger node regardless of
+            // which property the update touches, because the whole-object
+            // `properties` param (with bindings) cannot be statically matched
+            // against the trigger's watched `property_key`.
+            (GraphEventType::PropertyChanged, ActionType::UpdateNode) => {
+                action_targets_trigger_node(action, "node_id")
+            }
+            // Adding/removing a relationship whose source is the trigger node
+            // re-fires the relationship trigger (which matches on source type).
+            (GraphEventType::RelationshipAdded, ActionType::AddRelationship) => {
+                action_targets_trigger_node(action, "source_id")
+            }
+            (GraphEventType::RelationshipRemoved, ActionType::RemoveRelationship) => {
+                action_targets_trigger_node(action, "source_id")
+            }
+            _ => false,
+        };
+
+        if re_satisfies {
+            errors.push(PlaybookValidationError::InvariantChaining {
+                action: action.action_type.as_str().to_string(),
+                trigger: graph_event_name(on).to_string(),
+                location: format!("rule[{}].action[{}]", rule_idx, action_idx),
+            });
+        }
+    }
+}
+
+/// Whether a `create_node` action creates a node of `node_type` — either as a
+/// literal `node_type` param, or via the binding that resolves to the trigger
+/// node's own type (accepted in both `snake_case` and `camelCase` spellings).
+fn action_creates_node_type(action: &ParsedAction, node_type: &str) -> bool {
+    match action.params.get("node_type").and_then(|v| v.as_str()) {
+        Some(nt) => {
+            nt == node_type || nt == "{trigger.node.node_type}" || nt == "{trigger.node.nodeType}"
+        }
+        None => false,
+    }
+}
+
+/// Whether an action's `param` targets the trigger node itself via the
+/// `{trigger.node.id}` binding.
+fn action_targets_trigger_node(action: &ParsedAction, param: &str) -> bool {
+    matches!(
+        action.params.get(param).and_then(|v| v.as_str()),
+        Some("{trigger.node.id}")
+    )
+}
+
+/// The JSON name of a graph event type, for error messages.
+fn graph_event_name(on: &GraphEventType) -> &'static str {
+    match on {
+        GraphEventType::NodeCreated => "node_created",
+        GraphEventType::PropertyChanged => "property_changed",
+        GraphEventType::RelationshipAdded => "relationship_added",
+        GraphEventType::RelationshipRemoved => "relationship_removed",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Schema Change Impact Analysis (Phase 2)
 // ---------------------------------------------------------------------------
 
@@ -689,7 +949,7 @@ mod tests {
     use super::*;
     use crate::playbook::cel::compile_condition;
     use crate::playbook::types::{
-        ActionType, GraphEventType, ParsedAction, ParsedRule, ParsedTrigger,
+        ActionType, GraphEventType, ParsedAction, ParsedRule, ParsedTrigger, RuleClass,
     };
 
     // -- CEL condition validation tests (no NodeService needed) --
@@ -708,6 +968,7 @@ mod tests {
     ) -> Arc<ParsedRule> {
         Arc::new(ParsedRule {
             name: "test-rule".to_string(),
+            class: RuleClass::Reactive,
             trigger: ParsedTrigger::GraphEvent {
                 on: GraphEventType::NodeCreated,
                 node_type: node_type.to_string(),
@@ -721,6 +982,7 @@ mod tests {
     fn make_scheduled_rule(cron: &str, node_type: &str, conditions: Vec<&str>) -> Arc<ParsedRule> {
         Arc::new(ParsedRule {
             name: "test-scheduled-rule".to_string(),
+            class: RuleClass::Reactive,
             trigger: ParsedTrigger::Scheduled {
                 cron: cron.to_string(),
                 node_type: node_type.to_string(),
@@ -1752,6 +2014,392 @@ mod tests {
                 msg.contains("Playbook validation failed"),
                 "error should indicate validation failure: {}",
                 msg
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Invariant-rule eligibility (ADR-060 §2)
+    // -----------------------------------------------------------------------
+
+    mod invariant_eligibility {
+        use super::*;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        /// Build an invariant graph-event rule for eligibility testing.
+        fn invariant_rule(
+            on: GraphEventType,
+            node_type: &str,
+            property_key: Option<&str>,
+            conditions: Vec<&str>,
+            actions: Vec<ParsedAction>,
+        ) -> ParsedRule {
+            ParsedRule {
+                name: "inv".to_string(),
+                class: RuleClass::Invariant,
+                trigger: ParsedTrigger::GraphEvent {
+                    on,
+                    node_type: node_type.to_string(),
+                    property_key: property_key.map(str::to_string),
+                },
+                conditions: compile_conditions(conditions),
+                actions,
+            }
+        }
+
+        fn create_action(node_type: &str) -> ParsedAction {
+            ParsedAction {
+                action_type: ActionType::CreateNode,
+                params: json!({ "node_type": node_type, "content": "x" }),
+                for_each: None,
+            }
+        }
+
+        fn update_action(node_id: &str) -> ParsedAction {
+            ParsedAction {
+                action_type: ActionType::UpdateNode,
+                params: json!({ "node_id": node_id, "properties": { "custom:tag": "v" } }),
+                for_each: None,
+            }
+        }
+
+        fn add_rel_action(source_id: &str, target_id: &str) -> ParsedAction {
+            ParsedAction {
+                action_type: ActionType::AddRelationship,
+                params: json!({
+                    "source_id": source_id,
+                    "relationship_type": "linked_to",
+                    "target_id": target_id,
+                }),
+                for_each: None,
+            }
+        }
+
+        fn eligibility_errors(rule: &ParsedRule) -> Vec<PlaybookValidationError> {
+            let mut errors = Vec::new();
+            validate_invariant_eligibility(rule, 0, &mut errors);
+            errors
+        }
+
+        // -- Local writes only --
+
+        #[test]
+        fn all_current_action_types_are_local_writes() {
+            // ADR-060 §2 "local writes only" is a forward-looking gate: every v1
+            // action type IS a local write, so an invariant rule passes it today.
+            // The classification is an explicit exhaustive match (not a hardcoded
+            // `true` at the call site), so a future non-local action type will
+            // fail to compile until it is classified here.
+            for at in [
+                ActionType::CreateNode,
+                ActionType::UpdateNode,
+                ActionType::AddRelationship,
+                ActionType::RemoveRelationship,
+            ] {
+                assert!(at.is_local_write(), "{:?} should be a local write", at);
+            }
+        }
+
+        // -- Valid invariant rule --
+
+        #[test]
+        fn valid_invariant_rule_has_no_eligibility_errors() {
+            // Canonical invariant: on task creation, stamp a property on the
+            // trigger node inside the txn. Local write, deterministic, in-scope
+            // (targets the trigger node), and does not re-fire `node_created`.
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec!["node.status == 'open'"],
+                vec![update_action("{trigger.node.id}")],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(errors.is_empty(), "expected no errors, got {:?}", errors);
+        }
+
+        // -- Deterministic --
+
+        #[test]
+        fn invariant_non_deterministic_condition_rejected() {
+            for (expr, func) in [
+                ("days_since(node.created_date) > 7", "days_since"),
+                ("days_until(node.due_date) < 3", "days_until"),
+                ("size(today()) == 10", "today"),
+            ] {
+                let rule = invariant_rule(
+                    GraphEventType::NodeCreated,
+                    "task",
+                    None,
+                    vec![expr],
+                    vec![],
+                );
+                let errors = eligibility_errors(&rule);
+                assert!(
+                    errors.iter().any(|e| matches!(
+                        e,
+                        PlaybookValidationError::InvariantNonDeterministic { function, .. }
+                            if function == func
+                    )),
+                    "expected non-deterministic '{}' error for `{}`, got {:?}",
+                    func,
+                    expr,
+                    errors
+                );
+            }
+        }
+
+        #[test]
+        fn invariant_deterministic_condition_accepted() {
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec!["node.priority == 'high' && node.amount > 1000"],
+                vec![],
+            );
+            assert!(eligibility_errors(&rule).is_empty());
+        }
+
+        // -- Same-graph scope --
+
+        #[test]
+        fn invariant_literal_update_target_rejected() {
+            // update_node with a literal node_id addresses an arbitrary node.
+            let rule = invariant_rule(
+                GraphEventType::PropertyChanged,
+                "task",
+                Some("status"),
+                vec![],
+                vec![update_action("some-fixed-node-id")],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantOutOfScopeTarget { action, param, .. }
+                        if action == "update_node" && param == "node_id"
+                )),
+                "expected out-of-scope node_id error, got {:?}",
+                errors
+            );
+        }
+
+        #[test]
+        fn invariant_literal_relationship_target_rejected() {
+            // Binding source, but a literal target_id addresses an arbitrary node.
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec![],
+                vec![add_rel_action("{trigger.node.id}", "collection-hr")],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantOutOfScopeTarget { param, value, .. }
+                        if param == "target_id" && value == "collection-hr"
+                )),
+                "expected out-of-scope target_id error, got {:?}",
+                errors
+            );
+        }
+
+        #[test]
+        fn invariant_trigger_derived_bindings_accepted() {
+            // Both relationship endpoints are trigger-derived bindings, and the
+            // trigger event (node_created) is not re-satisfied by add_relationship.
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec![],
+                vec![add_rel_action(
+                    "{trigger.node.id}",
+                    "{trigger.node.owner_id}",
+                )],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(errors.is_empty(), "expected no errors, got {:?}", errors);
+        }
+
+        // -- Non-chaining, depth 1 (self-trigger detection) --
+
+        #[test]
+        fn invariant_self_chaining_create_same_type_rejected() {
+            // node_created(task) + create_node(task) re-fires the same trigger.
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec![],
+                vec![create_action("task")],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantChaining { action, trigger, .. }
+                        if action == "create_node" && trigger == "node_created"
+                )),
+                "expected chaining error, got {:?}",
+                errors
+            );
+        }
+
+        #[test]
+        fn invariant_create_different_type_not_chaining() {
+            let rule = invariant_rule(
+                GraphEventType::NodeCreated,
+                "task",
+                None,
+                vec![],
+                vec![create_action("audit_log")],
+            );
+            assert!(
+                !eligibility_errors(&rule)
+                    .iter()
+                    .any(|e| matches!(e, PlaybookValidationError::InvariantChaining { .. })),
+                "creating a different node type must not self-chain"
+            );
+        }
+
+        #[test]
+        fn invariant_self_chaining_property_update_of_trigger_node_rejected() {
+            let rule = invariant_rule(
+                GraphEventType::PropertyChanged,
+                "task",
+                Some("status"),
+                vec![],
+                vec![update_action("{trigger.node.id}")],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantChaining { action, trigger, .. }
+                        if action == "update_node" && trigger == "property_changed"
+                )),
+                "expected chaining error, got {:?}",
+                errors
+            );
+        }
+
+        #[test]
+        fn invariant_self_chaining_add_relationship_from_trigger_rejected() {
+            let rule = invariant_rule(
+                GraphEventType::RelationshipAdded,
+                "task",
+                None,
+                vec![],
+                vec![add_rel_action(
+                    "{trigger.node.id}",
+                    "{trigger.node.owner_id}",
+                )],
+            );
+            let errors = eligibility_errors(&rule);
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantChaining { action, trigger, .. }
+                        if action == "add_relationship" && trigger == "relationship_added"
+                )),
+                "expected chaining error, got {:?}",
+                errors
+            );
+        }
+
+        // -- End-to-end through validate_playbook: reactive bypass + invariant gate --
+
+        async fn create_test_service() -> (Arc<crate::services::NodeService>, tempfile::TempDir) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("test.db");
+            let mut store: Arc<crate::db::SqliteStore> =
+                Arc::new(crate::db::SqliteStore::new(db_path).await.unwrap());
+            let node_service =
+                Arc::new(crate::services::NodeService::new(&mut store).await.unwrap());
+            (node_service, temp_dir)
+        }
+
+        async fn create_schema(node_service: &crate::services::NodeService, type_name: &str) {
+            let schema_node = crate::models::Node::new_with_id(
+                type_name.to_string(),
+                "schema".to_string(),
+                type_name.to_string(),
+                json!({
+                    "isCore": false,
+                    "schemaVersion": 1,
+                    "description": format!("{} schema", type_name),
+                    "fields": [{ "name": "status", "type": "string" }],
+                    "relationships": []
+                }),
+            );
+            node_service.create_node(schema_node).await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn reactive_rule_bypasses_invariant_gate() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vi_react").await;
+
+            // A REACTIVE rule (default class) that would violate §2 if invariant:
+            // non-deterministic condition + self-chaining create_node of the same
+            // type. Reactive rules are not gated → accepted.
+            let rule = Arc::new(invariant_rule(
+                GraphEventType::NodeCreated,
+                "vi_react",
+                None,
+                vec!["days_since(node.created) > 7"],
+                vec![create_action("vi_react")],
+            ));
+            let reactive = Arc::new(ParsedRule {
+                class: RuleClass::Reactive,
+                ..(*rule).clone()
+            });
+            let result = validate_playbook(&[reactive], &svc).await;
+            assert!(
+                result.is_ok(),
+                "reactive rule must bypass the §2 gate: {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn invariant_rule_gated_through_validate_playbook() {
+            let (svc, _tmp) = create_test_service().await;
+            create_schema(&svc, "vi_inv").await;
+
+            // Same rule as above, but INVARIANT → the §2 gate fires with both a
+            // non-determinism and a self-chaining error, proving the gate is wired
+            // into validate_playbook.
+            let rule = Arc::new(invariant_rule(
+                GraphEventType::NodeCreated,
+                "vi_inv",
+                None,
+                vec!["days_since(node.created) > 7"],
+                vec![create_action("vi_inv")],
+            ));
+            let errors = validate_playbook(&[rule], &svc).await.unwrap_err();
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantNonDeterministic { function, .. }
+                        if function == "days_since"
+                )),
+                "expected non-determinism error, got {:?}",
+                errors
+            );
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e,
+                    PlaybookValidationError::InvariantChaining { action, .. }
+                        if action == "create_node"
+                )),
+                "expected chaining error, got {:?}",
+                errors
             );
         }
     }

@@ -633,6 +633,7 @@ mod tests {
             created_at: Utc::now(),
             rules: vec![Arc::new(ParsedRule {
                 name: "r1".to_string(),
+                class: RuleClass::Reactive,
                 trigger: ParsedTrigger::GraphEvent {
                     on: GraphEventType::NodeCreated,
                     node_type: "task".to_string(),
@@ -659,6 +660,7 @@ mod tests {
             created_at: Utc::now(),
             rules: vec![Arc::new(ParsedRule {
                 name: "r1".to_string(),
+                class: RuleClass::Reactive,
                 trigger: ParsedTrigger::GraphEvent {
                     on: GraphEventType::NodeCreated,
                     node_type: "task".to_string(),
