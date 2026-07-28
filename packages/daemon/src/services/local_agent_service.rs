@@ -718,7 +718,17 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // than failing the whole call.
         let spec = {
             let service = self.inner.service.read().await;
-            service.model_spec().await.unwrap_or(None)
+            service.model_spec().await.unwrap_or_else(|e| {
+                // Degrade rather than fail the call — the daemon is plainly
+                // reachable if we got this far. But an engine fault and a
+                // genuinely absent model are indistinguishable to the caller
+                // once both become `None`, so leave a trail.
+                tracing::warn!(
+                    error = %e,
+                    "model_spec failed; reporting status as no model loaded"
+                );
+                None
+            })
         };
         // Report the catalog id the model was loaded BY, not the resolved GGUF
         // path the engine reports. Callers compare this against the id they

@@ -8,25 +8,35 @@
  * The daemon, socket, and database are managed by the CALLER — this harness
  * never starts or seeds anything. It asserts the environment is usable
  * (see preflight.ts) and otherwise assumes it. Setup is documented in
- * nodespace-docs/development/agent-evals.md.
+ * nodespace-docs/development/agent-eval.md.
  */
 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Repository root, derived from this file's location. */
-export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+export const REPO_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
 
 export interface EvalEnv {
   /** Path to the `nodespace` CLI binary. */
   nsBin: string;
   /** Unix socket the CLI and daemon share. */
   socket: string;
-  /** Daemon log, scraped for per-turn tool calls. */
+  /**
+   * Daemon log, scraped for per-turn tool calls.
+   *
+   * Consumed by scripts/aichat.ts (which reads NS_LOG from the environment
+   * directly), not by the runner. Declared here so the contract lives in one
+   * place rather than only in the child process.
+   */
   log: string;
   /** Model id recorded on chat nodes and asserted by preflight. */
   model: string;
-  /** Per-turn timeout in milliseconds. */
+  /** Per-turn timeout in milliseconds. Consumed by aichat.ts, as with `log`. */
   timeoutMs: number;
   /** scripts/aichat.ts, the CLI driver every eval turn goes through. */
   aichat: string;

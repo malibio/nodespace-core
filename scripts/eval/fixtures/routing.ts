@@ -78,7 +78,8 @@ const FIXTURES: RoutingScenario[] = [
   },
   {
     id: "indirect-schema-freelance",
-    scenario: "Indirect: 'start tracking my freelance projects' → Schema Creation",
+    scenario:
+      "Indirect: 'start tracking my freelance projects' → Schema Creation",
     prompt: "start tracking my freelance projects",
     expected: { kind: "skill", skill: "Schema Creation" },
     loadBearing: true,
@@ -86,7 +87,8 @@ const FIXTURES: RoutingScenario[] = [
   },
   {
     id: "indirect-schema-expenses",
-    scenario: "Indirect: 'I need a way to log my business expenses' → Schema Creation",
+    scenario:
+      "Indirect: 'I need a way to log my business expenses' → Schema Creation",
     prompt: "I need a way to log my business expenses",
     expected: { kind: "skill", skill: "Schema Creation" },
     loadBearing: true,
@@ -103,7 +105,8 @@ const FIXTURES: RoutingScenario[] = [
   // ── Existing-type instance vs new-type (critical distinction) ────────────
   {
     id: "instance-not-schema-invoice",
-    scenario: "Instance vs schema: 'add an invoice for $500' → Node Creation, not Schema Creation",
+    scenario:
+      "Instance vs schema: 'add an invoice for $500' → Node Creation, not Schema Creation",
     // Context: invoice schema already exists (set up in prior turn)
     priorTurns: ["Create an invoice tracking database"],
     prompt: "Add an invoice for $500 due next Friday",
@@ -115,14 +118,16 @@ const FIXTURES: RoutingScenario[] = [
   // ── Ambiguous → expect clarification ─────────────────────────────────────
   {
     id: "ambiguous-client-contacts",
-    scenario: "Ambiguous: 'organize my client contacts' → clarify (schema vs collection)",
+    scenario:
+      "Ambiguous: 'organize my client contacts' → clarify (schema vs collection)",
     prompt: "organize my client contacts",
     expected: { kind: "clarify" },
     loadBearing: true,
   },
   {
     id: "ambiguous-manage-projects",
-    scenario: "Ambiguous: 'help me manage my projects' → clarify (schema vs search vs task)",
+    scenario:
+      "Ambiguous: 'help me manage my projects' → clarify (schema vs search vs task)",
     prompt: "help me manage my projects",
     expected: { kind: "clarify" },
   },
@@ -138,7 +143,8 @@ const FIXTURES: RoutingScenario[] = [
   // ── No-match / out-of-scope → clarify, then fall through ─────────────────
   {
     id: "out-of-scope-weather",
-    scenario: "Out of scope: weather query → clarify or fallback, no mutating tool",
+    scenario:
+      "Out of scope: weather query → clarify or fallback, no mutating tool",
     prompt: "What's the weather like in Tokyo today?",
     // The ADR requires: out-of-scope queries should not silently fire a mutating tool.
     // The correct guard is "no mutating tool called" — enforced via adversarial:true on
@@ -152,7 +158,8 @@ const FIXTURES: RoutingScenario[] = [
   // ── Clarification contract: one clarification, then fall through ──────────
   {
     id: "clarification-then-fallthrough",
-    scenario: "Clarification contract: after user clarifies, model proceeds (not a loop)",
+    scenario:
+      "Clarification contract: after user clarifies, model proceeds (not a loop)",
     priorTurns: [
       "organize my client contacts",
       // Simulate user clarifying: they want to search existing contacts
@@ -166,7 +173,8 @@ const FIXTURES: RoutingScenario[] = [
   // ── Mutating-skill gate: borderline schema vs read-only ───────────────────
   {
     id: "mutating-gate-borderline-schema",
-    scenario: "Mutating gate: borderline schema request — gated harder than read-only",
+    scenario:
+      "Mutating gate: borderline schema request — gated harder than read-only",
     prompt: "maybe set up some kind of tracking for vendors",
     expected: { kind: "clarify" }, // borderline → must clarify before schema creation
     mutating: true,
@@ -271,7 +279,8 @@ function assertFixture(fixture: RoutingScenario, turns: TurnRecord[]): Verdict {
       if (!replyLower.includes(expectedSkill)) {
         // Also check if the right tools were called (e.g. create_schema for Schema Creation)
         const toolCheck =
-          (expectedSkill.includes("schema creation") && calledSchemaCreate(turns)) ||
+          (expectedSkill.includes("schema creation") &&
+            calledSchemaCreate(turns)) ||
           (expectedSkill.includes("node creation") &&
             turns.some((t) => t.toolsCalled.includes("create_node")));
         if (!toolCheck) {
@@ -282,7 +291,11 @@ function assertFixture(fixture: RoutingScenario, turns: TurnRecord[]): Verdict {
         }
       }
       // Adversarial: if this fixture is adversarial, the model must NOT fire the wrong mutating tool
-      if (fixture.adversarial && fixture.expected.skill === "Node Creation" && calledSchemaCreate(turns)) {
+      if (
+        fixture.adversarial &&
+        fixture.expected.skill === "Node Creation" &&
+        calledSchemaCreate(turns)
+      ) {
         return {
           passed: false,
           failure: `Adversarial check failed: called create_schema when only Node Creation was expected`,

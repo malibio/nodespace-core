@@ -327,16 +327,23 @@ mod tests {
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
                 let name = path.file_name()?.to_str()?;
-                // Skip the scoring unit tests; they assert on tool names, not
-                // scenario prompts, and carry no `prompt:` literals.
-                (name.ends_with(".ts") && !name.ends_with(".test.ts")).then_some(path)
+                if !name.ends_with(".ts") || name.ends_with(".test.ts") {
+                    return None;
+                }
+                // A fixture is a file that declares scenario prompts. Selecting
+                // on that rather than on the filename means a shared helper or
+                // constants module dropped in this directory is skipped, not
+                // reported as parser drift — which is what a bare
+                // "no prompts here" failure would look like.
+                let source = std::fs::read_to_string(&path).ok()?;
+                eval_prompts(&source).1.gt(&0).then_some(path)
             })
             .collect();
         eval_scripts.sort();
         assert!(
             !eval_scripts.is_empty(),
-            "no eval fixtures found in {} — this guard is now vacuous; point it \
-             at wherever the eval scenarios moved to",
+            "no files declaring scenario prompts found in {} — this guard is now \
+             vacuous; point it at wherever the eval scenarios moved to",
             fixture_dir.display()
         );
 

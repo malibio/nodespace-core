@@ -60,7 +60,10 @@ export function actionTools(toolsCalled: string[]): string[] {
  * Pure and daemon-free so it is unit-testable without a model — see
  * scripts/eval/fixtures/agent-matrix.test.ts, which runs in `bun run test:all`.
  */
-export function assertExpectation(expect: Expectation, toolsCalled: string[]): Verdict {
+export function assertExpectation(
+  expect: Expectation,
+  toolsCalled: string[],
+): Verdict {
   const actions = actionTools(toolsCalled);
 
   switch (expect.kind) {
@@ -139,7 +142,14 @@ interface MatrixScenario extends Scenario {
 }
 
 const GROUPS: MatrixScenario[][] = [
-  [{ id: "1", scenario: "1. Greeting", prompt: "Hi there", expect: { kind: "noTools" } }],
+  [
+    {
+      id: "1",
+      scenario: "1. Greeting",
+      prompt: "Hi there",
+      expect: { kind: "noTools" },
+    },
+  ],
   [
     {
       id: "2",
@@ -163,7 +173,8 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "4",
       scenario: "4. Instance creation",
-      prompt: "Log a laser cutter checked out on the 12th, replacement cost 2400",
+      prompt:
+        "Log a laser cutter checked out on the 12th, replacement cost 2400",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
@@ -208,7 +219,8 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "8d",
       scenario: "8d. Instance: second type",
-      prompt: "New venue: the Blue Note, they can be reached at booking@example.com",
+      prompt:
+        "New venue: the Blue Note, they can be reached at booking@example.com",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {

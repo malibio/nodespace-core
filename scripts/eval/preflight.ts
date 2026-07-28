@@ -33,6 +33,11 @@ export const EXIT_FAILED = 1;
  * eval" without parsing output.
  */
 export const EXIT_ENVIRONMENT = 2;
+/**
+ * The command line was wrong — nothing was run. Distinct again, so a wrapper
+ * script cannot mistake "you invoked this incorrectly" for a real result.
+ */
+export const EXIT_USAGE = 64;
 
 export class EnvironmentError extends Error {
   constructor(
@@ -231,18 +236,35 @@ export function preflight(
     );
   }
 
-  // The daemon reports the resolved path/id it loaded, which need not equal the
-  // catalog id verbatim; require containment rather than equality so a path
-  // like ".../gemma-4-e4b-q4km.gguf" still satisfies NS_MODEL=gemma-4-e4b-q4km.
-  // Scoring the wrong model is silent otherwise: the results file would carry
-  // NS_MODEL while the numbers belong to whatever was actually resident.
-  if (!status.modelId.includes(env.model)) {
-    throw new EnvironmentError(
-      `The daemon has "${status.modelId}" loaded, but this run is labelled for ` +
-        `"${env.model}". The scores would be filed against a model that did not produce them.`,
-      `Load the requested model:\n` +
-        `    ${env.nsBin} --socket ${env.socket} model load ${env.model}\n` +
-        `  or set NS_MODEL to what is already loaded.`,
+  // The daemon normally reports the catalog id it loaded the model BY, so exact
+  // equality holds. It falls back to the resolved GGUF path only when the id is
+  // unavailable, hence the basename fallback.
+  //
+  // Substring matching is deliberately NOT used: `NS_MODEL=gemma-4-e4b` would
+  // then also accept a loaded `gemma-4-e4b-q8`. Quantization changes tool-calling
+  // behavior materially, so that is exactly the "scores filed against a model
+  // that did not produce them" case this check exists to stop.
+  if (status.modelId !== env.model) {
+    const basename = status.modelId.split("/").pop() ?? "";
+    const matchesPath = basename
+      .toLowerCase()
+      .includes(env.model.toLowerCase());
+    if (!matchesPath) {
+      throw new EnvironmentError(
+        `The daemon has "${status.modelId}" loaded, but this run is labelled for ` +
+          `"${env.model}". The scores would be filed against a model that did not produce them.`,
+        `Load the requested model:\n` +
+          `    ${env.nsBin} --socket ${env.socket} model load ${env.model}\n` +
+          `  or set NS_MODEL to what is already loaded.`,
+      );
+    }
+    // Matched a path rather than an id, so the exact build cannot be confirmed
+    // from the id alone. Proceed, but say so — a silent near-match is how a run
+    // gets filed under the wrong quantization.
+    console.error(
+      `[preflight] Warning: the daemon reports "${status.modelId}" (a path, not a ` +
+        `catalog id). Matched "${env.model}" by filename; the exact build could not ` +
+        `be confirmed.`,
     );
   }
 
@@ -274,8 +296,8 @@ export function abortOnEnvironment(
   console.error(e.message);
   console.error(`\n  How to fix:\n  ${e.remedy}`);
   console.error(
-    `\n  No scenarios were run and no results file was written: a score from this\n` +
-      `  environment would not mean anything.`,
+    `\n  No results file was written: a score from this environment would not mean\n` +
+      `  anything.`,
   );
   console.error(
     `────────────────────────────────────────────────────────────────────\n`,

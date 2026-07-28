@@ -18,6 +18,7 @@ import {
   readDaemonStatus,
   EnvironmentError,
   EXIT_FAILED,
+  EXIT_USAGE,
 } from "./preflight.ts";
 import type {
   EvalFixture,
@@ -203,7 +204,7 @@ function usage(fixture: EvalFixture): string {
     `  out.json     where to write results (default: /tmp/${fixture.name}-<label>-<ts>.json)\n` +
     `  --baseline   compare against a recorded run and fail on regression\n\n` +
     ENV_USAGE +
-    `\n\nExit codes: 0 all passed · 1 scenario failure/regression · 2 environment unusable`
+    `\n\nExit codes: 0 all passed · 1 scenario failure/regression · 2 environment unusable · 64 usage`
   );
 }
 
@@ -220,7 +221,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     baselinePath = argv[baselineFlag + 1];
     if (!baselinePath) {
       console.error(`--baseline needs a path\n\n${usage(fixture)}`);
-      process.exit(EXIT_FAILED);
+      process.exit(EXIT_USAGE);
     }
     argv.splice(baselineFlag, 2);
   }
@@ -228,7 +229,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   const [label, outPathArg] = argv;
   if (!label) {
     console.error(usage(fixture));
-    process.exit(EXIT_FAILED);
+    process.exit(EXIT_USAGE);
   }
 
   const env = readEnv();
