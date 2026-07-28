@@ -28,6 +28,77 @@ const RESERVED_CORE_PROPERTIES: &[&str] = &[
     "due",
 ];
 
+/// Report malformed entries in a `create_schema`/`update_schema` `fields` array
+/// with enough context for the caller to repair the exact element at fault.
+///
+/// Serde's own error for this payload names only the absent key — for a field
+/// array it cannot say which element lacked it. That is actionable for a human
+/// reading a stack trace and useless to an LLM constructing the call: with no
+/// position, the model edits an element that was already correct and each retry
+/// loses more information than the last.
+///
+/// Returns `Ok(())` when `fields` is absent or every entry has both `name` and
+/// `type` — the payload then proceeds to normal deserialization, so this
+/// function only ever converts an error into a better-located error.
+fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownError> {
+    let Some(fields) = params.get(key).and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let mut problems: Vec<String> = Vec::new();
+    for (idx, field) in fields.iter().enumerate() {
+        let Some(obj) = field.as_object() else {
+            problems.push(format!(
+                "{key}[{idx}] is {}, not an object",
+                json_type_name(field)
+            ));
+            continue;
+        };
+        // Identify the element by name where one exists — a name is far easier
+        // for the caller to match against what it sent than a bare index.
+        let label = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| format!("{key}[{idx}] (\"{n}\")"))
+            .unwrap_or_else(|| format!("{key}[{idx}]"));
+
+        for key in ["name", "type"] {
+            let missing = match obj.get(key) {
+                None => true,
+                Some(Value::String(s)) => s.trim().is_empty(),
+                Some(_) => false,
+            };
+            if missing {
+                problems.push(format!("{label} is missing \"{key}\""));
+            }
+        }
+    }
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+
+    Err(MarkdownError::invalid_params(format!(
+        "Invalid parameters: {}. Every entry in \"{key}\" needs both \"name\" and \"type\", \
+         e.g. {{\"name\":\"amount\",\"type\":\"number\"}}. Re-send the call with only the \
+         listed entries corrected — leave every other field exactly as it was.",
+        problems.join("; ")
+    )))
+}
+
+/// Name of a JSON value's type, for error messages.
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
 /// Input parameters for create_schema
 #[derive(Debug, Deserialize)]
 pub struct CreateSchemaParams {
@@ -131,6 +202,13 @@ pub async fn handle_create_schema(
     node_service: &Arc<NodeService>,
     params: Value,
 ) -> Result<Value, MarkdownError> {
+    // Locate malformed field entries before serde sees them. Deserializing the
+    // whole payload at once reports only the missing key ("missing field
+    // `type`") with no indication of WHICH array element is at fault, which
+    // leaves an LLM caller unable to repair the call: it re-sends with a
+    // different part mutated and degrades the arguments further on each retry.
+    describe_malformed_fields(&params, "fields")?;
+
     let params: CreateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 
@@ -490,6 +568,10 @@ pub async fn handle_update_schema(
     node_service: &Arc<NodeService>,
     params: Value,
 ) -> Result<Value, MarkdownError> {
+    // See `describe_malformed_fields` — locate a bad entry before serde reports
+    // only the absent key with no position.
+    describe_malformed_fields(&params, "add_fields")?;
+
     let params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
 

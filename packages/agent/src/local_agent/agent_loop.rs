@@ -758,19 +758,58 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 let start = Instant::now();
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.arguments_json).unwrap_or(serde_json::json!({}));
 
-                let tool_result = self
-                    .tool_executor
-                    .execute(&tc.function_name, args.clone())
-                    .await;
+                // Unparseable arguments must be reported as such. Substituting an
+                // empty object here (the previous behaviour) sends the tool a
+                // payload the model never wrote, so the failure surfaces as a
+                // missing required field — describing the substitute rather than
+                // the malformed JSON that actually caused it, and pointing the
+                // model's repair attempt at the wrong problem.
+                let parsed_args = if tc.arguments_json.trim().is_empty() {
+                    // No arguments emitted at all: an empty object is the faithful
+                    // reading, and the tool's own required-field error is correct.
+                    Ok(serde_json::json!({}))
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&tc.arguments_json)
+                };
+
+                let (args, tool_result) = match parsed_args {
+                    Ok(args) => {
+                        let result = self
+                            .tool_executor
+                            .execute(&tc.function_name, args.clone())
+                            .await;
+                        (args, Some(result))
+                    }
+                    Err(parse_err) => {
+                        tracing::warn!(
+                            session_id = %session.id,
+                            tool = %tc.function_name,
+                            iteration = iteration,
+                            error = %parse_err,
+                            args_preview = %tc.arguments_json.chars().take(300).collect::<String>(),
+                            "Model emitted unparseable tool arguments — reporting to model instead of substituting an empty object"
+                        );
+                        (serde_json::json!({}), None)
+                    }
+                };
 
                 let duration_ms = start.elapsed().as_millis() as u64;
 
                 let (result_value, is_error) = match tool_result {
-                    Ok(tr) => (tr.result, tr.is_error),
-                    Err(e) => (serde_json::json!({"error": e.to_string()}), true),
+                    Some(Ok(tr)) => (tr.result, tr.is_error),
+                    Some(Err(e)) => (serde_json::json!({"error": e.to_string()}), true),
+                    None => (
+                        serde_json::json!({
+                            "error": format!(
+                                "The arguments for {} were not valid JSON, so the call could not \
+                                 be made. Re-send the call with the same intent and syntactically \
+                                 valid JSON arguments.",
+                                tc.function_name
+                            )
+                        }),
+                        true,
+                    ),
                 };
 
                 tracing::info!(
@@ -3592,6 +3631,145 @@ mod tests {
             result.response.contains("⚠️") || result.response.to_lowercase().contains("error"),
             "error note should be present: {:?}",
             result.response
+        );
+    }
+
+    /// Unparseable tool arguments must be reported as unparseable — never
+    /// silently replaced with `{}` and executed.
+    ///
+    /// Substituting an empty object sends the tool a payload the model never
+    /// wrote, so the failure comes back as a missing required field. The model
+    /// then "repairs" an argument it did not get wrong, which is how a single
+    /// malformed call turns into a run of progressively worse retries.
+    #[tokio::test]
+    async fn malformed_tool_arguments_are_not_executed_as_empty_object() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct RecordingExecutor {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl AgentToolExecutor for RecordingExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_node".into(),
+                    description: "Create a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"id": "nodespace://created"}),
+                    is_error: false,
+                })
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            // Truncated mid-object — a real shape observed from small models.
+            r#"{"content":"Kind of Blue","node_type":"#,
+            "Added it for you.",
+        ));
+        let executor = Arc::new(RecordingExecutor {
+            calls: calls.clone(),
+        });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "put down Kind of Blue",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "the tool must not run at all when the model's arguments are not valid JSON"
+        );
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert!(
+            result.tool_calls_made[0].is_error,
+            "the malformed call must be recorded as an error"
+        );
+    }
+
+    /// A tool call carrying no arguments at all is a different case: `{}` is the
+    /// faithful reading, so the call proceeds and the tool's own required-field
+    /// error is the correct message.
+    #[tokio::test]
+    async fn absent_tool_arguments_still_reach_the_tool() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct RecordingExecutor {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl AgentToolExecutor for RecordingExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_node".into(),
+                    description: "Create a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(args, json!({}), "empty arguments should arrive as {{}}");
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"error": "missing field `node_type`"}),
+                    is_error: true,
+                })
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(MockEngine::tool_then_text("create_node", "", "Done."));
+        let executor = Arc::new(RecordingExecutor {
+            calls: calls.clone(),
+        });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        agent_loop
+            .run_turn(
+                &mut session,
+                "put down Kind of Blue",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an argument-less call is well-formed and must still reach the tool"
         );
     }
 

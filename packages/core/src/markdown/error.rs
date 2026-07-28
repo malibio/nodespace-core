@@ -8,8 +8,11 @@ use std::fmt;
 
 /// Error returned by markdown/schema library functions.
 ///
-/// Consumers only need a `Debug`/`Display` error (the agent formats with `{:?}`,
-/// the daemon logs `?e`), so this intentionally stays small.
+/// Consumers only need a `Debug`/`Display` error (the agent surfaces these to the
+/// model via `Display`, the daemon logs `?e`), so this intentionally stays small.
+///
+/// The `Display` text reaches the model verbatim as a tool result, so variant
+/// messages should read as repair instructions, not as internal diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkdownError {
     /// Request parameters were missing or malformed.

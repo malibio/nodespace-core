@@ -1641,9 +1641,11 @@ impl GraphToolExecutor {
             Ok(value) => Ok(ok_result(tool_call_id, "create_schema", value)),
             Err(e) => {
                 // Return validation errors as tool errors (not ToolError::ExecutionFailed)
-                // so the model sees the message and can self-correct.
-                let msg = format!("{:?}", e);
-                Ok(error_result(tool_call_id, "create_schema", &msg))
+                // so the model sees the message and can self-correct. Formatted with
+                // Display, not Debug: `{:?}` wraps the guidance in the Rust variant name
+                // (`InvalidParams("...")`), which is noise to the model and obscures the
+                // repair instruction the message carries.
+                Ok(error_result(tool_call_id, "create_schema", &e.to_string()))
             }
         }
     }
@@ -1661,10 +1663,8 @@ impl GraphToolExecutor {
         match result {
             Ok(value) => Ok(ok_result(tool_call_id, "update_schema", value)),
             Err(e) => {
-                // Return validation errors as tool errors (not ToolError::ExecutionFailed)
-                // so the model sees the message and can self-correct.
-                let msg = format!("{:?}", e);
-                Ok(error_result(tool_call_id, "update_schema", &msg))
+                // Display rather than Debug — see exec_create_schema.
+                Ok(error_result(tool_call_id, "update_schema", &e.to_string()))
             }
         }
     }
