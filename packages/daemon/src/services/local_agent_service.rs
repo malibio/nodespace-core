@@ -1328,18 +1328,63 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
     }
 }
 
-/// Tools that change graph state. A repeat of one of these is a real duplicate;
-/// repeating a read is merely wasteful.
-const WRITE_TOOLS: &[&str] = &[
-    "create_node",
-    "update_node",
-    "delete_node",
-    "create_relationship",
-    "create_schema",
-    "update_schema",
-    "create_nodes_from_markdown",
-    "update_task_status",
-];
+/// Maximum length of an evidence summary before it is clipped.
+const SUMMARY_MAX_CHARS: usize = 120;
+
+/// Which argument identifies the thing a write acted on, per tool.
+///
+/// An explicit mapping rather than a probe across likely key names: the write
+/// tools do not share one argument shape, and a probe silently degrades to a
+/// bare tool name for the ones it does not happen to cover. That is worst
+/// exactly where the evidence matters most — `create_nodes_from_markdown`
+/// imports a whole subtree, so a repeat duplicates all of it.
+///
+/// Returning `None` here means "this tool changes graph state but is not
+/// described by a single argument"; `create_relationship` is rendered from its
+/// own fields instead (see `completed_writes_from`).
+fn write_summary_arg(tool: &str) -> Option<&'static [&'static str]> {
+    match tool {
+        "create_node" | "update_node" | "update_task_status" | "delete_node" => {
+            Some(&["content", "title", "id"])
+        }
+        "create_schema" | "update_schema" => Some(&["name"]),
+        "create_nodes_from_markdown" => Some(&["markdown"]),
+        "create_relationship" => None,
+        _ => None,
+    }
+}
+
+/// Whether a tool changes graph state. A repeat of one of these is a real
+/// duplicate; repeating a read is merely wasteful.
+///
+/// Kept exhaustive against the tool set in `packages/agent/src/local_agent/tools.rs`.
+fn is_write_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "create_node"
+            | "update_node"
+            | "delete_node"
+            | "create_relationship"
+            | "create_schema"
+            | "update_schema"
+            | "create_nodes_from_markdown"
+            | "update_task_status"
+    )
+}
+
+/// Clip an evidence label, marking it when clipped so a truncated summary is
+/// not mistaken for a complete one.
+fn clip_summary(s: &str) -> String {
+    // Newlines would let user-supplied content shape the evidence block's
+    // line structure; the label is a single line by construction.
+    let flat = s.replace(['\n', '\r'], " ");
+    if flat.chars().count() > SUMMARY_MAX_CHARS {
+        let head: String = flat.chars().take(SUMMARY_MAX_CHARS).collect();
+        format!("{head}…")
+    } else {
+        flat
+    }
+}
 
 /// Pull the successful graph writes out of a turn's tool executions.
 ///
@@ -1348,25 +1393,46 @@ const WRITE_TOOLS: &[&str] = &[
 fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCompletedWrite> {
     executions
         .iter()
-        .filter(|r| !r.is_error && WRITE_TOOLS.contains(&r.name.as_str()))
+        .filter(|r| !r.is_error && is_write_tool(&r.name))
         .map(|r| {
-            // Tools report the affected node under `id` or `node_id` depending on
-            // the tool; accept either rather than assuming one shape.
+            // Every write tool that reports an affected node does so under `id`
+            // (as a `nodespace://` URI — the same form the model uses to refer to
+            // nodes elsewhere, so the evidence matches what it already reads).
+            // Schema and relationship writes report no node id at all.
             let node_id = r
                 .result
                 .get("id")
-                .or_else(|| r.result.get("node_id"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
-            // A short label makes the replayed evidence self-describing, so the
-            // model can match it against the instruction still in history.
-            let summary = r
-                .args
-                .get("content")
-                .or_else(|| r.args.get("title"))
-                .or_else(|| r.args.get("name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.chars().take(120).collect::<String>());
+
+            // A label makes the evidence self-describing, so the model can match
+            // it against the instruction still in history.
+            let summary = match write_summary_arg(&r.name) {
+                Some(keys) => keys
+                    .iter()
+                    .find_map(|k| r.args.get(*k))
+                    .and_then(|v| v.as_str())
+                    .map(clip_summary),
+                // A relationship has no single describing argument; render the
+                // edge itself, which is what identifies it.
+                None if r.name == "create_relationship" => {
+                    let field = |k: &str| {
+                        r.args
+                            .get(k)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                            .to_string()
+                    };
+                    Some(clip_summary(&format!(
+                        "{} -[{}]-> {}",
+                        field("from_id"),
+                        field("relationship_type"),
+                        field("to_id")
+                    )))
+                }
+                None => None,
+            };
+
             AiChatCompletedWrite {
                 tool: r.name.clone(),
                 node_id,
@@ -1879,7 +1945,7 @@ mod tests {
         let writes = completed_writes_from(&[exec(
             "create_node",
             serde_json::json!({"content": "Kind of Blue by Miles Davis", "node_type": "album_to_listen"}),
-            serde_json::json!({"id": "f1f25564"}),
+            serde_json::json!({"id": "nodespace://f1f25564"}),
         )]);
 
         svc.append_assistant_message(&node_id, "I have added \"Kind of Blue\".", None, writes)
@@ -1898,7 +1964,7 @@ mod tests {
             );
         assert!(evidence.content.contains("create_node"));
         assert!(evidence.content.contains("Kind of Blue by Miles Davis"));
-        assert!(evidence.content.contains("f1f25564"));
+        assert!(evidence.content.contains("nodespace://f1f25564"));
         // The evidence must follow the assistant turn it describes.
         let assistant_idx = history
             .iter()
@@ -1968,25 +2034,77 @@ mod tests {
         assert!(!history.iter().any(|m| matches!(m.role, Role::System)));
     }
 
-    /// Tools report the affected node under `id` or `node_id` depending on the
-    /// tool, so extraction must accept either.
+    /// Evidence must be self-describing for every write tool, not just the ones
+    /// that happen to take a `content` argument. A bare tool name cannot be
+    /// matched against the instruction it satisfied — which is the whole point.
     #[tokio::test]
-    async fn node_id_is_extracted_from_either_result_shape() {
-        let writes = completed_writes_from(&[
-            exec(
-                "create_node",
-                serde_json::json!({"content": "a"}),
-                serde_json::json!({"id": "aaa"}),
-            ),
-            exec(
-                "update_task_status",
-                serde_json::json!({"content": "b"}),
-                serde_json::json!({"node_id": "bbb"}),
-            ),
-        ]);
-        assert_eq!(writes.len(), 2);
-        assert_eq!(writes[0].node_id.as_deref(), Some("aaa"));
-        assert_eq!(writes[1].node_id.as_deref(), Some("bbb"));
+    async fn every_write_tool_produces_a_usable_label() {
+        // A relationship has no describing argument and returns no node id; it
+        // must still render as something identifiable.
+        let rel = completed_writes_from(&[exec(
+            "create_relationship",
+            serde_json::json!({
+                "from_id": "nodespace://a",
+                "to_id": "nodespace://b",
+                "relationship_type": "mentions"
+            }),
+            serde_json::json!({"from_id": "nodespace://a", "to_id": "nodespace://b", "created": true}),
+        )]);
+        assert_eq!(rel.len(), 1);
+        assert_eq!(rel[0].node_id, None);
+        let label = rel[0].summary.as_deref().expect("relationship label");
+        assert!(label.contains("nodespace://a"), "got {label:?}");
+        assert!(label.contains("mentions"), "got {label:?}");
+        assert!(label.contains("nodespace://b"), "got {label:?}");
+
+        // A markdown import is the highest-stakes duplicate in the set: its
+        // argument key is `markdown`, not `content`.
+        let md = completed_writes_from(&[exec(
+            "create_nodes_from_markdown",
+            serde_json::json!({"markdown": "# Trip plan\n- flights"}),
+            serde_json::json!({"created": 4}),
+        )]);
+        assert_eq!(md.len(), 1);
+        assert!(
+            md[0].summary.as_deref().unwrap_or("").contains("Trip plan"),
+            "markdown import must be identifiable, got {:?}",
+            md[0].summary
+        );
+
+        // Schemas are named, not contented.
+        let schema = completed_writes_from(&[exec(
+            "create_schema",
+            serde_json::json!({"name": "album_to_listen"}),
+            serde_json::json!({"created": true}),
+        )]);
+        assert_eq!(schema[0].summary.as_deref(), Some("album_to_listen"));
+    }
+
+    /// The node id is stored as the `nodespace://` URI the tools actually
+    /// return, matching the form the model uses to refer to nodes elsewhere.
+    #[tokio::test]
+    async fn node_id_is_recorded_as_the_uri_the_tool_returned() {
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": "a"}),
+            serde_json::json!({"id": "nodespace://aaa"}),
+        )]);
+        assert_eq!(writes[0].node_id.as_deref(), Some("nodespace://aaa"));
+    }
+
+    /// A clipped label must be distinguishable from a complete one, and must not
+    /// carry newlines that would reshape the evidence block.
+    #[tokio::test]
+    async fn long_and_multiline_summaries_are_clipped_and_flattened() {
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": format!("{}\nsecond line", "x".repeat(200))}),
+            serde_json::json!({"id": "nodespace://a"}),
+        )]);
+        let s = writes[0].summary.as_deref().expect("summary");
+        assert!(s.ends_with('…'), "clipped summary must be marked: {s:?}");
+        assert!(!s.contains('\n'));
+        assert_eq!(s.chars().count(), SUMMARY_MAX_CHARS + 1);
     }
 
     #[tokio::test]
