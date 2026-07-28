@@ -212,11 +212,67 @@ impl SqliteStore {
             .await
     }
 
+    /// ADR-059 §2 — a content node may hold a `member_of` edge only when it is a
+    /// **root** node (no `has_child` parent). Collections (nesting) and person
+    /// nodes (grantee membership, ADR-037 §4) are exempt. Enforced at the store's
+    /// three `member_of` INSERT sites (`add_to_collection`,
+    /// `bulk_add_to_collections`, and the generic `create_generic_relationship`
+    /// when its `rel_type` is `member_of`), so every write path is covered without
+    /// a per-path check: CLI, graph import, playbook `add_relationship`, and the
+    /// sync-apply cold-sweep (which calls `bulk_add_to_collections` directly). A
+    /// batched, chunked query keeps the bulk/cold-sweep path a single round trip.
+    /// Members that don't exist yet are left to the INSERT's foreign-key check.
+    async fn assert_root_only_membership(&self, member_ids: &[&str]) -> Result<()> {
+        if member_ids.is_empty() {
+            return Ok(());
+        }
+        let mut unique: Vec<&str> = member_ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+
+        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        const ID_CHUNK: usize = 900;
+        for chunk in unique.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT n.id, n.node_type, \
+                 EXISTS(SELECT 1 FROM relationship r \
+                        WHERE r.out_node = n.id AND r.relationship_type = 'has_child') \
+                 FROM node n WHERE n.id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.to_string()))
+                .collect();
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to validate root-only membership")?;
+            while let Some(row) = rows.next().await? {
+                let id: String = row.get(0)?;
+                let node_type: String = row.get(1)?;
+                let has_parent: i64 = row.get(2)?;
+                if has_parent != 0 && node_type != "collection" && node_type != "person" {
+                    return Err(anyhow::anyhow!(
+                        "member_of_not_root: content node '{}' (type '{}') has a parent, so it cannot be a member of a collection directly — file its root node instead",
+                        id,
+                        node_type
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn add_to_collection(
         &self,
         member_id: &str,
         collection_id: &str,
     ) -> Result<Option<String>> {
+        self.assert_root_only_membership(&[member_id]).await?;
+
         let tx = self
             .db
             .transaction()
@@ -507,16 +563,20 @@ impl SqliteStore {
         // system/definition nodes, `collection` members are shown in the tree
         // itself, and `horizontal-line` is a decorative divider. Keep the two lists
         // in sync.
-        let mut rows = self.db.query(
-            "SELECT r.out_node, COUNT(*) \
+        let mut rows = self
+            .db
+            .query(
+                "SELECT r.out_node, COUNT(*) \
              FROM relationship r \
              JOIN node n ON n.id = r.in_node \
              WHERE r.relationship_type = 'member_of' \
                AND n.node_type NOT IN \
                  ('schema', 'person', 'database-settings', 'collection', 'horizontal-line') \
              GROUP BY r.out_node",
-            (),
-        ).await.context("Failed to get member counts")?;
+                (),
+            )
+            .await
+            .context("Failed to get member counts")?;
 
         let mut count_map: HashMap<String, usize> = HashMap::new();
         while let Some(row) = rows.next().await? {
@@ -628,6 +688,12 @@ impl SqliteStore {
         if memberships.is_empty() {
             return Ok(Vec::new());
         }
+
+        let member_ids: Vec<&str> = memberships
+            .iter()
+            .map(|(node_id, _)| node_id.as_str())
+            .collect();
+        self.assert_root_only_membership(&member_ids).await?;
 
         let start = std::time::Instant::now();
 
@@ -829,6 +895,15 @@ impl SqliteStore {
         rel_type: &str,
         properties: &serde_json::Value,
     ) -> Result<String> {
+        // ADR-059 §2 applies to a `member_of` edge no matter which API builds it.
+        // This generic path carries `member_of` whenever a caller supplies an
+        // explicit `order` — `NodeService::create_relationship`'s non-auto-order
+        // fork, the playbook `add_relationship` action, and the CLI
+        // `relationship create --edge-data` — so it must be gated too. (Auto-order
+        // `member_of` goes through `add_to_collection` instead; both are guarded.)
+        if rel_type == "member_of" {
+            self.assert_root_only_membership(&[source_id]).await?;
+        }
         let now = chrono::Utc::now().to_rfc3339();
         let rel_id = uuid::Uuid::new_v4().to_string();
         let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
