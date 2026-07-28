@@ -854,7 +854,7 @@ pub async fn handle_create_nodes_from_markdown(
     tracing::debug!("create_nodes_from_markdown: START");
 
     let params: CreateNodesFromMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
     tracing::debug!(
         sync_import = params.sync_import,
         collection = ?params.collection,
@@ -1702,7 +1702,7 @@ pub async fn handle_get_markdown_from_node_id(
 ) -> Result<Value, MarkdownError> {
     // Parse parameters
     let params: GetMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     // Use shared get_subtree_data for efficient bulk fetch (same as frontend uses)
     // This performs exactly 3 database queries regardless of tree depth or node count:
@@ -2030,7 +2030,7 @@ pub async fn handle_update_root_from_markdown(
 ) -> Result<Value, MarkdownError> {
     // Parse parameters
     let params: UpdateRootFromMarkdownParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     let root_id = params.root_id;
 
