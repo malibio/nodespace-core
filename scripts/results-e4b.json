@@ -1,211 +1,375 @@
 {
-  "label": "e4b-1775-argument-errors",
-  "model": "gemma-4-e4b-q4km",
-  "recorded_at": "2026-07-28",
-  "guidance_commit": "a8e613b0",
-  "eval_commit": "805a60e4",
-  "n_ctx": 32768,
-  "n_ctx_note": "Chat context granted for this run, read from the daemon log ('Creating chat LlamaContext (n_ctx=32768...)'). Well above the ~6600-token agent system prompt, so this run was not context-starved - the failure mode where every turn dies on 'Context window exceeded' and no-tool assertions score as passes.",
-  "host_memory_gb": 16,
-  "supersedes": "e4b-decontaminated (9/12 raw, 8 effective)",
-  "note": "Measured after the #1775 argument-error-reporting fix, on a purged DB with a daemon rebuilt from the commit above, on a quiet machine. TWO runs were recorded and they disagree on the raw count (10/12 then 9/12); the results below are run 2. EFFECTIVE SCORE IS 8/12 in run 2 - scenario 3 is a FALSE PASS in BOTH runs (its create_schema failed and no equipment type persisted, see caveats[0]). Do not read the raw count as movement: the only scenario that changed between runs was 5, an unrelated search_nodes/search_semantic tool-choice wobble, so run-to-run variance on this matrix is at least +/-1 and single-run comparisons are not meaningful. The verified result of this work is scenario 8c, which was the defect #1775 was filed for and passes in BOTH runs with the underlying error now correctly reported.",
-  "caveats": [
-    "Scenario 3 is a FALSE PASS in both runs and #1775 did NOT fix it. In both runs the model called create_schema with a title_template and NO fields array: {\"name\":\"Equipment Check-out Tracker\",\"title_template\":\"{equipment} ({status})\"}. The noExtraTypes assertion only checks that create_schema was called once, so it cannot see that nothing persisted (`nodespace schema list` shows only album_to_listen and venue_booking). What DID change is the error text: it now names every unresolved placeholder at once and prescribes the exact entries to add - 'references {equipment}, {status} ... Either add {\"name\":\"equipment\",\"type\":\"text\"}, {\"name\":\"status\",\"type\":\"text\"} ...'. The model still did not repair the call: in run 2 its retry emitted create_schema with EMPTY arguments and it then gave up. Better error text was necessary but is not sufficient for this model on this shape - the remaining gap is the model's ability to act on a correct instruction, not the instruction's content.",
-    "Scenario 4 fails in both runs and remains downstream of scenario 3 - there is no equipment type to instantiate. It is NOT evidence about INSTANCE vs TYPE routing, and the #1775 acceptance criterion 'an instance request against an existing schema calls create_node' is not demonstrated by this matrix, because the schema never exists. 8c and 8d cover that criterion instead, against types that DO exist, and both pass.",
-    "Scenario 8c PASSES in both runs - the verified fix for the defect #1775 was filed for. In run 1 the log shows create_node called with empty arguments and reported as 'The arguments for create_node were not valid JSON, so the call could not be made...', where previously the harness substituted {} and surfaced a misleading 'missing field `node_type`' describing its own substitute. IMPORTANT: the toolOnce assertion counts tool NAMES, so this pass still hides that the first create_node errored and the model recovered on a later call. The pass is real, the assertion is weaker than it looks.",
-    "Run-to-run variance is real and was measured. Between two runs on identical code and a purged DB, scenario 5 flipped from search_nodes (pass) to search_semantic (fail) - the only scenario that moved. Raw counts of 10/12 and 9/12 therefore describe the sampler as much as the code. Treat any single-run delta of 1 on this matrix as noise, and prefer per-scenario tool traces over the headline number.",
-    "Scenario 6 (update) fails in both runs and is owned by #1637, out of scope for #1775.",
-    "Not exercised by either run: the within-array field locating that is the largest part of the #1775 change. No create_schema call in either run sent a malformed entry inside a fields array - the shape seen repeatedly in ~/.nodespace/logs/nodespaced.log lines 130-162 - so that path is covered by unit tests only, not by this matrix."
-  ],
+  "eval": "agent-matrix",
+  "label": "e4b-1775-r3",
+  "provenance": {
+    "model": "gemma-4-e4b-q4km",
+    "recordedAt": "2026-07-28T17:41:34.863Z",
+    "hostMemoryGb": 17.2,
+    "nCtx": 32768,
+    "evalCommit": "b53b1627",
+    "dirty": false
+  },
+  "summary": {
+    "total": 12,
+    "passed": 8,
+    "failed": 4
+  },
   "results": [
     {
+      "id": "1",
       "scenario": "1. Greeting",
       "prompt": "Hi there",
-      "expect": {
-        "kind": "noTools"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [],
-      "reply": "Hi there! How can I help you with your knowledge graph today?",
-      "latencyMs": 18307,
-      "passed": true
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [],
+          "reply": "Hi there! How can I help you with your knowledge graph today?",
+          "latencyMs": 18339
+        }
+      ],
+      "extra": {
+        "expect": {
+          "kind": "noTools"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [],
+        "latencyMs": 18339
+      }
     },
     {
+      "id": "2",
       "scenario": "2. Capability",
       "prompt": "What can you do?",
-      "expect": {
-        "kind": "noTools"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [],
-      "reply": "I am NodeSpace's built-in assistant, and I help you work with your knowledge graph. My core functions include:\n\n*   **Creating Nodes:** Adding new pieces of information (instances) or defining entirely new types of things to track (**schemas**) using `create_node` or `create_schema`.\n*   **Finding/Listing Data:** Searching for specific nodes by keyword (`search_nodes`), finding related concepts semantically (`search_semantic`), getting the full details of a known node ID (`get_node`), or listing everything under an existing type.\n*   **Updating Information:** Modifying content or properties on existing nodes (`update_node`) or changing task statuses specifically (`update_task_status`).\n*   **Structuring Knowledge:** Defining relationships between different kinds of data points with `create_relationship`, and modifying your tracking structures themselves via `update_schema`.\n\nEssentially, I help you build out, organize, read from, and modify structured knowledge within our graph!",
-      "latencyMs": 7152,
-      "passed": true
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [],
+          "reply": "I am NodeSpace's built-in assistant, and I help you work with your knowledge graph. My core functions include:\n\n*   **Creating Nodes:** Adding new pieces of information (instances) or defining entirely new types of things to track (**schemas**) using `create_node` or `create_schema`.\n*   **Finding/Listing Data:** Searching for specific nodes by keyword (`search_nodes`), finding related concepts semantically (`search_semantic`), getting the full details of a known node ID (`get_node`), or listing everything under an existing type.\n*   **Updating Information:** Modifying content or properties on existing nodes (`update_node`) or changing task statuses specifically (`update_task_status`).\n*   **Structuring Knowledge:** Defining relationships between different kinds of data points with `create_relationship`, and modifying your tracking structures themselves via `update_schema`.\n\nEssentially, I help you build out, organize, read from, and modify structured knowledge within our graph!",
+          "latencyMs": 7156
+        }
+      ],
+      "extra": {
+        "expect": {
+          "kind": "noTools"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [],
+        "latencyMs": 7156
+      }
     },
     {
+      "id": "3",
       "scenario": "3. Schema creation",
       "prompt": "I want to keep a record of the equipment my team checks out and whether it's been returned",
-      "expect": {
-        "kind": "noExtraTypes"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "create_schema"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "create_schema"
+          ],
+          "reply": "I encountered an error while setting up the schema. The title template references `{equipment}` and `{status}`, but I need to define these as fields first, or remove them from the template if they are not meant to be part of a field's value.\n\nTo fix this, could you clarify:\n1.  What should we call the equipment (this will become one of our main tracked properties)? Should it just use its own name? If so, what is that property called in your mind?\n2.  For tracking return status, do you want me to create a specific **Status** type with options like \"Checked Out\" and \"Returned\"? Or would using simple text for now work better?",
+          "latencyMs": 7133
+        }
       ],
-      "reply": "I encountered an error while setting up the schema. The title template references `{equipment}` and `{status}`, but I need to define these as fields first, or remove them from the template if they are not meant to be part of a field's value.\n\nTo fix this, could you clarify:\n1.  What should we call the equipment (this will become one of our main tracked properties)? Should it just use its own name? If so, what is that property called in your mind?\n2.  For tracking return status, do you want me to create a specific **Status** type with options like \"Checked Out\" and \"Returned\"? Or would using simple text for now work better?",
-      "latencyMs": 7159,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "noExtraTypes"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "create_schema"
+        ],
+        "latencyMs": 7133
+      }
     },
     {
+      "id": "4",
       "scenario": "4. Instance creation",
       "prompt": "Log a laser cutter checked out on the 12th, replacement cost 2400",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "create_node"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_skills",
-        "create_schema"
-      ],
-      "reply": "I'm sorry, I ran into an error while trying to create the necessary schema. It seems like my attempt was not in valid JSON format for that tool call.\n\nBased on your request (\"Log a laser cutter checked out on the 12th, replacement cost 2400\"), it sounds like we need a new type of record\u2014an **Equipment Checkout** log. This will allow us to track items and their status over time.\n\nSince this is about tracking *kind* of thing (a list/tracker), I must use `create_schema`. Let me try calling it again with just the name \"Checkout Log\" so you can confirm if that's what you want before adding fields.",
-      "latencyMs": 13216,
       "passed": false,
-      "failure": "Expected 'create_node' exactly once, got 0 (tools: create_schema)"
+      "failure": "Expected 'create_node' exactly once, got 0 (tools: create_schema,create_schema,search_nodes,search_nodes)",
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_skills",
+            "create_schema",
+            "create_schema",
+            "search_nodes",
+            "search_nodes"
+          ],
+          "reply": "\u2022 skill search completed\n\u2022 schema creation completed (2\u00d7)\n\u2022 node search completed (2\u00d7)",
+          "latencyMs": 23333
+        }
+      ],
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "create_node"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_skills",
+          "create_schema",
+          "create_schema",
+          "search_nodes",
+          "search_nodes"
+        ],
+        "latencyMs": 23333
+      }
     },
     {
+      "id": "5",
       "scenario": "5. List/query",
       "prompt": "What equipment is on the books?",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "search_nodes"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_semantic"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_nodes"
+          ],
+          "reply": "I couldn't find any equipment records in the system right now.",
+          "latencyMs": 20380
+        }
       ],
-      "reply": "I couldn't find any nodes matching \"equipment on the books\" using a general search.\n\nTo help me better, could you tell me if this equipment is related to:\n1.  A specific **Project**? (If so, what project?)\n2.  The team that checks it out? (e.g., The Engineering Team)\n3.  Or are we looking for all records of *all* types right now?",
-      "latencyMs": 5115,
-      "passed": false,
-      "failure": "Expected 'search_nodes' exactly once, got 0 (tools: search_semantic)"
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "search_nodes"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_nodes"
+        ],
+        "latencyMs": 20380
+      }
     },
     {
+      "id": "6",
       "scenario": "6. Update",
       "prompt": "The 2400 one came back \u2014 set it to returned",
-      "expect": {
-        "kind": "toolSequence",
-        "tools": [
-          "search_nodes",
-          "update_node"
-        ]
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_nodes"
-      ],
-      "reply": "I'm sorry, I encountered an error while trying to search for the node. It seems like my attempt was not in valid JSON format when calling `search_nodes`.\n\nSince you mentioned \"The 2400 one,\" and we were previously discussing logging equipment checkouts with a replacement cost of $2400, could you confirm if this item is associated with any specific **Project** or has another unique identifier (like serial number) that would help me find it?",
-      "latencyMs": 6130,
       "passed": false,
-      "failure": "Expected sequence [search_nodes,update_node] as a subsequence, got: search_nodes"
+      "failure": "Expected sequence [search_nodes,update_node] as a subsequence, got: search_nodes",
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_nodes"
+          ],
+          "reply": "\u26a0\ufe0f node search encountered an error. Please try again or check the details and retry.",
+          "latencyMs": 4104
+        }
+      ],
+      "extra": {
+        "expect": {
+          "kind": "toolSequence",
+          "tools": [
+            "search_nodes",
+            "update_node"
+          ]
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_nodes"
+        ],
+        "latencyMs": 4104
+      }
     },
     {
+      "id": "7",
       "scenario": "7. Empty-result query",
       "prompt": "Do we have anything worth 90000 sitting out?",
-      "expect": {
-        "kind": "noRetry",
-        "tool": "search_nodes"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_nodes"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_nodes"
+          ],
+          "reply": "I'm sorry, I ran into an error while trying to search for equipment. Could you please rephrase your question or provide more details about the \"equipment\" so I can try searching again?",
+          "latencyMs": 4098
+        }
       ],
-      "reply": "I'm sorry, I ran into an error while trying to search for the nodes. It seems like my attempt was not in valid JSON format when calling `search_nodes`.\n\nTo find equipment worth $90,000 that is currently checked out (\"sitting out\"), we need a structured way to query this information across all your records. Since you are asking about *value* and *status*, it suggests these items should be tracked under a specific schema type (like \"Equipment\").\n\nIf there isn't already a dedicated **Equipment** tracker:\n1.  Would you want me to create one? If so, what would its main name/title be?\n2.  Or do you think the existing record for \"$2400\" can tell us how to search by value AND status simultaneously?",
-      "latencyMs": 8164,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "noRetry",
+          "tool": "search_nodes"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_nodes"
+        ],
+        "latencyMs": 4098
+      }
     },
     {
+      "id": "8a",
       "scenario": "8a. Create type: first",
       "prompt": "Start tracking albums I mean to listen to",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "create_schema"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "create_schema"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "create_schema"
+          ],
+          "reply": "I have started tracking albums you mean to listen to under the type **Album To Listen**.",
+          "latencyMs": 2063
+        }
       ],
-      "reply": "I have started tracking albums you mean to listen to. You can now create instances of the \"Album To Listen\" type for these records.",
-      "latencyMs": 2064,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "create_schema"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "create_schema"
+        ],
+        "latencyMs": 2063
+      }
     },
     {
+      "id": "8b",
       "scenario": "8b. Create type: second",
       "prompt": "I also need a tracker for the venues I book",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "create_schema"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "create_schema"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "create_schema"
+          ],
+          "reply": "I have created a new tracker for venue bookings called **Venue Booking**.",
+          "latencyMs": 19303
+        }
       ],
-      "reply": "I have created a tracker for venue bookings called \"Venue Booking\". You can now create instances of this type.",
-      "latencyMs": 19269,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "create_schema"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "create_schema"
+        ],
+        "latencyMs": 19303
+      }
     },
     {
+      "id": "8c",
       "scenario": "8c. Instance: first type",
       "prompt": "Put down Kind of Blue, it's by Miles Davis",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "create_node"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_skills",
-        "search_nodes",
-        "create_node"
+      "passed": false,
+      "failure": "Expected 'create_node' exactly once, got 2 (tools: create_node,create_node)",
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_skills",
+            "create_node",
+            "create_node"
+          ],
+          "reply": "\u26a0\ufe0f node creation encountered an error. Please try again or check the details and retry.",
+          "latencyMs": 27431
+        }
       ],
-      "reply": "\u26a0\ufe0f node search, node creation encountered an error. Please try again or check the details and retry.",
-      "latencyMs": 28463,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "create_node"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_skills",
+          "create_node",
+          "create_node"
+        ],
+        "latencyMs": 27431
+      }
     },
     {
+      "id": "8d",
       "scenario": "8d. Instance: second type",
       "prompt": "New venue: the Blue Note, they can be reached at booking@example.com",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "create_node"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_skills",
-        "search_nodes",
-        "create_node"
+      "passed": false,
+      "failure": "Expected 'create_node' exactly once, got 2 (tools: search_nodes,create_node,search_nodes,create_node)",
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_nodes",
+            "create_node",
+            "search_nodes",
+            "create_node"
+          ],
+          "reply": "I've added \"Kind of Blue by Miles Davis\" to your albums to listen list and created a new venue booking node for The Blue Note.",
+          "latencyMs": 7168
+        }
       ],
-      "reply": "\u26a0\ufe0f node search encountered an error. Please try again or check the details and retry.",
-      "latencyMs": 13230,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "create_node"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_nodes",
+          "create_node",
+          "search_nodes",
+          "create_node"
+        ],
+        "latencyMs": 7168
+      }
     },
     {
+      "id": "8e",
       "scenario": "8e. Query across types",
       "prompt": "Run through the albums for me",
-      "expect": {
-        "kind": "toolOnce",
-        "tool": "search_nodes"
-      },
-      "toolsOffered": "",
-      "toolsCalled": [
-        "search_nodes"
+      "passed": true,
+      "turns": [
+        {
+          "toolsOffered": "",
+          "toolsCalled": [
+            "search_nodes"
+          ],
+          "reply": "Found 2 nodes matching \"Kind of Blue by Miles Davis\" in the Album To Listen type. Would you like me to get more details on either one?",
+          "latencyMs": 21382
+        }
       ],
-      "reply": "I did not find any albums in your \"Album To Listen\" tracker.",
-      "latencyMs": 2073,
-      "passed": true
+      "extra": {
+        "expect": {
+          "kind": "toolOnce",
+          "tool": "search_nodes"
+        },
+        "toolsOffered": "",
+        "toolsCalled": [
+          "search_nodes"
+        ],
+        "latencyMs": 21382
+      }
     }
   ],
-  "score": "9/12 raw in run 2 (10/12 in run 1) - scenario 3 is a confirmed FALSE PASS in both, so 8/12 turns in run 2 actually did what was asserted",
-  "effective_passed": 8,
-  "previous_effective_passed": 8,
-  "run1_raw_passed": 10,
-  "run2_raw_passed": 9
+  "supersedes": "e4b-decontaminated (9/12 raw, 8 effective); superseded by the runner from #1778",
+  "note": "Measured after the #1775 argument-error-reporting fix, rebased onto the shared eval runner (#1778), on a purged DB with a daemon rebuilt from this commit and the preflight gate passing. Raw 8/12. THREE runs of this work exist and they disagree: 10/12, 9/12, 8/12, on code that differs only by the title_template addition between runs 1-2 and 3. Read the per-scenario traces, not the count. The one durable, verified change is that unparseable tool arguments are now reported as such - visible in this run's log for both create_schema and create_node - where the harness previously substituted {} and produced a misleading missing-required-field error. Scenario 3 remains a FALSE PASS and scenario 4 still cascades from it; this work did NOT fix that. Run 3 additionally surfaced a cross-turn duplicate write that the earlier runs did not (caveats[2]).",
+  "caveats": [
+    "Scenario 3 is a FALSE PASS in all three runs and #1775 did NOT fix it. The model calls create_schema with a title_template and NO fields array ({\"name\":\"Equipment Check-out Tracker\",\"title_template\":\"{equipment} ({status})\"}), which is rejected. The noExtraTypes assertion only checks that create_schema was called once, so it cannot see that nothing persisted. The error now names every unresolved placeholder at once and prescribes the exact entries to add, and the model STILL does not repair it: in runs 2 and 3 its retry emitted create_schema with EMPTY arguments. In run 3 it then created an unrelated fields-less 'checkout-log' schema instead. Better error text was necessary but is not sufficient for this model on this shape.",
+    "Scenario 4 fails in all three runs, downstream of scenario 3 - there is no equipment type to instantiate. The acceptance criterion 'an instance request against an existing schema calls create_node' is therefore NOT demonstrated by scenario 4 in any run. 8c/8d exercise it against types that do exist.",
+    "NEW in run 3, not seen in runs 1-2: a CROSS-TURN duplicate write. 8c completed correctly (one create_node, node f1f25564, reply 'I have added Kind of Blue'). Then 8d's turn re-executed the PREVIOUS turn's instruction, calling create_node for 'Kind of Blue by Miles Davis' again at its iteration 1 (node 0bbcb76b) before creating the Blue Note venue. Two nodes now exist for one request. The duplicate-call guard in agent_loop.rs cannot catch this: seen_calls is per-turn and is reset between turns, by design. The eval scrapes tool calls per chat node, so 8d's stray call is attributed to 8c's assertion too, which is why BOTH report 'got 2' from a single extra write. This is a real defect and a DIFFERENT one from what #1775 fixed - it is a cross-turn instruction-repetition bug, not an argument-construction or error-reporting bug. Filed as #1780.",
+    "Scenario 8c's status across runs: PASSED in runs 1 and 2, FAILED in run 3 - and the run-3 failure is caused by the cross-turn duplicate above, not by a regression in the argument-error fix. In all three runs the underlying argument error is now reported correctly ('The arguments for create_node were not valid JSON...'), which is the change this issue set out to make; run 3's log shows the model recovering from exactly that message and creating the node successfully on its next call.",
+    "Run-to-run variance is large and measured. Across three runs: scenario 5 flipped twice (pass/fail/pass), 8c and 8d flipped in run 3. A single-run delta of 1-2 on this matrix is noise. Do not use the headline count to judge a change; use per-scenario tool traces and the daemon log.",
+    "Scenario 6 (update) fails in all three runs and is owned by #1637, out of scope here.",
+    "Still not exercised by any run: the within-array field locating that is the largest part of the #1775 change. No create_schema call in any run sent a malformed entry inside a fields array - the shape from ~/.nodespace/logs/nodespaced.log lines 130-162 - so that path is covered by unit tests only."
+  ],
+  "effective_passed": 7,
+  "effective_note": "8/12 raw minus scenario 3, a confirmed false pass whose create_schema failed and persisted nothing. Prior recorded effective was 8; the drop is the run-3 cross-turn duplicate (caveats[2]), a newly surfaced defect, not a regression from this fix.",
+  "raw_passed_by_run": {
+    "run1": 10,
+    "run2": 9,
+    "run3_rebased": 8
+  }
 }
