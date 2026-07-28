@@ -3,6 +3,9 @@
   "model": "gemma-4-e4b-q4km",
   "recorded_at": "2026-07-28",
   "guidance_commit": "da126293",
+  "eval_commit": "805a60e4",
+  "n_ctx": 32768,
+  "n_ctx_note": "Chat context granted for this run, read from the daemon log ('Creating chat LlamaContext (n_ctx=32768...)'). Well above the ~6600-token agent system prompt, so this run was not context-starved - the failure mode where every turn dies on 'Context window exceeded' and no-tool assertions score as passes.",
   "host_memory_gb": 16,
   "note": "Honest baseline: measured AFTER eval-prompt contamination was removed from agent guidance. Recorded on a purged database so every prompt/skill node was reseeded from the compiled constants - a reused DB keeps old seeded guidance and silently measures the pre-fix prompts. Not comparable to the earlier 11/12, which was measured with eval prompts planted in the guidance.",
   "caveats": [
@@ -169,5 +172,6 @@
       "passed": true,
       "latencyMs": 3164
     }
-  ]
+  ],
+  "score": "9/12 - but see caveats: scenario 3 is a confirmed FALSE PASS, so 8/12 turns actually did what was asserted"
 }
