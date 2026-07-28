@@ -60,11 +60,11 @@ pub use ai_chat_node::{AiChatMessage, AiChatNode};
 pub use code_block_node::{CodeBlockNode, CodeBlockValidationError};
 pub use node::{
     DeleteResult, FilterOperator, Node, NodeFilter, NodeQuery, NodeReference, NodeRelationship,
-    NodeUpdate, OrderBy, PropertyFilter, RelationshipDirection, ValidationError,
+    NodeUpdate, OrderBy, PropertyFilter, TraversalDirection, ValidationError,
 };
 pub use ordered_list_node::{OrderedListNode, OrderedListValidationError};
 pub use quote_block_node::{QuoteBlockNode, QuoteBlockValidationError};
-pub use schema::{SchemaField, SchemaProtectionLevel};
+pub use schema::{RelationshipDirection, SchemaField, SchemaProtectionLevel};
 pub use time::{SystemTimeProvider, TimeProvider};
 
 // Export type-safe wrappers

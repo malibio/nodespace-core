@@ -45,13 +45,13 @@ pub use nodespace_types::{
     DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, ValidationError,
 };
 
-/// Direction of a relationship relative to a node
+/// Direction to traverse an edge relative to a node
 ///
 /// - `Out`: The relationship points FROM this node TO another (outgoing)
 /// - `In`: The relationship points FROM another node TO this node (incoming)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum RelationshipDirection {
+pub enum TraversalDirection {
     /// Outgoing relationship: this node -> other node
     Out,
     /// Incoming relationship: other node -> this node
@@ -78,7 +78,7 @@ pub struct NodeRelationship {
     /// The related node's title (for display)
     pub title: Option<String>,
     /// Direction of the relationship relative to the node this is attached to
-    pub direction: RelationshipDirection,
+    pub direction: TraversalDirection,
     /// Type of relationship (e.g., "mentions", "has_child", "member_of")
     pub relationship_type: String,
 }
