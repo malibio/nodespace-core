@@ -1072,3 +1072,61 @@ async fn test_update_schema_title_template_may_reference_preexisting_fields() {
         result
     );
 }
+
+// ============================================================================
+// create_schema from a description (no explicit fields)
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_schema_from_description_only() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // No `fields` array: fields are inferred from the description and namespaced
+    // with `custom:` before the schema node is validated and persisted.
+    let result = handle_create_schema(
+        &svc,
+        json!({ "name": "Venue", "description": "contact email and capacity number" }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Description-only create_schema should succeed: {:?}",
+        result
+    );
+
+    let val = result.expect("description-only create_schema should return Ok");
+    assert_eq!(val["schemaId"], "venue");
+
+    let field_names: Vec<&str> = val["fields"]
+        .as_array()
+        .expect("fields should be an array")
+        .iter()
+        .map(|f| f["name"].as_str().expect("field name should be a string"))
+        .collect();
+
+    assert!(
+        !field_names.is_empty(),
+        "Description should infer at least one field"
+    );
+    assert!(
+        field_names.iter().all(|n| n.starts_with("custom:")),
+        "Inferred fields should be namespaced: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.contains(&"custom:contact_email"),
+        "Expected 'custom:contact_email' among {:?}",
+        field_names
+    );
+
+    // The schema must be readable back from storage, not merely returned.
+    let stored = svc
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed");
+    assert!(
+        stored.is_some(),
+        "Schema should be persisted and retrievable"
+    );
+}
