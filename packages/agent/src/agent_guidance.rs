@@ -195,6 +195,14 @@ mod tests {
                 corpus.push(("skill_pipeline::seed_skill_nodes", t.markdown_content));
             }
         }
+        // The seeded prompt nodes ARE the base system prompt. Some interpolate
+        // the constants above, but others carry their own literal text that
+        // nothing else covers.
+        for t in crate::prompt_assembler::PromptAssembler::seed_prompt_nodes() {
+            if !t.markdown_content.is_empty() {
+                corpus.push(("prompt_assembler::seed_prompt_nodes", t.markdown_content));
+            }
+        }
         corpus
     }
 
@@ -353,7 +361,10 @@ mod tests {
                     // A short prompt can be quoted in full without ever
                     // exceeding a fixed run length, so also flag any prompt
                     // reproduced in its entirety.
-                    let quoted_whole = run == prompt_words.len();
+                    // Below three words this degenerates into "guidance
+                    // mentions this word anywhere", which flags ordinary
+                    // vocabulary and reports it as contamination.
+                    let quoted_whole = run == prompt_words.len() && run >= 3;
                     if run > MAX_SHARED_RUN || quoted_whole {
                         let why = if quoted_whole {
                             "the ENTIRE prompt appears"
