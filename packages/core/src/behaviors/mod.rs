@@ -1232,7 +1232,8 @@ impl NodeBehavior for DateNodeBehavior {
 /// Validation includes:
 /// - Non-empty content (schema name)
 /// - Properties must be valid JSON object
-/// - Field names must be unique (alphanumeric and underscores only)
+/// - Field names must be unique (alphanumeric and underscores, with an optional
+///   `<namespace>:` prefix — see [`validate_schema_field_name`])
 /// - Enum fields must have at least one value defined (in core_values or user_values)
 ///
 /// # Strongly-Typed Validation
@@ -1242,15 +1243,60 @@ impl NodeBehavior for DateNodeBehavior {
 /// validation internally converts to SchemaNode for type-safe validation.
 pub struct SchemaNodeBehavior;
 
+/// Validate a schema field name.
+///
+/// A field name is either a bare name (`capacity`) or a namespaced name carrying
+/// exactly one `<namespace>:` prefix (`custom:capacity`). Both the namespace and
+/// the bare name must be non-empty and contain only alphanumerics and underscores.
+///
+/// Namespace prefixes are part of the stored field name, not a separate layer
+/// applied afterwards: user-defined fields are namespaced (`custom:`, `org:`,
+/// `plugin:`) before the schema node is validated and persisted, so validation
+/// must accept the prefixed form. Both schema-creation paths agree on this —
+/// the description path applies `custom:` during field inference, and the
+/// explicit-fields path passes through names the caller already namespaced.
+fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
+    let invalid = |reason: &str| {
+        Err(NodeValidationError::InvalidProperties(format!(
+            "Invalid field name '{}': {}",
+            name, reason
+        )))
+    };
+
+    let is_valid_segment =
+        |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
+
+    let mut parts = name.split(':');
+    // `split` always yields at least one element, so this cannot panic.
+    let bare_name = match (parts.next(), parts.next(), parts.next()) {
+        // Bare name: `capacity`
+        (Some(bare), None, _) => bare,
+        // Namespaced name: `custom:capacity`
+        (Some(namespace), Some(bare), None) => {
+            if !is_valid_segment(namespace) {
+                return invalid(
+                    "namespace prefix must contain only alphanumeric characters and underscores",
+                );
+            }
+            bare
+        }
+        // More than one ':' — e.g. `custom:a:b`
+        _ => return invalid("must contain at most one ':' namespace prefix"),
+    };
+
+    if !is_valid_segment(bare_name) {
+        return invalid(
+            "must contain only alphanumeric characters and underscores, \
+             optionally preceded by a '<namespace>:' prefix",
+        );
+    }
+
+    Ok(())
+}
+
 /// Validate a single schema field (standalone function for recursive validation)
 fn validate_schema_field(field: &SchemaField) -> Result<(), NodeValidationError> {
-    // Validate field name characters (alphanumeric and underscores only)
-    if !field.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return Err(NodeValidationError::InvalidProperties(format!(
-            "Invalid field name '{}': must contain only alphanumeric characters and underscores",
-            field.name
-        )));
-    }
+    validate_schema_field_name(&field.name)?;
 
     // Enum fields must have at least one value defined
     if field.field_type == "enum" {
@@ -2871,7 +2917,11 @@ mod tests {
         assert!(behavior.validate(&full).is_ok());
 
         // Minimal project: name only (no properties).
-        let minimal = Node::new("project".to_string(), "Untitled project".to_string(), json!({}));
+        let minimal = Node::new(
+            "project".to_string(),
+            "Untitled project".to_string(),
+            json!({}),
+        );
         assert!(behavior.validate(&minimal).is_ok());
 
         // Equal start/end dates are allowed (start <= end).
@@ -2883,7 +2933,10 @@ mod tests {
         assert!(behavior.validate(&same_day).is_ok());
 
         // Projects are embeddable roots (unlike Task): content is returned.
-        assert_eq!(behavior.get_embeddable_content(&full), Some("Launch v1".to_string()));
+        assert_eq!(
+            behavior.get_embeddable_content(&full),
+            Some("Launch v1".to_string())
+        );
     }
 
     #[test]
@@ -3652,6 +3705,73 @@ mod tests {
             Err(NodeValidationError::InvalidProperties(ref msg))
                 if msg.contains("duplicate field names")
         ));
+    }
+
+    #[test]
+    fn test_schema_field_name_accepts_bare_and_namespaced() {
+        for name in [
+            "capacity",
+            "contact_email",
+            "field1",
+            "custom:capacity",
+            "custom:contact_email",
+            "org:cost_center",
+            "plugin:external_id",
+        ] {
+            assert!(
+                validate_schema_field_name(name).is_ok(),
+                "'{}' should be a valid field name",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_field_name_rejects_malformed_names() {
+        for name in [
+            "",                // empty
+            "custom:",         // empty bare name
+            ":capacity",       // empty namespace
+            "custom:a:b",      // more than one prefix
+            "custom capacity", // space
+            "custom.capacity", // dot is not a namespace separator
+            "custom:has space",
+        ] {
+            assert!(
+                validate_schema_field_name(name).is_err(),
+                "'{}' should be rejected",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_node_accepts_namespaced_field_names() {
+        let behavior = SchemaNodeBehavior;
+
+        // Namespaced field names are what the description-inference path produces,
+        // so validation must accept them.
+        let namespaced_node = Node::new(
+            "schema".to_string(),
+            "venue".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "fields": [
+                    {
+                        "name": "custom:contact_email",
+                        "type": "string",
+                        "protection": "user",
+                        "indexed": false
+                    }
+                ]
+            }),
+        );
+
+        assert!(
+            behavior.validate(&namespaced_node).is_ok(),
+            "Namespaced field names should pass validation"
+        );
     }
 
     #[test]
