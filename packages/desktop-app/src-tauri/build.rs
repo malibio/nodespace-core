@@ -2,7 +2,7 @@ fn main() {
     // Compile the Pro-tier proto package alongside the standard Tauri build.
     // The .proto lives under `proto/` in this crate (vendored from
     // `nodespace-sync/nodespaced-pro/proto/`). When sync is checked out
-    // as a sibling, `scripts/refresh-pro-proto.sh` re-vendors from the
+    // as a sibling, `scripts/refresh-pro-proto.ts` re-vendors from the
     // source-of-truth.
     let protoc = protoc_bin_vendored::protoc_bin_path()
         .expect("protoc-bin-vendored is required for the Pro proto build");

@@ -248,6 +248,8 @@ Test files and DeveloperInspector are exempt.
 
 **Runtime:** Bun-only. `npm`/`yarn`/`pnpm` are blocked. Use `bun install`, `bun run dev`, `bun run test`, `bunx` for one-off tools.
 
+**Tooling scripts:** Tooling in `scripts/` is TypeScript (`scripts/*.ts`, run via `bun run`). A `.sh` file is acceptable only where shell is genuinely required — e.g. an uninstaller that must run without Bun present, or a signing/packaging pipeline driving platform tools. Prefer deleting a one-off script once its purpose is served rather than leaving it in `scripts/`.
+
 **Testing — NEVER use `bun test`** — it bypasses the Happy-DOM vitest config and breaks DOM tests. Always use `bun run test` or another `bun run test:*` command.
 
 **Git:** Branch per issue, name `issue-<number>-brief-desc`. Link commits: `git commit -m "Add TextNode component (closes #4)"`. Include Claude Code attribution.
