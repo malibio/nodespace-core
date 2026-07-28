@@ -537,6 +537,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_root_only_content_membership_is_enforced() -> Result<()> {
+        // ADR-059 §2: a content node may be `member_of` a collection only when it
+        // is a root node (no `has_child` parent). Enforced in `add_to_collection`,
+        // so every single-add path is gated — including the CLI (which routes
+        // through `ops::collection_ops` → `add_to_collection`).
+        let (store, _t) = create_test_store().await?;
+
+        let coll = Node::new("collection".to_string(), "Coll".to_string(), json!({}));
+        let coll_id = coll.id.clone();
+        store.create_node(coll, None, None).await?;
+
+        // A ROOT content node can be filed. (criterion: root content succeeds)
+        let root_text = Node::new("text".to_string(), "root doc".to_string(), json!({}));
+        let root_id = root_text.id.clone();
+        store.create_node(root_text, None, None).await?;
+        assert!(
+            store.add_to_collection(&root_id, &coll_id).await?.is_some(),
+            "a root content node must be fileable into a collection"
+        );
+
+        // An INTERIOR content node (has a `has_child` parent) is REJECTED. This is
+        // the CLI-path regression: filing an interior node into a (restricted or
+        // any) collection is refused with an actionable, node-naming error.
+        let interior = store
+            .create_child_node_atomic(&root_id, "text", "an interior child", json!({}), None)
+            .await?;
+        let err = store
+            .add_to_collection(&interior.id, &coll_id)
+            .await
+            .expect_err("an interior content node must not be fileable into a collection");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("member_of_not_root") && msg.contains(&interior.id),
+            "rejection must name the node and why it was refused; got: {msg}"
+        );
+
+        // The GENERIC relationship path is gated too. A `member_of` edge created
+        // with an explicit `order` — the CLI `relationship create --edge-data`,
+        // the playbook `add_relationship` action, and
+        // `NodeService::create_relationship`'s non-auto-order fork — routes through
+        // `create_generic_relationship`, which must reject an interior node just as
+        // `add_to_collection` does. (Regression for the bypass where adding one
+        // `order` JSON key skipped the guard.)
+        let err_generic = store
+            .create_generic_relationship(&interior.id, &coll_id, "member_of", &json!({"order": 5.0}))
+            .await
+            .expect_err("member_of via the generic path must reject an interior node");
+        assert!(
+            err_generic.to_string().contains("member_of_not_root"),
+            "generic-path rejection must carry the same reason; got: {err_generic}"
+        );
+        // A non-member_of generic edge is unaffected by the rule.
+        assert!(
+            store
+                .create_generic_relationship(&interior.id, &root_id, "mentions", &json!({}))
+                .await
+                .is_ok(),
+            "the root-only rule must not touch non-member_of generic edges"
+        );
+
+        // Person-node membership is EXEMPT (grantee membership, ADR-037 §4) — even
+        // when the person node is interior.
+        let interior_person = store
+            .create_child_node_atomic(&root_id, "person", "Ada", json!({}), None)
+            .await?;
+        assert!(
+            store
+                .add_to_collection(&interior_person.id, &coll_id)
+                .await
+                .is_ok(),
+            "person-node member_of edges are exempt from the root-only rule"
+        );
+
+        // Collection-to-collection nesting is EXEMPT — even an interior collection.
+        let interior_coll = store
+            .create_child_node_atomic(&root_id, "collection", "Nested", json!({}), None)
+            .await?;
+        assert!(
+            store
+                .add_to_collection(&interior_coll.id, &coll_id)
+                .await
+                .is_ok(),
+            "collection nesting is exempt from the root-only rule"
+        );
+
+        // End-to-end: a restricted task inside an OPEN project still works. The
+        // project ROOT is filed into the open collection; the task lives under it
+        // as an interior node and carries NO membership of its own — its access
+        // rides its root. Creating it must succeed (it is not a membership write).
+        let project = Node::new("project".to_string(), "Open Project".to_string(), json!({}));
+        let project_id = project.id.clone();
+        store.create_node(project, None, None).await?;
+        store.add_to_collection(&project_id, &coll_id).await?; // project root filed
+        let task = store
+            .create_child_node_atomic(&project_id, "task", "a restricted task", json!({}), None)
+            .await?;
+        assert!(
+            store.get_node_memberships(&task.id).await?.is_empty(),
+            "an interior task under a filed project holds no membership of its own"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bulk_root_only_membership_is_enforced() -> Result<()> {
+        // The bulk path (`bulk_add_to_collections`) is what the sync-apply
+        // cold-sweep calls directly, so the same rule must gate incoming edges.
+        let (store, _t) = create_test_store().await?;
+
+        let coll = Node::new("collection".to_string(), "Coll".to_string(), json!({}));
+        let coll_id = coll.id.clone();
+        store.create_node(coll, None, None).await?;
+
+        let r1 = Node::new("text".to_string(), "root 1".to_string(), json!({}));
+        let r1_id = r1.id.clone();
+        store.create_node(r1, None, None).await?;
+        let r2 = Node::new("text".to_string(), "root 2".to_string(), json!({}));
+        let r2_id = r2.id.clone();
+        store.create_node(r2, None, None).await?;
+
+        // An all-root batch applies cleanly.
+        let created = store
+            .bulk_add_to_collections(&[
+                (r1_id.clone(), coll_id.clone()),
+                (r2_id.clone(), coll_id.clone()),
+            ])
+            .await?;
+        assert_eq!(created.len(), 2, "both root memberships must be created");
+
+        // A batch containing ONE interior node is refused (cold-sweep parity): an
+        // incoming non-root membership edge cannot slip in via the bulk path.
+        let interior = store
+            .create_child_node_atomic(&r1_id, "text", "interior child", json!({}), None)
+            .await?;
+        let r3 = Node::new("text".to_string(), "root 3".to_string(), json!({}));
+        let r3_id = r3.id.clone();
+        store.create_node(r3, None, None).await?;
+        let err = store
+            .bulk_add_to_collections(&[
+                (r3_id.clone(), coll_id.clone()),
+                (interior.id.clone(), coll_id.clone()),
+            ])
+            .await
+            .expect_err("a bulk batch with an interior node must be refused");
+        assert!(
+            err.to_string().contains(&interior.id),
+            "the rejection must name the offending interior node; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_backfill_fts_reindexes_unindexed_nodes() -> Result<()> {
         // a node present in `node` but missing from `node_fts` (the pre-FTS
         // corpus) must be re-indexed by the one-time backfill.
@@ -1284,11 +1436,17 @@ mod tests {
             .zip(moved_vers.iter())
             .map(|(id, &v)| (id.as_str(), v))
             .collect();
-        let mut moved_orders = store.move_children_to_parent(&new_parent_id, &pairs).await?;
+        let mut moved_orders = store
+            .move_children_to_parent(&new_parent_id, &pairs)
+            .await?;
 
         // All four children now live under new_parent.
         let children = store.get_children(&new_parent_id).await?;
-        assert_eq!(children.len(), 4, "new_parent should hold 2 existing + 2 moved");
+        assert_eq!(
+            children.len(),
+            4,
+            "new_parent should hold 2 existing + 2 moved"
+        );
 
         // Every sibling order key is distinct — no collision with the existing
         // children (the old code produced 1.0, 1.0, 2.0, 2.0 here).
