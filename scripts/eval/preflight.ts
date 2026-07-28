@@ -156,20 +156,40 @@ export function readDaemonStatus(env: EvalEnv): DaemonStatus {
  * and nothing in the eval's own configuration reveals that.
  */
 function readServedDatabasePath(env: EvalEnv): string {
+  // Fails CLOSED. Every other check failing open costs a missed detection; this
+  // one guards against writing test schemas and chat nodes into live user data,
+  // which cannot be undone. "I could not determine which database this is" must
+  // therefore stop the run, not wave it through.
+  const unknown = (detail: string) =>
+    new EnvironmentError(
+      `Could not determine which database the daemon is serving (${detail}), so it ` +
+        `cannot be confirmed that this run will not write into live user data.`,
+      `Confirm the daemon is isolated — its startup log line \`served_db_path=\` must\n` +
+        `  point inside your test directory — and that ${env.nsBin} is a current build\n` +
+        `  (cargo build --release -p nodespace-cli).`,
+    );
+
   const r = Bun.spawnSync(
     [env.nsBin, "--socket", env.socket, "--json", "database", "list"],
     { stdout: "pipe", stderr: "pipe" },
   );
-  if (r.exitCode !== 0) return "";
-  try {
-    const parsed = JSON.parse(r.stdout.toString()) as {
-      databases?: Array<{ path?: string; is_default?: boolean }>;
-    };
-    const dbs = parsed.databases ?? [];
-    return (dbs.find((d) => d.is_default) ?? dbs[0])?.path ?? "";
-  } catch {
-    return "";
+  if (r.exitCode !== 0) {
+    throw unknown(`\`database list\` exited ${r.exitCode}`);
   }
+  let parsed: { databases?: Array<{ path?: string; is_default?: boolean }> };
+  try {
+    parsed = JSON.parse(r.stdout.toString());
+  } catch (e) {
+    throw unknown(`could not parse \`database list --json\`: ${e}`);
+  }
+  const dbs = parsed.databases ?? [];
+  // The daemon serves the default database for header-less requests, which is
+  // what aichat.ts sends.
+  const path = (dbs.find((d) => d.is_default) ?? dbs[0])?.path;
+  if (!path) {
+    throw unknown("the daemon reported no databases");
+  }
+  return path;
 }
 
 /**
@@ -189,11 +209,7 @@ export function preflight(
   // accident, because the registry overrides `NODESPACED_DB_PATH` and the
   // daemon starts perfectly happily either way.
   const realHome = `${process.env.HOME ?? ""}/.nodespace/`;
-  if (
-    status.databasePath &&
-    process.env.HOME &&
-    status.databasePath.startsWith(realHome)
-  ) {
+  if (process.env.HOME && status.databasePath.startsWith(realHome)) {
     throw new EnvironmentError(
       `The daemon is serving the REAL user database (${status.databasePath}).\n` +
         `  This eval creates schemas, chat nodes, and instances; running it here would ` +

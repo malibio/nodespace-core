@@ -13,6 +13,15 @@ export interface TurnRecord {
   toolsCalled: string[];
   reply: string;
   latencyMs: number;
+  /**
+   * The turn never reached the model — the send itself failed.
+   *
+   * Distinguished from a turn that ran and called no tools, because the two are
+   * indistinguishable by tool calls alone and a negative assertion ("no tools
+   * called") scores a failed send as a PASS. The runner uses this to abort when
+   * sends fail consecutively rather than scoring a dead environment.
+   */
+  sendFailed?: boolean;
 }
 
 /** The verdict a fixture's scoring function returns for one scenario. */

@@ -61,10 +61,11 @@ function newChat(env: EvalEnv): string {
 /**
  * Run one turn and scrape its outcome.
  *
- * A failed send is recorded as a turn with no tool calls rather than thrown:
- * one scenario erroring should not abandon the run. Preflight is what
- * distinguishes this from a systemically broken environment — without it, a
- * run where every send fails would score every negative assertion as a pass.
+ * A failed send is recorded rather than thrown, so one flaky turn does not
+ * abandon a run that costs minutes of inference. It is flagged `sendFailed` so
+ * the caller can tell it apart from a turn that genuinely called no tools —
+ * scoring the two alike is what lets a dead daemon pass a "no tools" assertion.
+ * The run loop aborts once sends fail consecutively.
  */
 function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
   const start = performance.now();
@@ -82,6 +83,7 @@ function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
       toolsCalled: [],
       reply: `(send failed: ${err})`,
       latencyMs,
+      sendFailed: true,
     };
   }
 
@@ -268,6 +270,19 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
 
   const results: ScenarioResult[] = [];
 
+  /**
+   * Consecutive failed sends tolerated before the run is declared void.
+   *
+   * Preflight proves the environment was usable at t=0; it cannot prove it
+   * stayed usable across the minutes a run takes. If the daemon dies mid-run
+   * every subsequent turn calls no tools, and every negative assertion scores
+   * as a PASS — the exact false result this harness exists to prevent, just
+   * relocated past the gate. One failure can be a flaky turn and is a real
+   * scenario failure; two in a row is the environment.
+   */
+  const MAX_CONSECUTIVE_SEND_FAILURES = 2;
+  let consecutiveSendFailures = 0;
+
   try {
     for (const group of fixture.groups) {
       const chatId = newChat(env);
@@ -286,6 +301,24 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         }
 
         const scored = runTurn(env, chatId, scenario.prompt);
+
+        if (scored.sendFailed) {
+          consecutiveSendFailures++;
+          if (consecutiveSendFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
+            throw new EnvironmentError(
+              `${consecutiveSendFailures} turns in a row failed to send — the daemon ` +
+                `went away partway through the run.\n  Last error: ${scored.reply}`,
+              `Check whether the daemon on ${env.socket} is still alive (it may have ` +
+                `run out of memory or been killed).\n  ${results.length} scenario(s) had ` +
+                `been scored; they are NOT written, because scores from a run that died ` +
+                `midway are not comparable to a complete one — and turns that never ` +
+                `reached the model would score "no tools called" assertions as passes.`,
+            );
+          }
+        } else {
+          consecutiveSendFailures = 0;
+        }
+
         const verdict = fixture.score(scenario, [scored]);
 
         results.push({
