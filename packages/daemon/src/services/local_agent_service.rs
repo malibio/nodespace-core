@@ -791,12 +791,17 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // path the engine reports. Callers compare this against the id they
         // asked for ("gemma-4-e4b-q4km"), which no path substring matches.
         let active_model_id = self.inner.active_model_id.lock().await.clone();
+        // The id and the window degrade independently. A snapshot that failed
+        // or timed out costs the window, not the identity: `active_model_id` is
+        // set by the same swap and is still authoritative, so a loaded model
+        // keeps reporting itself with `granted_n_ctx == 0` (window unknown)
+        // rather than vanishing into "nothing loaded".
         let (model_id, granted_n_ctx) = match spec {
             Some(spec) => (
                 active_model_id.unwrap_or(spec.model_id),
                 spec.context_window,
             ),
-            None => (String::new(), 0),
+            None => (active_model_id.unwrap_or_default(), 0),
         };
 
         Ok(Response::new(LocalAgentStatusResponse {
@@ -1995,9 +2000,10 @@ mod tests {
             .expect("get_status")
             .into_inner();
 
-        // Swap completed; geometry degraded to "nothing loaded" rather than
-        // hanging the caller.
-        assert_eq!(status.model_id, "");
+        // Swap completed rather than hanging the caller, and the model still
+        // reports its identity — only the window is unknown. Reporting an
+        // empty id here would make a loaded model look absent.
+        assert_eq!(status.model_id, "hanging-model");
         assert_eq!(status.granted_n_ctx, 0);
     }
 
