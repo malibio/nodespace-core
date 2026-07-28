@@ -203,7 +203,7 @@ fn synthetic_cron_envelope(node_id: &str) -> EventEnvelope {
 mod tests {
     use super::*;
     use crate::playbook::types::{
-        ActionType, CronEntry, OrderedRuleRef, ParsedAction, ParsedRule, ParsedTrigger,
+        ActionType, CronEntry, OrderedRuleRef, ParsedAction, ParsedRule, ParsedTrigger, RuleClass,
     };
     use chrono::Utc;
     use std::sync::Arc;
@@ -212,6 +212,7 @@ mod tests {
     fn make_cron_entry(cron_expr: &str, node_type: &str) -> CronEntry {
         let rule = Arc::new(ParsedRule {
             name: "test-cron-rule".to_string(),
+            class: RuleClass::Reactive,
             trigger: ParsedTrigger::Scheduled {
                 cron: cron_expr.to_string(),
                 node_type: node_type.to_string(),
@@ -300,6 +301,7 @@ mod tests {
         // (deduplication is structural — same cron+node_type = one CronEntry)
         let rule_a = Arc::new(ParsedRule {
             name: "rule-a".to_string(),
+            class: RuleClass::Reactive,
             trigger: ParsedTrigger::Scheduled {
                 cron: "0 * * * * * *".to_string(),
                 node_type: "task".to_string(),
@@ -310,6 +312,7 @@ mod tests {
 
         let rule_b = Arc::new(ParsedRule {
             name: "rule-b".to_string(),
+            class: RuleClass::Reactive,
             trigger: ParsedTrigger::Scheduled {
                 cron: "0 * * * * * *".to_string(),
                 node_type: "task".to_string(),

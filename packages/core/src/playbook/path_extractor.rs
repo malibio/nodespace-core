@@ -60,6 +60,83 @@ pub fn extract_paths(expr: &str) -> Result<ExtractionResult, String> {
     Ok(result)
 }
 
+/// Collect the names of every function called in a CEL expression.
+///
+/// Used by save-time validation to detect non-deterministic functions
+/// (wall-clock reads like `today`, `days_since`, `days_until`) inside an
+/// invariant rule's conditions (ADR-060 §2).
+///
+/// Notes on the CEL AST surface this walks:
+/// - Named function calls (`today()`, `days_since(x)`, `size(x)`) appear as
+///   `Expr::Call` with `func_name` set — these are what we collect.
+/// - Macros (`.any`/`.all`/`.exists`) are desugared into `Comprehension` nodes,
+///   not calls, so their sub-expressions are walked but contribute no call name.
+/// - Binary/unary operators appear as calls with sentinel names like `_==_`,
+///   `_&&_`, `_+_` — harmless here, they never match a wall-clock function.
+pub fn extract_function_names(expr: &str) -> Result<Vec<String>, String> {
+    let parsed = cel_parser::Parser::new()
+        .parse(expr)
+        .map_err(|e| format!("CEL parse error: {}", e))?;
+    let mut names = Vec::new();
+    collect_function_names(&parsed, &mut names);
+    Ok(names)
+}
+
+/// Recursively collect `func_name` from every `Expr::Call` in the AST.
+fn collect_function_names(expr: &IdedExpr, names: &mut Vec<String>) {
+    match &expr.expr {
+        Expr::Call(call) => {
+            names.push(call.func_name.clone());
+            if let Some(target) = &call.target {
+                collect_function_names(target, names);
+            }
+            for arg in &call.args {
+                collect_function_names(arg, names);
+            }
+        }
+        Expr::Select(sel) => collect_function_names(&sel.operand, names),
+        Expr::Comprehension(comp) => {
+            collect_function_names(&comp.iter_range, names);
+            collect_function_names(&comp.accu_init, names);
+            collect_function_names(&comp.loop_cond, names);
+            collect_function_names(&comp.loop_step, names);
+            collect_function_names(&comp.result, names);
+        }
+        Expr::List(list) => {
+            for elem in &list.elements {
+                collect_function_names(elem, names);
+            }
+        }
+        Expr::Map(map) => {
+            for entry in &map.entries {
+                match &entry.expr {
+                    cel_parser::ast::EntryExpr::MapEntry(me) => {
+                        collect_function_names(&me.key, names);
+                        collect_function_names(&me.value, names);
+                    }
+                    cel_parser::ast::EntryExpr::StructField(sf) => {
+                        collect_function_names(&sf.value, names);
+                    }
+                }
+            }
+        }
+        Expr::Struct(s) => {
+            for entry in &s.entries {
+                match &entry.expr {
+                    cel_parser::ast::EntryExpr::MapEntry(me) => {
+                        collect_function_names(&me.key, names);
+                        collect_function_names(&me.value, names);
+                    }
+                    cel_parser::ast::EntryExpr::StructField(sf) => {
+                        collect_function_names(&sf.value, names);
+                    }
+                }
+            }
+        }
+        Expr::Ident(_) | Expr::Literal(_) | Expr::Unspecified => {}
+    }
+}
+
 /// Recursively walk the AST, collecting paths.
 fn walk_expr(expr: &IdedExpr, active_iter_vars: &[String], result: &mut ExtractionResult) {
     match &expr.expr {
@@ -395,5 +472,33 @@ mod tests {
             .paths
             .iter()
             .any(|p| p.segments == vec!["node", "tasks"]));
+    }
+
+    // -- extract_function_names --
+
+    #[test]
+    fn extract_function_names_finds_named_calls() {
+        let names =
+            extract_function_names("days_since(node.created) > 7 && size(node.tags) > 0").unwrap();
+        assert!(names.contains(&"days_since".to_string()));
+        assert!(names.contains(&"size".to_string()));
+    }
+
+    #[test]
+    fn extract_function_names_finds_nested_call() {
+        // `today()` nested as an argument of `size(...)` is still collected.
+        let names = extract_function_names("size(today()) == 10").unwrap();
+        assert!(names.contains(&"today".to_string()));
+    }
+
+    #[test]
+    fn extract_function_names_ignores_macros_and_plain_paths() {
+        // `.exists` desugars to a comprehension, not a named call.
+        let names = extract_function_names("node.tasks.exists(t, t.status == 'done')").unwrap();
+        assert!(!names.contains(&"exists".to_string()));
+
+        // A plain property comparison references no wall-clock function.
+        let names = extract_function_names("node.status == 'open'").unwrap();
+        assert!(!names.iter().any(|n| n == "today" || n == "days_since"));
     }
 }

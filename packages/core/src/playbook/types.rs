@@ -119,10 +119,33 @@ pub enum PlaybookStatus {
     Disabled,
 }
 
+/// Execution class of a playbook rule (ADR-060).
+///
+/// - `Reactive` is today's behavior: the rule runs asynchronously, post-commit,
+///   on every device that observes the triggering event.
+/// - `Invariant` rules run synchronously inside the creating transaction,
+///   fail-closed, on the originating device only. They are subject to the
+///   save-time eligibility checks in [`crate::playbook::validation`] (ADR-060 §2).
+///
+/// The class is a property of the rule, declared in the playbook and validated at
+/// save time. It defaults to `Reactive` so every rule authored before this class
+/// existed keeps its current semantics unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleClass {
+    /// Synchronous, in-transaction, origin-device-only, fail-closed.
+    Invariant,
+    /// Asynchronous, post-commit, every device. The default.
+    #[default]
+    Reactive,
+}
+
 /// A single parsed rule from a playbook's `rules` array.
 #[derive(Debug, Clone)]
 pub struct ParsedRule {
     pub name: String,
+    /// Execution class (ADR-060). Defaults to `Reactive`.
+    pub class: RuleClass,
     pub trigger: ParsedTrigger,
     pub conditions: Vec<CompiledCondition>,
     pub actions: Vec<ParsedAction>,
@@ -168,6 +191,41 @@ pub enum ActionType {
     UpdateNode,
     AddRelationship,
     RemoveRelationship,
+}
+
+impl ActionType {
+    /// The canonical JSON name for this action type (the value parsed from a
+    /// rule's `action_type` field).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CreateNode => "create_node",
+            Self::UpdateNode => "update_node",
+            Self::AddRelationship => "add_relationship",
+            Self::RemoveRelationship => "remove_relationship",
+        }
+    }
+
+    /// Whether this action performs only a local graph write.
+    ///
+    /// ADR-060 §2 requires an invariant rule's actions to be **local writes
+    /// only**: a transaction cannot await an LLM call, a network request, a PTY,
+    /// or any external service, and holding a write transaction across an
+    /// unbounded wait is a correctness and liveness hazard.
+    ///
+    /// Every v1 action type is a pure local graph mutation, so this returns
+    /// `true` for all current variants. It is written as an exhaustive `match`
+    /// rather than a blanket `true` deliberately: adding a non-local action type
+    /// later (LLM/network/PTY/external) will fail to compile until it is
+    /// classified here, so such an action can never silently become eligible for
+    /// an invariant rule.
+    pub fn is_local_write(&self) -> bool {
+        match self {
+            Self::CreateNode
+            | Self::UpdateNode
+            | Self::AddRelationship
+            | Self::RemoveRelationship => true,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +283,10 @@ pub type CronRegistry = Vec<CronEntry>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleDefinition {
     pub name: String,
+    /// Execution class (ADR-060). Omitted in JSON → `Reactive`, so every
+    /// existing rule definition keeps today's async, post-commit semantics.
+    #[serde(default)]
+    pub class: RuleClass,
     pub trigger: TriggerDefinition,
     #[serde(default)]
     pub conditions: Vec<String>,
@@ -308,6 +370,7 @@ pub fn parse_rule(def: &RuleDefinition) -> Result<ParsedRule, PlaybookParseError
 
     Ok(ParsedRule {
         name: def.name.clone(),
+        class: def.class,
         trigger,
         conditions,
         actions,

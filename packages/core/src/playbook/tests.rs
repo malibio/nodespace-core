@@ -65,6 +65,7 @@ mod playbook_tests {
     fn test_parse_graph_event_node_created() {
         let def = RuleDefinition {
             name: "test rule".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("node_created".to_string()),
@@ -97,6 +98,7 @@ mod playbook_tests {
     fn test_parse_graph_event_property_changed() {
         let def = RuleDefinition {
             name: "status watcher".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("property_changed".to_string()),
@@ -130,6 +132,7 @@ mod playbook_tests {
     fn test_parse_scheduled_trigger() {
         let def = RuleDefinition {
             name: "daily check".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "scheduled".to_string(),
                 on: None,
@@ -155,6 +158,7 @@ mod playbook_tests {
     fn test_parse_invalid_trigger_type() {
         let def = RuleDefinition {
             name: "bad".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "webhook".to_string(),
                 on: None,
@@ -176,6 +180,7 @@ mod playbook_tests {
     fn test_parse_invalid_event_type() {
         let def = RuleDefinition {
             name: "bad".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("node_exploded".to_string()),
@@ -197,6 +202,7 @@ mod playbook_tests {
     fn test_parse_missing_node_type() {
         let def = RuleDefinition {
             name: "bad".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("node_created".to_string()),
@@ -218,6 +224,7 @@ mod playbook_tests {
     fn test_parse_invalid_cel_condition() {
         let def = RuleDefinition {
             name: "bad condition".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("node_created".to_string()),
@@ -239,6 +246,7 @@ mod playbook_tests {
     fn test_parse_condition_compiles_program_once() {
         let def = RuleDefinition {
             name: "compiled rule".to_string(),
+            class: RuleClass::Reactive,
             trigger: TriggerDefinition {
                 trigger_type: "graph_event".to_string(),
                 on: Some("node_created".to_string()),
@@ -300,6 +308,70 @@ mod playbook_tests {
         };
         let parsed = super::super::types::parse_action(&def).unwrap();
         assert_eq!(parsed.for_each, Some("trigger.node.tasks".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Rule class parsing (ADR-060)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rule_class_defaults_to_reactive() {
+        // A rule definition with no `class` field parses as Reactive, keeping
+        // every previously-authored rule's semantics unchanged.
+        let def = RuleDefinition {
+            name: "no class".to_string(),
+            class: RuleClass::default(),
+            trigger: TriggerDefinition {
+                trigger_type: "graph_event".to_string(),
+                on: Some("node_created".to_string()),
+                node_type: Some("task".to_string()),
+                property_key: None,
+                cron: None,
+            },
+            conditions: vec![],
+            actions: vec![],
+        };
+        assert_eq!(RuleClass::default(), RuleClass::Reactive);
+        assert_eq!(parse_rule(&def).unwrap().class, RuleClass::Reactive);
+    }
+
+    #[test]
+    fn test_rule_class_missing_field_deserializes_as_reactive() {
+        // JSON without a `class` key → Reactive via `#[serde(default)]`.
+        let defs: Vec<RuleDefinition> = serde_json::from_value(json!([{
+            "name": "r1",
+            "trigger": {"type": "graph_event", "on": "node_created", "node_type": "task"},
+            "conditions": [],
+            "actions": []
+        }]))
+        .unwrap();
+        assert_eq!(defs[0].class, RuleClass::Reactive);
+        assert_eq!(parse_rule(&defs[0]).unwrap().class, RuleClass::Reactive);
+    }
+
+    #[test]
+    fn test_rule_class_parses_invariant_and_reactive() {
+        let defs: Vec<RuleDefinition> = serde_json::from_value(json!([
+            {
+                "name": "inv",
+                "class": "invariant",
+                "trigger": {"type": "graph_event", "on": "node_created", "node_type": "task"},
+                "conditions": [],
+                "actions": []
+            },
+            {
+                "name": "react",
+                "class": "reactive",
+                "trigger": {"type": "graph_event", "on": "node_created", "node_type": "task"},
+                "conditions": [],
+                "actions": []
+            }
+        ]))
+        .unwrap();
+        assert_eq!(defs[0].class, RuleClass::Invariant);
+        assert_eq!(defs[1].class, RuleClass::Reactive);
+        assert_eq!(parse_rule(&defs[0]).unwrap().class, RuleClass::Invariant);
+        assert_eq!(parse_rule(&defs[1]).unwrap().class, RuleClass::Reactive);
     }
 
     #[test]

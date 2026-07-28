@@ -337,6 +337,18 @@ fn build_condition_context_with_resolved<'a>(
 // Custom CEL Functions
 // ---------------------------------------------------------------------------
 
+/// CEL functions that read wall-clock time and are therefore **non-deterministic**
+/// across devices: two devices evaluating the same condition at different moments
+/// can disagree.
+///
+/// ADR-060 §2 forbids these in an invariant rule's conditions (see
+/// [`crate::playbook::validation`]). Keep this list in sync with the functions
+/// registered in [`build_condition_context_with_resolved`] — it is the single
+/// source of truth for "which CEL functions are non-deterministic". There is no
+/// random-value function registered, so wall-clock reads are the only
+/// non-deterministic surface CEL can express today.
+pub const NON_DETERMINISTIC_FUNCTIONS: &[&str] = &["today", "days_since", "days_until"];
+
 /// `days_since(date_string)` — Parse ISO 8601 date and return days elapsed.
 ///
 /// Returns negative for future dates. Returns error for invalid input.
