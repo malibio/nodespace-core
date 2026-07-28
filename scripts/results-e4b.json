@@ -1,0 +1,168 @@
+{
+  "label": "e4b-decontaminated",
+  "model": "gemma-4-e4b-q4km",
+  "recorded_at": "2026-07-28",
+  "guidance_commit": "da126293",
+  "host_memory_gb": 16,
+  "note": "Honest baseline: measured AFTER eval-prompt contamination was removed from agent guidance. Recorded on a purged database so every prompt/skill node was reseeded from the compiled constants - a reused DB keeps old seeded guidance and silently measures the pre-fix prompts. Not comparable to the earlier 11/12, which was measured with eval prompts planted in the guidance.",
+  "results": [
+    {
+      "scenario": "1. Greeting",
+      "prompt": "Hi there",
+      "expect": {
+        "kind": "noTools"
+      },
+      "toolsCalled": [],
+      "passed": true,
+      "latencyMs": 19136
+    },
+    {
+      "scenario": "2. Capability",
+      "prompt": "What can you do?",
+      "expect": {
+        "kind": "noTools"
+      },
+      "toolsCalled": [],
+      "passed": true,
+      "latencyMs": 7146
+    },
+    {
+      "scenario": "3. Schema creation",
+      "prompt": "I want to keep a record of the equipment my team checks out and whether it's been returned",
+      "expect": {
+        "kind": "noExtraTypes"
+      },
+      "toolsCalled": [
+        "create_schema"
+      ],
+      "passed": true,
+      "latencyMs": 4089
+    },
+    {
+      "scenario": "4. Instance creation",
+      "prompt": "Log a laser cutter checked out on the 12th, replacement cost 2400",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "create_node"
+      },
+      "toolsCalled": [
+        "search_skills",
+        "create_schema"
+      ],
+      "passed": false,
+      "failure": "Expected 'create_node' exactly once, got 0 (tools: create_schema)",
+      "latencyMs": 10195
+    },
+    {
+      "scenario": "5. List/query",
+      "prompt": "What equipment is on the books?",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "search_nodes"
+      },
+      "toolsCalled": [
+        "search_nodes"
+      ],
+      "passed": true,
+      "latencyMs": 3118
+    },
+    {
+      "scenario": "6. Update",
+      "prompt": "The 2400 one came back \u2014 set it to returned",
+      "expect": {
+        "kind": "toolSequence",
+        "tools": [
+          "search_nodes",
+          "update_node"
+        ]
+      },
+      "toolsCalled": [],
+      "passed": false,
+      "failure": "Expected sequence [search_nodes,update_node] as a subsequence, got: ",
+      "latencyMs": 2103
+    },
+    {
+      "scenario": "7. Empty-result query",
+      "prompt": "Do we have anything worth 90000 sitting out?",
+      "expect": {
+        "kind": "noRetry",
+        "tool": "search_nodes"
+      },
+      "toolsCalled": [
+        "search_nodes"
+      ],
+      "passed": true,
+      "latencyMs": 18386
+    },
+    {
+      "scenario": "8a. Create type: first",
+      "prompt": "Start tracking albums I mean to listen to",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "create_schema"
+      },
+      "toolsCalled": [
+        "create_schema"
+      ],
+      "passed": true,
+      "latencyMs": 2109
+    },
+    {
+      "scenario": "8b. Create type: second",
+      "prompt": "I also need a tracker for the venues I book",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "create_schema"
+      },
+      "toolsCalled": [
+        "create_schema"
+      ],
+      "passed": true,
+      "latencyMs": 20585
+    },
+    {
+      "scenario": "8c. Instance: first type",
+      "prompt": "Put down Kind of Blue, it's by Miles Davis",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "create_node"
+      },
+      "toolsCalled": [
+        "search_skills",
+        "create_node",
+        "create_node"
+      ],
+      "passed": false,
+      "failure": "Expected 'create_node' exactly once, got 2 (tools: create_node,create_node)",
+      "latencyMs": 26453
+    },
+    {
+      "scenario": "8d. Instance: second type",
+      "prompt": "New venue: the Blue Note, they can be reached at booking@example.com",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "create_node"
+      },
+      "toolsCalled": [
+        "search_skills",
+        "search_nodes",
+        "create_node"
+      ],
+      "passed": true,
+      "latencyMs": 28521
+    },
+    {
+      "scenario": "8e. Query across types",
+      "prompt": "Run through the albums for me",
+      "expect": {
+        "kind": "toolOnce",
+        "tool": "search_nodes"
+      },
+      "toolsCalled": [
+        "search_nodes"
+      ],
+      "passed": true,
+      "latencyMs": 3164
+    }
+  ]
+}

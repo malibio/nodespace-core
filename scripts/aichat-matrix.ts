@@ -263,12 +263,12 @@ const GROUPS: ScenarioStep[][] = [
   [
     {
       scenario: "8a. Create type: first",
-      prompt: "Set up somewhere to note down albums I mean to listen to",
+      prompt: "Start tracking albums I mean to listen to",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
       scenario: "8b. Create type: second",
-      prompt: "I also need to keep track of the venues I book",
+      prompt: "I also need a tracker for the venues I book",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
