@@ -959,3 +959,139 @@ async fn test_update_schema_locates_malformed_add_fields_entry() {
         "error should name the offending entry: {msg}"
     );
 }
+
+// ============================================================================
+// title_template with no resolvable fields — error must state the repair
+// ============================================================================
+//
+// The shape observed in the #1775 matrix run: the model sent a title_template
+// and NO fields array at all. The downstream validator rejects this correctly
+// but only names the first undefined placeholder, and says nothing about what a
+// correct call looks like; the model abandoned the request rather than retrying.
+
+#[tokio::test]
+async fn test_create_schema_title_template_without_fields_states_the_fix() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // Verbatim shape from the matrix log.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment Check-out Tracker",
+            "title_template": "{equipment} ({status})"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a template with no fields array must be rejected")
+        .to_string();
+
+    // Both unresolved placeholders in one error — reporting them one per
+    // round-trip costs a retry per placeholder, and every retry is a chance to
+    // corrupt the parts that were already right.
+    assert!(
+        msg.contains("{equipment}") && msg.contains("{status}"),
+        "every unresolved placeholder must be reported at once: {msg}"
+    );
+    // The concrete edit, not just the rule.
+    assert!(
+        msg.contains(r#"{"name":"equipment","type":"text"}"#),
+        "error must spell out the field entry to add: {msg}"
+    );
+    assert!(
+        msg.contains("unchanged"),
+        "error must tell the caller to preserve the rest of the call: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_title_template_partially_resolved_names_only_the_gap() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [{ "name": "equipment", "type": "text" }],
+            "title_template": "{equipment} ({status})"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("an unresolved placeholder must be rejected")
+        .to_string();
+
+    assert!(
+        msg.contains("{status}"),
+        "the unresolved placeholder must be named: {msg}"
+    );
+    // The message echoes the whole template for context, so `{equipment}` does
+    // appear — what must NOT happen is `equipment` being listed among the
+    // entries to add. Implicating a field that is already correct is precisely
+    // what drives the caller to rewrite a working part of the call.
+    assert!(
+        !msg.contains(r#"{"name":"equipment""#),
+        "a field that IS defined must not be listed as one to add: {msg}"
+    );
+    assert!(
+        msg.contains(r#"{"name":"status","type":"text"}"#),
+        "only the genuinely missing field should be prescribed: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_fully_resolved_title_template_still_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The pre-check must only ever convert an error into a better error.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [
+                { "name": "equipment", "type": "text" },
+                { "name": "status", "type": "text" }
+            ],
+            "title_template": "{equipment} ({status})"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a template whose placeholders all resolve must still create: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_title_template_may_reference_preexisting_fields() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Gear",
+            "fields": [{ "name": "label", "type": "text" }]
+        }),
+    )
+    .await
+    .expect("setup create_schema failed");
+
+    // update_schema deliberately does NOT get the title_template pre-check: the
+    // template may reference fields already on the stored schema, which the
+    // payload alone cannot see. Pre-checking here would reject a valid call.
+    let result = handle_update_schema(
+        &svc,
+        json!({ "schema_id": "gear", "title_template": "{label}" }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a template referencing an existing stored field must be accepted: {:?}",
+        result
+    );
+}

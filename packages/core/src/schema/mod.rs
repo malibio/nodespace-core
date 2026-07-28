@@ -87,6 +87,75 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
     )))
 }
 
+/// Reject a `title_template` whose placeholders have no corresponding entries in
+/// `fields`, naming the exact field definitions the caller needs to add.
+///
+/// The downstream schema validator already rejects this and names the first
+/// undefined placeholder. What it cannot do is tell the caller what to send
+/// instead, and it reports one placeholder per round-trip. An LLM caller that
+/// supplies a template but omits `fields` entirely — the observed shape — gets
+/// told what is wrong but not what a correct call looks like, and in practice
+/// abandons the request rather than retrying.
+///
+/// Runs before deserialization so it also covers payloads that would not
+/// deserialize at all. Returns `Ok(())` when there is no template, or when every
+/// placeholder resolves, leaving the existing validator as the authority.
+fn describe_unresolved_title_template(params: &Value) -> Result<(), MarkdownError> {
+    let Some(template) = params.get("title_template").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    // Field names as sent. Namespacing happens later, so compare against the raw
+    // names — that is what the caller wrote and what it must correct.
+    let defined: Vec<&str> = params
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|f| f.get("name").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut missing: Vec<&str> = Vec::new();
+    for (idx, _) in template.match_indices('{') {
+        let rest = &template[idx + 1..];
+        let Some(end) = rest.find('}') else { continue };
+        let name = &rest[..end];
+        if name.is_empty() || defined.contains(&name) || missing.contains(&name) {
+            continue;
+        }
+        missing.push(name);
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // Spell out the entries to add. "Add it to schema.fields" states the rule;
+    // this states the edit.
+    let additions = missing
+        .iter()
+        .map(|n| format!("{{\"name\":\"{n}\",\"type\":\"text\"}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = missing
+        .iter()
+        .map(|n| format!("{{{n}}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(MarkdownError::invalid_params(format!(
+        "Invalid parameters: title_template \"{template}\" references {placeholders}, which \
+         {} not defined in \"fields\". Either add {} to the \"fields\" array (adjusting each \
+         \"type\" if text is wrong), or drop those placeholders from title_template. Re-send \
+         create_schema with everything else unchanged.",
+        if missing.len() == 1 { "is" } else { "are" },
+        additions
+    )))
+}
+
 /// Name of a JSON value's type, for error messages.
 fn json_type_name(v: &Value) -> &'static str {
     match v {
@@ -208,6 +277,7 @@ pub async fn handle_create_schema(
     // leaves an LLM caller unable to repair the call: it re-sends with a
     // different part mutated and degrades the arguments further on each retry.
     describe_malformed_fields(&params, "fields")?;
+    describe_unresolved_title_template(&params)?;
 
     let params: CreateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
