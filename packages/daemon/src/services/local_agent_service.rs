@@ -16,14 +16,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
     AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceError, InferenceUsage,
-    LocalAgentStatus, ModelManager, ModelStatus, Role, StreamingChunk,
+    LocalAgentStatus, ModelManager, ModelStatus, Role, StreamingChunk, ToolExecutionRecord,
 };
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 use nodespace_agent::local_agent::tools::{GraphToolExecutor, SharedEmbeddingService};
-use nodespace_core::models::{AiChatMessage, AiChatNode, NodeFilter, NodeUpdate};
+use nodespace_core::models::{
+    AiChatCompletedWrite, AiChatMessage, AiChatNode, NodeFilter, NodeUpdate,
+};
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
@@ -458,6 +460,7 @@ impl LocalAgentServiceImpl {
                         &node_id,
                         &result.response,
                         result.reasoning.as_deref(),
+                        completed_writes_from(&result.tool_calls_made),
                     )
                     .await
                 {
@@ -592,11 +595,17 @@ impl LocalAgentServiceImpl {
     /// Append an assistant message to `properties['ai-chat']['messages']`.
     /// Retries up to 5 times on version conflict. `reasoning` is the model's captured
     /// chain-of-thought, persisted alongside the answer when present.
+    ///
+    /// `completed_writes` records the graph writes this turn performed. The agent
+    /// session is rebuilt from these persisted messages on every turn, so this is
+    /// the only durable evidence that the turn's write actually happened; without
+    /// it the next turn can re-execute an instruction it already satisfied.
     async fn append_assistant_message(
         &self,
         node_id: &str,
         content: &str,
         reasoning: Option<&str>,
+        completed_writes: Vec<AiChatCompletedWrite>,
     ) -> Result<(), String> {
         for attempt in 0..5 {
             let node = self
@@ -621,6 +630,7 @@ impl LocalAgentServiceImpl {
                 content: content.to_string(),
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
                 reasoning,
+                completed_writes: completed_writes.clone(),
             });
 
             // Set status to idle here too (atomic with message append).
@@ -1318,6 +1328,163 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
     }
 }
 
+/// Maximum length of an evidence summary before it is clipped.
+const SUMMARY_MAX_CHARS: usize = 120;
+
+/// Which argument identifies the thing a write acted on, per tool.
+///
+/// An explicit mapping rather than a probe across likely key names: the write
+/// tools do not share one argument shape, and a probe silently degrades to a
+/// bare tool name for the ones it does not happen to cover. That is worst
+/// exactly where the evidence matters most — `create_nodes_from_markdown`
+/// imports a whole subtree, so a repeat duplicates all of it.
+///
+/// Returning `None` here means "this tool changes graph state but is not
+/// described by a single argument"; `create_relationship` is rendered from its
+/// own fields instead (see `completed_writes_from`).
+fn write_summary_arg(tool: &str) -> Option<&'static [&'static str]> {
+    match tool {
+        "create_node" | "update_node" | "update_task_status" | "delete_node" => {
+            Some(&["content", "title", "id", "node_id"])
+        }
+        // `create_schema` is keyed on the display name it declares; `update_schema`
+        // identifies its target by `schema_id` and has no top-level `name` (the
+        // only `name` keys sit nested inside `add_fields[]`, out of reach here).
+        "create_schema" => Some(&["name"]),
+        "update_schema" => Some(&["schema_id"]),
+        "create_nodes_from_markdown" => Some(&["markdown"]),
+        // `create_relationship` has no single describing argument; the call site
+        // renders the edge from its own fields instead.
+        _ => None,
+    }
+}
+
+/// Whether a tool changes graph state. A repeat of one of these is a real
+/// duplicate; repeating a read is merely wasteful.
+///
+/// Kept exhaustive against the tool set in `packages/agent/src/local_agent/tools.rs`.
+fn is_write_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "create_node"
+            | "update_node"
+            | "delete_node"
+            | "create_relationship"
+            | "create_schema"
+            | "update_schema"
+            | "create_nodes_from_markdown"
+            | "update_task_status"
+    )
+}
+
+/// Clip an evidence label, marking it when clipped so a truncated summary is
+/// not mistaken for a complete one.
+fn clip_summary(s: &str) -> String {
+    // Newlines would let user-supplied content shape the evidence block's
+    // line structure; the label is a single line by construction.
+    let flat = s.replace(['\n', '\r'], " ");
+    if flat.chars().count() > SUMMARY_MAX_CHARS {
+        let head: String = flat.chars().take(SUMMARY_MAX_CHARS).collect();
+        format!("{head}…")
+    } else {
+        flat
+    }
+}
+
+/// Pull the successful graph writes out of a turn's tool executions.
+///
+/// Failed calls are excluded: a write that errored did not happen, and recording
+/// it would tell the next turn not to retry work that never landed.
+fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCompletedWrite> {
+    executions
+        .iter()
+        .filter(|r| !r.is_error && is_write_tool(&r.name))
+        .map(|r| {
+            // Every write tool that reports an affected node does so under `id`
+            // (as a `nodespace://` URI — the same form the model uses to refer to
+            // nodes elsewhere, so the evidence matches what it already reads).
+            // Schema and relationship writes report no node id at all.
+            let node_id = r
+                .result
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
+            // A label makes the evidence self-describing, so the model can match
+            // it against the instruction still in history.
+            let summary = match write_summary_arg(&r.name) {
+                Some(keys) => keys
+                    .iter()
+                    .find_map(|k| r.args.get(*k))
+                    .and_then(|v| v.as_str())
+                    .map(clip_summary),
+                // A relationship has no single describing argument; render the
+                // edge itself, which is what identifies it.
+                None if r.name == "create_relationship" => {
+                    let field = |k: &str| {
+                        r.args
+                            .get(k)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                            .to_string()
+                    };
+                    Some(clip_summary(&format!(
+                        "{} -[{}]-> {}",
+                        field("from_id"),
+                        field("relationship_type"),
+                        field("to_id")
+                    )))
+                }
+                None => None,
+            };
+
+            AiChatCompletedWrite {
+                tool: r.name.clone(),
+                node_id,
+                summary,
+            }
+        })
+        .collect()
+}
+
+/// Render persisted writes as a system-role note for the rebuilt history.
+///
+/// The assistant's prose ("I have added X") is an unverifiable claim; a model
+/// weighing it against the user's still-present instruction may re-execute. This
+/// restores the missing half of the record — concrete proof, stated as
+/// fact-of-record rather than as the model's own narration.
+///
+/// `Role::System`, deliberately, not `Role::Tool`. A tool-role message is
+/// rendered with a `tool_call_id` and must be preceded by the assistant
+/// tool-call turn it answers (see `chat_message_to_oai_value` in
+/// `nlp-engine/src/chat/mod.rs`). Those tool calls are not persisted, so a
+/// tool-role message here would be an orphan tool result — the shape the
+/// summarization back-off in `agent_loop.rs` exists specifically to avoid,
+/// and which can abort a turn with llama.cpp `ffi error -3`.
+fn completed_writes_message(writes: &[AiChatCompletedWrite]) -> Option<ChatMessage> {
+    if writes.is_empty() {
+        return None;
+    }
+    let mut lines = String::from(
+        "Record of graph writes already completed in the previous turn. \
+         These are done — do not repeat them:\n",
+    );
+    for w in writes {
+        lines.push_str(&format!("- {}", w.tool));
+        if let Some(ref s) = w.summary {
+            lines.push_str(&format!(" \"{s}\""));
+        }
+        if let Some(ref id) = w.node_id {
+            lines.push_str(&format!(" -> {id}"));
+        }
+        lines.push('\n');
+    }
+    Some(ChatMessage::text(
+        Role::System,
+        lines.trim_end().to_string(),
+    ))
+}
+
 async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
     let node = match node_service.get_node(node_id).await {
         Ok(Some(n)) => n,
@@ -1342,16 +1509,21 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
     ai_chat
         .messages
         .into_iter()
-        .filter_map(|m| {
+        .flat_map(|m| {
             let role = match m.role.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
-                _ => return None,
+                _ => return Vec::new(),
             };
             let mut msg = ChatMessage::text(role, m.content);
             // Round-trip any persisted reasoning so reloaded history retains it.
             msg.reasoning = m.reasoning;
-            Some(msg)
+            // Follow the assistant turn with the record of what it actually wrote,
+            // so the next turn can tell a completed instruction from a pending one.
+            match completed_writes_message(&m.completed_writes) {
+                Some(evidence) => vec![msg, evidence],
+                None => vec![msg],
+            }
         })
         .collect()
 }
@@ -1463,6 +1635,7 @@ mod tests {
             content: user_text.to_string(),
             timestamp: Some(chrono::Utc::now().to_rfc3339()),
             reasoning: None,
+            completed_writes: Vec::new(),
         });
         let mut props = serde_json::json!({});
         props["ai-chat"] = ai_chat.to_properties_value();
@@ -1732,9 +1905,14 @@ mod tests {
         let (svc, node_service, _tempdir) = test_service().await;
         let node_id = create_ai_chat_node(&node_service).await;
 
-        svc.append_assistant_message(&node_id, "The answer.", Some("I reasoned about it."))
-            .await
-            .expect("append");
+        svc.append_assistant_message(
+            &node_id,
+            "The answer.",
+            Some("I reasoned about it."),
+            Vec::new(),
+        )
+        .await
+        .expect("append");
 
         let history = load_node_history(&node_service, &node_id).await;
         let assistant = history
@@ -1745,16 +1923,219 @@ mod tests {
         assert_eq!(assistant.reasoning.as_deref(), Some("I reasoned about it."));
     }
 
+    /// Build a successful tool execution record.
+    fn exec(name: &str, args: serde_json::Value, result: serde_json::Value) -> ToolExecutionRecord {
+        ToolExecutionRecord {
+            tool_call_id: format!("tc_{name}"),
+            name: name.to_string(),
+            args,
+            result,
+            is_error: false,
+            duration_ms: 1,
+        }
+    }
+
+    /// The cross-turn case. The per-turn `seen_calls` guard cannot cover this:
+    /// the agent session is destroyed at the end of every turn, so turn N+1 has
+    /// no in-memory record of turn N at all.
+    ///
+    /// This is the regression that matters — before the fix, the rebuilt history
+    /// contained the user's instruction and the assistant's prose claim but no
+    /// trace of the write, so the model could satisfy the same instruction twice.
+    #[tokio::test]
+    async fn completed_write_is_visible_in_the_next_turns_history() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": "Kind of Blue by Miles Davis", "node_type": "album_to_listen"}),
+            serde_json::json!({"id": "nodespace://f1f25564"}),
+        )]);
+
+        svc.append_assistant_message(&node_id, "I have added \"Kind of Blue\".", None, writes)
+            .await
+            .expect("append");
+
+        // What the NEXT turn actually sees.
+        let history = load_node_history(&node_service, &node_id).await;
+
+        let evidence = history
+            .iter()
+            .find(|m| matches!(m.role, Role::System))
+            .expect(
+                "next turn must see durable evidence of the completed write; without it the \
+                 model re-executes the instruction still present in history",
+            );
+        assert!(evidence.content.contains("create_node"));
+        assert!(evidence.content.contains("Kind of Blue by Miles Davis"));
+        assert!(evidence.content.contains("nodespace://f1f25564"));
+        // The evidence must follow the assistant turn it describes.
+        let assistant_idx = history
+            .iter()
+            .position(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant message present");
+        let evidence_idx = history
+            .iter()
+            .position(|m| matches!(m.role, Role::System))
+            .expect("evidence present");
+        assert!(evidence_idx > assistant_idx);
+
+        // The evidence must never be a tool-role message: those require a
+        // preceding assistant tool-call turn to pair with, and none is
+        // persisted. An orphan tool result can abort the turn outright.
+        assert!(
+            !history.iter().any(|m| matches!(m.role, Role::Tool)),
+            "evidence must not be injected as an orphan tool result"
+        );
+    }
+
+    /// A write that failed did not happen. Recording it would tell the next turn
+    /// not to retry work that never landed.
+    #[tokio::test]
+    async fn failed_writes_are_not_recorded_as_completed() {
+        let failed = ToolExecutionRecord {
+            tool_call_id: "tc_1".into(),
+            name: "create_node".into(),
+            args: serde_json::json!({"content": "never landed"}),
+            result: serde_json::json!({"error": "validation failed"}),
+            is_error: true,
+            duration_ms: 1,
+        };
+        assert!(completed_writes_from(&[failed]).is_empty());
+    }
+
+    /// Reads are not writes: repeating a search is wasteful, not a duplicate,
+    /// and recording them would bloat every subsequent prompt.
+    #[tokio::test]
+    async fn reads_are_not_recorded_as_completed_writes() {
+        let writes = completed_writes_from(&[
+            exec(
+                "search_nodes",
+                serde_json::json!({"query": "x"}),
+                serde_json::json!({"count": 3}),
+            ),
+            exec(
+                "get_node",
+                serde_json::json!({"id": "n1"}),
+                serde_json::json!({"content": "y"}),
+            ),
+        ]);
+        assert!(writes.is_empty());
+    }
+
+    /// A turn that only read must not emit an evidence message at all — an empty
+    /// "writes completed" block would be noise in every prompt.
+    #[tokio::test]
+    async fn read_only_turn_adds_no_evidence_message() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        svc.append_assistant_message(&node_id, "I found 3 tasks.", None, Vec::new())
+            .await
+            .expect("append");
+
+        let history = load_node_history(&node_service, &node_id).await;
+        assert!(!history.iter().any(|m| matches!(m.role, Role::System)));
+    }
+
+    /// Evidence must be self-describing for every write tool, not just the ones
+    /// that happen to take a `content` argument. A bare tool name cannot be
+    /// matched against the instruction it satisfied — which is the whole point.
+    #[tokio::test]
+    async fn every_write_tool_produces_a_usable_label() {
+        // A relationship has no describing argument and returns no node id; it
+        // must still render as something identifiable.
+        let rel = completed_writes_from(&[exec(
+            "create_relationship",
+            serde_json::json!({
+                "from_id": "nodespace://a",
+                "to_id": "nodespace://b",
+                "relationship_type": "mentions"
+            }),
+            serde_json::json!({"from_id": "nodespace://a", "to_id": "nodespace://b", "created": true}),
+        )]);
+        assert_eq!(rel.len(), 1);
+        assert_eq!(rel[0].node_id, None);
+        let label = rel[0].summary.as_deref().expect("relationship label");
+        assert!(label.contains("nodespace://a"), "got {label:?}");
+        assert!(label.contains("mentions"), "got {label:?}");
+        assert!(label.contains("nodespace://b"), "got {label:?}");
+
+        // A markdown import is the highest-stakes duplicate in the set: its
+        // argument key is `markdown`, not `content`.
+        let md = completed_writes_from(&[exec(
+            "create_nodes_from_markdown",
+            serde_json::json!({"markdown": "# Trip plan\n- flights"}),
+            serde_json::json!({"created": 4}),
+        )]);
+        assert_eq!(md.len(), 1);
+        assert!(
+            md[0].summary.as_deref().unwrap_or("").contains("Trip plan"),
+            "markdown import must be identifiable, got {:?}",
+            md[0].summary
+        );
+
+        // Schemas are named, not contented.
+        let schema = completed_writes_from(&[exec(
+            "create_schema",
+            serde_json::json!({"name": "album_to_listen"}),
+            serde_json::json!({"created": true}),
+        )]);
+        assert_eq!(schema[0].summary.as_deref(), Some("album_to_listen"));
+
+        // `update_schema` identifies its target by `schema_id`, not `name`. A
+        // repeat here is destructive — `rename_fields` rekeys property data on
+        // every existing node of the type — so it must not degrade to a bare
+        // tool name.
+        let updated = completed_writes_from(&[exec(
+            "update_schema",
+            serde_json::json!({
+                "schema_id": "album_to_listen",
+                "add_fields": [{"name": "rating", "field_type": "number"}]
+            }),
+            serde_json::json!({"updated": true}),
+        )]);
+        assert_eq!(updated[0].summary.as_deref(), Some("album_to_listen"));
+    }
+
+    /// The node id is stored as the `nodespace://` URI the tools actually
+    /// return, matching the form the model uses to refer to nodes elsewhere.
+    #[tokio::test]
+    async fn node_id_is_recorded_as_the_uri_the_tool_returned() {
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": "a"}),
+            serde_json::json!({"id": "nodespace://aaa"}),
+        )]);
+        assert_eq!(writes[0].node_id.as_deref(), Some("nodespace://aaa"));
+    }
+
+    /// A clipped label must be distinguishable from a complete one, and must not
+    /// carry newlines that would reshape the evidence block.
+    #[tokio::test]
+    async fn long_and_multiline_summaries_are_clipped_and_flattened() {
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": format!("{}\nsecond line", "x".repeat(200))}),
+            serde_json::json!({"id": "nodespace://a"}),
+        )]);
+        let s = writes[0].summary.as_deref().expect("summary");
+        assert!(s.ends_with('…'), "clipped summary must be marked: {s:?}");
+        assert!(!s.contains('\n'));
+        assert_eq!(s.chars().count(), SUMMARY_MAX_CHARS + 1);
+    }
+
     #[tokio::test]
     async fn empty_or_whitespace_reasoning_is_omitted() {
         let (svc, node_service, _tempdir) = test_service().await;
         let node_id = create_ai_chat_node(&node_service).await;
 
         // None and whitespace-only both persist no reasoning field.
-        svc.append_assistant_message(&node_id, "Plain answer.", None)
+        svc.append_assistant_message(&node_id, "Plain answer.", None, Vec::new())
             .await
             .expect("append none");
-        svc.append_assistant_message(&node_id, "Another answer.", Some("   "))
+        svc.append_assistant_message(&node_id, "Another answer.", Some("   "), Vec::new())
             .await
             .expect("append whitespace");
 

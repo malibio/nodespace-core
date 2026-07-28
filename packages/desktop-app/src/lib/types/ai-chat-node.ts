@@ -11,12 +11,29 @@ export interface OpenAiCompatConfig {
   model: string;    // wire-protocol "model" field, e.g. "gpt-4o" — required by the real OpenAI API
 }
 
+/**
+ * A graph write completed during an assistant turn.
+ *
+ * Persisted so the next turn can tell a satisfied instruction from a pending
+ * one — the agent session is rebuilt from these messages on every turn.
+ */
+export interface AiChatCompletedWrite {
+  /** Tool that performed the write, e.g. 'create_node'. */
+  tool: string;
+  /** Node the write produced or affected, when the tool reported one. */
+  nodeId?: string;
+  /** Short label for the written node, when available. */
+  summary?: string;
+}
+
 export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: string;
   /** Model chain-of-thought reasoning toward the answer, when captured. */
   reasoning?: string;
+  /** Graph writes this assistant turn completed. Absent when the turn only read. */
+  completedWrites?: AiChatCompletedWrite[];
 }
 
 /**

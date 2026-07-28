@@ -3,6 +3,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::helpers::is_active_lifecycle;
 
+/// A graph write completed during an assistant turn.
+///
+/// Mirrors `nodespace_core::models::AiChatCompletedWrite`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatCompletedWrite {
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 /// A single message in an ai-chat conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +26,9 @@ pub struct AiChatMessage {
     pub timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Graph writes this assistant turn completed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_writes: Vec<AiChatCompletedWrite>,
 }
 
 /// Wire shape for ai-chat nodes sent to the frontend.

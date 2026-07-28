@@ -138,6 +138,7 @@ mod tests {
             content: "done".to_string(),
             timestamp: None,
             reasoning: None,
+            completed_writes: Vec::new(),
         });
 
         let mut props = node.properties.clone();

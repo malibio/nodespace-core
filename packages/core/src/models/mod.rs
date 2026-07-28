@@ -56,7 +56,7 @@ pub mod ordered_list_node;
 #[path = "ordered_list_node_test.rs"]
 mod ordered_list_node_test;
 
-pub use ai_chat_node::{AiChatMessage, AiChatNode};
+pub use ai_chat_node::{AiChatCompletedWrite, AiChatMessage, AiChatNode};
 pub use code_block_node::{CodeBlockNode, CodeBlockValidationError};
 pub use node::{
     DeleteResult, FilterOperator, Node, NodeFilter, NodeQuery, NodeReference, NodeRelationship,
