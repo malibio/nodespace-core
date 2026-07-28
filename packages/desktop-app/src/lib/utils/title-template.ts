@@ -6,11 +6,30 @@
  * then trims and collapses internal whitespace so the output is consistent
  * with what the backend will compute and return as `node.title`.
  *
- * Token syntax: `{fieldName}` where fieldName matches `\w+` (word characters
- * only: [a-zA-Z0-9_]). Hyphenated names like `{first-name}` are NOT supported.
+ * Token syntax: `{fieldName}`, where fieldName is any run of characters up to
+ * the next `}`. This matches the Rust scanner, which takes everything between
+ * the braces rather than a restricted character class — so a namespaced field
+ * name (`{custom:capacity}`) resolves here exactly as it does on the backend.
+ * A narrower pattern would silently leave such tokens un-substituted in the UI
+ * while the backend-computed title resolved them, and the two would disagree.
  */
 
 import type { SchemaField } from '$lib/types/schema-node';
+
+/**
+ * Builds a matcher for `{token}`, capturing the field name between the braces.
+ *
+ * Mirrors Rust's `interpolate_title_template_with_schema`: it scans to the next
+ * `}`, so the name may contain any character except `}`. Defined once so both
+ * template evaluators stay in sync.
+ *
+ * A factory rather than a shared constant: a `/g` regex carries mutable
+ * `lastIndex` state, so a single shared instance is only safe while every call
+ * site uses `String.replace` (which resets it). The first `.test()` or
+ * `.exec()` added later would start returning alternating results — a failure
+ * mode that is hard to attribute back to a regex declared in another function.
+ */
+const templateTokenRe = () => /\{([^}]*)\}/g;
 
 /**
  * Interpolates a title template with the given field values.
@@ -24,7 +43,7 @@ export function evaluateTitleTemplate(
   template: string,
   fieldValues: Record<string, unknown>
 ): string {
-  const interpolated = template.replace(/\{(\w+)\}/g, (_, fieldName) => {
+  const interpolated = template.replace(templateTokenRe(), (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
     return String(val);
@@ -75,7 +94,7 @@ export function evaluateSummaryTemplate(
 ): string {
   const fieldMap = new Map(fields.map((f) => [f.name, f]));
 
-  const interpolated = template.replace(/\{(\w+)\}/g, (_, fieldName) => {
+  const interpolated = template.replace(templateTokenRe(), (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
 

@@ -48,9 +48,16 @@ describe('evaluateTitleTemplate', () => {
     expect(evaluateTitleTemplate('No tokens here', {})).toBe('No tokens here');
   });
 
-  it('does not match hyphenated token names (unsupported by \\w+ regex)', () => {
-    // {first-name} is NOT a valid token — the whole {first-name} passes through literally
-    expect(evaluateTitleTemplate('{first-name}', { 'first-name': 'Alice' })).toBe('{first-name}');
+  // Token names are not restricted to word characters — the pattern scans to the
+  // next '}', matching the Rust scanner in packages/core/src/utils/markdown.rs.
+  // These cases previously passed through literally here while the backend
+  // resolved them, so the optimistic title and the persisted title disagreed.
+  it('resolves hyphenated token names', () => {
+    expect(evaluateTitleTemplate('{first-name}', { 'first-name': 'Alice' })).toBe('Alice');
+  });
+
+  it('resolves namespace-prefixed token names', () => {
+    expect(evaluateTitleTemplate('{custom:capacity}', { 'custom:capacity': 120 })).toBe('120');
   });
 
   it('handles empty template string', () => {
@@ -146,5 +153,18 @@ describe('evaluateSummaryTemplate', () => {
   it('leaves non-date string values on unknown fields as-is', () => {
     const textField: SchemaField = { name: 'note', type: 'text', protection: 'user', indexed: false };
     expect(evaluateSummaryTemplate('{note}', { note: 'hello' }, [textField])).toBe('hello');
+  });
+
+  it('resolves namespace-prefixed token names, including enum labels', () => {
+    const namespacedEnum: SchemaField = {
+      name: 'custom:status',
+      type: 'enum',
+      protection: 'user',
+      indexed: false,
+      userValues: [{ value: 'on_hold', label: 'On Hold' }]
+    };
+    expect(
+      evaluateSummaryTemplate('{custom:status}', { 'custom:status': 'on_hold' }, [namespacedEnum])
+    ).toBe('On Hold');
   });
 });
