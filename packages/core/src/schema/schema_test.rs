@@ -899,12 +899,11 @@ async fn test_create_schema_without_fields_key_is_unaffected() {
     // Description-only creation infers its own fields; the locating pass must
     // not intercept a payload that has no `fields` array at all.
     //
-    // This asserts only that the locating pass stays out of the way. It does NOT
-    // assert overall success: description-only creation is separately broken on
-    // main — `normalize_and_namespace_fields` emits `custom:<name>`, which the
-    // field-name validator then rejects for containing ':'. That is unrelated to
-    // argument locating and is tracked separately; pinning success here would
-    // couple this test to that bug's fix.
+    // This originally asserted only that the locating pass stayed out of the way,
+    // guarded behind `if let Err`, because description-only creation was broken
+    // at the time: namespaced field names contained ':' and the field-name
+    // validator rejected them. That is now fixed, so the guard would make this
+    // test vacuous — it would pass without asserting anything at all.
     let result = handle_create_schema(
         &svc,
         json!({
@@ -914,14 +913,8 @@ async fn test_create_schema_without_fields_key_is_unaffected() {
     )
     .await;
 
-    if let Err(e) = &result {
-        let msg = e.to_string();
-        assert!(
-            !msg.contains("fields["),
-            "a payload with no `fields` array must not be reported by the \
-             field-locating pass: {msg}"
-        );
-    }
+    let output = result.expect("description-only create_schema must succeed");
+    assert_eq!(output["schemaId"], "venue");
 }
 
 #[tokio::test]
@@ -998,7 +991,8 @@ async fn test_create_schema_title_template_all_placeholders_defined_succeeds() {
 async fn test_create_schema_title_template_unclosed_placeholder_rejected() {
     let (svc, _tmp) = create_test_service().await;
 
-    // The case the removed pre-check silently passed.
+    // The case a hand-rolled pre-check silently passed: scanning for '{' and
+    // taking the next '}' finds none, skips the token, and reports nothing.
     let result = handle_create_schema(
         &svc,
         json!({
@@ -1012,9 +1006,17 @@ async fn test_create_schema_title_template_unclosed_placeholder_rejected() {
     let msg = result
         .expect_err("an unclosed placeholder must be rejected")
         .to_string();
+    // Assert the AUTHORITY's exact phrasing, not just the word "unclosed".
+    //
+    // On this input a pre-check and the authority agree on the OUTCOME — both
+    // reject — so an outcome assertion cannot tell which one spoke, and cannot
+    // detect a second validator being reintroduced. Pinning the exact wording
+    // at least catches a reintroduction that rewords the error, which is the
+    // most this input can guarantee. The empty-placeholder test below is the
+    // one that genuinely fails on a reintroduced pre-check.
     assert!(
-        msg.contains("unclosed"),
-        "the unclosed brace must be reported: {msg}"
+        msg.contains("contains an unclosed '{' placeholder"),
+        "the authority's own message must be what reaches the caller: {msg}"
     );
 }
 
@@ -1022,13 +1024,21 @@ async fn test_create_schema_title_template_unclosed_placeholder_rejected() {
 async fn test_create_schema_title_template_empty_placeholder_rejected() {
     let (svc, _tmp) = create_test_service().await;
 
-    // The case the removed pre-check mis-diagnosed: it prescribed adding the
-    // OTHER field and stayed silent about the empty {}.
+    // This is the ratchet: it fails if a second, hand-rolled title_template
+    // validator is ever reintroduced ahead of the authority.
+    //
+    // `fields` MUST stay empty. A pre-check that scans for placeholders and
+    // prescribes the missing ones would report `status` here and return its own
+    // message, which does not contain the authority's "empty" wording — so this
+    // assertion fails and the reintroduction is caught. Define `status` in
+    // `fields` and the placeholder resolves, the pre-check falls silent, the
+    // authority runs anyway, and the test passes either way — blind to the
+    // very thing it exists to catch.
     let result = handle_create_schema(
         &svc,
         json!({
             "name": "Equipment",
-            "fields": [{ "name": "status", "type": "text" }],
+            "fields": [],
             "title_template": "{} {status}"
         }),
     )
@@ -1038,8 +1048,10 @@ async fn test_create_schema_title_template_empty_placeholder_rejected() {
         .expect_err("an empty placeholder must be rejected")
         .to_string();
     assert!(
-        msg.contains("empty"),
-        "the empty placeholder must be reported: {msg}"
+        msg.contains("contains an empty '{}' placeholder"),
+        "the authority must reject on the empty placeholder, and its own message \
+         must be what reaches the caller — a different message here means a \
+         second validator spoke first: {msg}"
     );
 }
 

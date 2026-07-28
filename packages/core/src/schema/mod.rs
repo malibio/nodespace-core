@@ -215,7 +215,7 @@ pub async fn handle_create_schema(
     describe_malformed_fields(&params, "fields")?;
 
     let params: CreateSchemaParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     if params.name.trim().is_empty() {
         return Err(MarkdownError::invalid_params(
@@ -430,7 +430,7 @@ pub async fn handle_add_schema_relationship(
     params: Value,
 ) -> Result<Value, MarkdownError> {
     let params: AddSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     // Get existing schema
     let schema = node_service
@@ -498,7 +498,7 @@ pub async fn handle_remove_schema_relationship(
     params: Value,
 ) -> Result<Value, MarkdownError> {
     let params: RemoveSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     // Get existing schema
     let schema = node_service
@@ -578,7 +578,7 @@ pub async fn handle_update_schema(
     describe_malformed_fields(&params, "add_fields")?;
 
     let params: UpdateSchemaParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("Invalid parameters: {}", e)))?;
+        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
     // Schema existence is verified upfront so rename/playbook validation errors are reported
