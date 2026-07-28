@@ -1250,11 +1250,17 @@ pub struct SchemaNodeBehavior;
 /// the bare name must be non-empty and contain only alphanumerics and underscores.
 ///
 /// Namespace prefixes are part of the stored field name, not a separate layer
-/// applied afterwards: user-defined fields are namespaced (`custom:`, `org:`,
-/// `plugin:`) before the schema node is validated and persisted, so validation
-/// must accept the prefixed form. Both schema-creation paths agree on this —
-/// the description path applies `custom:` during field inference, and the
-/// explicit-fields path passes through names the caller already namespaced.
+/// applied afterwards: fields are namespaced (`custom:`, `org:`, `plugin:`)
+/// before the schema node is validated and persisted, so validation must accept
+/// the prefixed form. The same stored-name convention is assumed downstream —
+/// CEL strips the prefix, the graph resolver matches on it, and identifier
+/// validation in the query path permits it.
+///
+/// This function decides only whether a name is *well-formed*, not whether it is
+/// namespaced. Both are accepted, because the two schema-creation paths differ:
+/// the description path applies `custom:` during field inference, while the
+/// explicit-fields path stores caller-supplied names verbatim and does not
+/// namespace them. Requiring a prefix here would reject the latter.
 fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
     let invalid = |reason: &str| {
         Err(NodeValidationError::InvalidProperties(format!(
@@ -3771,6 +3777,142 @@ mod tests {
         assert!(
             behavior.validate(&namespaced_node).is_ok(),
             "Namespaced field names should pass validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_node_validates_namespaced_names_at_nesting_depth() {
+        let behavior = SchemaNodeBehavior;
+
+        // Name validation recurses through `fields` and `item_fields`, so the
+        // namespace rule must hold at depth, not just on top-level fields.
+        let nested = Node::new(
+            "schema".to_string(),
+            "venue".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "fields": [
+                    {
+                        "name": "custom:address",
+                        "type": "object",
+                        "protection": "user",
+                        "indexed": false,
+                        "fields": [
+                            {
+                                "name": "custom:postal_code",
+                                "type": "string",
+                                "protection": "user",
+                                "indexed": false
+                            }
+                        ]
+                    },
+                    {
+                        "name": "custom:sessions",
+                        "type": "array",
+                        "protection": "user",
+                        "indexed": false,
+                        "item_fields": [
+                            {
+                                "name": "custom:room",
+                                "type": "string",
+                                "protection": "user",
+                                "indexed": false
+                            }
+                        ]
+                    }
+                ]
+            }),
+        );
+
+        assert!(
+            behavior.validate(&nested).is_ok(),
+            "Namespaced nested and item field names should pass validation"
+        );
+
+        // A malformed nested name must still be rejected at depth.
+        let bad_nested = Node::new(
+            "schema".to_string(),
+            "venue".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "fields": [
+                    {
+                        "name": "custom:address",
+                        "type": "object",
+                        "protection": "user",
+                        "indexed": false,
+                        "fields": [
+                            {
+                                "name": "custom:a:b",
+                                "type": "string",
+                                "protection": "user",
+                                "indexed": false
+                            }
+                        ]
+                    }
+                ]
+            }),
+        );
+
+        assert!(
+            behavior.validate(&bad_nested).is_err(),
+            "Malformed nested field names should still be rejected"
+        );
+    }
+
+    #[test]
+    fn test_schema_node_title_template_resolves_namespaced_field() {
+        let behavior = SchemaNodeBehavior;
+
+        // Templates are checked against the STORED field names, so a schema
+        // created from a description must reference the namespaced form.
+        let resolved = Node::new(
+            "schema".to_string(),
+            "venue".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "titleTemplate": "{custom:contact_email}",
+                "fields": [
+                    {
+                        "name": "custom:contact_email",
+                        "type": "string",
+                        "protection": "user",
+                        "indexed": false
+                    }
+                ]
+            }),
+        );
+
+        assert!(
+            behavior.validate(&resolved).is_ok(),
+            "titleTemplate referencing a namespaced field should validate"
+        );
+
+        // The bare name is a different key and must not resolve.
+        let unresolved = Node::new(
+            "schema".to_string(),
+            "venue".to_string(),
+            json!({
+                "isCore": false,
+                "version": 1,
+                "titleTemplate": "{contact_email}",
+                "fields": [
+                    {
+                        "name": "custom:contact_email",
+                        "type": "string",
+                        "protection": "user",
+                        "indexed": false
+                    }
+                ]
+            }),
+        );
+
+        assert!(
+            behavior.validate(&unresolved).is_err(),
+            "Bare name must not resolve against a namespaced field"
         );
     }
 
