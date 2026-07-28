@@ -675,6 +675,13 @@ impl SqliteStore {
             return Ok(Vec::new());
         }
 
+        // ADR-059 §2 (reparent side): this cold-sweep attach path must not give a
+        // `has_child` parent to a node that holds a `member_of` edge — symmetric
+        // with the forward guard on `bulk_add_to_collections`. Run before the tx
+        // (the store shares one connection). See `assert_may_gain_parent`.
+        let child_ids: Vec<&str> = edges.iter().map(|(_, child, _)| child.as_str()).collect();
+        self.assert_may_gain_parent(&child_ids).await?;
+
         let now = Utc::now().to_rfc3339();
         let tx = self
             .db

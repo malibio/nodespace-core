@@ -2880,6 +2880,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reparenting_a_collection_member_is_rejected() {
+        // ADR-059 §2 (reparent side): a content node that holds a `member_of` edge
+        // is a root member; moving it under a parent would make it a forbidden
+        // interior member. The store-level guard rejects it on every reparent path
+        // — service `move_node` AND `upsert_node_with_parent` (the gRPC /
+        // save_node_with_parent path) — and must NOT silently drop the membership.
+        // A move to root stays allowed.
+        let (service, _temp) = create_test_service().await;
+
+        let coll = Node::new("collection".to_string(), "Coll".to_string(), json!({}));
+        let coll_id = service.create_node(coll).await.unwrap();
+
+        let root = Node::new("text".to_string(), "root doc".to_string(), json!({}));
+        let root_id = service.create_node(root).await.unwrap();
+        service
+            .create_relationship(&root_id, "member_of", &coll_id, json!({}))
+            .await
+            .unwrap();
+
+        let parent = Node::new("text".to_string(), "a parent".to_string(), json!({}));
+        let parent_id = service.create_node(parent).await.unwrap();
+
+        // Path 1 — service move_node reparent → rejected, naming the collection.
+        let root_node = service.get_node(&root_id).await.unwrap().unwrap();
+        let err = service
+            .move_node(
+                &root_id,
+                root_node.version,
+                Some(&parent_id),
+                crate::services::InsertPosition::End,
+            )
+            .await
+            .expect_err("reparenting a collection member via move_node must be rejected");
+        assert!(
+            err.to_string().contains("member_of_not_root") && err.to_string().contains(&coll_id),
+            "rejection must state the reason and name the collection; got: {err}"
+        );
+
+        // The rejected move did not drop the membership: a second attempt rejects.
+        let root_node = service.get_node(&root_id).await.unwrap().unwrap();
+        let again = service
+            .move_node(
+                &root_id,
+                root_node.version,
+                Some(&parent_id),
+                crate::services::InsertPosition::End,
+            )
+            .await;
+        assert!(
+            again.is_err(),
+            "membership must be intact after a rejected move; got: {:?}",
+            again
+        );
+
+        // Path 2 — upsert_node_with_parent is a DISTINCT reparent path (gRPC
+        // upsert / the save_node_with_parent Tauri command); it must be gated too.
+        let err2 = service
+            .upsert_node_with_parent(&root_id, "root doc", "text", &parent_id, &root_id, None)
+            .await
+            .expect_err("reparenting via upsert_node_with_parent must be rejected");
+        assert!(
+            err2.to_string().contains("member_of_not_root"),
+            "upsert_node_with_parent reparent must be gated; got: {err2}"
+        );
+
+        // Moving a member to root (new_parent = None) is still allowed.
+        let root_node = service.get_node(&root_id).await.unwrap().unwrap();
+        let to_root = service
+            .move_node(
+                &root_id,
+                root_node.version,
+                None,
+                crate::services::InsertPosition::End,
+            )
+            .await;
+        assert!(
+            to_root.is_ok(),
+            "moving a collection member to root must remain allowed; got: {:?}",
+            to_root
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_node_with_parent_rejects_non_container() {
         let (service, _temp) = create_test_service().await;
 

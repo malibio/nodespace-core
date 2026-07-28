@@ -581,7 +581,12 @@ mod tests {
         // `add_to_collection` does. (Regression for the bypass where adding one
         // `order` JSON key skipped the guard.)
         let err_generic = store
-            .create_generic_relationship(&interior.id, &coll_id, "member_of", &json!({"order": 5.0}))
+            .create_generic_relationship(
+                &interior.id,
+                &coll_id,
+                "member_of",
+                &json!({"order": 5.0}),
+            )
             .await
             .expect_err("member_of via the generic path must reject an interior node");
         assert!(
@@ -684,6 +689,92 @@ mod tests {
         assert!(
             err.to_string().contains(&interior.id),
             "the rejection must name the offending interior node; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reparent_guard_rejects_moving_a_member_under_a_parent() -> Result<()> {
+        // ADR-059 §2 (reparent side): the store's `move_node` chokepoint rejects
+        // giving a `has_child` parent to a node that holds a `member_of` edge, so
+        // every reparent path (service move_node, upsert_node_with_parent, ...) is
+        // covered. Non-members move freely; move-to-root is allowed; collection and
+        // person nodes are exempt.
+        let (store, _t) = create_test_store().await?;
+
+        let coll = Node::new("collection".to_string(), "Coll".to_string(), json!({}));
+        let coll_id = coll.id.clone();
+        store.create_node(coll, None, None).await?;
+
+        let parent = Node::new("text".to_string(), "parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        // A root member cannot be moved under a parent.
+        let member = Node::new("text".to_string(), "root member".to_string(), json!({}));
+        let member_id = member.id.clone();
+        store.create_node(member, None, None).await?;
+        store.add_to_collection(&member_id, &coll_id).await?;
+        let err = store
+            .move_node(&member_id, Some(&parent_id), None)
+            .await
+            .expect_err("store must reject reparenting a collection member");
+        assert!(
+            err.to_string().contains("member_of_not_root") && err.to_string().contains(&coll_id),
+            "rejection must name the reason and the collection; got: {err}"
+        );
+
+        // Moving the same member to root is allowed (the guard only fires on gaining a parent).
+        assert!(
+            store.move_node(&member_id, None, None).await.is_ok(),
+            "moving a member to root must be allowed"
+        );
+
+        // A non-member node moves under a parent freely.
+        let plain = Node::new("text".to_string(), "plain".to_string(), json!({}));
+        let plain_id = plain.id.clone();
+        store.create_node(plain, None, None).await?;
+        assert!(
+            store
+                .move_node(&plain_id, Some(&parent_id), None)
+                .await
+                .is_ok(),
+            "a non-member node must move under a parent freely"
+        );
+
+        // Person-node membership is exempt: an interior person member is allowed.
+        let person = Node::new("person".to_string(), "Ada".to_string(), json!({}));
+        let person_id = person.id.clone();
+        store.create_node(person, None, None).await?;
+        store.add_to_collection(&person_id, &coll_id).await?;
+        assert!(
+            store
+                .move_node(&person_id, Some(&parent_id), None)
+                .await
+                .is_ok(),
+            "person-node membership is exempt from the reparent rule"
+        );
+
+        // The sync cold-sweep bulk attach path (`bulk_create_has_child`) is gated
+        // too, symmetric with the forward `bulk_add_to_collections` guard: a batch
+        // that would give a parent to a root member is rejected.
+        let bulk_member = Node::new("text".to_string(), "bulk member".to_string(), json!({}));
+        let bulk_member_id = bulk_member.id.clone();
+        store.create_node(bulk_member, None, None).await?;
+        store.add_to_collection(&bulk_member_id, &coll_id).await?;
+        let plain2 = Node::new("text".to_string(), "plain2".to_string(), json!({}));
+        let plain2_id = plain2.id.clone();
+        store.create_node(plain2, None, None).await?;
+        let bulk_err = store
+            .bulk_create_has_child(&[
+                (parent_id.clone(), plain2_id.clone(), 1.0),
+                (parent_id.clone(), bulk_member_id.clone(), 2.0),
+            ])
+            .await
+            .expect_err("bulk_create_has_child must reject attaching a root member to a parent");
+        assert!(
+            bulk_err.to_string().contains("member_of_not_root"),
+            "bulk cold-sweep reparent must be gated; got: {bulk_err}"
         );
         Ok(())
     }
