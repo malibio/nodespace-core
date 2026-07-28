@@ -9,6 +9,9 @@ pub enum ChatError {
     #[error("Model loading failed: {0}")]
     ModelLoadError(String),
 
+    #[error("Insufficient memory for context window: {0}")]
+    InsufficientMemory(String),
+
     #[error("Model integrity check failed: {0}")]
     IntegrityError(String),
 
