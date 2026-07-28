@@ -13,6 +13,7 @@
 export const CORE_NODE_TYPES = new Set([
   'text',
   'task',
+  'project',
   'date',
   'header',
   'code-block',

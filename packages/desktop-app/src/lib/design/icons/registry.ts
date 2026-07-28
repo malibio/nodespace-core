@@ -106,6 +106,17 @@ class IconRegistry {
       hasRingEffect: true // Tasks show ring effects when they have children
     });
 
+    // Project nodes - container that groups tasks/notes; a built-in entity type
+    // like task/date. Reuses the shared circle glyph (as date/entity/user do)
+    // with its own color var, and shows a ring when it has children.
+    this.register('project', {
+      component: CircleIcon,
+      semanticClass: 'node-icon',
+      colorVar: 'hsl(var(--node-project, 200 40% 45%))',
+      hasState: false,
+      hasRingEffect: true // Projects contain child tasks/notes
+    });
+
     // AI Chat nodes - square design with "AI" text
     this.register('ai-chat', {
       component: AIIcon,
