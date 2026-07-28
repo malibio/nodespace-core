@@ -706,3 +706,369 @@ async fn test_schema_get_aggregated_content_returns_description_text() {
         text
     );
 }
+
+// ============================================================================
+// Malformed `fields` entries — error must LOCATE the bad entry
+// ============================================================================
+//
+// An LLM is the primary caller of create_schema, and it repairs a rejected call
+// from the error text alone. Serde's whole-payload error names only the absent
+// key ("missing field `type`") with no position, so the model cannot tell which
+// array element to fix; observed behaviour is that it mutates an element that
+// was already correct and degrades the arguments on every retry. These tests
+// pin the properties that make the error repairable: which entry, what is
+// missing, and an instruction not to disturb the rest.
+
+#[tokio::test]
+async fn test_create_schema_missing_field_type_names_the_offending_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // Second entry lacks "type" — the exact shape observed in the agent logs.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "fields": [
+                { "name": "project_name", "type": "text", "required": true },
+                { "name": "status", "required": true }
+            ]
+        }),
+    )
+    .await;
+
+    let err = result.expect_err("field missing 'type' must be rejected");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("fields[1]"),
+        "error must identify WHICH entry is malformed, not just the absent key: {msg}"
+    );
+    assert!(
+        msg.contains("status"),
+        "error should name the offending entry so the caller can match it: {msg}"
+    );
+    assert!(
+        msg.contains("\"type\""),
+        "error must say which key is missing: {msg}"
+    );
+    assert!(
+        !msg.contains("fields[0]"),
+        "the well-formed entry must not be implicated — blaming it is what drives \
+         the caller to corrupt a correct field on retry: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_malformed_fields_error_preserves_correct_entries() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "fields": [
+                { "name": "project_name", "type": "text" },
+                { "type": "text" }
+            ]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("field missing 'name' must be rejected")
+        .to_string();
+
+    // Without this instruction the observed failure mode is a retry that drops
+    // `name` from the entry that already had one.
+    assert!(
+        msg.contains("leave every other field exactly as it was"),
+        "error must tell the caller to correct only the listed entries: {msg}"
+    );
+    assert!(
+        msg.contains("fields[1]"),
+        "error must locate the entry missing 'name': {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_reports_every_malformed_entry_at_once() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "fields": [
+                { "name": "a" },
+                { "name": "b", "type": "text" },
+                { "type": "number" }
+            ]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("malformed entries must be rejected")
+        .to_string();
+
+    // Reporting one problem per round-trip would take as many retries as there
+    // are bad entries, and each retry is an opportunity to corrupt a good one.
+    assert!(
+        msg.contains("fields[0]") && msg.contains("fields[2]"),
+        "every malformed entry must be reported in a single error: {msg}"
+    );
+    assert!(
+        !msg.contains("fields[1]"),
+        "the valid entry must not be reported: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_rejects_blank_field_name_not_just_absent_key() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "fields": [{ "name": "   ", "type": "text" }]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a whitespace-only field name is not a usable name")
+        .to_string();
+    assert!(
+        msg.contains("fields[0]") && msg.contains("\"name\""),
+        "blank name must be reported like an absent one: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_reports_non_object_field_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Project",
+            "fields": ["status"]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a bare string is not a field definition")
+        .to_string();
+    assert!(
+        msg.contains("fields[0]") && msg.contains("not an object"),
+        "error must explain that the entry is the wrong shape entirely: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_with_well_formed_fields_is_unaffected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The locating pass must only ever turn an error into a better error — it
+    // must not reject a payload that previously succeeded.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [
+                { "name": "replacement_cost", "type": "number" },
+                { "name": "checked_out_on", "type": "date" }
+            ]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "well-formed fields must still create the schema: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_without_fields_key_is_unaffected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // Description-only creation infers its own fields; the locating pass must
+    // not intercept a payload that has no `fields` array at all.
+    //
+    // This asserts only that the locating pass stays out of the way. It does NOT
+    // assert overall success: description-only creation is separately broken on
+    // main — `normalize_and_namespace_fields` emits `custom:<name>`, which the
+    // field-name validator then rejects for containing ':'. That is unrelated to
+    // argument locating and is tracked separately; pinning success here would
+    // couple this test to that bug's fix.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "description": "contact email and capacity number"
+        }),
+    )
+    .await;
+
+    if let Err(e) = &result {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("fields["),
+            "a payload with no `fields` array must not be reported by the \
+             field-locating pass: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_update_schema_locates_malformed_add_fields_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Album",
+            "fields": [{ "name": "artist", "type": "text" }]
+        }),
+    )
+    .await
+    .expect("setup create_schema failed");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "album",
+            "add_fields": [{ "name": "released" }]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("add_fields entry missing 'type' must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("add_fields[0]"),
+        "update_schema must locate the bad entry using its own key name: {msg}"
+    );
+    assert!(
+        msg.contains("released"),
+        "error should name the offending entry: {msg}"
+    );
+}
+
+// ============================================================================
+// title_template resolution is owned by validate_template_tokens
+// ============================================================================
+//
+// There is deliberately no second, pre-deserialization check for this rule.
+// A hand-rolled scanner disagreed with the authority on real inputs — it waved
+// through "{a} {b" (unclosed) and prescribed a fix for "{} {b}" that still
+// failed on the empty placeholder — handing the caller a confident but wrong
+// repair instruction, which is worse than a terse correct one.
+
+#[tokio::test]
+async fn test_create_schema_title_template_all_placeholders_defined_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [
+                { "name": "equipment", "type": "text" },
+                { "name": "status", "type": "text" }
+            ],
+            "title_template": "{equipment} ({status})"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a template whose placeholders all resolve must create: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_title_template_unclosed_placeholder_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The case the removed pre-check silently passed.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [{ "name": "equipment", "type": "text" }],
+            "title_template": "{equipment} {status"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("an unclosed placeholder must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("unclosed"),
+        "the unclosed brace must be reported: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_title_template_empty_placeholder_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The case the removed pre-check mis-diagnosed: it prescribed adding the
+    // OTHER field and stayed silent about the empty {}.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [{ "name": "status", "type": "text" }],
+            "title_template": "{} {status}"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("an empty placeholder must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("empty"),
+        "the empty placeholder must be reported: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_title_template_may_reference_preexisting_fields() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Gear",
+            "fields": [{ "name": "label", "type": "text" }]
+        }),
+    )
+    .await
+    .expect("setup create_schema failed");
+
+    // update_schema deliberately does NOT get the title_template pre-check: the
+    // template may reference fields already on the stored schema, which the
+    // payload alone cannot see. Pre-checking here would reject a valid call.
+    let result = handle_update_schema(
+        &svc,
+        json!({ "schema_id": "gear", "title_template": "{label}" }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a template referencing an existing stored field must be accepted: {:?}",
+        result
+    );
+}
