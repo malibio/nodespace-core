@@ -429,6 +429,36 @@ pub struct AgentSession {
     /// Integration tests inject a pre-built prompt without a live database.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_override: Option<String>,
+
+    /// Writes completed in *earlier* turns of this conversation.
+    ///
+    /// The session is rebuilt from persisted messages on every turn, so this is
+    /// the only channel by which a turn can know what previous turns already
+    /// wrote. The tool-execution path consults it to refuse a repeat
+    /// deterministically, rather than relying on the model to honour a prompt
+    /// note saying the work is done.
+    ///
+    /// Empty for sessions with no prior writes, and for callers that do not
+    /// persist history.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_writes: Vec<PriorWrite>,
+}
+
+/// A write completed in an earlier turn, as the duplicate guard sees it.
+///
+/// `tool` plus `canonical_args` is the write's identity; `node_id` and `summary`
+/// exist so a refusal can name what already exists rather than reporting a bare
+/// "duplicate", which the model could not relay usefully to the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriorWrite {
+    /// Tool that performed the write.
+    pub tool: String,
+    /// The call's arguments, canonicalised — see `canonical_args`.
+    pub canonical_args: String,
+    /// Node the write produced, when the tool reported one.
+    pub node_id: Option<String>,
+    /// Short label for the written node, when available.
+    pub summary: Option<String>,
 }
 
 /// Result of a complete agent turn (one round of generation + tool execution).

@@ -38,9 +38,10 @@ fn default_version() -> i64 {
 /// original instruction alongside a prose claim of completion and no proof the
 /// write occurred — and may repeat it.
 ///
-/// Deliberately narrow: the tool name, the affected node, and a short label.
-/// Full arguments and tool results are not persisted, since the purpose is to
-/// establish *that* the write happened, not to replay it.
+/// Carries the tool name, the affected node, a short label, and the canonical
+/// arguments the call was made with. Tool *results* are not persisted: the
+/// purpose is to establish *that* the write happened and to recognise a later
+/// call as the same write, not to replay its output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatCompletedWrite {
@@ -54,6 +55,17 @@ pub struct AiChatCompletedWrite {
     /// Short human-readable label for the written node, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+
+    /// The call's arguments, canonicalised (JSON key order normalised). Together
+    /// with `tool` this is the write's identity for the cross-turn duplicate
+    /// guard: a later call matching both is the same write, not a new one.
+    ///
+    /// `None` when the arguments were too large to persist (see
+    /// `CANONICAL_ARGS_MAX_CHARS`). A `None` here never matches, so an
+    /// unrecorded call is executed rather than wrongly suppressed — the guard
+    /// fails open, which is the safe direction for a check that blocks work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_args: Option<String>,
 }
 
 /// A single message in an ai-chat conversation.

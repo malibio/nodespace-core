@@ -38,6 +38,82 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// that were about to succeed.
 const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
 
+/// Longest canonical-args string persisted as a completed write's identity.
+///
+/// `create_nodes_from_markdown` carries an entire import in its arguments, so
+/// storing them verbatim would write that content a second time into the chat
+/// node's own message history and grow it without bound. Past this length the
+/// identity is dropped rather than truncated: a truncated string could compare
+/// equal to a *different* call sharing a long prefix, turning a size limit into
+/// a wrong-suppression bug. Dropping it only costs a redundant re-execution.
+pub const CANONICAL_ARGS_MAX_CHARS: usize = 4096;
+
+/// Normalise a tool call's raw JSON arguments so equal calls compare equal.
+///
+/// Round-tripping through serde sorts nothing by itself, but it does normalise
+/// whitespace and re-serialises `serde_json::Value`'s `BTreeMap`-backed objects
+/// in sorted key order, so `{"b":1,"a":2}` and `{"a":2,"b":1}` produce the same
+/// string. Unparseable arguments are returned unchanged: they cannot be
+/// normalised, and an exact-match comparison on the raw text is still correct.
+///
+/// Shared by the per-turn duplicate detector and the cross-turn write guard so
+/// the two cannot drift into disagreeing about what "the same call" means.
+pub fn canonical_args(args_json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(args_json)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| args_json.to_owned())
+}
+
+/// Build the tool result returned in place of a refused duplicate write.
+///
+/// Deliberately informative rather than a bare failure. A user genuinely
+/// re-asking for the same node is rare but real, so the model must be able to
+/// read this, tell the user the thing already exists, and name it — or, if the
+/// repeat is intended, proceed deliberately with a call that differs.
+fn duplicate_write_result(prior: &crate::agent_types::PriorWrite) -> serde_json::Value {
+    let mut what = prior.tool.clone();
+    if let Some(ref s) = prior.summary {
+        what.push_str(&format!(" \"{s}\""));
+    }
+    serde_json::json!({
+        "skipped": "duplicate_write",
+        "id": prior.node_id,
+        "message": format!(
+            "Not executed: an identical {what} call already completed earlier in this \
+             conversation, so this would create a second copy. The result of that write \
+             still stands{}. Tell the user it already exists rather than repeating the \
+             write. If they explicitly want another, separate copy, say so and issue a \
+             call that differs from the original.",
+            match prior.node_id {
+                Some(ref id) => format!(" ({id})"),
+                None => String::new(),
+            }
+        ),
+    })
+}
+
+/// Whether a repeat of this tool in a *later turn* is a duplicate to suppress.
+///
+/// Narrower than the set of state-changing tools. The updates are excluded
+/// deliberately: setting a node to the same content, or a task to the same
+/// status, twice is idempotent — the second call is a no-op, not a duplicate,
+/// and blocking it would break a user legitimately re-asserting a value.
+/// `update_schema` is excluded on the same grounds.
+///
+/// The creates are the tools where a repeat produces a second, unwanted copy of
+/// the user's data. `delete_node` is included so a re-issued delete is answered
+/// from the record instead of failing against an already-removed node.
+pub fn is_cross_turn_guarded_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "create_node"
+            | "create_nodes_from_markdown"
+            | "create_schema"
+            | "create_relationship"
+            | "delete_node"
+    )
+}
+
 /// Maximum tokens any single inference round may generate.
 ///
 /// Small local models (e.g. Gemma-4-E4B) occasionally open an empty
@@ -732,11 +808,6 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             //
             // Args are round-tripped through serde to normalise JSON key order
             // so {"b":1,"a":2} and {"a":2,"b":1} are treated as the same call.
-            let canonical_args = |args_json: &str| {
-                serde_json::from_str::<serde_json::Value>(args_json)
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|_| args_json.to_owned())
-            };
             let all_duplicate = tool_calls.iter().all(|tc| {
                 seen_calls.contains(&(tc.function_name.clone(), canonical_args(&tc.arguments_json)))
             });
@@ -790,11 +861,54 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let (args, tool_result) = match parsed_args {
                     Ok(args) => {
                         consecutive_parse_failures = 0;
-                        let result = self
-                            .tool_executor
-                            .execute(&tc.function_name, args.clone())
-                            .await;
-                        (args, Some(result))
+                        // Cross-turn duplicate guard. The per-turn `seen_calls`
+                        // set above cannot see this: the session is rebuilt from
+                        // persisted messages every turn, so a repeat of a write
+                        // that landed in an *earlier* turn arrives here looking
+                        // brand new. Comparison is on the same canonical form
+                        // `seen_calls` uses, against writes replayed from the
+                        // conversation record.
+                        let already_written = if is_cross_turn_guarded_tool(&tc.function_name) {
+                            let incoming = canonical_args(&tc.arguments_json);
+                            session
+                                .prior_writes
+                                .iter()
+                                .find(|w| w.tool == tc.function_name && w.canonical_args == incoming)
+                        } else {
+                            None
+                        };
+                        if let Some(prior) = already_written {
+                            tracing::warn!(
+                                session_id = %session.id,
+                                tool = %tc.function_name,
+                                iteration = iteration,
+                                "Cross-turn duplicate write refused — identical call already completed in an earlier turn"
+                            );
+                            // An informative result, not a silent block. A user
+                            // genuinely re-asking for the same node is rare but
+                            // real, so the model needs to be able to tell them it
+                            // already exists — or, if the repeat is deliberate,
+                            // proceed by varying the call.
+                            (
+                                args,
+                                Some(Ok(crate::agent_types::ToolResult {
+                                    tool_call_id: tc.id.clone(),
+                                    name: tc.function_name.clone(),
+                                    result: duplicate_write_result(prior),
+                                    // Not an error: nothing went wrong, and the
+                                    // requested state already holds. Flagging it
+                                    // as a failure would invite a repair retry —
+                                    // the exact loop this guard exists to stop.
+                                    is_error: false,
+                                })),
+                            )
+                        } else {
+                            let result = self
+                                .tool_executor
+                                .execute(&tc.function_name, args.clone())
+                                .await;
+                            (args, Some(result))
+                        }
                     }
                     Err(parse_err) => {
                         consecutive_parse_failures += 1;
@@ -1361,6 +1475,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             tool_executions: Vec::new(),
             dynamic_context: None,
             system_prompt_override: None,
+            prior_writes: Vec::new(),
         };
 
         let cancel = CancellationToken::new();
@@ -1384,6 +1499,22 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.dynamic_context = Some(context);
+        }
+    }
+
+    /// Seed the writes completed by earlier turns of this conversation.
+    ///
+    /// The tool-execution path uses these to refuse a repeat of a write that
+    /// already landed in a prior turn. Callers that do not persist conversation
+    /// history simply never call this.
+    pub async fn set_session_prior_writes(
+        &self,
+        session_id: &str,
+        prior_writes: Vec<crate::agent_types::PriorWrite>,
+    ) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.prior_writes = prior_writes;
         }
     }
 
@@ -1485,7 +1616,9 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_types::{ChatModelSpec, ModelFamily, ToolDefinition, ToolError, ToolResult};
+    use crate::agent_types::{
+        ChatModelSpec, ModelFamily, PriorWrite, ToolDefinition, ToolError, ToolResult,
+    };
     use async_trait::async_trait;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1716,6 +1849,46 @@ mod tests {
         }
     }
 
+    /// Executor that records every call it actually performs.
+    ///
+    /// The duplicate guard's whole point is that a call never reaches the
+    /// executor, so asserting on the *result* alone is not enough — a guard that
+    /// executed the write and then relabelled the result would pass such a
+    /// check. This records ground truth.
+    struct RecordingToolExecutor {
+        inner: MockToolExecutor,
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl RecordingToolExecutor {
+        fn new(inner: MockToolExecutor) -> Self {
+            Self {
+                inner,
+                calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn calls_handle(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
+            Arc::clone(&self.calls)
+        }
+    }
+
+    #[async_trait]
+    impl AgentToolExecutor for RecordingToolExecutor {
+        async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+            self.inner.available_tools().await
+        }
+
+        async fn execute(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+        ) -> Result<ToolResult, ToolError> {
+            self.calls.lock().unwrap().push(name.to_string());
+            self.inner.execute(name, args).await
+        }
+    }
+
     // -- Helper to create a fresh session --------------------------------
 
     fn new_session() -> AgentSession {
@@ -1728,6 +1901,7 @@ mod tests {
             tool_executions: Vec::new(),
             dynamic_context: None,
             system_prompt_override: None,
+            prior_writes: Vec::new(),
         }
     }
 
@@ -4091,5 +4265,212 @@ mod tests {
     fn empty_response_fallback_is_never_blank() {
         assert!(!EMPTY_RESPONSE_FALLBACK.trim().is_empty());
         assert!(EMPTY_RESPONSE_FALLBACK.contains("try again"));
+    }
+
+    // -- Cross-turn duplicate-write guard --------------------------------
+
+    /// Build a session that already carries one completed `create_node` write,
+    /// as a rebuilt turn N+1 would after loading persisted history.
+    fn session_with_prior_create(canonical: &str) -> AgentSession {
+        let mut session = new_session();
+        session.prior_writes = vec![PriorWrite {
+            tool: "create_node".to_string(),
+            canonical_args: canonical.to_string(),
+            node_id: Some("nodespace://n1".to_string()),
+            summary: Some("Buy milk".to_string()),
+        }];
+        session
+    }
+
+    fn create_node_executor() -> MockToolExecutor {
+        MockToolExecutor::new().with_tool(
+            "create_node",
+            json!({"type": "object", "properties": {"content": {"type": "string"}}}),
+            json!({"id": "nodespace://n2", "created": true}),
+        )
+    }
+
+    /// The acceptance criterion: a repeated write with identical canonical args
+    /// in a later turn must not execute a second time.
+    #[tokio::test]
+    async fn cross_turn_duplicate_write_is_not_executed() {
+        let args = r#"{"content":"Buy milk"}"#;
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            args,
+            "It already exists.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_create(&canonical_args(args));
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "add a task to buy milk",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            !calls.lock().unwrap().iter().any(|c| c == "create_node"),
+            "the duplicate create must never reach the executor, got {:?}",
+            calls.lock().unwrap()
+        );
+
+        // The model still receives a result, and it is not an error.
+        let rec = result
+            .tool_calls_made
+            .iter()
+            .find(|r| r.name == "create_node")
+            .expect("a tool result must still be produced");
+        assert!(!rec.is_error, "a refused duplicate is not a failure");
+    }
+
+    /// The result must name the already-written node, so the model can tell the
+    /// user the thing exists instead of reporting an opaque refusal.
+    #[tokio::test]
+    async fn refused_duplicate_names_the_existing_node() {
+        let args = r#"{"content":"Buy milk"}"#;
+        let engine = Arc::new(MockEngine::tool_then_text("create_node", args, "Exists."));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_create(&canonical_args(args));
+        let result = agent_loop
+            .run_turn(&mut session, "add it", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .expect("turn should succeed");
+
+        let rec = result
+            .tool_calls_made
+            .iter()
+            .find(|r| r.name == "create_node")
+            .expect("tool result");
+        let rendered = rec.result.to_string();
+        assert!(
+            rendered.contains("nodespace://n1"),
+            "must name the existing node, got {rendered}"
+        );
+        assert!(
+            rendered.contains("Buy milk"),
+            "must describe what already exists, got {rendered}"
+        );
+    }
+
+    /// Key order must not defeat the guard: the same call re-emitted with
+    /// reordered keys is the same write.
+    #[tokio::test]
+    async fn guard_matches_regardless_of_argument_key_order() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            r#"{"node_type":"task","content":"Buy milk"}"#,
+            "Exists.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session =
+            session_with_prior_create(&canonical_args(r#"{"content":"Buy milk","node_type":"task"}"#));
+        agent_loop
+            .run_turn(&mut session, "add it", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            !calls.lock().unwrap().iter().any(|c| c == "create_node"),
+            "reordered keys are the same call and must still be refused"
+        );
+    }
+
+    /// A genuinely different write must still go through. The guard keys on the
+    /// arguments, not merely the tool name.
+    #[tokio::test]
+    async fn a_different_write_still_executes() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            r#"{"content":"Buy bread"}"#,
+            "Added.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_create(&canonical_args(r#"{"content":"Buy milk"}"#));
+        agent_loop
+            .run_turn(&mut session, "add bread", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            calls.lock().unwrap().iter().any(|c| c == "create_node"),
+            "a distinct create must not be blocked"
+        );
+    }
+
+    /// Idempotent repeats must survive the guard. Setting the same task status
+    /// twice is a no-op, not a duplicate, and blocking it would break a user
+    /// legitimately re-asserting a value.
+    #[tokio::test]
+    async fn idempotent_update_repeat_is_not_blocked() {
+        let args = r#"{"id":"nodespace://t1","status":"done"}"#;
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "update_task_status",
+            args,
+            "Marked done.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(MockToolExecutor::new().with_tool(
+            "update_task_status",
+            json!({"type": "object", "properties": {"status": {"type": "string"}}}),
+            json!({"id": "nodespace://t1", "status": "done"}),
+        )));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        // Even with an exact-match record present, an update must execute.
+        session.prior_writes = vec![PriorWrite {
+            tool: "update_task_status".to_string(),
+            canonical_args: canonical_args(args),
+            node_id: Some("nodespace://t1".to_string()),
+            summary: Some("t1".to_string()),
+        }];
+
+        agent_loop
+            .run_turn(&mut session, "mark it done", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            calls.lock().unwrap().iter().any(|c| c == "update_task_status"),
+            "idempotent updates must not be blocked by the cross-turn guard"
+        );
+    }
+
+    /// A session with no prior writes — every caller that does not persist
+    /// history — must behave exactly as before.
+    #[tokio::test]
+    async fn no_prior_writes_leaves_execution_untouched() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            r#"{"content":"Buy milk"}"#,
+            "Added.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        agent_loop
+            .run_turn(&mut session, "add milk", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .expect("turn should succeed");
+
+        assert!(calls.lock().unwrap().iter().any(|c| c == "create_node"));
     }
 }

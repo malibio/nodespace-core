@@ -24,6 +24,12 @@ export interface AiChatCompletedWrite {
   nodeId?: string;
   /** Short label for the written node, when available. */
   summary?: string;
+  /**
+   * The call's arguments, canonicalised. With `tool`, this is the write's
+   * identity for the backend's cross-turn duplicate guard. Absent when the
+   * arguments were too large to persist.
+   */
+  canonicalArgs?: string;
 }
 
 export interface AiChatMessage {
