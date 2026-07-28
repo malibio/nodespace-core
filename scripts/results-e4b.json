@@ -5,6 +5,11 @@
   "guidance_commit": "da126293",
   "host_memory_gb": 16,
   "note": "Honest baseline: measured AFTER eval-prompt contamination was removed from agent guidance. Recorded on a purged database so every prompt/skill node was reseeded from the compiled constants - a reused DB keeps old seeded guidance and silently measures the pre-fix prompts. Not comparable to the earlier 11/12, which was measured with eval prompts planted in the guidance.",
+  "caveats": [
+    "Scenario 3 is a FALSE PASS in this run. Its assertion (noExtraTypes) only checks that create_schema was called once; it does not check the schema persisted. Here create_schema returned is_error=true (title_template placeholders with no fields array) and no equipment type was registered. Scenario 4 then correctly reported the type did not exist and was scored a failure for it. Tracked in #1775.",
+    "Scenarios 4 and 6 are therefore downstream of scenario 3's silent failure, not independent defects. 8c (create_node retried after an error) is independent and real.",
+    "Control experiments run after this baseline, recorded here so the 8a/8b wording is not re-litigated from git archaeology: (a) trigger-vocabulary-free schema requests ('Set up somewhere to note down albums I mean to listen to', 'I want a place to jot down albums worth hearing') both fire create_schema correctly, so the DATABASE=SCHEMA rule generalizes and does not merely key on the words database/track/tracker/list; (b) scenario 4's wording is not the cause - an alternative instance phrasing behaves identically, because both are downstream of the missing schema."
+  ],
   "results": [
     {
       "scenario": "1. Greeting",
