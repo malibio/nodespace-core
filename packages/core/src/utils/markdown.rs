@@ -312,6 +312,25 @@ mod tests {
         );
     }
 
+    /// Token names are not restricted to word characters: the scanner reads to
+    /// the next `}`. The frontend evaluator in
+    /// `packages/desktop-app/src/lib/utils/title-template.ts` mirrors this, so a
+    /// template that resolves here resolves identically in the UI. A narrower
+    /// pattern on either side leaves such tokens un-substituted on that side
+    /// only, and the two computed titles disagree.
+    #[test]
+    fn test_interpolate_non_word_character_field_names() {
+        let props = serde_json::json!({"custom:capacity": 120, "first-name": "Alice"});
+        assert_eq!(
+            interpolate_title_template_with_schema("{custom:capacity}", &props, &[]),
+            "120"
+        );
+        assert_eq!(
+            interpolate_title_template_with_schema("{first-name}", &props, &[]),
+            "Alice"
+        );
+    }
+
     #[test]
     fn test_interpolate_missing_field_is_empty() {
         let props = serde_json::json!({"first_name": "Jane"});

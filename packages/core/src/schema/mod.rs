@@ -185,7 +185,9 @@ struct InferredField {
 ///
 /// Creates a new schema definition with optional fields and relationships.
 /// Fields can be provided explicitly or inferred from a natural language description.
-/// Automatically enforces namespace prefixes for user-defined fields.
+/// Both routes store field names as given (bare, not namespace-prefixed), so the
+/// same intent yields the same stored keys whichever route created the schema.
+/// A name colliding with a reserved core property is reported in `warnings`.
 ///
 /// # Parameters
 /// - `name`: Schema name (e.g., "Invoice", "Customer")
@@ -236,12 +238,10 @@ pub async fn handle_create_schema(
         // Parse natural language and infer fields
         let inferred_fields = parse_field_descriptions(description);
         let fields = apply_constraints(inferred_fields, params.additional_constraints);
-        let warnings = fields
-            .iter()
-            .flat_map(|f| f.warnings.clone())
-            .collect::<Vec<_>>();
-        let namespaced = normalize_and_namespace_fields(fields);
-        (namespaced, warnings)
+        // Collect warnings AFTER normalization: it appends the reserved-core-property
+        // warning, which is dropped entirely if the snapshot is taken beforehand.
+        let (normalized, warnings) = normalize_inferred_fields(fields);
+        (normalized, warnings)
     } else {
         // No fields and no description - create schema with empty fields
         (Vec::new(), Vec::new())
@@ -694,6 +694,24 @@ pub async fn handle_update_schema(
                     "Field '{}' already exists in schema '{}'",
                     field.name, params.schema_id
                 )));
+            }
+        }
+
+        // Extending a type NodeSpace owns requires a namespace prefix. A bare
+        // name here can be claimed by a core property in a future release, and
+        // the user's field would then collide with it. User-defined types carry
+        // no such risk — NodeSpace never adds core fields to them — so their
+        // fields are stored under the caller's names.
+        if schema.is_core {
+            for field in add_fields {
+                if !field.name.contains(':') {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Field '{}' added to core schema '{}' must carry a namespace prefix \
+                         (e.g. 'custom:{}'). Unprefixed names on core types are reserved for \
+                         core properties.",
+                        field.name, params.schema_id, field.name
+                    )));
+                }
             }
         }
         fields_added = add_fields.len();
@@ -1226,23 +1244,36 @@ fn apply_constraints(
     fields
 }
 
-/// Normalize field names and apply namespace prefixes
-fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<SchemaField> {
-    inferred_fields
+/// Normalize inferred field names into stored field names.
+///
+/// Stored field names are bare (`capacity`), never namespace-prefixed. Both
+/// `create_schema` paths must agree on this: the explicit-fields path stores
+/// caller-supplied names verbatim, so inferring a `custom:` prefix here would
+/// make the same user intent produce a different stored key depending on which
+/// path created the schema. Stored names are user-visible keys — they appear in
+/// `titleTemplate` tokens, CEL selectors, query filters and frontend lookups —
+/// so the two paths disagreeing is a correctness problem, not a cosmetic one.
+///
+/// A name colliding with a reserved core property is reported as a warning
+/// rather than silently rewritten, leaving the choice with the caller.
+fn normalize_inferred_fields(
+    inferred_fields: Vec<InferredField>,
+) -> (Vec<SchemaField>, Vec<String>) {
+    let mut warnings: Vec<String> = Vec::new();
+    let fields = inferred_fields
         .into_iter()
-        .map(|mut inferred| {
-            let field_name = normalize_field_name(&inferred.name);
+        .map(|inferred| {
+            let stored_name = normalize_field_name(&inferred.name);
+
+            warnings.extend(inferred.warnings.iter().cloned());
 
             // Warn if field name matches a reserved core property
-            if RESERVED_CORE_PROPERTIES.contains(&field_name.as_str()) {
-                inferred.warnings.push(format!(
-                    "Field name '{}' matches a reserved core property. Using 'custom:{}' prefix to avoid conflicts.",
-                    field_name, field_name
+            if RESERVED_CORE_PROPERTIES.contains(&stored_name.as_str()) {
+                warnings.push(format!(
+                    "Field name '{}' matches a reserved core property and may be shadowed by it. Consider a more specific name.",
+                    stored_name
                 ));
             }
-
-            // Apply custom: namespace prefix to all user fields
-            let namespaced_name = format!("custom:{}", field_name);
 
             // Convert string enum values to EnumValue with auto-generated labels
             let user_values = inferred.enum_values.as_ref().map(|values| {
@@ -1253,7 +1284,7 @@ fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<Sc
             });
 
             SchemaField {
-                name: namespaced_name,
+                name: stored_name,
                 field_type: inferred.field_type.clone(),
                 protection: SchemaProtectionLevel::User,
                 core_values: None,
@@ -1272,7 +1303,9 @@ fn normalize_and_namespace_fields(inferred_fields: Vec<InferredField>) -> Vec<Sc
                 item_fields: None,
             }
         })
-        .collect()
+        .collect();
+
+    (fields, warnings)
 }
 
 #[cfg(test)]
@@ -1377,7 +1410,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_and_namespace() {
+    fn test_normalize_inferred_field_names() {
         let inferred = vec![
             InferredField {
                 name: "invoice_number".to_string(),
@@ -1395,13 +1428,20 @@ mod tests {
             },
         ];
 
-        let fields = normalize_and_namespace_fields(inferred);
+        let (fields, warnings) = normalize_inferred_fields(inferred);
 
-        assert_eq!(fields[0].name, "custom:invoice_number");
-        // Note: status should trigger warning about reserved core property
-        assert_eq!(fields[1].name, "custom:status");
+        assert_eq!(fields[0].name, "invoice_number");
+        assert_eq!(fields[1].name, "status");
         assert!(fields[0].required.unwrap());
         assert!(fields[1].extensible.unwrap()); // enum is extensible
+
+        // "status" collides with a reserved core property, so the caller is warned
+        // rather than having the name silently rewritten.
+        assert!(
+            warnings.iter().any(|w| w.contains("status")
+                && w.contains("reserved core property")),
+            "Expected a reserved-core-property warning for 'status', got {warnings:?}"
+        );
     }
 
     #[test]
@@ -1497,35 +1537,35 @@ mod tests {
     fn test_integration_full_schema_creation() {
         let desc = "invoice number (required), amount in USD, status (draft/sent/paid), due date";
         let fields = parse_field_descriptions(desc);
-        let namespaced = normalize_and_namespace_fields(fields);
+        let (normalized, _warnings) = normalize_inferred_fields(fields);
 
-        // Verify all fields have custom: prefix
-        assert!(namespaced.iter().all(|f| f.name.starts_with("custom:")));
+        // Stored names are bare — no namespace prefix is applied during inference
+        assert!(normalized.iter().all(|f| !f.name.contains(':')));
 
         // Verify field names are present
-        assert_eq!(namespaced.len(), 4);
-        assert!(namespaced[0].name.contains("invoice"));
-        assert!(namespaced[1].name.contains("amount"));
-        assert!(namespaced[2].name.contains("status"));
-        assert!(namespaced[3].name.contains("due"));
+        assert_eq!(normalized.len(), 4);
+        assert!(normalized[0].name.contains("invoice"));
+        assert!(normalized[1].name.contains("amount"));
+        assert!(normalized[2].name.contains("status"));
+        assert!(normalized[3].name.contains("due"));
 
         // Verify types are inferred correctly (following priority order)
-        assert_eq!(namespaced[0].field_type, "number"); // "number" keyword in "invoice number"
-        assert_eq!(namespaced[1].field_type, "number"); // amount in USD
-        assert_eq!(namespaced[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern
-        assert_eq!(namespaced[3].field_type, "date"); // due date
+        assert_eq!(normalized[0].field_type, "number"); // "number" keyword in "invoice number"
+        assert_eq!(normalized[1].field_type, "number"); // amount in USD
+        assert_eq!(normalized[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern
+        assert_eq!(normalized[3].field_type, "date"); // due date
     }
 
     #[test]
     fn test_integration_ambiguous_description() {
         let desc = "some field";
         let fields = parse_field_descriptions(desc);
-        let namespaced = normalize_and_namespace_fields(fields);
+        let (normalized, _warnings) = normalize_inferred_fields(fields);
 
         // Even with ambiguous description, should still create valid schema
-        assert_eq!(namespaced.len(), 1);
-        assert_eq!(namespaced[0].field_type, "string"); // Defaults to string
-        assert_eq!(namespaced[0].name, "custom:some_field");
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].field_type, "string"); // Defaults to string
+        assert_eq!(normalized[0].name, "some_field");
     }
 
     #[test]
@@ -1563,16 +1603,24 @@ mod tests {
 
     #[test]
     fn test_integration_reserved_property_names() {
-        // Test that fields matching common core properties still work
-        // (they just get the custom: prefix)
+        // Fields matching core properties keep the caller's bare name and are
+        // surfaced as warnings instead of being silently rewritten.
         let desc = "status, priority, due_date";
         let fields = parse_field_descriptions(desc);
-        let namespaced = normalize_and_namespace_fields(fields);
+        let (normalized, warnings) = normalize_inferred_fields(fields);
 
-        // All should be prefixed with custom: to avoid conflicts
-        assert!(namespaced.iter().all(|f| f.name.starts_with("custom:")));
-        assert_eq!(namespaced[0].name, "custom:status");
-        assert_eq!(namespaced[1].name, "custom:priority");
-        assert_eq!(namespaced[2].name, "custom:due_date");
+        assert_eq!(normalized[0].name, "status");
+        assert_eq!(normalized[1].name, "priority");
+        assert_eq!(normalized[2].name, "due_date");
+
+        // Each collision is reported to the caller.
+        for name in ["status", "priority", "due_date"] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains(name) && w.contains("reserved core property")),
+                "Expected a reserved-core-property warning for '{name}', got {warnings:?}"
+            );
+        }
     }
 }

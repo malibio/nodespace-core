@@ -1093,8 +1093,8 @@ async fn test_update_schema_title_template_may_reference_preexisting_fields() {
 async fn test_create_schema_from_description_only() {
     let (svc, _tmp) = create_test_service().await;
 
-    // No `fields` array: fields are inferred from the description and namespaced
-    // with `custom:` before the schema node is validated and persisted.
+    // No `fields` array: fields are inferred from the description and stored
+    // under bare names, matching what the explicit-fields path stores.
     let result = handle_create_schema(
         &svc,
         json!({ "name": "Venue", "description": "contact email and capacity number" }),
@@ -1122,13 +1122,13 @@ async fn test_create_schema_from_description_only() {
         "Description should infer at least one field"
     );
     assert!(
-        field_names.iter().all(|n| n.starts_with("custom:")),
-        "Inferred fields should be namespaced: {:?}",
+        field_names.iter().all(|n| !n.contains(':')),
+        "Inferred fields should be stored under bare names: {:?}",
         field_names
     );
     assert!(
-        field_names.contains(&"custom:contact_email"),
-        "Expected 'custom:contact_email' among {:?}",
+        field_names.contains(&"contact_email"),
+        "Expected 'contact_email' among {:?}",
         field_names
     );
 
@@ -1140,5 +1140,115 @@ async fn test_create_schema_from_description_only() {
     assert!(
         stored.is_some(),
         "Schema should be persisted and retrievable"
+    );
+}
+
+/// The two `create_schema` routes must apply the same *namespacing* convention
+/// to stored field names. They previously diverged — the description path
+/// applied a `custom:` prefix during inference while the explicit-fields path
+/// stored caller-supplied names verbatim — so a schema's stored keys depended on
+/// which call shape created it. Stored names are user-visible (title-template
+/// tokens, CEL selectors, query filters, frontend lookups), so this asserts on
+/// the stored node rather than the return value.
+///
+/// The description here is worded so field-name *inference* is unambiguous
+/// ("capacity number" would infer the name `capacity_number`, folding in the
+/// type keyword). That inference difference is a separate concern from the
+/// namespace convention under test.
+#[tokio::test]
+async fn test_create_schema_paths_agree_on_stored_field_names() {
+    let field_names_of = |schema: &crate::models::SchemaNode| -> Vec<String> {
+        let mut names: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
+        names.sort();
+        names
+    };
+
+    // Path A: fields inferred from a natural-language description.
+    let (svc_described, _tmp_a) = create_test_service().await;
+    handle_create_schema(
+        &svc_described,
+        json!({ "name": "Venue", "description": "capacity" }),
+    )
+    .await
+    .expect("description-path create_schema should succeed");
+    let described = svc_described
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("description-path schema should be persisted");
+
+    // Path B: the same intent expressed as an explicit field definition.
+    let (svc_explicit, _tmp_b) = create_test_service().await;
+    handle_create_schema(
+        &svc_explicit,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": "capacity", "type": "string" }]
+        }),
+    )
+    .await
+    .expect("explicit-path create_schema should succeed");
+    let explicit = svc_explicit
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("explicit-path schema should be persisted");
+
+    assert_eq!(
+        field_names_of(&described),
+        field_names_of(&explicit),
+        "Both create_schema paths must store identical field names"
+    );
+    assert_eq!(
+        field_names_of(&explicit),
+        vec!["capacity".to_string()],
+        "Stored field names are bare, not namespace-prefixed"
+    );
+}
+
+/// Bare names are the convention for user-defined types, but a type NodeSpace
+/// owns is different: a bare name added to a core schema can be claimed by a
+/// core property in a future release, and the user's field would collide with
+/// it. The prefix requirement is kept exactly where that hazard exists.
+#[tokio::test]
+async fn test_update_schema_core_type_requires_namespace_prefix() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let unprefixed = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "add_fields": [{ "name": "effort", "type": "number" }]
+        }),
+    )
+    .await;
+
+    let err = unprefixed
+        .expect_err("adding an unprefixed field to a core schema should be rejected")
+        .to_string();
+    assert!(
+        err.contains("effort") && err.contains("namespace prefix"),
+        "Error should name the field and the requirement, got: {err}"
+    );
+
+    // The same field is accepted once it carries a prefix.
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "add_fields": [{ "name": "custom:effort", "type": "number" }]
+        }),
+    )
+    .await
+    .expect("adding a namespaced field to a core schema should succeed");
+
+    let stored = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    assert!(
+        stored.fields.iter().any(|f| f.name == "custom:effort"),
+        "Namespaced field should be persisted on the core schema"
     );
 }

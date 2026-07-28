@@ -107,15 +107,20 @@ Adding a property to a core node type?
   Core property the UI depends on → Edit hardcoded behavior in packages/core/src/behaviors/mod.rs
   Everything else → Use schema system with NAMESPACE PREFIX (custom:propertyName)
 
+Adding a field to a type the user defined (Venue, Invoice, …)?
+  Use a BARE property name (capacity) — no prefix
+
 Creating a new node type?
   Built-in type everyone needs → Hardcoded behavior + schema (requires issue approval)
   Everything else → Schema-only type
 ```
 
-**Rules:**
-- ✅ Use namespace prefixes for user properties: `custom:`, `org:`, `plugin:`
-- ✅ Check issue #400 for namespace enforcement status
-- ❌ No user properties without namespace prefix — conflicts with future core properties
+**Rules** (see [ADR-063](../nodespace-docs/decisions/063-namespace-prefixes-scope.md)):
+- ✅ Extending a core type (`task`, `text`, `date`, …) requires a prefix: `custom:`, `org:`, `plugin:`. `update_schema` rejects a bare name there — a future release may claim it as a core property
+- ✅ Fields of a user-defined type are stored bare. Both `create_schema` routes store the name they are given, so the same intent yields the same key either way
+- ✅ Stored names are user-visible keys: they appear in `titleTemplate` tokens, CEL selectors, query filters and frontend lookups. Changing one is a breaking change to every call site
+- ✅ Avoid user-defined-type field names that shadow core properties (`status`, `priority`, `due_date`, …) — `create_schema` warns rather than renaming the field for you
+- ❌ No unprefixed user properties on core types — conflicts with future core properties
 - ❌ No deleting core properties from schemas — breaks UI
 - ❌ No hardcoded behaviors for plugin/custom types
 

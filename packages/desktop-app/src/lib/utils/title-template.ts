@@ -6,11 +6,24 @@
  * then trims and collapses internal whitespace so the output is consistent
  * with what the backend will compute and return as `node.title`.
  *
- * Token syntax: `{fieldName}` where fieldName matches `\w+` (word characters
- * only: [a-zA-Z0-9_]). Hyphenated names like `{first-name}` are NOT supported.
+ * Token syntax: `{fieldName}`, where fieldName is any run of characters up to
+ * the next `}`. This matches the Rust scanner, which takes everything between
+ * the braces rather than a restricted character class — so a namespaced field
+ * name (`{custom:capacity}`) resolves here exactly as it does on the backend.
+ * A narrower pattern would silently leave such tokens un-substituted in the UI
+ * while the backend-computed title resolved them, and the two would disagree.
  */
 
 import type { SchemaField } from '$lib/types/schema-node';
+
+/**
+ * Matches a `{token}` and captures the field name between the braces.
+ *
+ * Mirrors Rust's `interpolate_title_template_with_schema`: it scans to the next
+ * `}`, so the name may contain any character except `}`. Kept in one place so
+ * both template evaluators stay in sync.
+ */
+const TEMPLATE_TOKEN_RE = /\{([^}]*)\}/g;
 
 /**
  * Interpolates a title template with the given field values.
@@ -24,7 +37,7 @@ export function evaluateTitleTemplate(
   template: string,
   fieldValues: Record<string, unknown>
 ): string {
-  const interpolated = template.replace(/\{(\w+)\}/g, (_, fieldName) => {
+  const interpolated = template.replace(TEMPLATE_TOKEN_RE, (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
     return String(val);
@@ -75,7 +88,7 @@ export function evaluateSummaryTemplate(
 ): string {
   const fieldMap = new Map(fields.map((f) => [f.name, f]));
 
-  const interpolated = template.replace(/\{(\w+)\}/g, (_, fieldName) => {
+  const interpolated = template.replace(TEMPLATE_TOKEN_RE, (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
 
