@@ -92,6 +92,36 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
     )))
 }
 
+/// Whether a field name carries a `<namespace>:` prefix (`custom:capacity`).
+///
+/// Requires exactly one `:` with a non-empty segment on each side, so neither a
+/// bare name (`capacity`) nor a malformed one (`:capacity`, `custom:`,
+/// `a:b:c`) counts as prefixed. `validate_schema_field_name` rejects the
+/// malformed forms outright, but this does not lean on that: a check that
+/// silently depends on validation order in another module is one refactor away
+/// from admitting the names it exists to exclude.
+fn has_namespace_prefix(name: &str) -> bool {
+    let mut parts = name.split(':');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(namespace), Some(bare), None) if !namespace.is_empty() && !bare.is_empty()
+    )
+}
+
+/// Whether `schema_id` names a schema NodeSpace ships, rather than a
+/// user-defined one. A missing schema is reported as non-core; the update path
+/// below surfaces the not-found error with better context.
+async fn schema_is_core(
+    node_service: &Arc<NodeService>,
+    schema_id: &str,
+) -> Result<bool, MarkdownError> {
+    let schema = node_service
+        .get_schema_node(schema_id)
+        .await
+        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?;
+    Ok(schema.is_some_and(|s| s.is_core))
+}
+
 /// Name of a JSON value's type, for error messages.
 fn json_type_name(v: &Value) -> &'static str {
     match v {
@@ -226,7 +256,7 @@ pub async fn handle_create_schema(
     }
 
     // Determine fields: explicit fields take precedence, otherwise parse description
-    let (namespaced_fields, warnings) = if let Some(explicit_fields) = params.fields {
+    let (stored_fields, warnings) = if let Some(explicit_fields) = params.fields {
         // Use explicit fields directly (already properly typed by caller)
         (explicit_fields, Vec::new())
     } else if let Some(ref description) = params.description {
@@ -270,7 +300,7 @@ pub async fn handle_create_schema(
     let mut properties = serde_json::json!({
         "isCore": false,
         "schemaVersion": 1,
-        "fields": &namespaced_fields,
+        "fields": &stored_fields,
         "relationships": &relationships
     });
     if let Some(ref template) = params.title_template {
@@ -310,7 +340,7 @@ pub async fn handle_create_schema(
         is_core: false,
         version: 1,
         description: description_text,
-        fields: namespaced_fields,
+        fields: stored_fields,
         relationships,
         warnings: if warnings.is_empty() {
             None
@@ -649,6 +679,47 @@ pub async fn handle_update_schema(
         None
     };
 
+    // --- Phase 0: Reject unprefixed field names on a type NodeSpace owns ---
+    //
+    // A bare name on a core type can be claimed by a core property in a future
+    // release, and the user's field would then collide with it. User-defined
+    // types carry no such risk — NodeSpace never adds core fields to them — so
+    // their fields are stored under the caller's names.
+    //
+    // This runs before Phase 1 rather than validating the final field list,
+    // because `rename_schema_field` migrates node property data and rewrites the
+    // schema per rename, committing each one as it goes. Validating afterwards
+    // would return an error with the offending rename already persisted across
+    // every node instance. Both routes that can introduce a name are checked
+    // here: `add_fields` supplies one directly, and `rename_fields` can turn an
+    // already-prefixed field into a bare one.
+    if schema_is_core(node_service, &params.schema_id).await? {
+        let reject = |name: &str, how: &str| {
+            MarkdownError::invalid_params(format!(
+                "Field '{name}' {how} core schema '{}' must carry a namespace prefix \
+                 (e.g. 'custom:{name}'). Unprefixed names on core types are reserved \
+                 for core properties.",
+                params.schema_id
+            ))
+        };
+
+        if let Some(ref add_fields) = params.add_fields {
+            for field in add_fields {
+                if !has_namespace_prefix(&field.name) {
+                    return Err(reject(&field.name, "added to"));
+                }
+            }
+        }
+
+        if let Some(ref renames) = params.rename_fields {
+            for rename in renames {
+                if !has_namespace_prefix(&rename.to) {
+                    return Err(reject(&rename.to, "renamed on"));
+                }
+            }
+        }
+    }
+
     // --- Phase 1: Process renames (each rename migrates data + updates schema definition) ---
     let mut fields_renamed = 0;
     if let Some(ref renames) = params.rename_fields {
@@ -694,24 +765,6 @@ pub async fn handle_update_schema(
                     "Field '{}' already exists in schema '{}'",
                     field.name, params.schema_id
                 )));
-            }
-        }
-
-        // Extending a type NodeSpace owns requires a namespace prefix. A bare
-        // name here can be claimed by a core property in a future release, and
-        // the user's field would then collide with it. User-defined types carry
-        // no such risk — NodeSpace never adds core fields to them — so their
-        // fields are stored under the caller's names.
-        if schema.is_core {
-            for field in add_fields {
-                if !field.name.contains(':') {
-                    return Err(MarkdownError::invalid_params(format!(
-                        "Field '{}' added to core schema '{}' must carry a namespace prefix \
-                         (e.g. 'custom:{}'). Unprefixed names on core types are reserved for \
-                         core properties.",
-                        field.name, params.schema_id, field.name
-                    )));
-                }
             }
         }
         fields_added = add_fields.len();
@@ -1407,6 +1460,22 @@ mod tests {
         assert_eq!(fields[1].field_type, "number"); // amount in USD
         assert_eq!(fields[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern detected
         assert_eq!(fields[3].field_type, "date"); // due date
+    }
+
+    #[test]
+    fn test_has_namespace_prefix() {
+        assert!(has_namespace_prefix("custom:capacity"));
+        assert!(has_namespace_prefix("org:region"));
+
+        assert!(!has_namespace_prefix("capacity"));
+
+        // Malformed forms are not prefixes. `validate_schema_field_name` also
+        // rejects these, but this must not depend on that happening first.
+        assert!(!has_namespace_prefix(":capacity"));
+        assert!(!has_namespace_prefix("custom:"));
+        assert!(!has_namespace_prefix("a:b:c"));
+        assert!(!has_namespace_prefix(":"));
+        assert!(!has_namespace_prefix(""));
     }
 
     #[test]
