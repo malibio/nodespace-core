@@ -26,7 +26,8 @@ pub struct CreateNodeInput {
     pub properties: Value,
     /// Optional collection path (e.g. "hr:policy:vacation")
     pub collection: Option<String>,
-    /// Optional lifecycle status ("active", "archived", "deleted")
+    /// Optional lifecycle status. Only `"active"` and `"archived"` are supported;
+    /// any other value is rejected at the storage boundary.
     pub lifecycle_status: Option<String>,
 }
 

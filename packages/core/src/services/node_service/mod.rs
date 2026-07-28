@@ -2455,6 +2455,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_rejects_unsupported_lifecycle_status() {
+        let (service, _temp) = create_test_service().await;
+
+        let node = Node::new("text".to_string(), "Original".to_string(), json!({}));
+        let id = service.create_node(node).await.unwrap();
+
+        // Writing an unsupported lifecycle_status ("deleted") must be rejected —
+        // there is no soft-delete state, only "active"/"archived".
+        let bad = NodeUpdate::new().with_lifecycle_status("deleted".to_string());
+        let err = service
+            .update_node(&id, 1, bad)
+            .await
+            .expect_err("update with lifecycle_status 'deleted' must be rejected");
+        assert!(
+            err.to_string().contains("lifecycle_status"),
+            "error should name the offending field, got: {err}"
+        );
+
+        // The rejected write must leave the persisted row untouched (still active, v1).
+        let unchanged = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(unchanged.lifecycle_status, "active");
+        assert_eq!(unchanged.version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_active_archived_lifecycle_transitions_succeed() {
+        let (service, _temp) = create_test_service().await;
+
+        let node = Node::new("text".to_string(), "Original".to_string(), json!({}));
+        let id = service.create_node(node).await.unwrap();
+
+        // active -> archived
+        let archived = service
+            .update_node(
+                &id,
+                1,
+                NodeUpdate::new().with_lifecycle_status("archived".to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(archived.lifecycle_status, "archived");
+        assert_eq!(archived.version, 2);
+
+        // archived -> active
+        let reactivated = service
+            .update_node(
+                &id,
+                2,
+                NodeUpdate::new().with_lifecycle_status("active".to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reactivated.lifecycle_status, "active");
+        assert_eq!(reactivated.version, 3);
+    }
+
+    #[tokio::test]
+    async fn test_all_store_write_paths_reject_unsupported_lifecycle_status() {
+        let (service, _temp) = create_test_service().await;
+        let node = Node::new("text".to_string(), "Original".to_string(), json!({}));
+        let id = service.create_node(node).await.unwrap();
+        let store = service.store();
+
+        // Direct single-column write path.
+        assert!(
+            store.update_lifecycle_status(&id, "deleted").await.is_err(),
+            "update_lifecycle_status must reject 'deleted'"
+        );
+        // A supported value on the same path still succeeds.
+        store
+            .update_lifecycle_status(&id, "archived")
+            .await
+            .expect("update_lifecycle_status must accept 'archived'");
+
+        // Batch write path.
+        assert!(
+            store
+                .bulk_update(vec![(
+                    id.clone(),
+                    NodeUpdate::new().with_lifecycle_status("deleted".to_string()),
+                )])
+                .await
+                .is_err(),
+            "bulk_update must reject 'deleted'"
+        );
+
+        // Insert write path.
+        let mut bad_new = Node::new("text".to_string(), "Bad".to_string(), json!({}));
+        bad_new.lifecycle_status = "deleted".to_string();
+        assert!(
+            store.create_node(bad_new, None, None).await.is_err(),
+            "create_node must reject 'deleted'"
+        );
+    }
+
+    #[tokio::test]
     async fn test_delete_with_cascade() {
         let (service, _temp) = create_test_service().await;
 
