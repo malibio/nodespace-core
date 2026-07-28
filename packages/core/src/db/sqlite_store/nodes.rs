@@ -18,6 +18,8 @@ impl SqliteStore {
             }
         }
 
+        Self::validate_lifecycle_status(&node.lifecycle_status)?;
+
         let properties = if node.properties.is_null() {
             serde_json::json!({})
         } else {
@@ -217,6 +219,10 @@ impl SqliteStore {
         update: NodeUpdate,
         source: Option<String>,
     ) -> Result<Node> {
+        if let Some(ref status) = update.lifecycle_status {
+            Self::validate_lifecycle_status(status)?;
+        }
+
         let current = self
             .get_node(id)
             .await?
@@ -358,6 +364,10 @@ impl SqliteStore {
         source: Option<String>,
         playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
     ) -> Result<Option<Node>> {
+        if let Some(ref status) = update.lifecycle_status {
+            Self::validate_lifecycle_status(status)?;
+        }
+
         let current = self
             .get_node(id)
             .await?
@@ -408,6 +418,7 @@ impl SqliteStore {
     }
 
     pub async fn update_lifecycle_status(&self, id: &str, status: &str) -> Result<()> {
+        Self::validate_lifecycle_status(status)?;
         self.db
             .execute(
                 "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
@@ -1593,6 +1604,10 @@ impl SqliteStore {
             .context("Failed to begin bulk update transaction")?;
 
         for (id, update) in &updates {
+            if let Some(ref status) = update.lifecycle_status {
+                Self::validate_lifecycle_status(status)?;
+            }
+
             let props_json = update
                 .properties
                 .as_ref()

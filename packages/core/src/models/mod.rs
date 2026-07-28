@@ -78,3 +78,8 @@ pub use text_node::TextNode;
 // node_to_typed_value and nodes_to_typed_values are the single canonical
 // implementations in nodespace-types, re-exported here for all entry points.
 pub use nodespace_types::{node_to_typed_value, nodes_to_typed_values};
+
+// The lifecycle-status allow-list and its validator live in nodespace-types
+// (owner of the `Node`/`NodeUpdate` types), re-exported here as the single
+// source of truth for the storage-layer write guard.
+pub use nodespace_types::{is_valid_lifecycle_status, LIFECYCLE_STATUSES};

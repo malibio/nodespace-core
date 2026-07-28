@@ -284,6 +284,24 @@ impl SqliteStore {
         ))
     }
 
+    /// Reject any `lifecycle_status` outside the supported allow-list before it
+    /// reaches a SQL write. The only supported values are `"active"` and
+    /// `"archived"` (local deletion is a hard delete, so there is no `"deleted"`
+    /// state). Guarding here — the single point every INSERT/UPDATE of the column
+    /// flows through — structurally prevents an unsupported value (e.g. from a
+    /// playbook action or API caller) from letting hidden nodes resurface in
+    /// full-text and semantic search.
+    fn validate_lifecycle_status(status: &str) -> Result<()> {
+        if crate::models::is_valid_lifecycle_status(status) {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Invalid lifecycle_status '{}'. Valid values: {:?}",
+            status,
+            crate::models::LIFECYCLE_STATUSES
+        ))
+    }
+
     pub(crate) fn add_to_schema_cache(&mut self, type_name: String) {
         self.valid_node_types.insert(type_name);
     }
