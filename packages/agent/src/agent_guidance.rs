@@ -315,7 +315,37 @@ mod tests {
         const MAX_SHARED_RUN: usize = 4;
 
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let eval_scripts = ["scripts/aichat-matrix.ts", "scripts/routing-eval.ts"];
+
+        // Enumerate the fixture directory rather than naming files. A
+        // hand-maintained list is exactly how the earlier version of this guard
+        // missed a contaminated file, and an eval added later would otherwise
+        // be unguarded by default — silently, since nothing fails when a path
+        // simply is not listed.
+        let fixture_dir = repo_root.join("scripts/eval/fixtures");
+        let mut eval_scripts: Vec<std::path::PathBuf> = std::fs::read_dir(&fixture_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture_dir.display()))
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                let name = path.file_name()?.to_str()?;
+                if !name.ends_with(".ts") || name.ends_with(".test.ts") {
+                    return None;
+                }
+                // A fixture is a file that declares scenario prompts. Selecting
+                // on that rather than on the filename means a shared helper or
+                // constants module dropped in this directory is skipped, not
+                // reported as parser drift — which is what a bare
+                // "no prompts here" failure would look like.
+                let source = std::fs::read_to_string(&path).ok()?;
+                (eval_prompts(&source).1 > 0).then_some(path)
+            })
+            .collect();
+        eval_scripts.sort();
+        assert!(
+            !eval_scripts.is_empty(),
+            "no files declaring scenario prompts found in {} — this guard is now \
+             vacuous; point it at wherever the eval scenarios moved to",
+            fixture_dir.display()
+        );
 
         let corpus = guidance_corpus();
         let tokenized: Vec<(&str, Vec<String>)> = corpus
@@ -326,9 +356,13 @@ mod tests {
         let mut violations: Vec<String> = Vec::new();
         let mut checked = 0usize;
 
-        for script in eval_scripts {
-            let path = repo_root.join(script);
-            let source = std::fs::read_to_string(&path)
+        for path in &eval_scripts {
+            let script = path
+                .strip_prefix(&repo_root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            let source = std::fs::read_to_string(path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
             let (prompts, sites) = eval_prompts(&source);

@@ -79,6 +79,17 @@ message LocalAgentStatusResponse {
   // Serialized LocalAgentStatus (JSON): "idle" | {"status":"streaming"} | etc.
   // Using JSON string keeps the proto stable as the Rust enum evolves.
   string status_json = 1;
+  // Id of the chat model currently loaded; empty when none is.
+  string model_id = 2;
+  // Context window the engine actually granted the loaded model. It is sized
+  // to available memory at load time and can be well below the configured
+  // ceiling. 0 when no model is loaded.
+  //
+  // Reported so a caller can verify the window exceeds the system prompt it
+  // intends to send. Without it an over-large prompt fails per turn at
+  // generation time, which reads as the model declining to act rather than as
+  // an environment that cannot run the request at all.
+  uint32 granted_n_ctx = 3;
 }
 
 // ---------------------------------------------------------------------------

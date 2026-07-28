@@ -711,7 +711,42 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         };
         let status_json = serde_json::to_string(&status)
             .map_err(|e| Status::internal(format!("Failed to serialize status: {e}")))?;
-        Ok(Response::new(LocalAgentStatusResponse { status_json }))
+
+        // Report the loaded model's real geometry alongside the activity status.
+        // A model-info failure is not a status failure: the daemon is plainly
+        // reachable if we got this far, so degrade to "nothing loaded" rather
+        // than failing the whole call.
+        let spec = {
+            let service = self.inner.service.read().await;
+            service.model_spec().await.unwrap_or_else(|e| {
+                // Degrade rather than fail the call — the daemon is plainly
+                // reachable if we got this far. But an engine fault and a
+                // genuinely absent model are indistinguishable to the caller
+                // once both become `None`, so leave a trail.
+                tracing::warn!(
+                    error = %e,
+                    "model_spec failed; reporting status as no model loaded"
+                );
+                None
+            })
+        };
+        // Report the catalog id the model was loaded BY, not the resolved GGUF
+        // path the engine reports. Callers compare this against the id they
+        // asked for ("gemma-4-e4b-q4km"), which no path substring matches.
+        let active_model_id = self.inner.active_model_id.lock().await.clone();
+        let (model_id, granted_n_ctx) = match spec {
+            Some(spec) => (
+                active_model_id.unwrap_or(spec.model_id),
+                spec.context_window,
+            ),
+            None => (String::new(), 0),
+        };
+
+        Ok(Response::new(LocalAgentStatusResponse {
+            status_json,
+            model_id,
+            granted_n_ctx,
+        }))
     }
 
     type EnsureModelReadyStream = ReceiverStream<Result<ModelLoadProgressEvent, Status>>;

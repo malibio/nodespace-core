@@ -252,6 +252,8 @@ Test files and DeveloperInspector are exempt.
 
 **Testing — NEVER use `bun test`** — it bypasses the Happy-DOM vitest config and breaks DOM tests. Always use `bun run test` or another `bun run test:*` command.
 
+The one exception is `bun run test:scripts` (`bun test scripts/`), which covers standalone tooling tests under `scripts/`. Those files import `bun:test` and sit outside every Vitest project glob, so Vitest cannot run them. **Tests under `scripts/` must therefore stay DOM-free** — a DOM test placed there would be silently misrouted around Happy-DOM, which is precisely what the rule above exists to prevent.
+
 **Git:** Branch per issue, name `issue-<number>-brief-desc`. Link commits: `git commit -m "Add TextNode component (closes #4)"`. Include Claude Code attribution.
 
 **Documentation:** All specs/design/architecture/ADRs live in `../nodespace-docs/` — this repo carries only root `CLAUDE.md` + `README.md`, both pointing there. Never add a `docs/` directory, nested READMEs, or other `.md` docs to this repo. Do not embed GitHub issue numbers in documentation content or code comments — describe the behavior/constraint directly, and reference decisions by ADR. (GitHub process mechanics like commit/PR/branch conventions above are unaffected.) Full rule: [`documentation.md`](../nodespace-docs/development/standards/documentation.md)
