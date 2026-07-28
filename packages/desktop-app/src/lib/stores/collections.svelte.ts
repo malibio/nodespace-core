@@ -97,6 +97,15 @@ class CollectionsDataStore {
   });
 
   /**
+   * True once `loadCollections` has completed at least one successful fetch.
+   * Lets consumers distinguish "not fetched yet" (empty because unloaded) from
+   * "fetched, genuinely empty" — e.g. the invitations prompt only concludes a
+   * signed-in user has no collection access after a real load has resolved,
+   * never during the pre-load window.
+   */
+  hasLoaded = $state(false);
+
+  /**
    * Transform flat collections into tree structure for UI display.
    * Uses parentCollectionIds to build proper hierarchy. Hides collections with
    * no member nodes visible to the current user.
@@ -113,6 +122,7 @@ class CollectionsDataStore {
       const collections = await collectionService.getAllCollections();
       log.debug('Loaded collections', { count: collections.length });
       this.state = { ...this.state, collections, loading: false };
+      this.hasLoaded = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load collections';
       log.error('Failed to load collections', { error: message });
@@ -178,6 +188,7 @@ class CollectionsDataStore {
   /** Clear all cached data */
   reset(): void {
     this.state = { ...initialDataState, members: new Map() };
+    this.hasLoaded = false;
   }
 
   /** Set test data directly (for testing purposes only) */
@@ -188,6 +199,7 @@ class CollectionsDataStore {
       loading: false,
       error: null,
     };
+    this.hasLoaded = true;
   }
 }
 

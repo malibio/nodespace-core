@@ -1,8 +1,9 @@
 <!--
   InvitationsInbox — onboarding entry point. A modal
-  opened from the Pro account menu (and once, on first sign-in). Lets a user
-  redeem a share-code invite, browse the collections they can join, and join an
-  open one directly / request a restricted one.
+  opened from the Pro account menu (Invitations), and auto-shown for a signed-in
+  user who has no collection access yet. Lets a user redeem a share-code invite,
+  browse the collections they can join, and join an open one directly / request a
+  restricted one.
 
   Email-bound invites are auto-redeemed server-side on reconnect
   (`redeem_my_invites`), so they need no action here — the copy just says so.
