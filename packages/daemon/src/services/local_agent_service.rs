@@ -1457,8 +1457,8 @@ fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatComple
             // what "the same call" means. Dropped when oversized rather than
             // truncated — see `CANONICAL_ARGS_MAX_CHARS`.
             let canonical = canonical_args(&r.args.to_string());
-            let canonical_args = (canonical.chars().count() <= CANONICAL_ARGS_MAX_CHARS)
-                .then_some(canonical);
+            let canonical_args =
+                (canonical.chars().count() <= CANONICAL_ARGS_MAX_CHARS).then_some(canonical);
 
             AiChatCompletedWrite {
                 tool: r.name.clone(),

@@ -870,10 +870,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // conversation record.
                         let already_written = if is_cross_turn_guarded_tool(&tc.function_name) {
                             let incoming = canonical_args(&tc.arguments_json);
-                            session
-                                .prior_writes
-                                .iter()
-                                .find(|w| w.tool == tc.function_name && w.canonical_args == incoming)
+                            session.prior_writes.iter().find(|w| {
+                                w.tool == tc.function_name && w.canonical_args == incoming
+                            })
                         } else {
                             None
                         };
@@ -4342,7 +4341,13 @@ mod tests {
 
         let mut session = session_with_prior_create(&canonical_args(args));
         let result = agent_loop
-            .run_turn(&mut session, "add it", |_| {}, |_| {}, CancellationToken::new())
+            .run_turn(
+                &mut session,
+                "add it",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
             .await
             .expect("turn should succeed");
 
@@ -4375,10 +4380,17 @@ mod tests {
         let calls = executor.calls_handle();
         let agent_loop = LocalAgentLoop::new(engine, executor);
 
-        let mut session =
-            session_with_prior_create(&canonical_args(r#"{"content":"Buy milk","node_type":"task"}"#));
+        let mut session = session_with_prior_create(&canonical_args(
+            r#"{"content":"Buy milk","node_type":"task"}"#,
+        ));
         agent_loop
-            .run_turn(&mut session, "add it", |_| {}, |_| {}, CancellationToken::new())
+            .run_turn(
+                &mut session,
+                "add it",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
             .await
             .expect("turn should succeed");
 
@@ -4403,7 +4415,13 @@ mod tests {
 
         let mut session = session_with_prior_create(&canonical_args(r#"{"content":"Buy milk"}"#));
         agent_loop
-            .run_turn(&mut session, "add bread", |_| {}, |_| {}, CancellationToken::new())
+            .run_turn(
+                &mut session,
+                "add bread",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
             .await
             .expect("turn should succeed");
 
@@ -4424,11 +4442,13 @@ mod tests {
             args,
             "Marked done.",
         ));
-        let executor = Arc::new(RecordingToolExecutor::new(MockToolExecutor::new().with_tool(
-            "update_task_status",
-            json!({"type": "object", "properties": {"status": {"type": "string"}}}),
-            json!({"id": "nodespace://t1", "status": "done"}),
-        )));
+        let executor = Arc::new(RecordingToolExecutor::new(
+            MockToolExecutor::new().with_tool(
+                "update_task_status",
+                json!({"type": "object", "properties": {"status": {"type": "string"}}}),
+                json!({"id": "nodespace://t1", "status": "done"}),
+            ),
+        ));
         let calls = executor.calls_handle();
         let agent_loop = LocalAgentLoop::new(engine, executor);
 
@@ -4442,12 +4462,22 @@ mod tests {
         }];
 
         agent_loop
-            .run_turn(&mut session, "mark it done", |_| {}, |_| {}, CancellationToken::new())
+            .run_turn(
+                &mut session,
+                "mark it done",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
             .await
             .expect("turn should succeed");
 
         assert!(
-            calls.lock().unwrap().iter().any(|c| c == "update_task_status"),
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|c| c == "update_task_status"),
             "idempotent updates must not be blocked by the cross-turn guard"
         );
     }
@@ -4467,7 +4497,13 @@ mod tests {
 
         let mut session = new_session();
         agent_loop
-            .run_turn(&mut session, "add milk", |_| {}, |_| {}, CancellationToken::new())
+            .run_turn(
+                &mut session,
+                "add milk",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
             .await
             .expect("turn should succeed");
 
