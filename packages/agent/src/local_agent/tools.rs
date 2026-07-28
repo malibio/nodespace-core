@@ -865,7 +865,7 @@ impl Tool {
     ];
 
     /// The wire/identifier name the model uses to call this tool.
-    pub(crate) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Tool::SearchNodes => "search_nodes",
             Tool::ResolveQuery => "resolve_query",
@@ -887,7 +887,7 @@ impl Tool {
     /// Resolve a wire name back to its registry entry. Returns `None` for any
     /// name not in the registry — used for dispatch and for validating
     /// skill `tool_whitelist` references.
-    pub(crate) fn from_name(name: &str) -> Option<Tool> {
+    pub fn from_name(name: &str) -> Option<Tool> {
         Tool::ALL.iter().copied().find(|t| t.name() == name)
     }
 
@@ -934,6 +934,78 @@ impl Tool {
             Tool::CreateNodesFromMarkdown => "markdown import",
         }
     }
+
+    /// What repeating this tool with identical arguments means.
+    ///
+    /// An exhaustive match rather than a list, so adding a tool cannot silently
+    /// default to "safe to repeat": the compiler makes the author state the
+    /// semantics. Consumers derive their own sets from this — see
+    /// [`Tool::is_write`] and [`Tool::duplicate_is_destructive`].
+    pub fn write_semantics(self) -> WriteSemantics {
+        match self {
+            // Reads. Repeating one is wasteful, never a duplicate.
+            Tool::SearchNodes
+            | Tool::ResolveQuery
+            | Tool::SearchSemantic
+            | Tool::GetNode
+            | Tool::GetRelatedNodes
+            | Tool::SearchSkills => WriteSemantics::Read,
+
+            // Idempotent writes. Setting a node to the same content, or a task
+            // to the same status, twice is a no-op — the second call is not a
+            // duplicate, and refusing it would break a user legitimately
+            // re-asserting a value.
+            Tool::UpdateNode | Tool::UpdateSchema | Tool::UpdateTaskStatus => {
+                WriteSemantics::IdempotentWrite
+            }
+
+            // Writes whose repeat produces a second, unwanted copy of the
+            // user's data — or, for a delete, re-attacks a node the record
+            // already shows removed.
+            Tool::CreateNode
+            | Tool::CreateSchema
+            | Tool::CreateRelationship
+            | Tool::CreateNodesFromMarkdown
+            | Tool::DeleteNode => WriteSemantics::DuplicableWrite,
+        }
+    }
+
+    /// Whether this tool changes graph state.
+    pub fn is_write(self) -> bool {
+        !matches!(self.write_semantics(), WriteSemantics::Read)
+    }
+
+    /// Whether repeating this tool across turns duplicates the user's data.
+    pub fn duplicate_is_destructive(self) -> bool {
+        matches!(self.write_semantics(), WriteSemantics::DuplicableWrite)
+    }
+}
+
+/// What a repeat of a tool call means for graph state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteSemantics {
+    /// Does not change state. A repeat wastes an iteration, nothing more.
+    Read,
+    /// Changes state, but a repeat with identical arguments converges on the
+    /// same result rather than producing a second copy.
+    IdempotentWrite,
+    /// Changes state, and a repeat with identical arguments produces a second
+    /// copy of the user's data. These are what the cross-turn guard refuses.
+    DuplicableWrite,
+}
+
+/// Whether a repeat of this tool in a *later turn* must be refused.
+///
+/// Resolves the wire name through the registry, so the set is computed from
+/// [`Tool::write_semantics`] rather than restated. An unknown name is not
+/// guarded: the guard blocks work, so an unrecognised tool must fail open.
+pub fn is_cross_turn_guarded_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::duplicate_is_destructive)
+}
+
+/// Whether a tool changes graph state, by wire name. Computed from the registry.
+pub fn is_write_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::is_write)
 }
 
 /// All tool definitions for the graph executor, derived from the registry.

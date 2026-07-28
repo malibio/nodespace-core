@@ -20,12 +20,14 @@ use nodespace_agent::agent_types::{
     ToolExecutionRecord,
 };
 use nodespace_agent::local_agent::agent_loop::{
-    canonical_args, is_cross_turn_guarded_tool, LocalAgentService, CANONICAL_ARGS_MAX_CHARS,
+    canonical_args, LocalAgentService, CANONICAL_ARGS_MAX_CHARS,
 };
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-use nodespace_agent::local_agent::tools::{GraphToolExecutor, SharedEmbeddingService};
+use nodespace_agent::local_agent::tools::{
+    is_cross_turn_guarded_tool, is_write_tool, GraphToolExecutor, SharedEmbeddingService,
+};
 use nodespace_core::models::{
     AiChatCompletedWrite, AiChatMessage, AiChatNode, NodeFilter, NodeUpdate,
 };
@@ -1373,24 +1375,6 @@ fn write_summary_arg(tool: &str) -> Option<&'static [&'static str]> {
     }
 }
 
-/// Whether a tool changes graph state. A repeat of one of these is a real
-/// duplicate; repeating a read is merely wasteful.
-///
-/// Kept exhaustive against the tool set in `packages/agent/src/local_agent/tools.rs`.
-fn is_write_tool(tool: &str) -> bool {
-    matches!(
-        tool,
-        "create_node"
-            | "update_node"
-            | "delete_node"
-            | "create_relationship"
-            | "create_schema"
-            | "update_schema"
-            | "create_nodes_from_markdown"
-            | "update_task_status"
-    )
-}
-
 /// Clip an evidence label, marking it when clipped so a truncated summary is
 /// not mistaken for a complete one.
 fn clip_summary(s: &str) -> String {
@@ -2395,29 +2379,42 @@ api_key = "sk-test"
         );
     }
 
-    /// The guarded set must stay a subset of the tools recognised as writes.
-    /// A tool guarded here but absent from `is_write_tool` would never have its
-    /// args recorded, so the guard would silently never fire for it — the two
-    /// lists are hand-maintained and nothing else forces them to agree.
+    /// The guarded set must stay a subset of the tools recognised as writes:
+    /// a guarded tool absent from `is_write_tool` would never have its args
+    /// recorded, so the guard could never fire for it.
+    ///
+    /// Iterates the registry itself rather than a hardcoded list. A literal
+    /// list would pass vacuously on exactly the change this is meant to catch —
+    /// a newly added tool simply would not appear in it.
     #[tokio::test]
     async fn every_guarded_tool_is_also_recorded_as_a_write() {
-        for tool in [
-            "create_node",
-            "create_nodes_from_markdown",
-            "create_schema",
-            "create_relationship",
-            "delete_node",
-            "update_node",
-            "update_task_status",
-            "update_schema",
-        ] {
-            if is_cross_turn_guarded_tool(tool) {
+        use nodespace_agent::local_agent::tools::Tool;
+
+        for tool in Tool::ALL {
+            let name = tool.name();
+            if is_cross_turn_guarded_tool(name) {
                 assert!(
-                    is_write_tool(tool),
-                    "{tool} is guarded across turns but not recorded as a write, \
+                    is_write_tool(name),
+                    "{name} is guarded across turns but not recorded as a write, \
                      so its canonical args are never persisted and the guard cannot fire"
                 );
             }
+        }
+    }
+
+    /// Every guarded tool must also produce an evidence label, otherwise a
+    /// refusal can only say "duplicate" without naming what already exists.
+    #[tokio::test]
+    async fn every_guarded_tool_can_describe_what_it_wrote() {
+        use nodespace_agent::local_agent::tools::Tool;
+
+        for tool in Tool::ALL.iter().filter(|t| t.duplicate_is_destructive()) {
+            let name = tool.name();
+            assert!(
+                write_summary_arg(name).is_some() || name == "create_relationship",
+                "{name} is guarded but has no way to describe its write, so a \
+                 refusal could not name the existing node"
+            );
         }
     }
 }

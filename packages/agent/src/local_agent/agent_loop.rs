@@ -21,6 +21,7 @@ use crate::agent_types::{
 use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
 use crate::local_agent::response_processing::{normalize_response, normalize_response_traced};
+use crate::local_agent::tools::is_cross_turn_guarded_tool;
 use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
 // ---------------------------------------------------------------------------
@@ -90,28 +91,6 @@ fn duplicate_write_result(prior: &crate::agent_types::PriorWrite) -> serde_json:
             }
         ),
     })
-}
-
-/// Whether a repeat of this tool in a *later turn* is a duplicate to suppress.
-///
-/// Narrower than the set of state-changing tools. The updates are excluded
-/// deliberately: setting a node to the same content, or a task to the same
-/// status, twice is idempotent — the second call is a no-op, not a duplicate,
-/// and blocking it would break a user legitimately re-asserting a value.
-/// `update_schema` is excluded on the same grounds.
-///
-/// The creates are the tools where a repeat produces a second, unwanted copy of
-/// the user's data. `delete_node` is included so a re-issued delete is answered
-/// from the record instead of failing against an already-removed node.
-pub fn is_cross_turn_guarded_tool(tool: &str) -> bool {
-    matches!(
-        tool,
-        "create_node"
-            | "create_nodes_from_markdown"
-            | "create_schema"
-            | "create_relationship"
-            | "delete_node"
-    )
 }
 
 /// Maximum tokens any single inference round may generate.
@@ -869,7 +848,15 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // `seen_calls` uses, against writes replayed from the
                         // conversation record.
                         let already_written = if is_cross_turn_guarded_tool(&tc.function_name) {
-                            let incoming = canonical_args(&tc.arguments_json);
+                            // Canonicalised from the *parsed* arguments, not the
+                            // raw text, so this derives from exactly what the
+                            // record side stores (`ToolExecutionRecord.args`).
+                            // Canonicalising the raw string instead would differ
+                            // wherever the two are not textually identical — most
+                            // concretely when empty arguments are read as `{}`
+                            // above, which yields "" here against a stored "{}"
+                            // and a write that could never match itself.
+                            let incoming = canonical_args(&args.to_string());
                             session.prior_writes.iter().find(|w| {
                                 w.tool == tc.function_name && w.canonical_args == incoming
                             })
@@ -4508,5 +4495,43 @@ mod tests {
             .expect("turn should succeed");
 
         assert!(calls.lock().unwrap().iter().any(|c| c == "create_node"));
+    }
+
+    /// The guard's identity must derive from the *parsed* arguments on both
+    /// sides. Empty arguments are read as `{}` before execution, so a
+    /// raw-string comparison would store `"{}"` and compare `""` — a write that
+    /// could never match itself, silently disarming the guard for that call.
+    #[tokio::test]
+    async fn empty_arguments_compare_against_their_parsed_form() {
+        let engine = Arc::new(MockEngine::tool_then_text("create_node", "", "Exists."));
+        let executor = Arc::new(RecordingToolExecutor::new(create_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        // What the daemon would have persisted for an empty-args call: the
+        // canonical form of the parsed `{}`, not the empty string.
+        session.prior_writes = vec![PriorWrite {
+            tool: "create_node".to_string(),
+            canonical_args: canonical_args("{}"),
+            node_id: Some("nodespace://n1".to_string()),
+            summary: Some("Buy milk".to_string()),
+        }];
+
+        agent_loop
+            .run_turn(
+                &mut session,
+                "add it",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            !calls.lock().unwrap().iter().any(|c| c == "create_node"),
+            "an empty-args repeat must still be recognised as the same call"
+        );
     }
 }
