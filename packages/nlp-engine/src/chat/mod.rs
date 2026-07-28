@@ -113,12 +113,15 @@ impl ChatLlamaState {
     /// Get or create the generation context.
     ///
     /// Unlike the embedding context, the chat context does NOT use embeddings
-    /// mode and has a fixed batch size matching the context window.
+    /// mode, and its batch size is a fixed constant independent of the context
+    /// window (see [`PREFILL_BATCH_TOKENS`]) so the compute buffer does not
+    /// scale with `n_ctx`.
     fn get_or_create_context(&mut self) -> Result<&mut LlamaContext<'static>> {
         if self.context.is_none() {
-            // `context_size` was already sized to available memory at load time
-            // (see `load_model`), so the KV cache below allocates exactly the
-            // window `model_info` reports and the overflow/stop guards measure.
+            // `context_size` was already fitted to this machine's memory at load
+            // time (see `load_model`), so the KV cache below allocates exactly
+            // the window `model_info` reports and the overflow/stop guards
+            // measure.
             tracing::info!(
                 "Creating chat LlamaContext (n_ctx={}, n_threads={}, type_k={:?}, type_v={:?})",
                 self.context_size,
@@ -474,7 +477,7 @@ impl ChatEngine {
 
         for (chunk_idx, chunk) in pending.chunks(PREFILL_BATCH_TOKENS as usize).enumerate() {
             batch.clear();
-            let chunk_start = decode_from + chunk_idx * PREFILL_BATCH_TOKENS as usize;
+            let chunk_start = prefill_chunk_start(decode_from, chunk_idx);
             for (i, &token) in chunk.iter().enumerate() {
                 let pos = chunk_start + i;
                 // Only the final token of the whole prompt needs logits — that
@@ -543,7 +546,12 @@ impl ChatEngine {
                 break;
             }
 
-            // Sample next token
+            // Sample next token. This indexes the *last* batch decoded, which on
+            // the first pass is the final prefill chunk — correct because the
+            // prompt's last token always lands in that chunk's final slot (see
+            // `prefill_chunk_positions`), so the logits it carries are the ones
+            // to sample from. A change to the chunking that broke that invariant
+            // would silently sample the wrong position.
             let new_token = sampler.sample(ctx, batch.n_tokens() - 1);
             sampler.accept(new_token);
 
@@ -1219,7 +1227,7 @@ fn fit_n_ctx_to_budget(
 
     let budget = total_ram_bytes
         .saturating_sub(weights_bytes)
-        .saturating_sub(OS_RESERVE_BYTES)
+        .saturating_sub(os_reserve_for(total_ram_bytes))
         .saturating_sub(COMPUTE_RESERVE_BYTES);
 
     // Round down to a 256-token multiple, then cap at the configured ceiling.
@@ -1270,12 +1278,70 @@ const PREFILL_BATCH_TOKENS: u32 = 2048;
 #[cfg(any(feature = "chat-service", test))]
 const PREFILL_UBATCH_TOKENS: u32 = 512;
 
-/// Physical RAM left for the OS and other applications. macOS pages other
-/// processes out under pressure, so this need not cover everything running —
-/// it covers the kernel's own footprint plus enough margin to keep the machine
-/// responsive.
+/// Absolute position of the first token of prefill chunk `chunk_idx`.
+///
+/// Chunking walks `tokens[decode_from..]`, but positions handed to the batch
+/// must be absolute in `tokens` — the KV cache already holds `0..decode_from`
+/// from the reused prefix, and RoPE encodes absolute position. Getting this
+/// wrong degrades output silently rather than failing, so it is a named
+/// function with its own tests (see `prefill_chunk_positions`).
+#[cfg(any(feature = "chat-service", test))]
+fn prefill_chunk_start(decode_from: usize, chunk_idx: usize) -> usize {
+    decode_from + chunk_idx * PREFILL_BATCH_TOKENS as usize
+}
+
+/// The `(position, wants_logits)` pairs prefill emits for a prompt of
+/// `token_count` tokens with `decode_from` already cached.
+///
+/// Mirrors the emission loop exactly so the invariants that loop depends on —
+/// contiguous absolute positions, and logits requested on exactly the final
+/// token — are checkable without a live model.
+#[cfg(test)]
+fn prefill_chunk_positions(token_count: usize, decode_from: usize) -> Vec<(usize, bool)> {
+    let last_idx = token_count - 1;
+    let pending = token_count - decode_from;
+    let stride = PREFILL_BATCH_TOKENS as usize;
+    let mut out = Vec::with_capacity(pending);
+
+    for chunk_idx in 0..pending.div_ceil(stride) {
+        let chunk_start = prefill_chunk_start(decode_from, chunk_idx);
+        let chunk_len = stride.min(token_count - chunk_start);
+        for i in 0..chunk_len {
+            let pos = chunk_start + i;
+            out.push((pos, pos == last_idx));
+        }
+    }
+    out
+}
+
+/// Physical RAM left for the OS and other applications, on a machine large
+/// enough to afford it. macOS pages other processes out under pressure, so this
+/// need not cover everything running — it covers the kernel's own footprint
+/// plus enough margin to keep the machine responsive.
+///
+/// Calibrated on Apple Silicon, where unified memory makes total RAM a good
+/// proxy for what a GPU allocation can obtain. On platforms with a discrete GPU
+/// (where VRAM, not system RAM, is the real ceiling) or a memory manager whose
+/// "available" figure is trustworthy, a different reserve shape may fit better;
+/// this one is unvalidated there.
 #[cfg(any(feature = "chat-service", test))]
 const OS_RESERVE_BYTES: u64 = 3 * 1024 * 1024 * 1024; // 3 GiB
+
+/// Ceiling on the OS reserve as a fraction of total RAM, expressed as a
+/// divisor. A flat reserve is regressive on small machines — 3 GiB is a modest
+/// slice of 32 GB but nearly half of 8 GB, enough to refuse a model the catalog
+/// advertises as fitting. Capping the reserve at `total / OS_RESERVE_DIVISOR`
+/// leaves behaviour unchanged at 16 GB and above (where the flat value is
+/// already the smaller of the two) while degrading proportionally below it.
+#[cfg(any(feature = "chat-service", test))]
+const OS_RESERVE_DIVISOR: u64 = 4;
+
+/// The OS reserve for a machine of this size: the flat [`OS_RESERVE_BYTES`],
+/// capped at a fraction of total RAM so small machines are not starved.
+#[cfg(any(feature = "chat-service", test))]
+fn os_reserve_for(total_ram_bytes: u64) -> u64 {
+    OS_RESERVE_BYTES.min(total_ram_bytes / OS_RESERVE_DIVISOR)
+}
 
 /// Reserve for compute/activation buffers and backend command buffers. With
 /// `n_batch`/`n_ubatch` capped these no longer scale with the context window,
@@ -1357,7 +1423,7 @@ fn compute_effective_n_ctx(
 
     if effective < N_CTX_MINIMUM {
         let bytes_per_token = geometry.bytes_per_token();
-        let reserved = OS_RESERVE_BYTES + COMPUTE_RESERVE_BYTES;
+        let reserved = os_reserve_for(total_ram) + COMPUTE_RESERVE_BYTES;
         let budget = total_ram
             .saturating_sub(weights_bytes)
             .saturating_sub(reserved);
@@ -2092,6 +2158,141 @@ mod tests {
             );
             assert!(n >= prev, "window shrank from {prev} to {n} at {gib}GiB");
             prev = n;
+        }
+    }
+
+    #[test]
+    fn os_reserve_is_capped_on_small_machines_and_flat_above() {
+        // At 16GB and up the flat reserve is already the smaller value, so the
+        // cap changes nothing — the measured behaviour there must not move.
+        assert_eq!(os_reserve_for(16 * GIB), OS_RESERVE_BYTES);
+        assert_eq!(os_reserve_for(32 * GIB), OS_RESERVE_BYTES);
+        // Below that the flat 3GiB would take a punitive share, so it scales.
+        assert_eq!(os_reserve_for(8 * GIB), 2 * GIB);
+        assert_eq!(os_reserve_for(4 * GIB), GIB);
+    }
+
+    #[test]
+    fn fit_loads_the_8gb_tier_model_on_an_8gb_machine() {
+        // Ministral 3B is catalogued at min_memory_gb: 8 (32 layers, n_embd
+        // 4096, GQA 32/8, F16 → 128 KiB/token, ~2.1GB weights). A flat 3GiB OS
+        // reserve consumed enough of an 8GB machine to push it under
+        // N_CTX_MINIMUM, making a model the catalog advertises as fitting
+        // refuse to load. With the reserve capped proportionally it gets a
+        // usable window.
+        let n = fit_n_ctx_to_budget(
+            KvGeometry {
+                n_layer: 32,
+                n_embd: 4096,
+                n_head: 32,
+                n_head_kv: 8,
+                bytes_per_elem: kv_bytes_per_element(None),
+            },
+            8 * GIB,
+            2_147_023_008,
+            32_768,
+        );
+        assert!(
+            n >= N_CTX_MINIMUM,
+            "the 8GB-tier model must load on an 8GB machine, got {n}"
+        );
+    }
+
+    #[test]
+    fn fit_is_unchanged_at_16gb_by_the_proportional_reserve() {
+        // Guard that capping the reserve did not perturb the machine class the
+        // constants were actually measured on: E4B keeps its full window and
+        // 12B stays below the 27,136 that OOM'd.
+        let e4b = fit_n_ctx_to_budget(
+            KvGeometry {
+                n_layer: 42,
+                n_embd: 2560,
+                n_head: 8,
+                n_head_kv: 2,
+                bytes_per_elem: kv_bytes_per_element(None),
+            },
+            TOTAL_16GB,
+            E4B_WEIGHTS,
+            32_768,
+        );
+        assert_eq!(e4b, 32_768);
+
+        let g12 = fit_n_ctx_to_budget(
+            KvGeometry {
+                n_layer: 48,
+                n_embd: 3840,
+                n_head: 16,
+                n_head_kv: 8,
+                bytes_per_elem: kv_bytes_per_element(Some(KvCacheQuantType::Q8_0)),
+            },
+            TOTAL_16GB,
+            G12B_WEIGHTS,
+            32_768,
+        );
+        assert!(
+            g12 < 27_136,
+            "12B must stay under the OOM window, got {g12}"
+        );
+    }
+
+    #[test]
+    fn prefill_chunking_emits_contiguous_absolute_positions() {
+        // The chunk walk must cover exactly `decode_from..token_count`, in
+        // order, with no gap or repeat at a chunk boundary. A position error
+        // here corrupts RoPE and degrades output silently rather than failing,
+        // so the boundary cases are enumerated explicitly: exact multiples of
+        // the stride, one either side of it, and a cached prefix that is itself
+        // a multiple.
+        let stride = PREFILL_BATCH_TOKENS as usize;
+        let cases = [
+            (10_787, 0),     // the measured multi-chunk prompt
+            (10_787, 4_096), // same, with a reused prefix
+            (stride, 0),     // exactly one full chunk
+            (stride + 1, 0), // one token into a second chunk
+            (stride - 1, 0), // just under a single chunk
+            (2 * stride, 0), // exact multiple, no remainder
+            (4_097, stride), // prefix reuse landing on a stride boundary
+            (32_768, 0),     // the full configured window
+            (6_000, 5_999),  // single trailing token
+        ];
+
+        for (token_count, decode_from) in cases {
+            let emitted = prefill_chunk_positions(token_count, decode_from);
+            let positions: Vec<usize> = emitted.iter().map(|(p, _)| *p).collect();
+            let expected: Vec<usize> = (decode_from..token_count).collect();
+            assert_eq!(
+                positions, expected,
+                "positions must be contiguous and absolute for \
+                 token_count={token_count} decode_from={decode_from}"
+            );
+
+            let with_logits: Vec<usize> = emitted
+                .iter()
+                .filter(|(_, l)| *l)
+                .map(|(p, _)| *p)
+                .collect();
+            assert_eq!(
+                with_logits,
+                vec![token_count - 1],
+                "logits must be requested on exactly the final token for \
+                 token_count={token_count} decode_from={decode_from}"
+            );
+        }
+    }
+
+    #[test]
+    fn prefill_final_token_lands_in_last_chunk() {
+        // Sampling reads `batch.n_tokens() - 1` of the LAST decoded batch, so
+        // the prompt's final token must be the final entry of the final chunk.
+        // This is what makes that index the right one to sample from.
+        let stride = PREFILL_BATCH_TOKENS as usize;
+        for (token_count, decode_from) in
+            [(10_787, 0), (stride, 0), (2 * stride, 0), (4_097, stride)]
+        {
+            let emitted = prefill_chunk_positions(token_count, decode_from);
+            let (last_pos, last_wants_logits) = *emitted.last().expect("chunks are non-empty");
+            assert_eq!(last_pos, token_count - 1, "final emitted token is the last");
+            assert!(last_wants_logits, "final emitted token carries the logits");
         }
     }
 
