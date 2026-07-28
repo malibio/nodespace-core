@@ -1332,7 +1332,8 @@ impl GraphToolExecutor {
                 Err(e) => Ok(error_result(
                     tool_call_id,
                     "get_node",
-                    &format!("Failed to render markdown: {:?}", e),
+                    // Display, not Debug — this text reaches the model verbatim.
+                    &format!("Failed to render markdown: {e}"),
                 )),
             }
         } else {

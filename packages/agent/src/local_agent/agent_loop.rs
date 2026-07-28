@@ -30,6 +30,14 @@ use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBA
 /// Maximum number of tool-call iterations per turn.
 const MAX_TOOL_ITERATIONS: usize = 5;
 
+/// Consecutive tool calls with unparseable JSON arguments tolerated before the
+/// turn gives up and produces a final response from what it already has.
+///
+/// Two, not one: a single malformed call followed by a correct retry is normal
+/// recovery and observed in practice, so tripping on the first would abort turns
+/// that were about to succeed.
+const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
+
 /// Maximum tokens any single inference round may generate.
 ///
 /// Small local models (e.g. Gemma-4-E4B) occasionally open an empty
@@ -349,6 +357,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // an iteration executing the same query and getting the same result.
         let mut seen_calls: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
+        // Consecutive tool calls whose arguments would not parse as JSON. The
+        // duplicate detector above cannot catch this class: each attempt is
+        // malformed *differently*, so no two canonical arg strings match and the
+        // model can burn every iteration without executing a single tool. Reset
+        // on any successful parse, so only an unbroken run trips it.
+        let mut consecutive_parse_failures = 0usize;
         let mut total_usage = InferenceUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -775,6 +789,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
                 let (args, tool_result) = match parsed_args {
                     Ok(args) => {
+                        consecutive_parse_failures = 0;
                         let result = self
                             .tool_executor
                             .execute(&tc.function_name, args.clone())
@@ -782,11 +797,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         (args, Some(result))
                     }
                     Err(parse_err) => {
+                        consecutive_parse_failures += 1;
                         tracing::warn!(
                             session_id = %session.id,
                             tool = %tc.function_name,
                             iteration = iteration,
                             error = %parse_err,
+                            consecutive_parse_failures,
                             args_preview = %tc.arguments_json.chars().take(300).collect::<String>(),
                             "Model emitted unparseable tool arguments — reporting to model instead of substituting an empty object"
                         );
@@ -851,6 +868,20 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     tc.id.clone(),
                     tc.function_name.clone(),
                 ));
+            }
+
+            // A model that cannot emit valid JSON is not making progress, and each
+            // attempt is malformed differently so the duplicate guard never fires.
+            // Break after a short unbroken run — the error results are already in
+            // history, so the final-inference path can still answer from them.
+            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES {
+                tracing::warn!(
+                    session_id = %session.id,
+                    iteration = iteration,
+                    consecutive_parse_failures,
+                    "Model repeatedly emitted unparseable tool arguments — breaking to force final response"
+                );
+                break;
             }
 
             // Set tool results on the iteration span and close it before the next iteration.
@@ -3707,6 +3738,111 @@ mod tests {
         assert!(
             result.tool_calls_made[0].is_error,
             "the malformed call must be recorded as an error"
+        );
+    }
+
+    /// A model emitting *differently*-malformed arguments each round must not be
+    /// able to burn every iteration.
+    ///
+    /// The duplicate-call guard cannot catch this: it keys on canonical argument
+    /// strings, and no two malformed attempts are identical, so nothing matches.
+    #[tokio::test]
+    async fn repeated_unparseable_arguments_break_the_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct NeverCalledExecutor {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl AgentToolExecutor for NeverCalledExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_node".into(),
+                    description: "Create a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ToolResult {
+                    tool_call_id: "tc".into(),
+                    name: name.into(),
+                    result: json!({}),
+                    is_error: false,
+                })
+            }
+        }
+
+        // Each round is malformed in a DIFFERENT way, so canonical-args dedup
+        // never matches. Supply more rounds than the guard should allow.
+        let malformed = [
+            r#"{"content":"a","node_type":"#,
+            r#"{"content":"b",,}"#,
+            r#"{"content":"c""#,
+            r#"{"content":"d"}}"#,
+        ];
+        let rounds: Vec<Vec<StreamingChunk>> = malformed
+            .iter()
+            .enumerate()
+            .map(|(i, args)| {
+                vec![
+                    StreamingChunk::ToolCallStart {
+                        id: format!("tc_{i}"),
+                        name: "create_node".to_string(),
+                    },
+                    StreamingChunk::ToolCallArgs {
+                        id: format!("tc_{i}"),
+                        args_json: (*args).to_string(),
+                    },
+                    StreamingChunk::Done {
+                        usage: InferenceUsage {
+                            prompt_tokens: 10,
+                            completion_tokens: 5,
+                        },
+                    },
+                ]
+            })
+            .collect();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(NeverCalledExecutor {
+            calls: calls.clone(),
+        });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "put down Kind of Blue",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no tool should ever execute — every call had invalid JSON"
+        );
+        assert!(
+            result.tool_calls_made.len() <= MAX_CONSECUTIVE_PARSE_FAILURES,
+            "the turn must stop after {} consecutive parse failures, got {} attempts",
+            MAX_CONSECUTIVE_PARSE_FAILURES,
+            result.tool_calls_made.len()
+        );
+        assert!(
+            result.tool_calls_made.iter().all(|r| r.is_error),
+            "every recorded attempt must be marked as an error"
         );
     }
 

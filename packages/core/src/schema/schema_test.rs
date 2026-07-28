@@ -961,91 +961,19 @@ async fn test_update_schema_locates_malformed_add_fields_entry() {
 }
 
 // ============================================================================
-// title_template with no resolvable fields — error must state the repair
+// title_template resolution is owned by validate_template_tokens
 // ============================================================================
 //
-// The shape observed in the #1775 matrix run: the model sent a title_template
-// and NO fields array at all. The downstream validator rejects this correctly
-// but only names the first undefined placeholder, and says nothing about what a
-// correct call looks like; the model abandoned the request rather than retrying.
+// There is deliberately no second, pre-deserialization check for this rule.
+// A hand-rolled scanner disagreed with the authority on real inputs — it waved
+// through "{a} {b" (unclosed) and prescribed a fix for "{} {b}" that still
+// failed on the empty placeholder — handing the caller a confident but wrong
+// repair instruction, which is worse than a terse correct one.
 
 #[tokio::test]
-async fn test_create_schema_title_template_without_fields_states_the_fix() {
+async fn test_create_schema_title_template_all_placeholders_defined_succeeds() {
     let (svc, _tmp) = create_test_service().await;
 
-    // Verbatim shape from the matrix log.
-    let result = handle_create_schema(
-        &svc,
-        json!({
-            "name": "Equipment Check-out Tracker",
-            "title_template": "{equipment} ({status})"
-        }),
-    )
-    .await;
-
-    let msg = result
-        .expect_err("a template with no fields array must be rejected")
-        .to_string();
-
-    // Both unresolved placeholders in one error — reporting them one per
-    // round-trip costs a retry per placeholder, and every retry is a chance to
-    // corrupt the parts that were already right.
-    assert!(
-        msg.contains("{equipment}") && msg.contains("{status}"),
-        "every unresolved placeholder must be reported at once: {msg}"
-    );
-    // The concrete edit, not just the rule.
-    assert!(
-        msg.contains(r#"{"name":"equipment","type":"text"}"#),
-        "error must spell out the field entry to add: {msg}"
-    );
-    assert!(
-        msg.contains("unchanged"),
-        "error must tell the caller to preserve the rest of the call: {msg}"
-    );
-}
-
-#[tokio::test]
-async fn test_create_schema_title_template_partially_resolved_names_only_the_gap() {
-    let (svc, _tmp) = create_test_service().await;
-
-    let result = handle_create_schema(
-        &svc,
-        json!({
-            "name": "Equipment",
-            "fields": [{ "name": "equipment", "type": "text" }],
-            "title_template": "{equipment} ({status})"
-        }),
-    )
-    .await;
-
-    let msg = result
-        .expect_err("an unresolved placeholder must be rejected")
-        .to_string();
-
-    assert!(
-        msg.contains("{status}"),
-        "the unresolved placeholder must be named: {msg}"
-    );
-    // The message echoes the whole template for context, so `{equipment}` does
-    // appear — what must NOT happen is `equipment` being listed among the
-    // entries to add. Implicating a field that is already correct is precisely
-    // what drives the caller to rewrite a working part of the call.
-    assert!(
-        !msg.contains(r#"{"name":"equipment""#),
-        "a field that IS defined must not be listed as one to add: {msg}"
-    );
-    assert!(
-        msg.contains(r#"{"name":"status","type":"text"}"#),
-        "only the genuinely missing field should be prescribed: {msg}"
-    );
-}
-
-#[tokio::test]
-async fn test_create_schema_fully_resolved_title_template_still_succeeds() {
-    let (svc, _tmp) = create_test_service().await;
-
-    // The pre-check must only ever convert an error into a better error.
     let result = handle_create_schema(
         &svc,
         json!({
@@ -1061,8 +989,57 @@ async fn test_create_schema_fully_resolved_title_template_still_succeeds() {
 
     assert!(
         result.is_ok(),
-        "a template whose placeholders all resolve must still create: {:?}",
+        "a template whose placeholders all resolve must create: {:?}",
         result
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_title_template_unclosed_placeholder_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The case the removed pre-check silently passed.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [{ "name": "equipment", "type": "text" }],
+            "title_template": "{equipment} {status"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("an unclosed placeholder must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("unclosed"),
+        "the unclosed brace must be reported: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_title_template_empty_placeholder_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The case the removed pre-check mis-diagnosed: it prescribed adding the
+    // OTHER field and stayed silent about the empty {}.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Equipment",
+            "fields": [{ "name": "status", "type": "text" }],
+            "title_template": "{} {status}"
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("an empty placeholder must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("empty"),
+        "the empty placeholder must be reported: {msg}"
     );
 }
 
