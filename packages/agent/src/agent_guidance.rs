@@ -336,7 +336,7 @@ mod tests {
                 // reported as parser drift — which is what a bare
                 // "no prompts here" failure would look like.
                 let source = std::fs::read_to_string(&path).ok()?;
-                eval_prompts(&source).1.gt(&0).then_some(path)
+                (eval_prompts(&source).1 > 0).then_some(path)
             })
             .collect();
         eval_scripts.sort();

@@ -58,6 +58,13 @@ export interface DaemonStatus {
   hostRamBytes: number;
   /** On-disk path of the database the daemon is actually serving. */
   databasePath: string;
+  /**
+   * True when `modelId` could only be matched to the requested model by
+   * filename, because the daemon reported a resolved path instead of a catalog
+   * id. The exact build is unconfirmed in that case; recorded in the results
+   * file so the caveat outlives the terminal session that saw the warning.
+   */
+  modelMatchedByPath?: boolean;
 }
 
 /**
@@ -261,6 +268,7 @@ export function preflight(
     // Matched a path rather than an id, so the exact build cannot be confirmed
     // from the id alone. Proceed, but say so — a silent near-match is how a run
     // gets filed under the wrong quantization.
+    status.modelMatchedByPath = true;
     console.error(
       `[preflight] Warning: the daemon reports "${status.modelId}" (a path, not a ` +
         `catalog id). Matched "${env.model}" by filename; the exact build could not ` +

@@ -256,6 +256,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     recordedAt: new Date().toISOString(),
     hostMemoryGb: Number((status.hostRamBytes / 1e9).toFixed(1)),
     nCtx: status.grantedNCtx,
+    ...(status.modelMatchedByPath ? { modelMatchedByPath: true } : {}),
     evalCommit: commit,
     dirty,
   };
@@ -284,6 +285,36 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   const MAX_CONSECUTIVE_SEND_FAILURES = 2;
   let consecutiveSendFailures = 0;
 
+  /**
+   * Run a turn and count it against the consecutive-failure budget.
+   *
+   * Every turn goes through here, prior-context turns included. A guard on only
+   * the scored turn would leave the identical hole one call site over: a prior
+   * turn that never reached the model leaves its scenario running against a
+   * chat that never received its setup, and the resulting verdict gets filed as
+   * the model's behavior rather than as an environment artifact.
+   */
+  const turn = (chatId: string, message: string): TurnRecord => {
+    const t = runTurn(env, chatId, message);
+    if (!t.sendFailed) {
+      consecutiveSendFailures = 0;
+      return t;
+    }
+    consecutiveSendFailures++;
+    if (consecutiveSendFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
+      throw new EnvironmentError(
+        `${consecutiveSendFailures} turns in a row failed to send — the daemon ` +
+          `went away partway through the run.\n  Last error: ${t.reply}`,
+        `Check whether the daemon on ${env.socket} is still alive (it may have ` +
+          `run out of memory or been killed).\n  ${results.length} scenario(s) had ` +
+          `been scored; they are NOT written, because scores from a run that died ` +
+          `midway are not comparable to a complete one — and turns that never ` +
+          `reached the model would score "no tools called" assertions as passes.`,
+      );
+    }
+    return t;
+  };
+
   try {
     for (const group of fixture.groups) {
       const chatId = newChat(env);
@@ -298,27 +329,10 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         const priorTurns: TurnRecord[] = [];
         for (const prior of scenario.priorTurns ?? []) {
           console.error(`[${fixture.name}]   [context] ${prior}`);
-          priorTurns.push(runTurn(env, chatId, prior));
+          priorTurns.push(turn(chatId, prior));
         }
 
-        const scored = runTurn(env, chatId, scenario.prompt);
-
-        if (scored.sendFailed) {
-          consecutiveSendFailures++;
-          if (consecutiveSendFailures >= MAX_CONSECUTIVE_SEND_FAILURES) {
-            throw new EnvironmentError(
-              `${consecutiveSendFailures} turns in a row failed to send — the daemon ` +
-                `went away partway through the run.\n  Last error: ${scored.reply}`,
-              `Check whether the daemon on ${env.socket} is still alive (it may have ` +
-                `run out of memory or been killed).\n  ${results.length} scenario(s) had ` +
-                `been scored; they are NOT written, because scores from a run that died ` +
-                `midway are not comparable to a complete one — and turns that never ` +
-                `reached the model would score "no tools called" assertions as passes.`,
-            );
-          }
-        } else {
-          consecutiveSendFailures = 0;
-        }
+        const scored = turn(chatId, scenario.prompt);
 
         const verdict = fixture.score(scenario, [scored]);
 

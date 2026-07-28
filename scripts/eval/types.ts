@@ -124,6 +124,12 @@ export interface Provenance {
    * when this comfortably exceeds the agent's system prompt; see preflight.ts.
    */
   nCtx: number;
+  /**
+   * Set when the loaded model could only be matched to `NS_MODEL` by filename,
+   * because the daemon reported a resolved path rather than a catalog id. The
+   * exact build behind this number is unconfirmed.
+   */
+  modelMatchedByPath?: boolean;
   /** Commit of the repo the eval ran from. */
   evalCommit: string;
   /** True when the working tree had uncommitted changes at run time. */
