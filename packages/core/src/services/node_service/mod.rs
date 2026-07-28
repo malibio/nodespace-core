@@ -1829,6 +1829,159 @@ mod tests {
         (service, temp_dir)
     }
 
+    /// Adding existing nodes as children one at a time appends each after the
+    /// current last sibling, producing strictly increasing order keys — the
+    /// simple single-threaded case for the add-existing-child path.
+    #[tokio::test]
+    async fn add_existing_child_appends_in_order() {
+        let (service, _temp) = create_test_service().await;
+        for id in ["p", "a", "b", "c"] {
+            service
+                .create_node(Node::new_with_id(
+                    id.to_string(),
+                    "text".to_string(),
+                    id.to_string(),
+                    json!({}),
+                ))
+                .await
+                .unwrap();
+        }
+
+        for child in ["a", "b", "c"] {
+            service
+                .create_relationship("p", "has_child", child, json!({}))
+                .await
+                .unwrap();
+        }
+
+        // get_children sorts by the has_child edge order ASC, so insertion order
+        // is preserved: each append landed after the previous max.
+        let kids: Vec<String> = service
+            .get_children("p")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.id)
+            .collect();
+        assert_eq!(kids, vec!["a", "b", "c"], "appends preserve sibling order");
+
+        let mut orders: Vec<f64> = service
+            .store()
+            .get_relationship_orders("p", "has_child", "in_node")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.unwrap_or(0.0))
+            .collect();
+        orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(orders, vec![1.0, 2.0, 3.0], "strictly appended order keys");
+    }
+
+    /// Regression for the ops-layer add-existing-child order race: many
+    /// `create_relationship("has_child")` appends onto the SAME parent running
+    /// at once — alongside a concurrent reorder of an existing child — must leave
+    /// every sibling with a DISTINCT fractional-order key. The pre-fix code read
+    /// the next child order and wrote the edge as two separate un-serialized
+    /// steps, so concurrent appends computed the same key against a stale max and
+    /// collided. `append_child_edge` does the read → compute → write atomically
+    /// under `reorder_lock`, matching `move_node`'s discipline.
+    ///
+    /// Requires a multi-thread runtime so the appends' read/compute/write can
+    /// actually interleave (mirrors the store-level reorder-race test).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_add_existing_child_keeps_distinct_order() {
+        let (service, _temp) = create_test_service().await;
+        let service = Arc::new(service);
+
+        // Parent seeded with two children: a non-trivial starting max order and a
+        // reorder target for the concurrent move.
+        service
+            .create_node(Node::new_with_id(
+                "p".to_string(),
+                "text".to_string(),
+                "p".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        for seed in ["seed0", "seed1"] {
+            service
+                .create_node(Node::new_with_id(
+                    seed.to_string(),
+                    "text".to_string(),
+                    seed.to_string(),
+                    json!({}),
+                ))
+                .await
+                .unwrap();
+            service
+                .create_relationship("p", "has_child", seed, json!({}))
+                .await
+                .unwrap();
+        }
+
+        // Orphan nodes to attach concurrently.
+        const N: usize = 16;
+        for i in 0..N {
+            service
+                .create_node(Node::new_with_id(
+                    format!("n{i}"),
+                    "text".to_string(),
+                    format!("n{i}"),
+                    json!({}),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let mut handles = Vec::new();
+        // N concurrent add-existing-child appends onto the same parent.
+        for i in 0..N {
+            let service = service.clone();
+            handles.push(tokio::spawn(async move {
+                service
+                    .create_relationship("p", "has_child", &format!("n{i}"), json!({}))
+                    .await
+            }));
+        }
+        // A concurrent reorder contending on the same parent's sibling order.
+        {
+            let service = service.clone();
+            handles.push(tokio::spawn(async move {
+                service
+                    .reorder_child("seed1", crate::services::InsertPosition::Beginning)
+                    .await
+            }));
+        }
+        for h in handles {
+            h.await
+                .expect("task panicked")
+                .expect("add-existing-child / reorder returned an error");
+        }
+
+        // All 2 seed + N appended children are present (none lost/duplicated).
+        let children = service.get_children("p").await.unwrap();
+        assert_eq!(children.len(), N + 2, "lost or duplicated a child");
+
+        // Every has_child edge under the parent carries a DISTINCT order key.
+        let mut orders: Vec<f64> = service
+            .store()
+            .get_relationship_orders("p", "has_child", "in_node")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.unwrap_or(0.0))
+            .collect();
+        assert_eq!(orders.len(), N + 2, "expected one edge per child");
+        orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for pair in orders.windows(2) {
+            assert!(
+                (pair[1] - pair[0]).abs() > f64::EPSILON,
+                "colliding sibling order keys after concurrent add-existing-child: {orders:?}"
+            );
+        }
+    }
+
     /// The batched edge-sweep primitive (#345) reproduces the sender's sibling order
     /// and is idempotent — it never re-parents a child that already has a parent.
     #[tokio::test]

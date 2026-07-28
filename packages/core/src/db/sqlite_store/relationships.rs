@@ -207,9 +207,48 @@ impl SqliteStore {
             .await
     }
 
-    pub async fn get_next_child_order(&self, parent_id: &str) -> Result<f64> {
-        self.get_next_order_for_relationship(parent_id, "has_child", false)
-            .await
+    /// Append a `has_child` edge from `parent_id` to `child_id`, assigning the
+    /// next fractional sibling order — reading the current max order, computing
+    /// the next key, and inserting the edge as ONE atomic unit under
+    /// `reorder_lock`. The ordered `has_child` analogue of `add_to_collection`'s
+    /// `member_of` path.
+    ///
+    /// Splitting the read from the write (a separate "get next order" call
+    /// followed by a generic relationship insert) let a concurrent reorder
+    /// interleave between them, so two appends computed the same order key
+    /// against a now-stale max and collided. Holding `reorder_lock` across the
+    /// read → compute → write serializes this against `move_node`,
+    /// `create_child_node_atomic`, and `move_children_to_parent`, matching their
+    /// discipline. The lock scopes exactly the order read/compute/write — no
+    /// unrelated async work runs under it.
+    ///
+    /// No re-entrancy: `get_next_order_for_relationship` and the raw INSERT take
+    /// no lock, so nothing re-acquires `reorder_lock`. See `reorder_lock`.
+    ///
+    /// Uses `INSERT OR IGNORE` (matching `create_generic_relationship`) so a
+    /// duplicate edge — already guarded by the caller's existence check — is a
+    /// benign no-op rather than a unique-index error. Returns the assigned order
+    /// and the new relationship id.
+    pub async fn append_child_edge(
+        &self,
+        parent_id: &str,
+        child_id: &str,
+    ) -> Result<(f64, String)> {
+        let _reorder_guard = self.reorder_lock.lock().await;
+
+        let new_order = self
+            .get_next_order_for_relationship(parent_id, "has_child", false)
+            .await?;
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let props = serde_json::json!({ "order": new_order }).to_string();
+        self.db.execute(
+            "INSERT OR IGNORE INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+            libsql::params![rel_id.clone(), parent_id.to_string(), child_id.to_string(), props, now.clone(), now],
+        ).await.context("Failed to insert has_child edge")?;
+
+        Ok((new_order, rel_id))
     }
 
     /// ADR-059 §2 — a content node may hold a `member_of` edge only when it is a
