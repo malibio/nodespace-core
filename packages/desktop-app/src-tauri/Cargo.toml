@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # Pro-tier proto compilation (nodespace.pro.v1 — vendored from
-# nodespace-sync via scripts/refresh-pro-proto.sh).
+# nodespace-sync via scripts/refresh-pro-proto.ts).
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
 
