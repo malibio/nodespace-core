@@ -15,8 +15,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent_types::{
     AgentSession, AgentToolExecutor, AgentTurnResult, ChatInferenceEngine, ChatMessage,
-    InferenceError, InferenceRequest, InferenceUsage, LocalAgentStatus, Role, StreamingChunk,
-    ToolCallRaw, ToolExecutionRecord,
+    ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage, LocalAgentStatus, Role,
+    StreamingChunk, ToolCallRaw, ToolExecutionRecord,
 };
 use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
@@ -223,6 +223,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             tool_executor,
             prompt_assembler: None,
         }
+    }
+
+    /// The inference engine backing this loop, so callers that need to report
+    /// the loaded model's real geometry (id, granted context window) can ask it
+    /// without threading a second handle through every construction site.
+    pub fn engine(&self) -> &Arc<E> {
+        &self.engine
     }
 
     pub fn with_prompt_assembler(mut self, assembler: Arc<PromptAssembler>) -> Self {
@@ -1252,6 +1259,16 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             agent_loop,
             cancel_tokens: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// The loaded model's spec (id and the context window actually granted at
+    /// load time, not the configured ceiling). `None` when no model is loaded.
+    ///
+    /// Exposed so the daemon can report the real window over the wire: an eval
+    /// or client that assumes a window larger than the one granted produces
+    /// turns that die on context overflow before inference runs.
+    pub async fn model_spec(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+        self.agent_loop.engine().model_info().await
     }
 
     /// Create a new conversation session.

@@ -8,7 +8,8 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
-    EnsureModelReadyRequest, ListModelsRequest, RecommendedModelRequest,
+    EnsureModelReadyRequest, GetLocalStatusRequest, GetSystemRamRequest, ListModelsRequest,
+    RecommendedModelRequest,
 };
 use serde_json::json;
 
@@ -22,6 +23,8 @@ pub enum ModelAction {
     Load(LoadArgs),
     /// Print the recommended model id for this machine's RAM.
     Recommended,
+    /// Print the loaded model, the context window granted to it, and host RAM.
+    Status,
 }
 
 #[derive(Args, Debug)]
@@ -35,6 +38,7 @@ pub async fn run(client: &mut LocalAgentClient, action: ModelAction, json: bool)
         ModelAction::List => list(client, json).await,
         ModelAction::Load(args) => load(client, args, json).await,
         ModelAction::Recommended => recommended(client, json).await,
+        ModelAction::Status => status(client, json).await,
     }
 }
 
@@ -156,6 +160,56 @@ async fn load(client: &mut LocalAgentClient, args: LoadArgs, json: bool) -> Resu
     if last_event != "ready" && last_event != "error" {
         // Stream ended without an explicit terminal event — surface it.
         eprintln!("warning: model load stream ended on '{last_event}'");
+    }
+    Ok(())
+}
+
+/// Report what the daemon actually has loaded.
+///
+/// `granted_n_ctx` is the window the engine allocated at load time, which is
+/// sized to available memory and can be well below the configured ceiling. A
+/// caller that intends to send a large system prompt must be able to check it
+/// up front; otherwise an impossible request fails one turn at a time and looks
+/// like a model that will not act rather than an environment that cannot run it.
+async fn status(client: &mut LocalAgentClient, json: bool) -> Result<()> {
+    let status = client
+        .get_status(GetLocalStatusRequest { session_id: None })
+        .await
+        .context("GetStatus RPC failed")?
+        .into_inner();
+
+    let ram_bytes = client
+        .get_system_ram(GetSystemRamRequest {})
+        .await
+        .context("GetSystemRam RPC failed")?
+        .into_inner()
+        .ram_bytes;
+
+    let loaded = !status.model_id.is_empty();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "loaded": loaded,
+                "model_id": status.model_id,
+                "granted_n_ctx": status.granted_n_ctx,
+                "status": status.status_json,
+                "host_ram_bytes": ram_bytes,
+            }))?
+        );
+    } else if loaded {
+        println!(
+            "{} (n_ctx {}, host RAM {:.1} GB)",
+            status.model_id,
+            status.granted_n_ctx,
+            ram_bytes as f64 / 1e9,
+        );
+    } else {
+        println!(
+            "no model loaded (host RAM {:.1} GB)",
+            ram_bytes as f64 / 1e9
+        );
     }
     Ok(())
 }

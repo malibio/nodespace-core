@@ -1,12 +1,10 @@
-#!/usr/bin/env bun
 /**
- * routing-eval.ts — repeatable fixture harness for skill-discovery routing accuracy.
+ * Skill-routing eval — routing accuracy through the two-gate pipeline (ADR-036).
  *
- * Tests the two-gate routing pipeline from ADR-036:
- *   Stage 1: model forms a search query (or emits clarification request)
+ *   Stage 1: model forms a search query (or emits a clarification request)
  *   Stage 2: model judges whether the retrieved skill fits the intent
  *
- * Coverage mirrors issue #1357 acceptance criteria:
+ * Coverage:
  *   - Direct intent → correct skill
  *   - Indirect phrasing → correct skill (the load-bearing assumption)
  *   - Ambiguous → expect clarification, not a guess
@@ -15,116 +13,40 @@
  *   - No-match / out-of-scope → clarify, then fall through (not a loop)
  *   - Mutating-skill gate: borderline schema-creation gated harder than read-only
  *
- * Usage:
- *   NS_BIN=target/release/nodespace \
- *   NODESPACED_SOCKET=/tmp/nodespaced-test/daemon.sock \
- *   NS_LOG=/tmp/nodespaced-test/daemon.log \
- *   NS_MODEL=<id> NS_TIMEOUT_MS=120000 \
- *     bun run scripts/routing-eval.ts <label> [out.json]
- *
- * Writes results to <out.json> (default: /tmp/routing-eval-<label>-<ts>.json).
- * Exits 0 if all mandatory assertions pass, 1 otherwise.
- * Set ROUTING_BASELINE=path/to/baseline.json to compare against recorded baseline.
- *
- * The daemon, socket, and DB must be managed by the caller (same as aichat-matrix.ts).
- * Skills must be seeded in the daemon's DB before running this harness.
- *
- * Dependencies: #1356 (find_skills returns instructions subtree — affects Stage-2 judgment).
- * Gated on: llama.cpp upgrade issue (run against the verified engine, not the vendored build).
+ * Scenario wording must stay independent of packages/agent/src/agent_guidance.rs;
+ * `guidance_is_not_contaminated_by_eval_prompts` parses the `prompt:` literals
+ * out of this file and fails the build if guidance reproduces one.
  */
 
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const WORKTREE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const AICHAT = join(WORKTREE, "scripts", "aichat.ts");
-
-const [label, outPathArg] = process.argv.slice(2);
-if (!label) {
-  console.error(
-    "usage: routing-eval.ts <label> [out.json]\n" +
-      "  label    arbitrary tag recorded in results (e.g. 'e4b-upgraded')\n" +
-      "  out.json path to write results (default: /tmp/routing-eval-<label>-<ts>.json)",
-  );
-  process.exit(1);
-}
-
-const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const outPath = outPathArg ?? `/tmp/routing-eval-${label}-${ts}.json`;
-const baselinePath = process.env.ROUTING_BASELINE;
+import type { EvalFixture, Scenario, TurnRecord, Verdict } from "../types.ts";
 
 // ---------------------------------------------------------------------------
-// Types
+// Expectation model
 // ---------------------------------------------------------------------------
 
-type ExpectedOutcome =
-  | { kind: "skill"; skill: string } // expects skill name (substring match, case-insensitive)
-  | { kind: "clarify" } // expects a clarification question, no tool action
-  | { kind: "search" }; // expects the Research & Search / general search skill
+export type ExpectedOutcome =
+  | { kind: "skill"; skill: string } // skill name (substring match, case-insensitive)
+  | { kind: "clarify" } // a clarification question, no tool action
+  | { kind: "search" }; // the Research & Search / general search skill
 
-interface Fixture {
-  id: string; // unique stable ID for baseline diffing
-  scenario: string; // human-readable description
-  prompt: string; // the user message to send
-  // Optional prior turns that set up context (same chat node, in order)
-  priorTurns?: string[];
+interface RoutingScenario extends Scenario {
   expected: ExpectedOutcome;
-  // Fixtures that cover the "thin evidence" areas the ADR calls out explicitly
+  /** Covers a "thin evidence" area the ADR calls out explicitly. */
   loadBearing?: boolean;
-  // Mutating skill: the bar should be higher (schema-create vs search)
+  /** Mutating skill: the bar is higher (schema-create vs search). */
   mutating?: boolean;
-  // Adversarial: a message that should NOT match a mutating skill
+  /** A message that must NOT reach a mutating skill. */
   adversarial?: boolean;
 }
 
-interface TurnRecord {
-  toolsOffered: string;
-  toolsCalled: string[];
-  reply: string;
-  latencyMs: number;
-}
-
-interface FixtureResult {
-  id: string;
-  scenario: string;
-  prompt: string;
-  expected: ExpectedOutcome;
-  loadBearing: boolean;
-  mutating: boolean;
-  adversarial: boolean;
-  passed: boolean;
-  failure?: string;
-  // Routing signals
-  skillsSearched: boolean; // did the model call search_skills?
-  matchedSkill: string | null; // first skill name returned (from log)
-  topScore: number | null;
-  turnCount: number; // total turns in the chat node for this fixture
-  clarified: boolean; // did the reply contain a clarification question?
-  // Raw turn data
-  turns: TurnRecord[];
-}
-
-interface EvalResults {
-  label: string;
-  model: string;
-  timestamp: string;
-  summary: {
-    total: number;
-    passed: number;
-    failed: number;
-    loadBearingPassed: number;
-    loadBearingTotal: number;
-    mutatingPassed: number;
-    mutatingTotal: number;
-  };
-  fixtures: FixtureResult[];
-}
-
 // ---------------------------------------------------------------------------
-// Fixture set (issue #1357 acceptance criteria)
+// Scenarios
+//
+// Each runs in its own chat node. `id` is the baseline join key and must stay
+// stable; prompts may be reworded freely.
 // ---------------------------------------------------------------------------
 
-const FIXTURES: Fixture[] = [
+const FIXTURES: RoutingScenario[] = [
   // ── Direct intent → correct skill ────────────────────────────────────────
   {
     id: "direct-schema-create",
@@ -260,56 +182,7 @@ const FIXTURES: Fixture[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Harness helpers (reuse aichat.ts patterns)
-// ---------------------------------------------------------------------------
-
-function runAichat(args: string[]): {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-} {
-  const r = Bun.spawnSync(["bun", "run", AICHAT, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env },
-  });
-  return {
-    exitCode: r.exitCode ?? 1,
-    stdout: r.stdout.toString(),
-    stderr: r.stderr.toString(),
-  };
-}
-
-function newChat(): string {
-  const r = runAichat(["new"]);
-  if (r.exitCode !== 0) throw new Error(`new failed: ${r.stderr}`);
-  return r.stdout.trim();
-}
-
-function sendTurn(chatId: string, message: string): TurnRecord {
-  const start = performance.now();
-  const r = runAichat(["send", chatId, message]);
-  const latencyMs = Math.round(performance.now() - start);
-
-  if (r.exitCode !== 0) {
-    return {
-      toolsOffered: `(error: ${r.stderr.trim()})`,
-      toolsCalled: [],
-      reply: `(send failed: ${r.stderr.trim()})`,
-      latencyMs,
-    };
-  }
-
-  const out = r.stdout;
-  const toolsOffered = out.match(/\[tools offered\] (.*)/)?.[1]?.trim() ?? "";
-  const toolsCalled = [...out.matchAll(/\[tool\] ([a-z_]+)/g)].map((m) => m[1]);
-  const reply = out.match(/assistant> ([\s\S]*)$/)?.[1]?.trim() ?? "(no reply parsed)";
-
-  return { toolsOffered, toolsCalled, reply, latencyMs };
-}
-
-// ---------------------------------------------------------------------------
-// Assertion logic
+// Scoring
 // ---------------------------------------------------------------------------
 
 function isClarification(reply: string): boolean {
@@ -379,7 +252,7 @@ function calledSchemaCreate(turns: TurnRecord[]): boolean {
   return turns.some((t) => t.toolsCalled.includes("create_schema"));
 }
 
-function assertFixture(fixture: Fixture, turns: TurnRecord[]): { passed: boolean; failure?: string } {
+function assertFixture(fixture: RoutingScenario, turns: TurnRecord[]): Verdict {
   const allReplies = turns.map((t) => t.reply).join("\n");
   const clarified = isClarification(allReplies);
   const searched = calledSearchSkills(turns);
@@ -452,152 +325,38 @@ function assertFixture(fixture: Fixture, turns: TurnRecord[]): { passed: boolean
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main eval loop
-// ---------------------------------------------------------------------------
-
-console.error(`[routing-eval] label=${label} model=${process.env.NS_MODEL ?? "(default)"}`);
-console.error(`[routing-eval] ${FIXTURES.length} fixtures to run`);
-
-const results: FixtureResult[] = [];
-let failed = 0;
-
-for (const fixture of FIXTURES) {
-  const chatId = newChat();
-  console.error(`[routing-eval] fixture: ${fixture.id} (chat ${chatId})`);
-
-  const allTurns: TurnRecord[] = [];
-
-  // Run prior-context turns (not asserted)
-  for (const prior of fixture.priorTurns ?? []) {
-    console.error(`  [context] ${prior}`);
-    const t = sendTurn(chatId, prior);
-    allTurns.push(t);
-    console.error(`    tools=[${t.toolsCalled.join(",")}] ${t.latencyMs}ms`);
-  }
-
-  // Run the fixture turn (asserted)
-  console.error(`  [fixture] ${fixture.prompt}`);
-  const t = sendTurn(chatId, fixture.prompt);
-  allTurns.push(t);
-  console.error(`    tools=[${t.toolsCalled.join(",")}] ${t.latencyMs}ms`);
-
-  // Only assert on the fixture turn and its reply (last turn)
-  const assertionTurns = allTurns.slice(fixture.priorTurns?.length ?? 0);
-  const { passed, failure } = assertFixture(fixture, assertionTurns);
-
-  if (!passed) {
-    failed++;
-    console.error(`  ✗ FAILED: ${failure}`);
-  } else {
-    console.error(`  ✓ passed`);
-  }
-
-  results.push({
-    id: fixture.id,
-    scenario: fixture.scenario,
-    prompt: fixture.prompt,
-    expected: fixture.expected,
-    loadBearing: fixture.loadBearing ?? false,
-    mutating: fixture.mutating ?? false,
-    adversarial: fixture.adversarial ?? false,
-    passed,
-    failure,
-    skillsSearched: calledSearchSkills(assertionTurns),
-    matchedSkill: skillNameFromTurns(assertionTurns),
-    topScore: null, // TODO(#1357): parse from daemon log (retrieval score is one of ADR-036's two gate signals)
-    turnCount: allTurns.length,
-    clarified: isClarification(assertionTurns.map((t) => t.reply).join("\n")),
-    turns: allTurns,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Summary
-// ---------------------------------------------------------------------------
-
-const total = results.length;
-const passed = total - failed;
-const loadBearingResults = results.filter((r) => r.loadBearing);
-const loadBearingPassed = loadBearingResults.filter((r) => r.passed).length;
-const mutatingResults = results.filter((r) => r.mutating);
-const mutatingPassed = mutatingResults.filter((r) => r.passed).length;
-
-const evalResults: EvalResults = {
-  label,
-  model: process.env.NS_MODEL ?? "(default)",
-  timestamp: new Date().toISOString(),
-  summary: {
-    total,
-    passed,
-    failed,
-    loadBearingPassed,
-    loadBearingTotal: loadBearingResults.length,
-    mutatingPassed,
-    mutatingTotal: mutatingResults.length,
+const fixture: EvalFixture = {
+  name: "routing",
+  description: "Routing Eval Results (skill-discovery accuracy)",
+  // Each scenario is independent, so every one gets its own chat node.
+  groups: FIXTURES.map((f) => [f]),
+  score(scenario, turns) {
+    return assertFixture(scenario as RoutingScenario, turns);
   },
-  fixtures: results,
+  extra(scenario, turns) {
+    const s = scenario as RoutingScenario;
+    return {
+      expected: s.expected,
+      loadBearing: s.loadBearing ?? false,
+      mutating: s.mutating ?? false,
+      adversarial: s.adversarial ?? false,
+      skillsSearched: calledSearchSkills(turns),
+      matchedSkill: skillNameFromTurns(turns),
+      clarified: isClarification(turns.map((t) => t.reply).join("\n")),
+      toolsCalled: turns.flatMap((t) => t.toolsCalled),
+      latencyMs: turns.reduce((sum, t) => sum + t.latencyMs, 0),
+    };
+  },
+  summary(results) {
+    const count = (pred: (e: Record<string, unknown>) => boolean) => {
+      const rows = results.filter((r) => r.extra && pred(r.extra));
+      return `${rows.filter((r) => r.passed).length}/${rows.length}`;
+    };
+    return [
+      `Load-bearing (indirect phrasing + clarification): ${count((e) => e.loadBearing === true)}`,
+      `Mutating gate:  ${count((e) => e.mutating === true)}`,
+    ];
+  },
 };
 
-await Bun.write(outPath, JSON.stringify(evalResults, null, 2));
-console.error(`\n[routing-eval] results written to ${outPath}`);
-
-// Print summary table
-console.log(`\n── Routing Eval Results ─────────────────────────────────────────────`);
-console.log(`   Label:   ${label}`);
-console.log(`   Model:   ${process.env.NS_MODEL ?? "(default)"}`);
-console.log(`   Passed:  ${passed}/${total}`);
-console.log(
-  `   Load-bearing (indirect phrasing + clarification): ${loadBearingPassed}/${loadBearingResults.length}`,
-);
-console.log(`   Mutating gate:  ${mutatingPassed}/${mutatingResults.length}`);
-console.log(`────────────────────────────────────────────────────────────────────`);
-for (const r of results) {
-  const mark = r.passed ? "✓" : "✗";
-  const lb = r.loadBearing ? " [load-bearing]" : "";
-  console.log(`  ${mark} ${r.id}${lb}`);
-  if (!r.passed) console.log(`      ↳ ${r.failure}`);
-}
-console.log(`────────────────────────────────────────────────────────────────────\n`);
-
-// ---------------------------------------------------------------------------
-// Baseline comparison (optional)
-// ---------------------------------------------------------------------------
-
-if (baselinePath) {
-  try {
-    const baseline: EvalResults = JSON.parse(await Bun.file(baselinePath).text());
-    console.log(`── Baseline Comparison (vs ${baseline.label} @ ${baseline.timestamp}) ──`);
-    let regressions = 0;
-    for (const cur of results) {
-      const base = baseline.fixtures.find((f) => f.id === cur.id);
-      if (!base) {
-        console.log(`  NEW  ${cur.id} → ${cur.passed ? "pass" : "fail"}`);
-        continue;
-      }
-      if (base.passed && !cur.passed) {
-        console.log(`  REGRESSION  ${cur.id}: was passing, now failing — ${cur.failure}`);
-        regressions++;
-      } else if (!base.passed && cur.passed) {
-        console.log(`  FIXED  ${cur.id}: was failing, now passing`);
-      }
-    }
-    if (regressions > 0) {
-      console.error(`\n[routing-eval] ✗ ${regressions} regression(s) vs baseline — failing`);
-      process.exit(1);
-    } else {
-      console.log(`\n[routing-eval] ✓ No regressions vs baseline`);
-    }
-  } catch (e) {
-    console.error(`[routing-eval] Warning: could not read baseline at ${baselinePath}: ${e}`);
-  }
-}
-
-// Fail the process if mandatory assertions failed (for CI)
-if (failed > 0) {
-  console.error(`\n[routing-eval] ✗ ${failed}/${total} fixtures failed`);
-  process.exit(1);
-} else {
-  console.error(`\n[routing-eval] ✓ All ${total} fixtures passed`);
-  process.exit(0);
-}
+export default fixture;

@@ -59,7 +59,7 @@ mlflow traces search --filter "attributes.session_id = '<id>'"
 
 ## Compare model runs
 
-Run `aichat-matrix.ts` (or send the same message with different model settings) then compare:
+Run `bun run eval:agent` (or send the same message with different model settings) then compare:
 
 1. Open http://localhost:5000 → **Traces**
 2. Select two traces → **Compare** to diff assembled prompts and responses side-by-side

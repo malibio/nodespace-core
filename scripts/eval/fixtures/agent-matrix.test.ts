@@ -1,17 +1,19 @@
 /**
- * Unit tests for assertExpectation() in scripts/aichat-matrix.ts.
+ * Unit tests for assertExpectation() — the function that decides whether an
+ * agent-matrix scenario passed.
  *
- * scripts/ isn't part of any Vitest project's file glob, so this uses
- * Bun's native test runner directly:
+ * Runs via `bun run test:scripts` (and so under `bun run test:all`). This is a
+ * deliberate exception to the project-wide "never use `bun test`" rule: that
+ * rule exists so DOM tests cannot bypass the Happy-DOM Vitest config, and this
+ * file touches no DOM. It cannot run under Vitest anyway — it imports
+ * `bun:test`, and scripts/ is outside every Vitest project glob.
  *
- *   bun test scripts/aichat-matrix.test.ts
- *
- * Do NOT use `bun run test` for this file — that command is scoped to
- * packages/desktop-app's Happy-DOM Vitest suite and won't discover it.
+ * It needs no model and no daemon, which is what makes the scoring logic
+ * cheap to protect even though the eval itself is manual.
  */
 
 import { describe, expect, test } from "bun:test";
-import { assertExpectation, type Expectation } from "./aichat-matrix";
+import { assertExpectation, type Expectation } from "./agent-matrix.ts";
 
 describe("assertExpectation", () => {
   describe("noTools", () => {
