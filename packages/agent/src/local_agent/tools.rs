@@ -1784,7 +1784,9 @@ impl GraphToolExecutor {
         let result = handle_create_nodes_from_markdown(&ns, handler_args)
             .await
             .map_err(|e| {
-                ToolError::ExecutionFailed(format!("create_nodes_from_markdown failed: {:?}", e))
+                // Display, not Debug — MarkdownError's Display text is written to
+                // be read by the model, and `{:?}` wraps it in the variant name.
+                ToolError::ExecutionFailed(format!("create_nodes_from_markdown failed: {e}"))
             })?;
 
         Ok(ok_result(

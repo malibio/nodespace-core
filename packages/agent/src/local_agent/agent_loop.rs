@@ -995,11 +995,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // Otherwise loop back for another inference round
         }
 
-        // Reached only via the duplicate-call guard's `break` above. The
-        // max-iteration path (iteration == effective_max_iterations - 1) always
-        // returns early and never falls through here. Run one final text-only
-        // inference so the session always produces a response from the tool
-        // results already in history.
+        // Reached via either `break` above: the duplicate-call guard, or the
+        // consecutive-parse-failure guard. The max-iteration path
+        // (iteration == effective_max_iterations - 1) always returns early and
+        // never falls through here. Run one final text-only inference so the
+        // session always produces a response from the tool results already in
+        // history.
         on_status(LocalAgentStatus::Thinking);
 
         let mut messages = vec![ChatMessage::text(Role::System, system_content.clone())];
