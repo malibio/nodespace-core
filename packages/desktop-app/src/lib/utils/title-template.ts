@@ -17,13 +17,19 @@
 import type { SchemaField } from '$lib/types/schema-node';
 
 /**
- * Matches a `{token}` and captures the field name between the braces.
+ * Builds a matcher for `{token}`, capturing the field name between the braces.
  *
  * Mirrors Rust's `interpolate_title_template_with_schema`: it scans to the next
- * `}`, so the name may contain any character except `}`. Kept in one place so
- * both template evaluators stay in sync.
+ * `}`, so the name may contain any character except `}`. Defined once so both
+ * template evaluators stay in sync.
+ *
+ * A factory rather than a shared constant: a `/g` regex carries mutable
+ * `lastIndex` state, so a single shared instance is only safe while every call
+ * site uses `String.replace` (which resets it). The first `.test()` or
+ * `.exec()` added later would start returning alternating results — a failure
+ * mode that is hard to attribute back to a regex declared in another function.
  */
-const TEMPLATE_TOKEN_RE = /\{([^}]*)\}/g;
+const templateTokenRe = () => /\{([^}]*)\}/g;
 
 /**
  * Interpolates a title template with the given field values.
@@ -37,7 +43,7 @@ export function evaluateTitleTemplate(
   template: string,
   fieldValues: Record<string, unknown>
 ): string {
-  const interpolated = template.replace(TEMPLATE_TOKEN_RE, (_, fieldName) => {
+  const interpolated = template.replace(templateTokenRe(), (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
     return String(val);
@@ -88,7 +94,7 @@ export function evaluateSummaryTemplate(
 ): string {
   const fieldMap = new Map(fields.map((f) => [f.name, f]));
 
-  const interpolated = template.replace(TEMPLATE_TOKEN_RE, (_, fieldName) => {
+  const interpolated = template.replace(templateTokenRe(), (_, fieldName) => {
     const val = fieldValues[fieldName];
     if (val === null || val === undefined) return '';
 
