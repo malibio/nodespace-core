@@ -158,7 +158,7 @@ pub enum StreamingChunk {
 }
 
 /// Current status of a model in the local catalog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ModelStatus {
     /// Model is known but not yet downloaded.
@@ -247,21 +247,35 @@ pub enum ModelFamily {
     Gemma4,
     /// MistralSmall -- Mistral AI's Small series (24B dense, strong reasoning).
     MistralSmall,
-    /// Model served via Ollama (family determined by Ollama).
-    Ollama,
-    /// Model served via a user-configured OpenAI-compatible endpoint.
+    /// Model served via a user-configured OpenAI-compatible endpoint (family
+    /// determined by the remote server).
     OpenAiCompat,
 }
 
 /// Backend used to serve a language model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ModelBackend {
     /// Local GGUF model loaded via llama.cpp.
     #[default]
     Gguf,
-    /// Model served by a local Ollama daemon.
-    Ollama,
+    /// Model served by a user-configured OpenAI-compatible endpoint. Covers
+    /// every remotely-served model, Ollama's `/v1` API included.
+    OpenAiCompat,
+}
+
+impl ModelBackend {
+    /// Wire identifier sent to the frontend in the model catalog.
+    ///
+    /// Spelled out rather than derived from `Debug`, which would render the
+    /// variant as "openaicompat" and silently disagree with the hyphenated
+    /// value the frontend matches on.
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            ModelBackend::Gguf => "gguf",
+            ModelBackend::OpenAiCompat => "openai-compat",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

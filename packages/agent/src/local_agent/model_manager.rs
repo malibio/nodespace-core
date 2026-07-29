@@ -369,8 +369,8 @@ impl GgufModelManager {
     /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_MEDIUM`] (16 GB), otherwise 3B.
     /// - `Gemma4`:    three-tier — 31B at or above [`RAM_THRESHOLD_LARGE`],
     ///   12B at or above [`RAM_THRESHOLD_MEDIUM`], otherwise E4B.
-    /// - `Ollama` / `OpenAiCompat`: have no GGUF catalog entries; fall back to
-    ///   the default Ministral recommendation.
+    /// - `OpenAiCompat`: has no GGUF catalog entries; falls back to the default
+    ///   Ministral recommendation.
     pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
         let large = total_ram >= RAM_THRESHOLD_LARGE;
@@ -393,7 +393,7 @@ impl GgufModelManager {
                 }
             }
             ModelFamily::MistralSmall => MISTRAL_SMALL_3_2.id,
-            ModelFamily::Ollama | ModelFamily::OpenAiCompat => {
+            ModelFamily::OpenAiCompat => {
                 if medium {
                     MINISTRAL_8B.id
                 } else {

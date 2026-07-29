@@ -1,19 +1,20 @@
 //! `ChatInferenceEngine` implementation for user-configured OpenAI-compatible
-//! HTTP endpoints (e.g. a self-hosted vLLM/LM Studio server, or Ollama's own
-//! `/v1/chat/completions`).
+//! HTTP endpoints (e.g. a self-hosted vLLM/LM Studio server, or Ollama's
+//! `/v1` endpoint).
 //!
-//! Mirrors [`crate::local_agent::ollama_inference::OllamaInferenceEngine`] but
-//! speaks the standard OpenAI chat-completions request/response shape and
-//! authenticates with a bearer token.
+//! This is the single path for every remotely-served model. Ollama is reached
+//! here through its OpenAI-compatible `/v1` API rather than its native wire
+//! format — one protocol implementation serves every such provider.
 
 use crate::agent_types::{
     ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
     ModelFamily, StreamingChunk,
 };
-use crate::local_agent::ollama_ndjson::NdjsonLineBuffer;
+use crate::local_agent::ndjson::NdjsonLineBuffer;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Prefix used to identify OpenAI-compatible provider configs. The suffix is
 /// the UUID of the config stored in daemon.toml (`[[openai_compat.configs]]`).
@@ -47,14 +48,42 @@ pub struct OpenAiCompatInferenceEngine {
     model_name: String,
 }
 
+/// Time allowed to establish a TCP connection to the endpoint.
+///
+/// Deliberately short: a wrong or dead `base_url` should surface as an error in
+/// seconds rather than hanging the chat turn.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Time allowed for a single request, measured to the *end* of the response body.
+///
+/// A generation legitimately runs for minutes on a slow local model, so this is
+/// far longer than a typical HTTP timeout. Its job is to bound the pathological
+/// case the bare default could not: an endpoint that accepts the connection and
+/// then goes silent forever. `reqwest` surfaces an error only on transport
+/// failure, and a connected-but-stalled server is not one.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
 impl OpenAiCompatInferenceEngine {
     pub fn new(base_url: String, api_key: String, model_name: String) -> Self {
         Self {
-            http_client: reqwest::Client::new(),
+            http_client: Self::build_http_client(),
             base_url,
             api_key,
             model_name,
         }
+    }
+
+    /// Build the HTTP client with connect and request timeouts applied.
+    ///
+    /// Falls back to a default client if the builder fails, which it does only
+    /// on TLS backend initialization errors — losing the timeouts is strictly
+    /// better than refusing to construct the engine at all.
+    fn build_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
     }
 
     /// The wire-protocol model identifier this engine sends as the request

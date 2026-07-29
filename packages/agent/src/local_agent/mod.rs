@@ -1,10 +1,8 @@
 pub mod agent_loop;
-pub mod composite_model_manager;
 pub mod inference;
 pub mod model_manager;
-pub mod ollama_inference;
-pub mod ollama_model_manager;
-pub mod ollama_ndjson;
+pub mod ndjson;
+pub mod openai_compat_discovery;
 pub mod openai_compat_inference;
 pub mod otlp_tracer;
 pub mod prompt_dump;

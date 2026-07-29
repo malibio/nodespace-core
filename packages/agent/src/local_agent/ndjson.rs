@@ -1,15 +1,16 @@
-//! Bounded NDJSON line buffering for Ollama HTTP streams.
+//! Bounded newline-delimited line buffering for streaming HTTP responses.
 //!
-//! Ollama streams responses as newline-delimited JSON. A stream chunk may split
-//! a line at an arbitrary byte boundary — including mid-way through a multi-byte
-//! UTF-8 sequence — so bytes must be accumulated raw and decoded only once a
-//! complete line is in hand. The buffer is capped so a malfunctioning or hostile
-//! local daemon emitting an unterminated line cannot grow memory without bound.
+//! Both NDJSON and SSE (`text/event-stream`) bodies arrive as newline-delimited
+//! records. A stream chunk may split a line at an arbitrary byte boundary —
+//! including mid-way through a multi-byte UTF-8 sequence — so bytes must be
+//! accumulated raw and decoded only once a complete line is in hand. The buffer
+//! is capped so a malfunctioning or hostile server emitting an unterminated line
+//! cannot grow memory without bound.
 
 /// Maximum bytes buffered between newlines before the stream is rejected.
 ///
-/// A single Ollama NDJSON line is a small JSON object (chat delta or pull
-/// progress); 1 MiB is orders of magnitude past any legitimate line.
+/// A single line is a small JSON object (e.g. a chat delta); 1 MiB is orders of
+/// magnitude past any legitimate line.
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 /// Reason a [`NdjsonLineBuffer`] rejected input.
@@ -26,10 +27,10 @@ impl std::fmt::Display for NdjsonError {
         match self {
             NdjsonError::LineTooLong { limit } => write!(
                 f,
-                "Ollama stream line exceeded {limit} bytes without a newline"
+                "stream line exceeded {limit} bytes without a newline"
             ),
             NdjsonError::InvalidUtf8 => {
-                write!(f, "Ollama stream line was not valid UTF-8")
+                write!(f, "stream line was not valid UTF-8")
             }
         }
     }

@@ -25,8 +25,8 @@
 //! Run with:
 //!   cargo test -p nodespace-agent --test search_skills_latency -- --nocapture
 //!
-//! Gracefully skips if no inference backend is available (Ollama not running and
-//! no local GGUF model downloaded).
+//! Gracefully skips if no inference backend is available (no OpenAI-compatible
+//! endpoint reachable and no local GGUF model downloaded).
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
@@ -36,12 +36,11 @@ use nodespace_agent::agent_types::{
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
-use nodespace_agent::local_agent::ollama_inference::OllamaInferenceEngine;
-use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-use nodespace_agent::ModelManager;
+use nodespace_agent::local_agent::openai_compat_discovery::discover_models;
+use nodespace_agent::local_agent::openai_compat_inference::OpenAiCompatInferenceEngine;
 use nodespace_nlp_engine::chat::ChatConfig;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Walk up from `CARGO_MANIFEST_DIR` searching for a `nodespace-docs` sibling directory.
 ///
@@ -65,29 +64,25 @@ fn find_docs_benchmarks_dir() -> Option<std::path::PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Backend resolution (shared pattern with ollama_integration.rs)
+// Backend resolution
 // ---------------------------------------------------------------------------
 
-async fn ollama_running() -> bool {
-    reqwest::Client::new()
-        .get("http://127.0.0.1:11434/api/tags")
-        .timeout(Duration::from_secs(2))
-        .send()
-        .await
-        .is_ok()
-}
-
-async fn first_ollama_model() -> Option<String> {
-    let manager = OllamaModelManager::new();
-    let models: Vec<_> = manager.list().await.ok()?;
-    models.into_iter().next().map(|m| m.id)
-}
+/// Default local OpenAI-compatible endpoint. Ollama serves this on /v1; LM
+/// Studio and vLLM expose the same protocol on their own ports.
+const LOCAL_OPENAI_COMPAT_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 
 /// Returns (engine, model_name) or None if no backend available.
+///
+/// Prefers a locally-served OpenAI-compatible model (far faster to reach than
+/// loading a GGUF into memory), falling back to a downloaded GGUF.
 async fn resolve_backend() -> Option<(Arc<dyn ChatInferenceEngine>, String)> {
-    if ollama_running().await {
-        if let Some(model) = first_ollama_model().await {
-            let engine = OllamaInferenceEngine::new(model.clone());
+    if let Ok(models) = discover_models(LOCAL_OPENAI_COMPAT_BASE_URL, "").await {
+        if let Some(model) = models.into_iter().next() {
+            let engine = OpenAiCompatInferenceEngine::new(
+                LOCAL_OPENAI_COMPAT_BASE_URL.to_string(),
+                String::new(),
+                model.clone(),
+            );
             return Some((Arc::new(engine) as Arc<dyn ChatInferenceEngine>, model));
         }
     }
@@ -559,7 +554,7 @@ async fn bench_search_skills_e2e_latency() {
     let Some((engine, model_name)) = resolve_backend().await else {
         eprintln!(
             "SKIP bench_search_skills_e2e_latency: No inference backend available \
-             (Ollama not running, ministral-3b not downloaded)"
+             (no OpenAI-compatible endpoint reachable, ministral-3b not downloaded)"
         );
         return;
     };
