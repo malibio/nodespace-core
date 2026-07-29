@@ -37,11 +37,11 @@ export interface TurnRecord {
   /**
    * Tool names in call order.
    *
-   * Kept as a plain string[] rather than folded into `toolCalls` below: this is
-   * the shape recorded in every baseline results file, and `compareToBaseline`
-   * joins recorded runs against new ones. Changing it would orphan the recorded
-   * baselines — a data-format concern, not the code-level backward compatibility
-   * the greenfield rule tells us to delete on sight.
+   * Kept as a plain string[] rather than folded into `toolCalls` below because
+   * it has a live reader: the routing fixture scores turns off these names
+   * directly and never calls into the matrix fixture's assertions. This is a
+   * field in current use, not a compatibility shim the greenfield rule would
+   * tell us to delete.
    */
   toolsCalled: string[];
   /**

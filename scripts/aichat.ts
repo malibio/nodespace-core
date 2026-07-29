@@ -157,11 +157,13 @@ function reportTurnLog(sinceByte: number): void {
     const tool = l.match(/tool="?([a-z_]+)"?/)?.[1] ?? "?";
     const args = l.match(/args_preview="?([^"]*?)"? result_preview/)?.[1] ?? "";
     const err = /is_error=true/.test(l) ? " [ERROR]" : "";
-    // Field count of the persisted result. tracing omits the field entirely when
-    // it is None, so "absent" (not a schema-creating tool) stays distinguishable
-    // from "=0" (a schema persisted with no properties) — the latter is a real
-    // failure that looks identical to success by tool name alone. Emitted before
-    // the args, which are free-form and truncated and so must stay last.
+    // Field count of the persisted result, emitted by any tool whose result
+    // carries a top-level `fields` array. tracing omits the field entirely when
+    // it is None, so "absent" (the result reports no fields) stays
+    // distinguishable from "=0" (a schema persisted with no properties) — the
+    // latter is a real failure that looks identical to success by tool name
+    // alone. Emitted before the args, which are free-form and truncated at the
+    // source and so must stay last on the line.
     const fields = l.match(/result_field_count=(\d+)/)?.[1];
     const fieldPart = fields === undefined ? "" : ` [fields=${fields}]`;
     console.log(`[tool] ${tool}${err}${fieldPart} ${args}`);
