@@ -14,8 +14,11 @@ pub struct AiChatCompletedWrite {
     pub node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub canonical_args: Option<String>,
+    /// The write's identity for the cross-turn duplicate guard: canonical JSON
+    /// verbatim, or `sha256:<hex>` of it when too large to store. Always
+    /// present — this is the struct that serialises to the frontend, so making
+    /// it optional here would contradict the TypeScript mirror.
+    pub canonical_args: String,
 }
 
 /// A single message in an ai-chat conversation.

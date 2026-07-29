@@ -20,7 +20,7 @@ use nodespace_agent::agent_types::{
     ToolExecutionRecord,
 };
 use nodespace_agent::local_agent::agent_loop::{
-    canonical_args, LocalAgentService, CANONICAL_ARGS_MAX_CHARS,
+    canonical_args, canonical_args_identity, LocalAgentService,
 };
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
@@ -407,8 +407,12 @@ impl LocalAgentServiceImpl {
     /// before triggering this turn — writing it again here would re-emit a
     /// nodeUpdated event and cause a re-entry loop.
     async fn run_ai_chat_turn(&self, node_id: String, cancel: CancellationToken) {
-        // Load history from node.
-        let history = load_node_history(&self.inner.node_service, &node_id).await;
+        // One read of the chat node serves both of the things this turn needs
+        // from it: the rendered inference history, and the record of what
+        // earlier turns wrote (which seeds the duplicate guard below).
+        let messages = load_chat_messages(&self.inner.node_service, &node_id).await;
+        let prior_writes = prior_writes_from_history(&messages);
+        let history = node_history_from_messages(messages);
         if history.is_empty() {
             tracing::warn!(node_id, "ai-chat history empty — skipping turn");
             let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
@@ -441,11 +445,11 @@ impl LocalAgentServiceImpl {
             service.set_session_context(&session_id, ctx_str).await;
         }
 
-        // Seed the deterministic duplicate guard with what earlier turns wrote.
-        // The prompt note built from the same record tells the model the work is
-        // done; this makes the tool-execution path enforce it regardless of
-        // whether the model heeds that note.
-        let prior_writes = load_prior_writes(&self.inner.node_service, &node_id).await;
+        // Seed the deterministic duplicate guard with what earlier turns wrote
+        // (read above, alongside the history). The prompt note built from the
+        // same record tells the model the work is done; this makes the
+        // tool-execution path enforce it regardless of whether the model heeds
+        // that note.
         if !prior_writes.is_empty() {
             service
                 .set_session_prior_writes(&session_id, prior_writes)
@@ -1489,11 +1493,11 @@ fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatComple
 
             // Identity for the cross-turn duplicate guard. Canonicalised through
             // the same function the per-turn detector uses, so the two agree on
-            // what "the same call" means. Dropped when oversized rather than
-            // truncated — see `CANONICAL_ARGS_MAX_CHARS`.
-            let canonical = canonical_args(&r.args.to_string());
-            let canonical_args =
-                (canonical.chars().count() <= CANONICAL_ARGS_MAX_CHARS).then_some(canonical);
+            // what "the same call" means, then reduced to a storable identity —
+            // verbatim when small, a digest when not. The execution path derives
+            // the incoming call's identity the same way; that shared derivation
+            // is what keeps the two comparable.
+            let canonical_args = canonical_args_identity(&canonical_args(&r.args.to_string()));
 
             AiChatCompletedWrite {
                 tool: r.name.clone(),
@@ -1507,22 +1511,19 @@ fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatComple
 
 /// Rebuild the duplicate-guard's view of earlier turns from persisted messages.
 ///
-/// Only writes that carry a canonical-args identity can be matched against an
-/// incoming call, so entries without one are skipped: they would match nothing
-/// and only add noise. Filtering to the guarded tools here keeps the set small,
-/// since the execution-path check applies the same restriction anyway.
+/// Filtering to the guarded tools here keeps the set small, since the
+/// execution-path check applies the same restriction anyway. Every recorded
+/// write carries an identity, so none are dropped.
 fn prior_writes_from_history(messages: &[AiChatMessage]) -> Vec<PriorWrite> {
     messages
         .iter()
         .flat_map(|m| m.completed_writes.iter())
         .filter(|w| is_cross_turn_guarded_tool(&w.tool))
-        .filter_map(|w| {
-            w.canonical_args.as_ref().map(|args| PriorWrite {
-                tool: w.tool.clone(),
-                canonical_args: args.clone(),
-                node_id: w.node_id.clone(),
-                summary: w.summary.clone(),
-            })
+        .map(|w| PriorWrite {
+            tool: w.tool.clone(),
+            canonical_args: w.canonical_args.clone(),
+            node_id: w.node_id.clone(),
+            summary: w.summary.clone(),
         })
         .collect()
 }
@@ -1565,26 +1566,13 @@ fn completed_writes_message(writes: &[AiChatCompletedWrite]) -> Option<ChatMessa
     ))
 }
 
-/// Load the writes completed by earlier turns of this chat.
+/// Load an ai-chat node's persisted messages.
 ///
-/// Separate from `load_node_history` because that function's return type is
-/// `ChatMessage`, which has no room for the per-message write record — the very
-/// erasure that let the original duplicate through.
-async fn load_prior_writes(node_service: &Arc<NodeService>, node_id: &str) -> Vec<PriorWrite> {
-    let node = match node_service.get_node(node_id).await {
-        Ok(Some(n)) => n,
-        // A missing or unreadable node is already logged by `load_node_history`,
-        // which runs first on the same node; staying quiet here avoids a
-        // duplicate error line for one underlying failure.
-        _ => return Vec::new(),
-    };
-    match AiChatNode::from_node(node) {
-        Ok(c) => prior_writes_from_history(&c.messages),
-        Err(_) => Vec::new(),
-    }
-}
-
-async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
+/// The single read a turn makes of its own chat node. Both things a turn needs
+/// from it — the rendered history and the completed-write record — derive from
+/// these messages, so fetching once and deriving twice avoids a redundant read
+/// per turn. Any failure is logged here, once, and yields no messages.
+async fn load_chat_messages(node_service: &Arc<NodeService>, node_id: &str) -> Vec<AiChatMessage> {
     let node = match node_service.get_node(node_id).await {
         Ok(Some(n)) => n,
         Ok(None) => {
@@ -1597,16 +1585,22 @@ async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Ve
         }
     };
 
-    let ai_chat = match AiChatNode::from_node(node) {
-        Ok(c) => c,
+    match AiChatNode::from_node(node) {
+        Ok(c) => c.messages,
         Err(e) => {
             tracing::warn!(node_id, error = %e, "node is not an ai-chat node");
-            return vec![];
+            vec![]
         }
-    };
+    }
+}
 
-    ai_chat
-        .messages
+/// Render persisted messages as the inference history for this turn.
+///
+/// Separate from `prior_writes_from_history` because `ChatMessage` has no room
+/// for the per-message write record — the very erasure that let the original
+/// duplicate through. Both read the same loaded messages.
+fn node_history_from_messages(messages: Vec<AiChatMessage>) -> Vec<ChatMessage> {
+    messages
         .into_iter()
         .flat_map(|m| {
             let role = match m.role.as_str() {
@@ -1682,8 +1676,17 @@ async fn build_workspace_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nodespace_agent::local_agent::agent_loop::CANONICAL_ARGS_MAX_CHARS;
     use nodespace_core::models::Node;
     use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
+
+    /// Load and render a chat node's history, the way a turn does.
+    ///
+    /// A turn splits these steps so one read can also feed the duplicate guard;
+    /// tests that only care about the rendered history compose them back.
+    async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
+        node_history_from_messages(load_chat_messages(node_service, node_id).await)
+    }
 
     /// Build a `LocalAgentServiceImpl` backed by a temp-dir SqliteStore.
     /// Returns the `TempDir` so it outlives the test body.
@@ -2606,10 +2609,7 @@ api_key = "sk-test"
             serde_json::json!({"id": "nodespace://n1"}),
         )]);
         assert_eq!(writes.len(), 1);
-        let canonical = writes[0]
-            .canonical_args
-            .as_deref()
-            .expect("a create must carry its canonical args");
+        let canonical = &writes[0].canonical_args;
         assert!(canonical.contains("Buy milk"), "got {canonical:?}");
     }
 
@@ -2631,11 +2631,15 @@ api_key = "sk-test"
         assert_eq!(a[0].canonical_args, b[0].canonical_args);
     }
 
-    /// Oversized args are dropped, not truncated. A truncated string could
-    /// compare equal to a different call sharing a long prefix, which would turn
-    /// a size limit into a wrongly-blocked write.
+    /// Oversized args are digested, never truncated and never dropped.
+    ///
+    /// A truncated string could compare equal to a different call sharing a long
+    /// prefix — a size limit turned into a wrongly-blocked write. Dropping the
+    /// identity avoids that but leaves the tool unguarded, and this is the tool
+    /// where a repeat is worst: it duplicates an entire subtree. A digest is the
+    /// form that has neither problem.
     #[tokio::test]
-    async fn oversized_args_drop_the_identity_rather_than_truncating() {
+    async fn oversized_args_are_digested_rather_than_dropped_or_truncated() {
         let huge = "#".repeat(CANONICAL_ARGS_MAX_CHARS + 100);
         let writes = completed_writes_from(&[exec(
             "create_nodes_from_markdown",
@@ -2643,16 +2647,75 @@ api_key = "sk-test"
             serde_json::json!({"created": 3}),
         )]);
         assert_eq!(writes.len(), 1);
-        assert_eq!(
-            writes[0].canonical_args, None,
-            "oversized args must be dropped so they can never produce a false match"
+        let identity = &writes[0].canonical_args;
+        assert!(
+            identity.starts_with("sha256:"),
+            "oversized args must still yield an identity, as a digest: {identity:?}"
         );
+        // The point of the digest: the import itself is not copied back into the
+        // chat node's own history.
+        assert!(
+            !identity.contains(&huge),
+            "the import must not be re-stored"
+        );
+        // Exactly "sha256:" plus 64 hex chars. An exact length, not a loose
+        // bound: a bound generous enough to be safe would also pass on a
+        // truncated identity, which is the regression this is here to catch.
+        assert_eq!(identity.len(), 71, "identity must be a full digest");
         // The evidence label is unaffected: the write is still reported.
         assert!(writes[0].summary.is_some());
     }
 
-    /// The guard reads its state back out of persisted messages. Entries with no
-    /// canonical args cannot match anything and are dropped rather than carried.
+    /// The digest must identify the *specific* call, not merely "something big".
+    /// If it collapsed all oversized calls together, a second, genuinely
+    /// different import would be refused — a wrong suppression, the one failure
+    /// mode this guard must not have.
+    #[tokio::test]
+    async fn different_oversized_imports_get_different_identities() {
+        let identity_for = |body: &str| {
+            completed_writes_from(&[exec(
+                "create_nodes_from_markdown",
+                serde_json::json!({ "markdown": body }),
+                serde_json::json!({"created": 3}),
+            )])[0]
+                .canonical_args
+                .clone()
+        };
+        let a = identity_for(&format!(
+            "# Groceries\n{}",
+            "a".repeat(CANONICAL_ARGS_MAX_CHARS)
+        ));
+        let b = identity_for(&format!(
+            "# Recipes\n{}",
+            "a".repeat(CANONICAL_ARGS_MAX_CHARS)
+        ));
+        assert_ne!(a, b, "distinct imports must not share an identity");
+    }
+
+    /// Key-order normalisation must survive the digest — it is applied to the
+    /// canonical form *before* hashing. Were it applied after, the same call with
+    /// reordered keys would hash differently and slip the guard above the cap
+    /// while being caught below it.
+    #[tokio::test]
+    async fn oversized_identity_still_ignores_key_order() {
+        let huge = "#".repeat(CANONICAL_ARGS_MAX_CHARS + 100);
+        let a = completed_writes_from(&[exec(
+            "create_nodes_from_markdown",
+            serde_json::json!({"markdown": huge, "parent_id": "n1"}),
+            serde_json::json!({"created": 3}),
+        )]);
+        let b = completed_writes_from(&[exec(
+            "create_nodes_from_markdown",
+            serde_json::json!({"parent_id": "n1", "markdown": huge}),
+            serde_json::json!({"created": 3}),
+        )]);
+        assert_eq!(a[0].canonical_args, b[0].canonical_args);
+        assert!(a[0].canonical_args.starts_with("sha256:"));
+    }
+
+    /// The guard reads its state back out of persisted messages. Every recorded
+    /// guarded write carries an identity, so every one is replayed — including
+    /// a digested one, which is precisely the case that used to be dropped.
     #[tokio::test]
     async fn prior_writes_are_rebuilt_from_persisted_messages() {
         let msgs = vec![AiChatMessage {
@@ -2665,21 +2728,24 @@ api_key = "sk-test"
                     tool: "create_node".to_string(),
                     node_id: Some("nodespace://n1".to_string()),
                     summary: Some("Buy milk".to_string()),
-                    canonical_args: Some(r#"{"content":"Buy milk"}"#.to_string()),
+                    canonical_args: r#"{"content":"Buy milk"}"#.to_string(),
                 },
                 AiChatCompletedWrite {
-                    tool: "create_node".to_string(),
+                    tool: "create_nodes_from_markdown".to_string(),
                     node_id: Some("nodespace://n2".to_string()),
-                    summary: Some("no identity".to_string()),
-                    canonical_args: None,
+                    summary: Some("big import".to_string()),
+                    canonical_args: "sha256:abc123".to_string(),
                 },
             ],
         }];
 
         let prior = prior_writes_from_history(&msgs);
-        assert_eq!(prior.len(), 1, "the identity-less write must be skipped");
-        assert_eq!(prior[0].tool, "create_node");
+        assert_eq!(prior.len(), 2, "every guarded write must be replayed");
         assert_eq!(prior[0].node_id.as_deref(), Some("nodespace://n1"));
+        assert_eq!(
+            prior[1].canonical_args, "sha256:abc123",
+            "a digested identity must be carried through unchanged"
+        );
     }
 
     /// Updates are idempotent: re-setting the same status or content is a no-op,
@@ -2697,19 +2763,19 @@ api_key = "sk-test"
                     tool: "update_task_status".to_string(),
                     node_id: Some("nodespace://t1".to_string()),
                     summary: Some("t1".to_string()),
-                    canonical_args: Some(r#"{"status":"done"}"#.to_string()),
+                    canonical_args: r#"{"status":"done"}"#.to_string(),
                 },
                 AiChatCompletedWrite {
                     tool: "update_node".to_string(),
                     node_id: Some("nodespace://t2".to_string()),
                     summary: Some("t2".to_string()),
-                    canonical_args: Some(r#"{"content":"x"}"#.to_string()),
+                    canonical_args: r#"{"content":"x"}"#.to_string(),
                 },
                 AiChatCompletedWrite {
                     tool: "update_schema".to_string(),
                     node_id: None,
                     summary: Some("s1".to_string()),
-                    canonical_args: Some(r#"{"schema_id":"s1"}"#.to_string()),
+                    canonical_args: r#"{"schema_id":"s1"}"#.to_string(),
                 },
             ],
         }];

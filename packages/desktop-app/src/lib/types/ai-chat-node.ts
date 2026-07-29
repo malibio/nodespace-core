@@ -26,10 +26,14 @@ export interface AiChatCompletedWrite {
   summary?: string;
   /**
    * The call's arguments, canonicalised. With `tool`, this is the write's
-   * identity for the backend's cross-turn duplicate guard. Absent when the
-   * arguments were too large to persist.
+   * identity for the backend's cross-turn duplicate guard.
+   *
+   * Two forms: the canonical JSON verbatim when small enough to store, or
+   * `sha256:<hex>` of it when not — which keeps a large write (an entire
+   * markdown import, say) guarded without copying its content into this
+   * message history a second time. Always present; treat it as opaque.
    */
-  canonicalArgs?: string;
+  canonicalArgs: string;
 }
 
 export interface AiChatMessage {

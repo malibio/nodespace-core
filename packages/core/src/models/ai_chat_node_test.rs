@@ -148,4 +148,89 @@ mod tests {
         assert_eq!(props["ai-chat"]["status"], json!("idle"));
         assert_eq!(props["ai-chat"]["messages"][0]["content"], json!("done"));
     }
+
+    /// One unreadable message must not take the conversation with it.
+    ///
+    /// Decoding the array as a single `Vec` fails wholesale on any one bad
+    /// element, and callers that write the node back — a status update does —
+    /// re-serialise from this struct, so a read that silently yields zero
+    /// messages *persists* as an erased conversation. Per-message decoding keeps
+    /// the loss to the message actually at fault.
+    #[test]
+    fn one_unreadable_message_does_not_erase_the_conversation() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "status": "idle",
+                "messages": [
+                    { "role": "user", "content": "hello" },
+                    // Malformed: `content` is required and must be a string.
+                    { "role": "assistant", "content": 42 },
+                    { "role": "assistant", "content": "goodbye" }
+                ]
+            }
+        }));
+
+        let chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(
+            chat.messages.len(),
+            2,
+            "only the unreadable message may be dropped"
+        );
+        assert_eq!(chat.messages[0].content, "hello");
+        assert_eq!(chat.messages[1].content, "goodbye");
+    }
+
+    /// A write record missing its identity is the concrete case that made the
+    /// above reachable: `canonicalArgs` is required, so a legacy write without
+    /// one fails to decode. Its message is dropped; the rest of the conversation
+    /// survives, rather than the whole history decoding to empty.
+    #[test]
+    fn a_write_without_an_identity_does_not_erase_the_conversation() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "status": "idle",
+                "messages": [
+                    { "role": "user", "content": "add a task" },
+                    {
+                        "role": "assistant",
+                        "content": "Added.",
+                        "completedWrites": [
+                            { "tool": "create_node", "nodeId": "nodespace://n1" }
+                        ]
+                    },
+                    { "role": "user", "content": "thanks" }
+                ]
+            }
+        }));
+
+        let chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(chat.messages.len(), 2);
+        assert_eq!(chat.messages[0].content, "add a task");
+        assert_eq!(chat.messages[1].content, "thanks");
+    }
+
+    /// The identity is required, so a well-formed write round-trips with it.
+    #[test]
+    fn completed_write_identity_round_trips() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "status": "idle",
+                "messages": [{
+                    "role": "assistant",
+                    "content": "Added.",
+                    "completedWrites": [{
+                        "tool": "create_node",
+                        "nodeId": "nodespace://n1",
+                        "canonicalArgs": r#"{"content":"Buy milk"}"#
+                    }]
+                }]
+            }
+        }));
+
+        let chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(
+            chat.messages[0].completed_writes[0].canonical_args,
+            r#"{"content":"Buy milk"}"#
+        );
+    }
 }
