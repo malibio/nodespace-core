@@ -1249,18 +1249,20 @@ pub struct SchemaNodeBehavior;
 /// exactly one `<namespace>:` prefix (`custom:capacity`). Both the namespace and
 /// the bare name must be non-empty and contain only alphanumerics and underscores.
 ///
-/// Namespace prefixes are part of the stored field name, not a separate layer
-/// applied afterwards: fields are namespaced (`custom:`, `org:`, `plugin:`)
-/// before the schema node is validated and persisted, so validation must accept
-/// the prefixed form. The same stored-name convention is assumed downstream —
-/// CEL strips the prefix, the graph resolver matches on it, and identifier
-/// validation in the query path permits it.
+/// Both forms are well-formed, and which one is *required* depends on the type
+/// being described rather than on the name alone: fields of a user-defined type
+/// are stored bare, while extending a core type requires a prefix so a future
+/// core property cannot collide with a user's field. Neither `create_schema`
+/// route adds a prefix — both store the name they are given, so the two routes
+/// produce identical stored keys.
 ///
-/// This function decides only whether a name is *well-formed*, not whether it is
-/// namespaced. Both are accepted, because the two schema-creation paths differ:
-/// the description path applies `custom:` during field inference, while the
-/// explicit-fields path stores caller-supplied names verbatim and does not
-/// namespace them. Requiring a prefix here would reject the latter.
+/// This function therefore decides only whether a name is *well-formed*. The
+/// core-type prefix requirement is enforced where the target schema is known
+/// (`update_schema`'s `add_fields` path); it cannot be enforced here, which sees
+/// a name with no indication of the type it belongs to. Rejecting either form
+/// here would reject names the rest of the system handles correctly: CEL strips
+/// the prefix, the graph resolver matches with and without it, and identifier
+/// validation in the query path permits it.
 fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
     let invalid = |reason: &str| {
         Err(NodeValidationError::InvalidProperties(format!(

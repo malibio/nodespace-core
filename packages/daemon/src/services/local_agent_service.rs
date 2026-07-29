@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
-    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceError, InferenceUsage,
-    LocalAgentStatus, ModelManager, ModelStatus, PriorWrite, Role, StreamingChunk,
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError,
+    InferenceUsage, LocalAgentStatus, ModelManager, ModelStatus, PriorWrite, Role, StreamingChunk,
     ToolExecutionRecord,
 };
 use nodespace_agent::local_agent::agent_loop::{
@@ -84,11 +84,29 @@ type AgentService = Arc<LocalAgentService<dyn ChatInferenceEngine, dyn AgentTool
 /// Cancellation tokens keyed by node_id for in-progress turns.
 type TurnTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
+/// How long the engine-swap geometry snapshot may take before it is abandoned.
+/// Generous for a local read; the bound exists only so a remote engine that
+/// stalls cannot hold up the model load that awaits it.
+const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
     model_manager: Arc<CompositeModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
+    /// The loaded model's geometry, captured at engine-swap time.
+    ///
+    /// Read by `get_status` instead of calling `model_spec()`, which reaches a
+    /// `std::sync::Mutex` that the native engine holds for the *entire*
+    /// duration of a generation. Querying it live would make a status RPC
+    /// block a tokio worker for the length of a turn (60-180s). The geometry
+    /// only changes on engine swap, and `replace_engine` is the single choke
+    /// point for that, so a value cached there is always current.
+    loaded_model_spec: Mutex<Option<ChatModelSpec>>,
+    /// Bound on the engine-swap geometry snapshot. A field rather than a
+    /// constant so tests can drive the timeout path without paying it in
+    /// wall-clock time.
+    model_spec_snapshot_timeout: std::time::Duration,
     embedding_service: SharedEmbeddingService,
     /// Broadcast channel for streaming tokens → all SubscribeTokenStream clients.
     token_tx: broadcast::Sender<AgentChunk>,
@@ -134,6 +152,8 @@ impl LocalAgentServiceImpl {
                 model_manager,
                 node_service,
                 active_model_id: Mutex::new(None),
+                loaded_model_spec: Mutex::new(None),
+                model_spec_snapshot_timeout: MODEL_SPEC_SNAPSHOT_TIMEOUT,
                 embedding_service,
                 token_tx,
                 turn_tokens: Arc::new(Mutex::new(HashMap::new())),
@@ -198,8 +218,45 @@ impl LocalAgentServiceImpl {
             prompt_assembler,
         ));
 
+        // Snapshot the model geometry here, the one place an engine can change.
+        // Safe to query now: a swap happens between turns, so the engine mutex
+        // this reaches is uncontended, unlike the same call from `get_status`.
+        //
+        // Bounded because this is not always a local read: the Ollama engine
+        // answers `model_info` with an HTTP round-trip on a client with no
+        // default timeout, so an endpoint that accepts the connection and then
+        // stalls would hang the model-load RPC that awaits this. Losing the
+        // geometry only costs a degraded status report; blocking the swap
+        // would cost the load itself.
+        let spec = match tokio::time::timeout(
+            self.inner.model_spec_snapshot_timeout,
+            new_service.model_spec(),
+        )
+        .await
+        {
+            Ok(Ok(spec)) => spec,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    "model_spec failed during engine swap; status will report no model loaded"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout = ?self.inner.model_spec_snapshot_timeout,
+                    "model_spec timed out during engine swap; status will report no model loaded"
+                );
+                None
+            }
+        };
+
         let mut guard = self.inner.service.write().await;
         *guard = new_service;
+        // Released before taking `loaded_model_spec`: no site holds two of
+        // these locks at once, which is what keeps the ordering acyclic.
+        drop(guard);
+        *self.inner.loaded_model_spec.lock().await = spec;
     }
 
     async fn replace_engine_if_changed(
@@ -226,6 +283,7 @@ impl LocalAgentServiceImpl {
         ));
         drop(guard);
         *self.inner.active_model_id.lock().await = None;
+        *self.inner.loaded_model_spec.lock().await = None;
         tracing::debug!("LocalAgentServiceImpl: inference engine reset to NoOp");
     }
 
@@ -738,34 +796,27 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let status_json = serde_json::to_string(&status)
             .map_err(|e| Status::internal(format!("Failed to serialize status: {e}")))?;
 
-        // Report the loaded model's real geometry alongside the activity status.
-        // A model-info failure is not a status failure: the daemon is plainly
-        // reachable if we got this far, so degrade to "nothing loaded" rather
-        // than failing the whole call.
-        let spec = {
-            let service = self.inner.service.read().await;
-            service.model_spec().await.unwrap_or_else(|e| {
-                // Degrade rather than fail the call — the daemon is plainly
-                // reachable if we got this far. But an engine fault and a
-                // genuinely absent model are indistinguishable to the caller
-                // once both become `None`, so leave a trail.
-                tracing::warn!(
-                    error = %e,
-                    "model_spec failed; reporting status as no model loaded"
-                );
-                None
-            })
-        };
+        // Report the loaded model's real geometry alongside the activity status,
+        // from the snapshot taken at engine-swap time. Deliberately NOT queried
+        // live: `model_spec()` reaches a `std::sync::Mutex` held for the whole
+        // of a generation, so a live call would block a tokio worker for the
+        // length of a turn — the exact hang a status poller would trip over.
+        let spec = self.inner.loaded_model_spec.lock().await.clone();
         // Report the catalog id the model was loaded BY, not the resolved GGUF
         // path the engine reports. Callers compare this against the id they
         // asked for ("gemma-4-e4b-q4km"), which no path substring matches.
         let active_model_id = self.inner.active_model_id.lock().await.clone();
+        // The id and the window degrade independently. A snapshot that failed
+        // or timed out costs the window, not the identity: `active_model_id` is
+        // set by the same swap and is still authoritative, so a loaded model
+        // keeps reporting itself with `granted_n_ctx == 0` (window unknown)
+        // rather than vanishing into "nothing loaded".
         let (model_id, granted_n_ctx) = match spec {
             Some(spec) => (
                 active_model_id.unwrap_or(spec.model_id),
                 spec.context_window,
             ),
-            None => (String::new(), 0),
+            None => (active_model_id.unwrap_or_default(), 0),
         };
 
         Ok(Response::new(LocalAgentStatusResponse {
@@ -1795,6 +1846,274 @@ mod tests {
         async fn token_count(&self, _text: &str) -> Result<u32, InferenceError> {
             Ok(0)
         }
+    }
+
+    /// Engine reporting a fixed geometry, so status assertions have real
+    /// values to check rather than the `None` the other stubs return.
+    struct SpecEngine {
+        model_id: String,
+        context_window: u32,
+    }
+
+    #[async_trait]
+    impl ChatInferenceEngine for SpecEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            Err(InferenceError::Engine("not used".into()))
+        }
+
+        async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+            Ok(Some(ChatModelSpec {
+                model_id: self.model_id.clone(),
+                family: nodespace_agent::agent_types::ModelFamily::Gemma4,
+                context_window: self.context_window,
+                default_temperature: 0.7,
+                type_k: None,
+                type_v: None,
+            }))
+        }
+
+        async fn token_count(&self, _text: &str) -> Result<u32, InferenceError> {
+            Ok(0)
+        }
+    }
+
+    /// Engine that models the native `LlamaChatEngine` locking discipline: a
+    /// `std::sync::Mutex` held for the *whole* of a generation, which
+    /// `model_info` must also take. This is the shape that makes a live
+    /// `model_spec()` call from `get_status` block for the length of a turn.
+    struct MutexHeldDuringGenerationEngine {
+        /// Stands in for `LlamaChatEngine`'s state mutex.
+        state: Arc<std::sync::Mutex<()>>,
+        /// Signals that `generate` has taken the lock.
+        started: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        /// Released by the test to let `generate` finish.
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    #[async_trait]
+    impl ChatInferenceEngine for MutexHeldDuringGenerationEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            let started = self.started.lock().await.take();
+            let release = self.release.lock().await.take();
+            let state = self.state.clone();
+            // Take the lock on a blocking thread and hold it for the whole
+            // "generation", as the native engine's `generate_blocking` does.
+            // A `std::sync::MutexGuard` cannot be held across an await point,
+            // which is exactly why the real lock lives off the async path.
+            tokio::task::spawn_blocking(move || {
+                let _guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(tx) = started {
+                    let _ = tx.send(());
+                }
+                if let Some(rx) = release {
+                    let _ = rx.blocking_recv();
+                }
+            })
+            .await
+            .expect("generation thread joins");
+            Err(InferenceError::Engine("should not complete".into()))
+        }
+
+        async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+            let _guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            Ok(Some(ChatModelSpec {
+                model_id: "held-model".to_string(),
+                family: nodespace_agent::agent_types::ModelFamily::Gemma4,
+                context_window: 8192,
+                default_temperature: 0.7,
+                type_k: None,
+                type_v: None,
+            }))
+        }
+
+        async fn token_count(&self, _text: &str) -> Result<u32, InferenceError> {
+            Ok(0)
+        }
+    }
+
+    // -- get_status model geometry -----------------------------------------
+
+    #[tokio::test]
+    async fn get_status_reports_geometry_from_swapped_engine() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+        svc.replace_engine_if_changed(
+            "gemma-4-e4b-q4km",
+            Arc::new(SpecEngine {
+                model_id: "/models/resolved-path.gguf".to_string(),
+                context_window: 16384,
+            }),
+        )
+        .await;
+
+        let status = svc
+            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+            .await
+            .expect("get_status")
+            .into_inner();
+
+        // The catalog id the model was loaded BY, not the engine's GGUF path.
+        assert_eq!(status.model_id, "gemma-4-e4b-q4km");
+        assert_eq!(status.granted_n_ctx, 16384);
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_no_model_after_reset() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+        svc.replace_engine_if_changed(
+            "gemma-4-e4b-q4km",
+            Arc::new(SpecEngine {
+                model_id: "/models/resolved-path.gguf".to_string(),
+                context_window: 16384,
+            }),
+        )
+        .await;
+        svc.reset_to_noop_engine().await;
+
+        let status = svc
+            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+            .await
+            .expect("get_status")
+            .into_inner();
+
+        // The cached geometry must be cleared on reset, not left stale.
+        assert_eq!(status.model_id, "");
+        assert_eq!(status.granted_n_ctx, 0);
+    }
+
+    /// Engine whose `model_info` never returns — the shape of a remote
+    /// endpoint that accepts the connection and then stalls.
+    struct HangingModelInfoEngine;
+
+    #[async_trait]
+    impl ChatInferenceEngine for HangingModelInfoEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            Err(InferenceError::Engine("not used".into()))
+        }
+
+        async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+            std::future::pending().await
+        }
+
+        async fn token_count(&self, _text: &str) -> Result<u32, InferenceError> {
+            Ok(0)
+        }
+    }
+
+    /// A remote engine that stalls on `model_info` must not hold up the swap.
+    /// Losing the geometry degrades the status report; blocking here would
+    /// block the model-load RPC that awaits `replace_engine`.
+    ///
+    /// Bounds the swap on its own task rather than awaiting it directly: if the
+    /// snapshot timeout regresses away, `replace_engine` never returns, and an
+    /// unbounded await here would hang the suite instead of failing it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn engine_swap_completes_when_model_info_hangs() {
+        let (mut svc, _node_service, _tempdir) = test_service().await;
+        // Drive the timeout path without paying the production bound in
+        // wall-clock time on every run.
+        let short = std::time::Duration::from_millis(50);
+        Arc::get_mut(&mut svc.inner)
+            .expect("sole owner before any clone")
+            .model_spec_snapshot_timeout = short;
+
+        let swap_svc = svc.clone();
+        tokio::time::timeout(
+            short + std::time::Duration::from_secs(5),
+            tokio::spawn(async move {
+                swap_svc
+                    .replace_engine_if_changed("hanging-model", Arc::new(HangingModelInfoEngine))
+                    .await
+            }),
+        )
+        .await
+        .expect("engine swap must not block on a stalled model_info")
+        .expect("swap task joins");
+
+        let status = svc
+            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+            .await
+            .expect("get_status")
+            .into_inner();
+
+        // Swap completed rather than hanging the caller, and the model still
+        // reports its identity — only the window is unknown. Reporting an
+        // empty id here would make a loaded model look absent.
+        assert_eq!(status.model_id, "hanging-model");
+        assert_eq!(status.granted_n_ctx, 0);
+    }
+
+    /// The core regression guard: `get_status` must not touch the engine
+    /// mutex, which a generation holds for its entire duration.
+    ///
+    /// Querying `model_spec()` live here would block until the turn finished.
+    /// The generation is deliberately never released before the status call, so
+    /// against the pre-fix code the status RPC blocks outright rather than
+    /// merely returning wrong values, and the timeout turns that into a
+    /// failure. Needs the multi-thread runtime: the blocking lock wedges a
+    /// worker thread, and on the default single-threaded runtime there would be
+    /// no thread left to fire the timeout — the test would hang instead of
+    /// failing cleanly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn get_status_does_not_block_while_a_generation_holds_the_engine_lock() {
+        let (svc, node_service, _tempdir) = test_service().await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        svc.replace_engine_if_changed(
+            "held-model",
+            Arc::new(MutexHeldDuringGenerationEngine {
+                state: Arc::new(std::sync::Mutex::new(())),
+                started: tokio::sync::Mutex::new(Some(started_tx)),
+                release: tokio::sync::Mutex::new(Some(release_rx)),
+            }),
+        )
+        .await;
+
+        // Kick off a turn and wait until it actually holds the engine lock.
+        let node_id = create_processing_node_with_user_message(&node_service, "Hi").await;
+        let turn_svc = svc.clone();
+        let turn = tokio::spawn(async move {
+            turn_svc.maybe_handle_ai_chat_node(&node_id).await;
+        });
+        started_rx.await.expect("generation should take the lock");
+
+        // Run the status call on its own task and bound the join, not the call.
+        // A pre-fix `get_status` blocks its worker thread outright, so a
+        // timeout wrapped directly around the future could be starved of a
+        // thread to fire on; timing out the join keeps the failure clean.
+        let status_svc = svc.clone();
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::spawn(async move {
+                status_svc
+                    .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+                    .await
+            }),
+        )
+        .await
+        .expect("get_status must return while a generation holds the engine lock")
+        .expect("status task joins")
+        .expect("get_status")
+        .into_inner();
+
+        // Served from the cache, so the real geometry is still reported.
+        assert_eq!(status.model_id, "held-model");
+        assert_eq!(status.granted_n_ctx, 8192);
+
+        let _ = release_tx.send(());
+        let _ = turn.await;
     }
 
     // -- Agent-flow (stuck-state) coverage with a stub model ----------------
