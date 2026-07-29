@@ -188,10 +188,33 @@ impl AiChatNode {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Decoded per message, not as one `Vec`. Decoding the whole array at
+        // once means a single unreadable message discards the entire
+        // conversation — and because a caller that then writes the node back
+        // (status updates do) re-serialises from this struct, that loss is
+        // persisted. Per-message decoding contains the damage to the message
+        // actually at fault, and logs it rather than failing silently.
         let messages = props
             .get("messages")
-            .cloned()
-            .map(|v| serde_json::from_value::<Vec<AiChatMessage>>(v).unwrap_or_default())
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(
+                        |m| match serde_json::from_value::<AiChatMessage>(m.clone()) {
+                            Ok(msg) => Some(msg),
+                            Err(e) => {
+                                tracing::error!(
+                                    node_id = %node.id,
+                                    error = %e,
+                                    "dropping unreadable ai-chat message; the rest of the \
+                                     conversation is preserved"
+                                );
+                                None
+                            }
+                        },
+                    )
+                    .collect()
+            })
             .unwrap_or_default();
 
         Ok(Self {

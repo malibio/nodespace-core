@@ -2658,7 +2658,10 @@ api_key = "sk-test"
             !identity.contains(&huge),
             "the import must not be re-stored"
         );
-        assert!(identity.len() < 128, "identity must be constant-size");
+        // Exactly "sha256:" plus 64 hex chars. An exact length, not a loose
+        // bound: a bound generous enough to be safe would also pass on a
+        // truncated identity, which is the regression this is here to catch.
+        assert_eq!(identity.len(), 71, "identity must be a full digest");
         // The evidence label is unaffected: the write is still reported.
         assert!(writes[0].summary.is_some());
     }

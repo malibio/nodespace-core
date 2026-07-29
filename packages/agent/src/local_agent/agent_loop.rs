@@ -93,6 +93,13 @@ pub fn canonical_args(args_json: &str) -> String {
 
 /// Rewrite aliased top-level parameter keys to the name the params struct uses.
 ///
+/// Applied to every tool's arguments rather than per-tool. `node_id` is the only
+/// alias in the tool registry and always means `id`, so a blanket rule is both
+/// correct and self-maintaining — a future tool adopting the same alias needs no
+/// matching fix here. A tool with no such parameter is unaffected in practice,
+/// and even a stray `node_id` is renamed identically on both sides of the
+/// comparison, so the identity stays consistent either way.
+///
 /// Only the top level: a nested `properties` blob is the user's own data, where
 /// a key named `node_id` means whatever the user's schema says and must not be
 /// renamed. When a call carries *both* spellings the object is left untouched —
@@ -4651,6 +4658,8 @@ mod tests {
             .await
             .expect("turn should succeed");
 
+        // Bound, not returned directly: the temporary `MutexGuard` in the
+        // expression would outlive `calls` at the end of the function.
         let ran = calls.lock().unwrap().iter().any(|c| c == "delete_node");
         ran
     }
@@ -4695,9 +4704,19 @@ mod tests {
     /// different field for identity purposes.
     #[test]
     fn alias_normalisation_does_not_reach_into_nested_user_data() {
-        let canonical = canonical_args(r#"{"properties":{"node_id":"x"},"node_type":"venue"}"#);
+        // A realistic `update_node`: the tool's own target under the alias, plus
+        // a user-defined field that happens to be named `node_id` inside the
+        // `properties` blob. The top-level key is renamed; the user's field is
+        // not, and its value must survive untouched.
+        let canonical = canonical_args(
+            r#"{"node_id":"nodespace://n1","properties":{"node_id":"user-value","capacity":10}}"#,
+        );
         assert!(
-            canonical.contains("node_id"),
+            canonical.contains(r#""id":"nodespace://n1""#),
+            "the top-level alias must be resolved, got {canonical}"
+        );
+        assert!(
+            canonical.contains(r#""node_id":"user-value""#),
             "a nested user field must be left alone, got {canonical}"
         );
     }
