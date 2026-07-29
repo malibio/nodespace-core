@@ -1020,7 +1020,8 @@ fn parse_single_field_description(
     // Extract field name (first word or phrase before parentheses/keywords)
     let field_name = extract_field_name(field_desc)?;
 
-    // Infer field type
+    // Infer field type from the full description, before the name is shortened, so a phrase
+    // like "capacity number" still yields `number` once the name becomes `capacity`.
     let field_type = infer_field_type(field_desc, &field_name);
 
     // Extract enum values if present
@@ -1031,6 +1032,21 @@ fn parse_single_field_description(
 
     // Collect warnings
     let mut warnings = Vec::new();
+
+    // A trailing type keyword is an annotation, not part of the name the caller wants stored.
+    let field_name = match strip_trailing_type_keyword(&field_name) {
+        Some((stripped, keyword)) => {
+            warnings.push(format!(
+                "Inferred field name '{}' (type {}) from '{}' — the '{}' keyword was read as the type. \
+                 Use '{}' in title templates, filters and property lookups. To store a different \
+                 name, pass \"fields\" explicitly instead of a description.",
+                stripped, field_type, field_desc, keyword, stripped
+            ));
+            stripped
+        }
+        None => field_name,
+    };
+
     if field_type == "string" && contains_any(field_desc, &["amount", "price", "cost"]) {
         warnings.push(format!(
             "Field '{}' mentions monetary amount but inferred as string. Consider using number type.",
@@ -1093,6 +1109,101 @@ fn extract_before_keyword(text: &str, keywords: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+/// Bare type keywords that may be dropped from the tail of an inferred field name.
+///
+/// Deliberately narrower than the vocabulary [`infer_field_type`] recognises: words like
+/// "amount", "price", "count" and "total" also signal a type, but they are legitimate field
+/// names in their own right, so removing them would leave the caller with a worse name than
+/// the one they described.
+const STRIPPABLE_TYPE_KEYWORDS: &[&str] = &[
+    "number", "date", "text", "string", "boolean", "list", "array",
+];
+
+/// Words that make a trailing type keyword part of the field name rather than a type annotation.
+///
+/// "capacity number" describes a capacity held as a number; "invoice number" describes an
+/// identifier that is called a number. The phrases are structurally identical, so the intent
+/// cannot be derived — this table records the cases where the keyword is intrinsic.
+///
+/// Recoverability is asymmetric, so this errs towards keeping: a missed strip leaves a slightly
+/// clumsy name, while a wrong strip changes a user-visible key that title templates, CEL
+/// selectors and query filters all resolve against. The "number" group is the larger one because
+/// those nouns *have* a number rather than *being* one.
+///
+/// This is matched on the word immediately before the keyword, so it is not subsumed by the
+/// reserved-property guard in [`strip_trailing_type_keyword`]: that guard compares the whole
+/// shortened name, and so protects `due_date` but not `payment_due_date`, whose shortened form
+/// is the unreserved `payment_due`. The same holds for `id` and `customer_id_number`.
+const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
+    (
+        "number",
+        &[
+            "invoice",
+            "phone",
+            "account",
+            "serial",
+            "order",
+            "reference",
+            "tracking",
+            "part",
+            "version",
+            "page",
+            "model",
+            "ticket",
+            "flight",
+            "id",
+            "security",
+            "registration",
+            "license",
+            "batch",
+            "lot",
+            "room",
+            "seat",
+            "case",
+        ],
+    ),
+    ("date", &["birth", "due"]),
+];
+
+/// Drop a trailing bare type keyword from an inferred field name.
+///
+/// Returns the shortened name and the keyword that was removed, or `None` when the name should
+/// be left alone. Operates on an already-normalized snake_case name, so splitting on '_' is
+/// enough to find word boundaries.
+///
+/// The keyword is only removed when it is the final word, a non-empty name remains, the
+/// preceding word does not make it intrinsic (see [`INTRINSIC_KEYWORD_PREFIXES`]), and the
+/// shortened name is not a reserved core property.
+fn strip_trailing_type_keyword(name: &str) -> Option<(String, String)> {
+    let words: Vec<&str> = name.split('_').filter(|w| !w.is_empty()).collect();
+
+    // A bare keyword is the whole name ("number"): there is nothing left to call the field.
+    let (keyword, head) = words.split_last()?;
+    if head.is_empty() || !STRIPPABLE_TYPE_KEYWORDS.contains(keyword) {
+        return None;
+    }
+
+    let preceding = head.last()?;
+    let is_intrinsic = INTRINSIC_KEYWORD_PREFIXES
+        .iter()
+        .any(|(kw, prefixes)| kw == keyword && prefixes.contains(preceding));
+    if is_intrinsic {
+        return None;
+    }
+
+    let stripped = head.join("_");
+
+    // Shortening must not invent a collision the caller never described: "status text" would
+    // otherwise become `status`, colliding with a core property that "status_text" does not.
+    // Checking here rather than listing each casualty in the table above keeps one source of
+    // truth, so a core property added later is covered without touching this function.
+    if RESERVED_CORE_PROPERTIES.contains(&stripped.as_str()) {
+        return None;
+    }
+
+    Some((stripped, (*keyword).to_string()))
 }
 
 /// Normalize field name to snake_case
@@ -1440,6 +1551,170 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_trailing_type_keyword() {
+        // A trailing keyword is a type annotation: the caller wants the noun.
+        for (input, expected_name, expected_keyword) in [
+            ("capacity_number", "capacity", "number"),
+            ("score_number", "score", "number"),
+            ("tags_list", "tags", "list"),
+            ("bio_text", "bio", "text"),
+            ("start_date", "start", "date"),
+            ("labels_array", "labels", "array"),
+            // Only the final word is considered, so a multi-word head survives intact.
+            ("max_room_capacity_number", "max_room_capacity", "number"),
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                Some((expected_name.to_string(), expected_keyword.to_string())),
+                "'{input}' should strip its trailing type keyword"
+            );
+        }
+
+        // Names where the keyword is intrinsic, not an annotation. Every entry in
+        // INTRINSIC_KEYWORD_PREFIXES appears here: an unexercised entry is indistinguishable
+        // from a missing one, since the strip would simply proceed.
+        for input in [
+            "invoice_number",
+            "phone_number",
+            "account_number",
+            "serial_number",
+            "order_number",
+            "reference_number",
+            "tracking_number",
+            "part_number",
+            "version_number",
+            "page_number",
+            "model_number",
+            "ticket_number",
+            "flight_number",
+            "id_number",
+            "security_number",
+            "registration_number",
+            "license_number",
+            "batch_number",
+            "lot_number",
+            "room_number",
+            "seat_number",
+            "case_number",
+            "date_of_birth",
+            "due_date",
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' keeps its keyword — it is part of the intended name"
+            );
+        }
+
+        // The keep-list is keyed on the word immediately before the keyword, so it still
+        // protects these names when the head carries additional qualifiers. This is what the
+        // reserved-property guard alone cannot do: it compares the whole shortened name, which
+        // is `payment_due` here, not `due`.
+        for input in [
+            "payment_due_date",
+            "invoice_due_date",
+            "customer_id_number",
+            "purchase_order_number",
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' keeps its keyword — a qualified head does not make it an annotation"
+            );
+        }
+
+        // Stripping must not invent a reserved-core-property collision that the caller's own
+        // wording avoided: "status text" describes a field `status_text`, not `status`.
+        for input in [
+            "status_text",
+            "priority_text",
+            "content_text",
+            "id_number",
+            "due_date",
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' must not be shortened onto a reserved core property"
+            );
+        }
+
+        // Nothing to strip: the keyword is the entire name, or there is no keyword.
+        for input in ["number", "date", "capacity", "customer_name", ""] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' has no strippable trailing keyword"
+            );
+        }
+
+        // A keyword away from the tail is an ordinary word.
+        assert_eq!(strip_trailing_type_keyword("number_of_guests"), None);
+    }
+
+    /// The description route used to fold the type keyword into the stored name, so
+    /// "capacity number" produced a field called `capacity_number` while the explicit-fields
+    /// route produced `capacity` for the same intent. Stored names are user-visible keys, so
+    /// the keyword is now read as the type only.
+    #[test]
+    fn test_parse_field_descriptions_strips_type_keyword() {
+        let fields = parse_field_descriptions("capacity number");
+
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "capacity");
+        // The type still comes from the full phrase, even though the name no longer carries it.
+        assert_eq!(fields[0].field_type, "number");
+
+        // The caller is told which key was stored, so later title templates and filters can
+        // reference it without guessing.
+        assert!(
+            fields[0]
+                .warnings
+                .iter()
+                .any(|w| w.contains("capacity") && w.contains("capacity number")),
+            "Expected a warning naming the stored field and its source phrase, got {:?}",
+            fields[0].warnings
+        );
+    }
+
+    /// Shortening a name can only remove words, so it can land on a reserved core property that
+    /// the caller's own wording steered clear of — "status text" describes `status_text`, and
+    /// turning it into `status` manufactures a collision rather than reporting one.
+    #[test]
+    fn test_parse_field_descriptions_does_not_strip_onto_reserved_property() {
+        let fields = parse_field_descriptions("status text, priority text, id number");
+
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "status_text");
+        assert_eq!(fields[1].name, "priority_text");
+        assert_eq!(fields[2].name, "id_number");
+    }
+
+    /// Naive stripping would turn "invoice number" into `invoice` — a different wrong answer.
+    #[test]
+    fn test_parse_field_descriptions_keeps_intrinsic_type_keyword() {
+        let fields = parse_field_descriptions("invoice number, phone number, due date");
+
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "invoice_number");
+        assert_eq!(fields[1].name, "phone_number");
+        assert_eq!(fields[2].name, "due_date");
+
+        // Nothing was rewritten, so nothing is reported as rewritten.
+        for field in &fields {
+            assert!(
+                !field
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("was read as the type")),
+                "'{}' should not report a stripped keyword, got {:?}",
+                field.name,
+                field.warnings
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_field_descriptions_simple() {
         let desc = "invoice number, amount, status";
         let fields = parse_field_descriptions(desc);
@@ -1612,12 +1887,13 @@ mod tests {
         // Stored names are bare — no namespace prefix is applied during inference
         assert!(normalized.iter().all(|f| !f.name.contains(':')));
 
-        // Verify field names are present
+        // Exact names, not substrings: these are the keys title templates and filters use,
+        // and a `contains` assertion would pass whether or not a type keyword was folded in.
         assert_eq!(normalized.len(), 4);
-        assert!(normalized[0].name.contains("invoice"));
-        assert!(normalized[1].name.contains("amount"));
-        assert!(normalized[2].name.contains("status"));
-        assert!(normalized[3].name.contains("due"));
+        assert_eq!(normalized[0].name, "invoice_number");
+        assert_eq!(normalized[1].name, "amount");
+        assert_eq!(normalized[2].name, "status");
+        assert_eq!(normalized[3].name, "due_date");
 
         // Verify types are inferred correctly (following priority order)
         assert_eq!(normalized[0].field_type, "number"); // "number" keyword in "invoice number"
