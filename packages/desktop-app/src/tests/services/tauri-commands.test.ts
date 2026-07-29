@@ -25,7 +25,6 @@ describe('Tauri System Commands - API Surface', () => {
       expect(typeof tauriCommands.chatModelLoad).toBe('function');
       expect(typeof tauriCommands.chatModelUnload).toBe('function');
       expect(typeof tauriCommands.getSystemRamGb).toBe('function');
-      expect(typeof tauriCommands.ollamaAvailable).toBe('function');
       expect(typeof tauriCommands.ensureModelReady).toBe('function');
     });
 

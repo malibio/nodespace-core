@@ -536,7 +536,6 @@ pub fn run() {
             commands::chat_models::chat_model_delete,
             commands::chat_models::chat_model_load,
             commands::chat_models::chat_model_unload,
-            commands::chat_models::ollama_available,
             commands::chat_models::get_system_ram_gb,
             // PTY agent session commands
             commands::agent_session::launch_session,

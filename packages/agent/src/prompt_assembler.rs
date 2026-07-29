@@ -345,7 +345,7 @@ mod tests {
     /// Lock in the exact bytes of the two seeds composed from `agent_guidance`
     /// constants. If a future edit to `agent_guidance.rs` or the surrounding
     /// `format!()` glue silently changes the rendered seed body, this test
-    /// fails — preventing the local Ollama agent's prompt from drifting
+    /// fails — preventing the local agent's prompt from drifting
     /// unintentionally. Edit the expected strings deliberately when you change
     /// agent guidance.
     #[test]

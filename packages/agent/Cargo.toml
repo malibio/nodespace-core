@@ -62,15 +62,6 @@ testing = []
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
 
-# `ollama_integration.rs` calls `set_system_prompt`, which lives behind the
-# `testing` feature. Declaring it here means `cargo test -p nodespace-agent`
-# without features simply skips this binary instead of failing to compile,
-# while `cargo test -p nodespace-agent --features testing` builds and runs it.
-[[test]]
-name = "ollama_integration"
-path = "tests/ollama_integration.rs"
-required-features = ["testing"]
-
 [[test]]
 name = "search_skills_latency"
 path = "tests/search_skills_latency.rs"

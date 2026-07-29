@@ -246,7 +246,7 @@ mod wire_contract {
             serde_json::json!({
                 "ai-chat": {
                     "status": "active",
-                    "provider": "ollama",
+                    "provider": "openai-compat",
                     "messages": [{ "role": "user", "content": "hi" }]
                 }
             }),
@@ -254,7 +254,7 @@ mod wire_contract {
         let out = node_to_typed_value(node).unwrap();
 
         assert_eq!(out["status"], "active");
-        assert_eq!(out["provider"], "ollama");
+        assert_eq!(out["provider"], "openai-compat");
         assert_eq!(out["messages"][0]["content"], "hi");
         assert!(out["properties"].get("ai-chat").is_none());
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));

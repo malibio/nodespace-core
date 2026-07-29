@@ -22,9 +22,7 @@ use nodespace_agent::agent_types::{
 use nodespace_agent::local_agent::agent_loop::{
     canonical_args, canonical_args_identity, LocalAgentService,
 };
-use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
-use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
 use nodespace_agent::local_agent::tools::{
     is_cross_turn_guarded_tool, is_write_tool, GraphToolExecutor, SharedEmbeddingService,
 };
@@ -43,9 +41,8 @@ use crate::nodespace::{
     DeleteModelRequest, DeleteModelResponse, DownloadModelRequest, EnsureModelReadyRequest,
     GetLocalStatusRequest, GetSystemRamRequest, GetSystemRamResponse, ListModelsRequest,
     ListModelsResponse, LoadModelRequest, LoadModelResponse, LocalAgentStatusResponse, ModelEntry,
-    ModelLoadProgressEvent, OllamaAvailableRequest, OllamaAvailableResponse,
-    RecommendedModelRequest, RecommendedModelResponse, SubscribeTokenStreamRequest,
-    UnloadModelRequest, UnloadModelResponse,
+    ModelLoadProgressEvent, RecommendedModelRequest, RecommendedModelResponse,
+    SubscribeTokenStreamRequest, UnloadModelRequest, UnloadModelResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +88,7 @@ const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
-    model_manager: Arc<CompositeModelManager>,
+    model_manager: Arc<GgufModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
     /// The loaded model's geometry, captured at engine-swap time.
@@ -135,10 +132,8 @@ impl LocalAgentServiceImpl {
         embedding_service: SharedEmbeddingService,
         daemon_config_path: std::path::PathBuf,
     ) -> Self {
-        let gguf =
+        let model_manager =
             Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
-        let ollama = Arc::new(OllamaModelManager::new());
-        let model_manager = Arc::new(CompositeModelManager::new(gguf, ollama));
 
         // Channel capacity: enough headroom for burst token output (~256 tokens per broadcast).
         let (token_tx, _) = broadcast::channel(512);
@@ -222,7 +217,7 @@ impl LocalAgentServiceImpl {
         // Safe to query now: a swap happens between turns, so the engine mutex
         // this reaches is uncontended, unlike the same call from `get_status`.
         //
-        // Bounded because this is not always a local read: the Ollama engine
+        // Bounded because this is not always a local read: a remote engine
         // answers `model_info` with an HTTP round-trip on a client with no
         // default timeout, so an endpoint that accepts the connection and then
         // stalls would hang the model-load RPC that awaits this. Losing the
@@ -856,18 +851,20 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         &self,
         _request: Request<ListModelsRequest>,
     ) -> Result<Response<ListModelsResponse>, Status> {
-        let models = self
+        let mut models = self
             .inner
             .model_manager
             .list()
             .await
             .map_err(|e| Status::internal(format!("Failed to list models: {e}")))?;
 
+        models.extend(self.discover_openai_compat_models().await);
+
         let entries = models
             .into_iter()
             .map(|m| {
                 let status_json = serde_json::to_string(&m.status).unwrap_or_default();
-                let backend = format!("{:?}", m.backend).to_lowercase();
+                let backend = m.backend.as_wire_str().to_string();
                 ModelEntry {
                     id: m.id,
                     name: m.name,
@@ -898,7 +895,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let tx_gguf = tx.clone();
         let mid_gguf = model_id.clone();
         manager
-            .set_gguf_progress_callback(
+            .set_progress_callback(
                 &model_id,
                 Box::new(move |evt| {
                     let event = ModelLoadProgressEvent {
@@ -909,24 +906,6 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
                         ..Default::default()
                     };
                     let _ = tx_gguf.try_send(Ok(event));
-                }),
-            )
-            .await;
-
-        let tx_ollama = tx.clone();
-        let mid_ollama = model_id.clone();
-        manager
-            .set_ollama_progress_callback(
-                &model_id,
-                Box::new(move |evt| {
-                    let event = ModelLoadProgressEvent {
-                        event_type: "downloading".to_string(),
-                        model_id: mid_ollama.clone(),
-                        bytes_downloaded: Some(evt.bytes_downloaded as i64),
-                        bytes_total: Some(evt.bytes_total as i64),
-                        ..Default::default()
-                    };
-                    let _ = tx_ollama.try_send(Ok(event));
                 }),
             )
             .await;
@@ -962,10 +941,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             // own now-unused callback, hanging the frontend's await forever.
             // Cleared by model_id, not wholesale, so a concurrent download of
             // a different model is unaffected.
-            manager.clear_gguf_progress_callback(&model_id_clone).await;
-            manager
-                .clear_ollama_progress_callback(&model_id_clone)
-                .await;
+            manager.clear_progress_callback(&model_id_clone).await;
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -1022,14 +998,6 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         Ok(Response::new(CancelModelDownloadResponse {}))
     }
 
-    async fn ollama_available(
-        &self,
-        _request: Request<OllamaAvailableRequest>,
-    ) -> Result<Response<OllamaAvailableResponse>, Status> {
-        let available = self.inner.model_manager.ollama_available().await;
-        Ok(Response::new(OllamaAvailableResponse { available }))
-    }
-
     async fn recommended_model(
         &self,
         _request: Request<RecommendedModelRequest>,
@@ -1053,11 +1021,56 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
+    /// Query every configured OpenAI-compatible endpoint for the models it
+    /// serves, as catalog rows.
+    ///
+    /// Endpoints are queried concurrently: they are independent network calls,
+    /// and the model selector awaits this whole listing before it can render.
+    /// An endpoint that is unreachable or misconfigured contributes nothing
+    /// rather than failing the catalog — a user with one dead provider must
+    /// still see the models from every other one.
+    async fn discover_openai_compat_models(&self) -> Vec<nodespace_agent::agent_types::ModelInfo> {
+        use nodespace_agent::local_agent::openai_compat_discovery::{
+            discover_models_or_empty, discovered_model_info,
+        };
+
+        let configs = match crate::services::settings_service::load_openai_compat_configs(
+            &self.inner.daemon_config_path,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to read OpenAI-compat configs for discovery");
+                return Vec::new();
+            }
+        };
+
+        let mut lookups = tokio::task::JoinSet::new();
+        for config in configs {
+            lookups.spawn(async move {
+                let models = discover_models_or_empty(&config.base_url, &config.api_key).await;
+                models
+                    .into_iter()
+                    .map(|model| discovered_model_info(&config.id, &config.name, &model))
+                    .collect::<Vec<_>>()
+            });
+        }
+
+        let mut discovered = Vec::new();
+        while let Some(result) = lookups.join_next().await {
+            match result {
+                Ok(rows) => discovered.extend(rows),
+                Err(e) => tracing::warn!(error = %e, "OpenAI-compat discovery task failed"),
+            }
+        }
+        discovered
+    }
+
     async fn load_model_and_collect_events(&self, model_id: &str) -> Vec<ModelLoadProgressEvent> {
         use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
-        use nodespace_agent::local_agent::ollama_inference::OllamaInferenceEngine;
         use nodespace_agent::local_agent::openai_compat_inference::{
-            is_openai_compat, strip_openai_compat_prefix, OpenAiCompatInferenceEngine,
+            is_openai_compat, parse_openai_compat_id, OpenAiCompatInferenceEngine,
         };
         use nodespace_nlp_engine::chat::ChatConfig;
 
@@ -1067,7 +1080,9 @@ impl LocalAgentServiceImpl {
         // of the model catalog `list()` returns — resolve and branch on them first
         // so they never fall through to the "Unknown model" / GGUF path below.
         if is_openai_compat(model_id) {
-            let config_id = strip_openai_compat_prefix(model_id);
+            // A discovered model carries its own identifier after the config
+            // UUID; without one, fall back to the config's pinned `model`.
+            let (config_id, discovered_model) = parse_openai_compat_id(model_id);
 
             events.push(ModelLoadProgressEvent {
                 event_type: "loading".to_string(),
@@ -1107,16 +1122,19 @@ impl LocalAgentServiceImpl {
                 }
             };
 
-            // `model` is the wire-protocol identifier (e.g. "gpt-4o"); `name` is
-            // only a cosmetic UI label and must never be sent as the request's
-            // "model" field — real OpenAI-API and multi-model servers reject or
-            // misroute an arbitrary display string. Empty only for configs
-            // created before this field existed; single-model local servers
-            // (Ollama, LM Studio) generally ignore the field either way.
-            let model = if config.model.is_empty() {
-                "default".to_string()
-            } else {
-                config.model.clone()
+            // `model` is the wire-protocol identifier (e.g. "gpt-4o" or
+            // "mistral:7b"); `name` is only a cosmetic UI label and must never
+            // be sent as the request's "model" field — real OpenAI-API and
+            // multi-model servers reject or misroute an arbitrary display
+            // string. A model discovered via /models wins over the config's
+            // pinned value, since it names one of several models the same
+            // endpoint serves.
+            let model = match discovered_model {
+                Some(m) => m.to_string(),
+                None if !config.model.is_empty() => config.model.clone(),
+                // Only for configs created before the field existed;
+                // single-model local servers generally ignore it.
+                None => "default".to_string(),
             };
             let engine = OpenAiCompatInferenceEngine::new(
                 config.base_url.clone(),
@@ -1163,48 +1181,6 @@ impl LocalAgentServiceImpl {
                 return events;
             }
         };
-
-        if CompositeModelManager::is_ollama(model_id) {
-            let ollama_name = CompositeModelManager::strip_ollama_prefix(model_id).to_string();
-
-            events.push(ModelLoadProgressEvent {
-                event_type: "loading".to_string(),
-                model_id: model_id.to_string(),
-                message: Some(format!("Connecting to Ollama model {ollama_name}...")),
-                ..Default::default()
-            });
-
-            if let Err(e) = self.inner.model_manager.load(model_id).await {
-                events.push(ModelLoadProgressEvent {
-                    event_type: "error".to_string(),
-                    model_id: model_id.to_string(),
-                    error_message: Some(e.to_string()),
-                    ..Default::default()
-                });
-                return events;
-            }
-
-            let ollama_base_url = self
-                .inner
-                .model_manager
-                .ollama_manager()
-                .base_url()
-                .to_string();
-            let engine = OllamaInferenceEngine::with_base_url(ollama_name.clone(), ollama_base_url);
-            let swapped = self
-                .replace_engine_if_changed(model_id, Arc::new(engine))
-                .await;
-
-            events.push(ModelLoadProgressEvent {
-                event_type: "ready".to_string(),
-                model_id: model_id.to_string(),
-                message: Some(format!("Ollama model {ollama_name} ready")),
-                engine_swapped: Some(swapped),
-                ..Default::default()
-            });
-
-            return events;
-        }
 
         {
             let active = self.inner.active_model_id.lock().await;
@@ -1260,7 +1236,7 @@ impl LocalAgentServiceImpl {
             ..Default::default()
         });
 
-        let model_path = match self.inner.model_manager.gguf_manager().model_path(model_id) {
+        let model_path = match self.inner.model_manager.model_path(model_id) {
             Ok(p) => p,
             Err(e) => {
                 events.push(ModelLoadProgressEvent {
@@ -1273,12 +1249,7 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        let (family, chat_config) = match self
-            .inner
-            .model_manager
-            .gguf_manager()
-            .model_spec_for(model_id)
-        {
+        let (family, chat_config) = match self.inner.model_manager.model_spec_for(model_id) {
             Ok(spec) => {
                 let config = ChatConfig {
                     n_ctx: spec.context_window,

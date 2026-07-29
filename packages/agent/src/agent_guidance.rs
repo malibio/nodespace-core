@@ -3,7 +3,7 @@
 //! These constants define the rules injected into the local agent's seeded
 //! prompt nodes ([`crate::prompt_assembler`]). Changing a rule here propagates
 //! to every code path that composes local-agent guidance — including the
-//! local Ollama agent, next time prompt nodes are reseeded.
+//! local agent, next time prompt nodes are reseeded.
 //!
 //! External PTY-spawned agent sessions ([`crate::acp::context_assembly`]) do
 //! not use these constants — they get all tool/capability guidance from

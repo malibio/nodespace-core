@@ -1203,14 +1203,22 @@ mod tests {
 
         // Multi-membership node: member_of BOTH collections.
         let multi = ns
-            .create_node(Node::new("text".to_string(), "multi".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "multi".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
         svc.add_to_collection(&multi, &default).await.unwrap();
         svc.add_to_collection(&multi, &topic).await.unwrap();
         // Single-membership node: member_of only one collection.
         let single = ns
-            .create_node(Node::new("text".to_string(), "single".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "single".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
         svc.add_to_collection(&single, &default).await.unwrap();

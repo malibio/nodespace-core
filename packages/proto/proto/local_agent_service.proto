@@ -22,7 +22,6 @@ service LocalAgentService {
   rpc LoadModel(LoadModelRequest)                returns (LoadModelResponse);
   rpc UnloadModel(UnloadModelRequest)            returns (UnloadModelResponse);
   rpc CancelModelDownload(CancelModelDownloadRequest) returns (CancelModelDownloadResponse);
-  rpc OllamaAvailable(OllamaAvailableRequest)    returns (OllamaAvailableResponse);
   rpc RecommendedModel(RecommendedModelRequest)  returns (RecommendedModelResponse);
   rpc GetSystemRam(GetSystemRamRequest)          returns (GetSystemRamResponse);
 }
@@ -145,7 +144,7 @@ message ListModelsRequest {}
 message ModelEntry {
   string id = 1;
   string name = 2;
-  // "gguf" | "ollama"
+  // "gguf" | "openai-compat"
   string backend = 3;
   // Serialized ModelStatus (JSON tag-enum): "not_downloaded" | "ready" | etc.
   string status_json = 4;
@@ -204,16 +203,6 @@ message CancelModelDownloadRequest {
 }
 
 message CancelModelDownloadResponse {}
-
-// ---------------------------------------------------------------------------
-// OllamaAvailable
-// ---------------------------------------------------------------------------
-
-message OllamaAvailableRequest {}
-
-message OllamaAvailableResponse {
-  bool available = 1;
-}
 
 // ---------------------------------------------------------------------------
 // RecommendedModel

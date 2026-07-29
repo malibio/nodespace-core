@@ -1,7 +1,7 @@
 import type { Node } from './node';
 
 export type AiChatStatus = 'active' | 'processing' | 'archived';
-export type AiChatProvider = 'native' | 'ollama' | 'openai' | 'openai-compat' | 'pty';
+export type AiChatProvider = 'native' | 'openai' | 'openai-compat' | 'pty';
 
 export interface OpenAiCompatConfig {
   id: string;       // uuid, generated client-side

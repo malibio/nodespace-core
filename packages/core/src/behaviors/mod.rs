@@ -1738,12 +1738,15 @@ impl NodeBehavior for AiChatNodeBehavior {
         // Validate provider if present
         if let Some(provider) = node.properties.get("provider") {
             if let Some(provider_str) = provider.as_str() {
-                // ADR-034: AIChat is one node type with four provider modes.
+                // ADR-034: AIChat is one node type with several provider modes.
+                // "openai-compat" covers every remotely-served model, Ollama
+                // included — it is reached through its OpenAI-compatible /v1
+                // endpoint rather than a bespoke provider mode.
                 match provider_str {
-                    "native" | "ollama" | "openai" | "pty" => {}
+                    "native" | "openai" | "openai-compat" | "pty" => {}
                     _ => {
                         return Err(NodeValidationError::InvalidProperties(format!(
-                            "Invalid provider '{}': must be one of native, ollama, openai, pty",
+                            "Invalid provider '{}': must be one of native, openai, openai-compat, pty",
                             provider_str
                         )));
                     }
@@ -4741,7 +4744,7 @@ mod tests {
     #[test]
     fn test_ai_chat_node_valid_providers() {
         let behavior = AiChatNodeBehavior;
-        for provider in &["native", "ollama", "openai", "pty"] {
+        for provider in &["native", "openai", "openai-compat", "pty"] {
             let node = Node::new(
                 "ai-chat".to_string(),
                 "Chat".to_string(),

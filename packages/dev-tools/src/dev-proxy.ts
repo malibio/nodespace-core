@@ -769,19 +769,6 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
-  // GET /api/agent/ollama-available
-  if (method === 'GET' && pathname === '/api/agent/ollama-available') {
-    try {
-      const res = await agentCall<Record<string, never>, { available: boolean }>(
-        (agentClient as unknown as Record<string, Function>).ollamaAvailable,
-        {}
-      );
-      return json({ available: res.available });
-    } catch (err) {
-      return grpcError(err as grpc.ServiceError);
-    }
-  }
-
   // POST /api/agent/ensure-model-ready
   if (method === 'POST' && pathname === '/api/agent/ensure-model-ready') {
     try {

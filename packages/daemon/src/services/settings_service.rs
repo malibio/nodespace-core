@@ -137,6 +137,25 @@ pub async fn read_capture_settings(config_path: &std::path::Path) -> anyhow::Res
     }
 }
 
+/// Read every OpenAI-compatible provider config. Used by `LocalAgentService`
+/// to query each configured endpoint for the models it serves.
+///
+/// A missing config file is not an error — it just means no providers are
+/// configured yet.
+pub async fn load_openai_compat_configs(
+    config_path: &std::path::Path,
+) -> anyhow::Result<Vec<OpenAiCompatConfig>> {
+    match tokio::fs::read_to_string(config_path).await {
+        Ok(contents) => {
+            let config: DaemonConfig = toml::from_str(&contents)
+                .map_err(|e| anyhow::anyhow!("failed to parse daemon config: {}", e))?;
+            Ok(config.openai_compat.configs)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(anyhow::anyhow!("failed to read daemon config: {}", e)),
+    }
+}
+
 /// Look up a single OpenAI-compatible provider config by UUID. Used by
 /// `LocalAgentService` when loading an `openai-compat:<uuid>` model.
 pub async fn find_openai_compat_config(

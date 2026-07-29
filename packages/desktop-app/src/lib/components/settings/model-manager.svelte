@@ -10,7 +10,6 @@
     type ModelSelection,
   } from '$lib/stores/settings.svelte';
   import {
-    ollamaAvailable,
     chatModelList,
     getOpenAiCompatConfigsFromDaemon,
   } from '$lib/services/tauri-commands';
@@ -34,28 +33,25 @@
   const LOCAL_FAMILIES: ModelFamily[] = ['gemma4'];
   const localModels = $derived(models.filter((m) => LOCAL_FAMILIES.includes(m.family)));
 
-  // --- Ollama state ---
-  let ollamaRunning = $state(false);
-  let ollamaModels = $state<{ id: string; name: string }[]>([]);
-  let ollamaChecking = $state(true);
+  // --- Models discovered at configured OpenAI-compatible endpoints ---
+  // The daemon queries each endpoint's /models and returns one row per model,
+  // so "did it answer" is simply whether any rows came back.
+  let remoteModels = $state<{ id: string; name: string }[]>([]);
+  let remoteChecking = $state(true);
 
-  async function checkOllama() {
-    ollamaChecking = true;
+  async function refreshRemoteModels() {
+    remoteChecking = true;
     try {
-      ollamaRunning = await ollamaAvailable();
-      if (ollamaRunning) {
-        const list = await chatModelList();
-        ollamaModels = list.filter((m) => m.backend === 'ollama').map((m) => ({ id: m.id, name: m.name }));
-      } else {
-        ollamaModels = [];
-      }
+      const list = await chatModelList();
+      remoteModels = list
+        .filter((m) => m.backend === 'openai-compat')
+        .map((m) => ({ id: m.id, name: m.name }));
     } catch (e) {
-      log.warn('Ollama check failed', e);
-      ollamaRunning = false;
-      ollamaModels = [];
+      log.warn('Failed to list remote models', e);
+      remoteModels = [];
     } finally {
       buildDefaultOptions();
-      ollamaChecking = false;
+      remoteChecking = false;
     }
   }
 
@@ -70,11 +66,20 @@
   let availableSelectionsForDefault = $state<{ label: string; value: string }[]>([]);
 
   function encodeSelection(s: ModelSelection): string {
-    // openai-compat: "openai-compat:<uuid>" (configId == modelId, no need to append twice)
-    // ollama: raw daemon ID, e.g. "ollama:llama3.2:latest" — stored as-is
+    // openai-compat: the daemon's own id, fully qualified as
+    //   "openai-compat:<uuid>" or "openai-compat:<uuid>:<model>".
     // native: "native:<model-id>"
-    if (s.provider === 'openai-compat') return `openai-compat:${s.configId ?? s.modelId}`;
-    if (s.provider === 'ollama') return s.modelId; // already "ollama:<name>"
+    //
+    // `modelId` is normalized rather than passed through: a ModelSelection can
+    // legitimately carry a bare config UUID (older persisted defaults stored
+    // one, and configId is the only id a config with no discovered models
+    // has). Returning that unqualified would match no <option>, so the select
+    // would silently fall back to "None" and quietly forget the saved default.
+    if (s.provider === 'openai-compat') {
+      return s.modelId.startsWith('openai-compat:')
+        ? s.modelId
+        : `openai-compat:${s.configId ?? s.modelId}`;
+    }
     return `native:${s.modelId}`;
   }
   function decodeSelection(v: string): ModelSelection | null {
@@ -82,12 +87,10 @@
       return { provider: 'native', modelId: v.slice('native:'.length) };
     }
     if (v.startsWith('openai-compat:')) {
-      const configId = v.slice('openai-compat:'.length);
-      return { provider: 'openai-compat', modelId: configId, configId };
-    }
-    if (v.startsWith('ollama:')) {
-      // Full daemon ID including any colons in the Ollama model name.
-      return { provider: 'ollama', modelId: v };
+      // The config UUID is the segment up to the FIRST colon; a model name may
+      // itself contain colons ("mistral:7b"), so the rest is not part of it.
+      const configId = v.slice('openai-compat:'.length).split(':')[0];
+      return { provider: 'openai-compat', modelId: v, configId };
     }
     return null;
   }
@@ -112,7 +115,7 @@
       log.warn('Failed to refresh OpenAI-compat configs from daemon', e);
     }
 
-    await checkOllama();
+    await refreshRemoteModels();
   });
 
   function buildDefaultOptions() {
@@ -123,13 +126,29 @@
         opts.push({ label: `Local — ${m.name}`, value: encodeSelection({ provider: 'native', modelId: m.id }) });
       }
     }
-    // Ollama models — use daemon ID (already "ollama:<name>") as modelId
-    for (const m of ollamaModels) {
-      opts.push({ label: `Ollama — ${m.name}`, value: encodeSelection({ provider: 'ollama', modelId: m.id }) });
+    // Remote models — the daemon ID is already fully qualified. Discovery
+    // covers every endpoint that answered, so a config only earns its own
+    // fallback row when it contributed no discovered models (endpoint down, or
+    // a server with no /models listing). Otherwise it would appear twice.
+    for (const m of remoteModels) {
+      opts.push({
+        label: m.name,
+        value: encodeSelection({ provider: 'openai-compat', modelId: m.id }),
+      });
     }
-    // OpenAI-compat configs
+    const discoveredConfigIds = new Set(
+      remoteModels.map((m) => m.id.slice('openai-compat:'.length).split(':')[0])
+    );
     for (const c of openAiConfigs) {
-      opts.push({ label: c.name, value: encodeSelection({ provider: 'openai-compat', modelId: c.id, configId: c.id }) });
+      if (discoveredConfigIds.has(c.id)) continue;
+      opts.push({
+        label: c.name,
+        value: encodeSelection({
+          provider: 'openai-compat',
+          modelId: `openai-compat:${c.id}`,
+          configId: c.id,
+        }),
+      });
     }
     availableSelectionsForDefault = opts;
   }
@@ -242,7 +261,7 @@
     {#if ramTooLow}
       <p class="mm-notice mm-notice--warn">
         Your machine has {systemRamGb} GB RAM. Local models require at least {MIN_RAM_GB} GB.
-        Use Ollama or an external provider instead.
+        Use a remote endpoint instead.
       </p>
     {/if}
 
@@ -292,39 +311,39 @@
 
   <hr class="mm-divider" />
 
-  <!-- ── Ollama ─────────────────────────────────────────────────── -->
+  <!-- ── Discovered remote models ────────────────────────────────── -->
   <section class="mm-section">
     <div class="mm-section-header">
-      <h3>Ollama</h3>
+      <h3>Available remote models</h3>
       <button
         class="refresh-btn"
-        onclick={checkOllama}
-        disabled={ollamaChecking}
-        aria-label="Refresh Ollama status"
+        onclick={refreshRemoteModels}
+        disabled={remoteChecking}
+        aria-label="Refresh remote models"
       >
-        <svg class:spinning={ollamaChecking} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+        <svg class:spinning={remoteChecking} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
           <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
         </svg>
       </button>
     </div>
 
-    {#if ollamaChecking}
+    {#if remoteChecking}
       <p class="mm-empty">Checking…</p>
-    {:else if ollamaRunning}
-      <p class="mm-notice mm-notice--ok">Running at localhost:11434</p>
-      {#if ollamaModels.length === 0}
-        <p class="mm-empty">No models found in Ollama.</p>
-      {:else}
-        <ul class="ollama-list">
-          {#each ollamaModels as m (m.id)}
-            <li class="ollama-item">{m.name}</li>
-          {/each}
-        </ul>
-      {/if}
+    {:else if remoteModels.length > 0}
+      <ul class="remote-list">
+        {#each remoteModels as m (m.id)}
+          <li class="remote-item">{m.name}</li>
+        {/each}
+      </ul>
+    {:else if openAiConfigs.length === 0}
+      <p class="mm-empty">
+        No endpoints configured. Add one below — a local Ollama server is
+        reached at <code>http://localhost:11434/v1</code>.
+      </p>
     {:else}
       <p class="mm-notice">
-        Ollama is not running.
-        <a href="https://ollama.com/" target="_blank" rel="noopener noreferrer" class="mm-link">Download and install Ollama</a>
+        No models found. Check that each configured endpoint is running and its
+        base URL is correct.
       </p>
     {/if}
   </section>
@@ -571,8 +590,8 @@
     gap: 0.5rem;
   }
 
-  /* Ollama list */
-  .ollama-list {
+  /* Remote model list */
+  .remote-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -581,7 +600,7 @@
     gap: 0.375rem;
   }
 
-  .ollama-item {
+  .remote-item {
     font-size: 0.8125rem;
     color: hsl(var(--foreground));
     padding: 0.375rem 0.625rem;

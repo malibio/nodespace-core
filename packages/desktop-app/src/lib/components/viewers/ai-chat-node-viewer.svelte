@@ -5,7 +5,7 @@
   single dispatcher for the type. It renders a header (title + unified model selector)
   and routes on `properties.provider` (+ `properties.model`):
     - pty                           → embedded terminal session (AiChatPtySession).
-    - native | ollama | openai-compat → message UI (chat input + streamed messages[]).
+    - native | openai-compat → message UI (chat input + streamed messages[]).
     - model not yet set             → prompt to select a model via the header selector.
 
   The header selector (AiChatModelSelector) replaces the two-step provider → model
@@ -45,7 +45,7 @@
   const log = createLogger('AiChatNodeViewer');
 
   /** Provider modes that render the message UI. */
-  const MESSAGE_PROVIDERS = ['native', 'ollama', 'openai', 'openai-compat'] as const;
+  const MESSAGE_PROVIDERS = ['native', 'openai', 'openai-compat'] as const;
 
   let {
     nodeId,
@@ -90,12 +90,10 @@
   const selectorCurrentValue = $derived(
     provider && model
       ? provider === 'openai-compat'
-        ? `openai-compat:${model}`    // model = config UUID
-        : provider === 'ollama'
-          ? model                      // model = full daemon ID "ollama:<name>"
-          : provider === 'pty'
-            ? `pty:${model}`           // model = agent id, e.g. "claude-code"
-            : `native:${model}`
+        ? model                      // model = full daemon ID "openai-compat:<config>[:<model>]"
+        : provider === 'pty'
+          ? `pty:${model}`           // model = agent id, e.g. "claude-code"
+          : `native:${model}`
       : ''
   );
 
@@ -139,7 +137,7 @@
    * For native models: if the model is not yet downloaded (no status in the
    * catalog list) this shows the download modal. The download modal listens for
    * MODEL_DOWNLOAD_PROGRESS events and clears itself on MODEL_DOWNLOAD_READY.
-   * For ollama / openai-compat: write provider + model to the node immediately.
+   * For openai-compat: write provider + model to the node immediately.
    */
   function handleModelSelect(selection: ModelSelection): void {
     if (selection.provider === 'native') {
@@ -183,7 +181,7 @@
       return;
     }
 
-    // ollama / openai-compat: write directly.
+    // openai-compat: write directly.
     const current = sharedNodeStore.getNode(nodeId) as unknown as AiChatNode | undefined;
     sharedNodeStore.updateNode(
       nodeId,
