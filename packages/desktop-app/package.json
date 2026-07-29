@@ -60,6 +60,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
+    "@grpc/grpc-js": "1.14.4",
+    "@grpc/proto-loader": "^0.7.0",
     "@internationalized/date": "^3.8.1",
     "@lucide/svelte": "^0.515.0",
     "@sveltejs/adapter-static": "^3.0.6",

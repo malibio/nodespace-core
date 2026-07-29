@@ -10,103 +10,30 @@
  * No external database required — nodespaced embeds SQLite/libsql.
  */
 
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
 import {
   buildTaskNodeUpdatePatch,
   encodeInsertPosition,
   HTTP_ROUTE_PATTERNS,
   type InsertPosition,
 } from '../../desktop-app/src/lib/services/adapter-core.ts';
+import { createNodeSpaceClients } from './grpc-client.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const PROTO_PATH = path.resolve(__dirname, '../../proto/proto/node_service.proto');
-const AGENT_PROTO_PATH = path.resolve(__dirname, '../../proto/proto/local_agent_service.proto');
 const PORT = parseInt(process.env.DEV_PROXY_PORT ?? '3001', 10);
 
 // ============================================================================
 // gRPC client setup
 // ============================================================================
-
-function resolveSocketAddress(): string {
-  const sock =
-    process.env.NODESPACED_SOCKET ?? `${process.env.HOME}/.nodespace/daemon.sock`;
-  return `unix:${sock}`;
-}
-
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-  keepCase: false,
-  longs: String,
-  enums: String,
-  defaults: true,
-  oneofs: true
-});
-
-const agentPackageDefinition = protoLoader.loadSync(AGENT_PROTO_PATH, {
-  keepCase: false,
-  longs: String,
-  enums: String,
-  defaults: true,
-  oneofs: true
-});
-
-const proto = grpc.loadPackageDefinition(packageDefinition) as unknown as {
-  nodespace: {
-    NodeService: grpc.ServiceClientConstructor;
-  };
-};
-
-const agentProto = grpc.loadPackageDefinition(agentPackageDefinition) as unknown as {
-  nodespace: {
-    LocalAgentService: grpc.ServiceClientConstructor;
-  };
-};
-
-const address = resolveSocketAddress();
-const nodeClient = new proto.nodespace.NodeService(
-  address,
-  grpc.credentials.createInsecure()
-);
-const agentClient = new agentProto.nodespace.LocalAgentService(
-  address,
-  grpc.credentials.createInsecure()
-);
-
-// Promisify a unary gRPC call on nodeClient
-function call<TReq, TRes>(method: Function, request: TReq): Promise<TRes> {
-  return new Promise((resolve, reject) => {
-    method.call(nodeClient, request, (err: grpc.ServiceError | null, res: TRes) => {
-      if (err) reject(err);
-      else resolve(res);
-    });
-  });
-}
-
-// Promisify a unary gRPC call on agentClient
-function agentCall<TReq, TRes>(method: Function, request: TReq): Promise<TRes> {
-  return new Promise((resolve, reject) => {
-    method.call(agentClient, request, (err: grpc.ServiceError | null, res: TRes) => {
-      if (err) reject(err);
-      else resolve(res);
-    });
-  });
-}
-
-// Consume a server-streaming gRPC call, resolving when stream ends.
-// Rejects on error events; resolves with all collected events on stream end.
-function agentStream<TReq, TEvent>(method: Function, request: TReq): Promise<TEvent[]> {
-  return new Promise((resolve, reject) => {
-    const stream = method.call(agentClient, request) as grpc.ClientReadableStream<TEvent>;
-    const events: TEvent[] = [];
-    stream.on('data', (evt: TEvent) => events.push(evt));
-    stream.on('error', (err: grpc.ServiceError) => reject(err));
-    stream.on('end', () => resolve(events));
-  });
-}
+//
+// The gRPC-js clients, the reconnect-backoff cap, and the READY-gate that make
+// the dev-proxy recover promptly when the daemon socket appears AFTER the
+// proxy starts all live in ./grpc-client.ts (see that file's header for the
+// gRPC-js-specific rationale). `call`/`agentCall`/`agentStream` here are the
+// gated wrappers — each waits for the channel to reach READY before issuing
+// its RPC, so a call made moments after the daemon binds no longer fails
+// silently with UNAVAILABLE.
+const { address, nodeClient, agentClient, ready, call, agentCall, agentStream } =
+  createNodeSpaceClients();
 
 // ============================================================================
 // SSE broadcast
@@ -156,7 +83,18 @@ interface ProtoNodeEvent {
 }
 
 function startWatchBridge(): void {
-  function connect(): void {
+  async function connect(): Promise<void> {
+    // Gate the long-lived watch stream on the channel reaching READY too, so a
+    // proxy started before the daemon opens the stream promptly once the
+    // socket appears (per the bounded reconnect backoff) instead of churning
+    // through immediate stream errors while the channel is mid-backoff.
+    try {
+      await ready(nodeClient);
+    } catch (err) {
+      console.error('[dev-proxy] WatchNodes channel not ready, retrying in 2s:', (err as Error).message);
+      setTimeout(connect, 2000);
+      return;
+    }
     const stream = (nodeClient as unknown as Record<string, Function>).watchNodes({
       nodeType: '',
       rootId: ''
@@ -194,7 +132,7 @@ function startWatchBridge(): void {
     });
   }
 
-  connect();
+  void connect();
 }
 
 // ============================================================================

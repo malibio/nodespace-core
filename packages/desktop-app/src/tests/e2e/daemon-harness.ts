@@ -312,37 +312,28 @@ export class DaemonTestHarness {
   }
 
   /**
-   * Poll until a real RPC through the FULL stack under test — HTTP ->
-   * dev-proxy -> gRPC -> daemon — actually succeeds, not just until the
-   * daemon's own socket is reachable.
+   * Wait until the daemon this harness spawned is reachable end-to-end
+   * through the dev-proxy — which, since the dev-proxy's gRPC channel now
+   * recovers promptly on its own, reduces to waiting for the daemon's UDS to
+   * be reachable.
    *
-   * These are two different readiness layers when `startDeferred()` is
-   * used: the dev-proxy's gRPC-js client is constructed once, at proxy
-   * startup, against a socket that may not exist yet. gRPC-js's channel
-   * then owns its own reconnect/backoff state machine, independent of the
-   * caller — unlike the production Tauri path's tonic lazy channel, which
-   * has no such state and simply retries fresh on the next call (verified
-   * directly: a call issued right after the daemon binds succeeds
-   * immediately). So a daemon whose SOCKET is reachable does not imply the
-   * dev-proxy's CHANNEL to it is usable yet; waiting on the real round-trip
-   * this harness's callers are about to make is the only signal that means
-   * what "ready" needs to mean here.
+   * This used to poll a real RPC (`getAllSchemas`) through the full HTTP ->
+   * dev-proxy -> gRPC -> daemon stack, because the dev-proxy constructs its
+   * gRPC-js client once at startup and — when started before the daemon binds
+   * — the channel entered its own ever-growing reconnect backoff, independent
+   * of the socket becoming reachable. A socket probe could report the daemon
+   * up while the channel was still mid-backoff, so the only trustworthy
+   * "ready" signal was the round-trip itself.
+   *
+   * `packages/dev-tools/src/grpc-client.ts` closes that gap at the source:
+   * it caps the reconnect backoff to a fixed ~100ms and gates every RPC on
+   * the channel reaching READY. Once the socket is reachable the channel is
+   * usable within ~100ms, so the real-RPC poll is no longer needed — waiting
+   * on the cheap socket probe is sufficient, and any RPC issued afterwards
+   * self-heals inside the proxy rather than failing silently.
    */
   async waitUntilProxyReady(timeoutMs = 30_000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    let lastError: unknown;
-    while (Date.now() < deadline) {
-      try {
-        await this.adapter.getAllSchemas();
-        return;
-      } catch (err) {
-        lastError = err;
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    }
-    throw new Error(
-      `dev-proxy never reached the daemon after ${timeoutMs}ms (last error: ${String(lastError)})`
-    );
+    await waitForSocket(this.socketPath, timeoutMs);
   }
 
   /** SSE endpoint URL for WatchNodes event tests. */
