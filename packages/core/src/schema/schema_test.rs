@@ -1151,10 +1151,9 @@ async fn test_create_schema_from_description_only() {
 /// tokens, CEL selectors, query filters, frontend lookups), so this asserts on
 /// the stored node rather than the return value.
 ///
-/// The description here is worded so field-name *inference* is unambiguous
-/// ("capacity number" would infer the name `capacity_number`, folding in the
-/// type keyword). That inference difference is a separate concern from the
-/// namespace convention under test.
+/// The description here is worded so field-name *inference* is unambiguous, keeping this test
+/// focused on the namespace convention. The companion test below covers the harder case, where
+/// the description carries a type keyword the inference has to read as a type rather than a name.
 #[tokio::test]
 async fn test_create_schema_paths_agree_on_stored_field_names() {
     let field_names_of = |schema: &crate::models::SchemaNode| -> Vec<String> {
@@ -1203,6 +1202,101 @@ async fn test_create_schema_paths_agree_on_stored_field_names() {
         field_names_of(&explicit),
         vec!["capacity".to_string()],
         "Stored field names are bare, not namespace-prefixed"
+    );
+}
+
+/// The two routes must also agree when the description carries a type keyword. "capacity number"
+/// once stored `capacity_number` while the explicit-fields route stored `capacity` — the keyword
+/// was consumed for type inference *and* kept in the name, so a schema's user-visible keys
+/// depended on which call shape created it. Asserts on the stored node, not the return value.
+#[tokio::test]
+async fn test_create_schema_paths_agree_on_stored_field_names_with_type_keyword() {
+    let field_names_of = |schema: &crate::models::SchemaNode| -> Vec<String> {
+        let mut names: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
+        names.sort();
+        names
+    };
+
+    // Path A: the type keyword sits in a natural-language description.
+    let (svc_described, _tmp_a) = create_test_service().await;
+    handle_create_schema(
+        &svc_described,
+        json!({ "name": "Venue", "description": "capacity number" }),
+    )
+    .await
+    .expect("description-path create_schema should succeed");
+    let described = svc_described
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("description-path schema should be persisted");
+
+    // Path B: the same intent, with the type given explicitly instead of in prose.
+    let (svc_explicit, _tmp_b) = create_test_service().await;
+    handle_create_schema(
+        &svc_explicit,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": "capacity", "type": "number" }]
+        }),
+    )
+    .await
+    .expect("explicit-path create_schema should succeed");
+    let explicit = svc_explicit
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("explicit-path schema should be persisted");
+
+    assert_eq!(
+        field_names_of(&described),
+        field_names_of(&explicit),
+        "Both create_schema paths must store identical field names when the description \
+         carries a type keyword"
+    );
+    assert_eq!(
+        field_names_of(&explicit),
+        vec!["capacity".to_string()],
+        "The type keyword is read as the type, not folded into the stored name"
+    );
+
+    // The keyword was read as the type, not merely discarded.
+    let capacity = described
+        .fields
+        .iter()
+        .find(|f| f.name == "capacity")
+        .expect("described schema should define 'capacity'");
+    assert_eq!(
+        capacity.field_type, "number",
+        "'capacity number' should still infer a number type"
+    );
+}
+
+/// Names where the type keyword is intrinsic must survive the description route unchanged —
+/// stripping it would turn `invoice_number` into `invoice`, a different wrong stored key.
+#[tokio::test]
+async fn test_create_schema_description_keeps_intrinsic_type_keyword() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({ "name": "Bill", "description": "invoice number, capacity number" }),
+    )
+    .await
+    .expect("description-path create_schema should succeed");
+
+    let stored = svc
+        .get_schema_node("bill")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("schema should be persisted");
+
+    let mut names: Vec<String> = stored.fields.iter().map(|f| f.name.clone()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["capacity".to_string(), "invoice_number".to_string()],
+        "'invoice number' keeps its keyword while 'capacity number' drops it"
     );
 }
 
