@@ -870,12 +870,55 @@ impl Tool {
         Tool::CreateNodesFromMarkdown,
     ];
 
-    /// Compile-time proof that [`Tool::ALL`] lists every variant.
+    /// The number of variants, counted by walking every one of them.
     ///
-    /// The match is exhaustive, so a new variant must be given a position here;
-    /// the assertion then fails to compile unless that position also holds it
-    /// in `ALL`. A test could only check the variants it was told about, which
-    /// is exactly the blind spot — the omitted one.
+    /// The successor chain is an exhaustive match, so a new variant cannot be
+    /// added without being threaded into it — and threading it in necessarily
+    /// increments this count. That is the whole point: a literal here would be
+    /// satisfied by the very edit it is meant to police, since adding a variant
+    /// changes nothing on the right-hand side of a comparison against a
+    /// constant. `std::mem::variant_count` would say this directly but is still
+    /// nightly-only.
+    const COUNT: usize = {
+        let mut n = 0;
+        let mut v = Tool::SearchNodes;
+        loop {
+            n += 1;
+            v = match v {
+                Tool::SearchNodes => Tool::ResolveQuery,
+                Tool::ResolveQuery => Tool::SearchSemantic,
+                Tool::SearchSemantic => Tool::GetNode,
+                Tool::GetNode => Tool::CreateNode,
+                Tool::CreateNode => Tool::UpdateNode,
+                Tool::UpdateNode => Tool::CreateSchema,
+                Tool::CreateSchema => Tool::UpdateSchema,
+                Tool::UpdateSchema => Tool::UpdateTaskStatus,
+                Tool::UpdateTaskStatus => Tool::CreateRelationship,
+                Tool::CreateRelationship => Tool::GetRelatedNodes,
+                Tool::GetRelatedNodes => Tool::SearchSkills,
+                Tool::SearchSkills => Tool::DeleteNode,
+                Tool::DeleteNode => Tool::CreateNodesFromMarkdown,
+                Tool::CreateNodesFromMarkdown => break,
+            };
+        }
+        n
+    };
+
+    /// Compile-time proof that [`Tool::ALL`] lists every variant, exactly once,
+    /// in enum order.
+    ///
+    /// Two independent failure modes, because neither check catches the other's:
+    /// the index match below catches an entry that is out of order or listed
+    /// twice, while the count catches one omitted entirely — an omission
+    /// shortens the list without disturbing the indices of what remains.
+    ///
+    /// This is worth stating precisely because the obvious version of this
+    /// check does not work. Comparing `ALL.len()` against a literal passes the
+    /// case that actually happens — someone adds a tool — since the exhaustive
+    /// match forces an edit to the *match*, not to the number. The count must
+    /// itself be derived from an exhaustive match ([`Tool::COUNT`]) for the
+    /// proof to bind. Verify any change here by adding a variant, leaving it
+    /// out of `ALL`, and confirming the build fails; inspection is not enough.
     const ALL_IS_COMPLETE: () = {
         let mut i = 0;
         while i < Self::ALL.len() {
@@ -900,12 +943,8 @@ impl Tool {
             assert!(expected == i, "Tool::ALL lists a variant out of order");
             i += 1;
         }
-        // The loop above only proves the listed entries sit at their own index;
-        // a variant left out entirely shortens the list without disturbing the
-        // rest. The count is what catches that, and the exhaustive match above
-        // is what forces this number to be revisited when a variant is added.
         assert!(
-            Self::ALL.len() == 14,
+            Self::ALL.len() == Self::COUNT,
             "Tool::ALL is missing a variant — every variant must be listed"
         );
     };
@@ -1048,9 +1087,15 @@ pub enum WriteSemantics {
     /// Changes state, but a repeat with identical arguments converges on the
     /// same result rather than producing a second copy.
     IdempotentWrite,
-    /// Changes state, and a repeat is rejected by the tool's own validation
-    /// rather than converging or duplicating. Not guarded: the tool already
-    /// refuses the redundant work itself.
+    /// Changes state, and a repeat is either rejected by the tool's own
+    /// validation or is a no-op — never a second copy. Both happen within one
+    /// tool: a repeated `update_schema` add or rename is an error, while a
+    /// repeated remove simply finds nothing left to remove.
+    ///
+    /// Not guarded, for a reason beyond the tool handling redundancy itself:
+    /// the guard keys on whole-call arguments, and a call in this category may
+    /// batch independent edits, so repeating one applied edit alongside a new
+    /// one is not the same write yet would be refused wholesale.
     SelfLimitingWrite,
     /// Changes state, and a repeat with identical arguments produces a second
     /// copy of the user's data. These are what the cross-turn guard refuses.
