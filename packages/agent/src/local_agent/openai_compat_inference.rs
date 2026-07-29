@@ -239,7 +239,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
 
         // Tool-calling responses are not reliably delivered incrementally by
         // every OpenAI-compatible server, so use the same non-streaming
-        // fallback strategy as the Ollama engine when tools are present.
+        // fallback strategy when tools are present.
         let use_stream = tools.is_none();
         let openai_request = OpenAiChatRequest {
             model: &self.model_name,

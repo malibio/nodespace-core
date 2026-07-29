@@ -13,7 +13,7 @@ pub mod local_agent;
 
 // Shared agent guidance rules: single source of truth for tool strategy,
 // schema creation, and node reference guidance. Consumed by
-// `prompt_assembler` (local Ollama agent) and by ADR-032 context-file
+// `prompt_assembler` (local agent) and by ADR-032 context-file
 // writers in `acp`.
 pub mod agent_guidance;
 

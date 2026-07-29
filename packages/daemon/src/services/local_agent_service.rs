@@ -217,7 +217,7 @@ impl LocalAgentServiceImpl {
         // Safe to query now: a swap happens between turns, so the engine mutex
         // this reaches is uncontended, unlike the same call from `get_status`.
         //
-        // Bounded because this is not always a local read: the Ollama engine
+        // Bounded because this is not always a local read: a remote engine
         // answers `model_info` with an HTTP round-trip on a client with no
         // default timeout, so an endpoint that accepts the connection and then
         // stalls would hang the model-load RPC that awaits this. Losing the

@@ -378,7 +378,7 @@ pub struct ModelInfo {
     /// Current download / load status.
     pub status: ModelStatus,
     /// Minimum system RAM (in GiB) required to run this model comfortably.
-    /// Zero means unknown (e.g. for Ollama-managed models).
+    /// Zero means unknown (e.g. for remotely-served models).
     pub min_memory_gb: u8,
 }
 
