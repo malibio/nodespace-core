@@ -25,13 +25,34 @@ pub fn is_openai_compat(model_id: &str) -> bool {
     model_id.starts_with(OPENAI_COMPAT_PREFIX)
 }
 
-/// Strip the `"openai-compat:"` prefix, returning the config UUID.
+/// Strip the `"openai-compat:"` prefix, returning everything after it.
 ///
 /// Returns the original model ID unchanged if it does not have the prefix.
+/// Prefer [`parse_openai_compat_id`] when you need the config UUID on its own —
+/// the remainder may also carry a discovered model segment.
 pub fn strip_openai_compat_prefix(model_id: &str) -> &str {
     model_id
         .strip_prefix(OPENAI_COMPAT_PREFIX)
         .unwrap_or(model_id)
+}
+
+/// Split an `openai-compat:` model ID into its config UUID and optional model.
+///
+/// Two forms are accepted:
+/// - `openai-compat:<uuid>` — the config's own `model` field is used.
+/// - `openai-compat:<uuid>:<model>` — a specific model discovered at that
+///   endpoint, which is how one config exposes the several models a server
+///   serves.
+///
+/// The split is on the **first** colon after the prefix: a UUID never contains
+/// one, whereas a model identifier routinely does (`mistral:7b`), so anything
+/// past that first separator belongs to the model.
+pub fn parse_openai_compat_id(model_id: &str) -> (&str, Option<&str>) {
+    let rest = strip_openai_compat_prefix(model_id);
+    match rest.split_once(':') {
+        Some((config_id, model)) if !model.is_empty() => (config_id, Some(model)),
+        _ => (rest, None),
+    }
 }
 
 pub struct OpenAiCompatInferenceEngine {

@@ -126,7 +126,7 @@ pub struct AiChatNode {
     #[serde(default)]
     pub status: String,
 
-    /// Inference provider (e.g. `"native"`, `"ollama"`).
+    /// Inference provider (e.g. `"native"`, `"openai-compat"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
 

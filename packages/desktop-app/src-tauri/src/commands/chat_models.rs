@@ -9,7 +9,7 @@ use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
 use nodespace_proto::nodespace::{
     CancelModelDownloadRequest, DeleteModelRequest, DownloadModelRequest, GetSystemRamRequest,
-    ListModelsRequest, LoadModelRequest, OllamaAvailableRequest, RecommendedModelRequest,
+    ListModelsRequest, LoadModelRequest, RecommendedModelRequest,
     UnloadModelRequest,
 };
 use serde::Serialize;
@@ -49,8 +49,8 @@ const EXPOSED_GGUF_MODEL_IDS: &[&str] = &["gemma-4-e4b-q4km"];
 
 /// List models in the catalog with their current status.
 ///
-/// Returns a curated set of GGUF models ([`EXPOSED_GGUF_MODEL_IDS`]) plus any
-/// `ollama:`-prefixed models when the Ollama daemon is running. Other GGUF
+/// Returns a curated set of GGUF models ([`EXPOSED_GGUF_MODEL_IDS`]) plus every
+/// model discovered at a configured OpenAI-compatible endpoint. Other GGUF
 /// models remain in the Rust catalog for internal use but are not exposed to
 /// the frontend.
 #[tauri::command]
@@ -213,17 +213,6 @@ pub async fn chat_model_unload(grpc: State<'_, GrpcClient>) -> Result<(), Comman
         .await
         .map_err(|e| model_error(format!("Failed to unload model: {e}")))?;
     Ok(())
-}
-
-/// Check whether the Ollama daemon is running and reachable.
-#[tauri::command]
-pub async fn ollama_available(grpc: State<'_, GrpcClient>) -> Result<bool, CommandError> {
-    let mut client = grpc.local_agent_client().await;
-    let resp = client
-        .ollama_available(OllamaAvailableRequest {})
-        .await
-        .map_err(|e| model_error(format!("Failed to check Ollama: {e}")))?;
-    Ok(resp.into_inner().available)
 }
 
 /// Return total system RAM in GiB (rounded down).
