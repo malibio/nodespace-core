@@ -15,23 +15,22 @@
  *   - "not ready" uses a socket path nothing was ever spawned against —
  *     deterministic, since there is nothing to race.
  *   - "recovered" spawns the real daemon via `DaemonTestHarness.startDeferred()`
- *     and waits on `waitUntilProxyReady()` — a real data-plane round-trip
- *     through the full HTTP -> dev-proxy -> gRPC -> daemon stack, not just
- *     the daemon's own socket. A socket-reachability probe alone is NOT
- *     sufficient here: `startDeferred()` starts the dev-proxy before the
- *     daemon binds, and the proxy's gRPC-js client — constructed once at
- *     proxy startup against a not-yet-existing socket — owns its own
- *     reconnect/backoff state independent of the daemon's actual socket
- *     becoming reachable moments later (confirmed by instrumenting a real
- *     run: the daemon's socket read as reachable while the proxy's gRPC
- *     channel was still mid-backoff, "reconnecting in 2s", so a store
- *     reload triggered right then failed silently). Waiting on the real
- *     round-trip the test is about to exercise is the only signal that
- *     means what "ready" needs to mean here — the same "reachable at one
- *     layer is not usable end-to-end" gap this suite exists to close, this time
- *     surfacing in the test's own harness rather than the app. (Checked
- *     separately: production's tonic lazy channel does NOT have this gap —
- *     a call issued right after the daemon binds succeeds immediately, no
+ *     and waits on `waitUntilProxyReady()`, which resolves once the daemon's
+ *     UDS is reachable. `startDeferred()` starts the dev-proxy before the
+ *     daemon binds, so the proxy's gRPC-js client is constructed against a
+ *     not-yet-existing socket. That gRPC-js channel used to own its own
+ *     ever-growing reconnect backoff, independent of the daemon's socket
+ *     becoming reachable moments later — so a socket probe could read the
+ *     daemon up while the channel was still mid-backoff ("reconnecting in
+ *     2s"), and a store reload triggered right then failed silently.
+ *     `packages/dev-tools/src/grpc-client.ts` closes that at the source: it
+ *     caps the reconnect backoff to a fixed ~100ms and gates every RPC on the
+ *     channel reaching READY, so once the socket is reachable the proxy
+ *     self-heals within ~100ms. Waiting on the socket probe is therefore
+ *     sufficient now, and the store reload this test drives afterwards
+ *     recovers on its own instead of needing a real-RPC poll in the harness.
+ *     (Checked separately: production's tonic lazy channel never had this gap
+ *     — a call issued right after the daemon binds succeeds immediately, no
  *     cached backoff state. This is specific to the gRPC-js dev-proxy path.)
  *
  * `daemon-status.ts` is Tauri-event-driven in production, and this harness
@@ -155,11 +154,11 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         const source = harnessStatusSource(h);
         startDaemonStatusListener(source);
 
-        // Recovered: wait for the full stack this test is about to exercise
-        // — HTTP -> dev-proxy -> gRPC -> daemon — to actually work, not just
-        // for the daemon's socket to be reachable (see the module doc
-        // comment for why those are different readiness layers here). Only
-        // then re-pull status through the shared contract, which is what
+        // Recovered: wait for the daemon's socket to be reachable. The
+        // dev-proxy's gRPC channel now self-heals within ~100ms of that (see
+        // the module doc comment and grpc-client.ts), so the store reload
+        // this drives afterwards no longer needs a real-RPC poll to succeed.
+        // Only then re-pull status through the shared contract, which is what
         // fires schemasData's own onDaemonReconnect hook.
         await h.waitUntilProxyReady(30_000);
         await refreshDaemonStatus();
@@ -169,9 +168,9 @@ describe('daemon readiness: not-ready -> degraded -> recovered (real daemon)', (
         // Poll briefly for the auto-retried load to land — the reconnect
         // callback fires loadSchemas() asynchronously and this test has no
         // direct handle on that exact call to await. Short window: the
-        // round-trip itself was already proven to work by
-        // waitUntilProxyReady() above, so this is only waiting on
-        // scheduling, not on the network.
+        // socket is reachable and the proxy's gated RPC path self-heals, so
+        // this is only waiting on scheduling plus the ~100ms channel
+        // recovery, not on an unbounded backoff.
         const deadline = Date.now() + 5_000;
         let total = 0;
         while (Date.now() < deadline) {
