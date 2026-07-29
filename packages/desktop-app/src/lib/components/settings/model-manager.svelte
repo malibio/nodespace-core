@@ -66,10 +66,20 @@
   let availableSelectionsForDefault = $state<{ label: string; value: string }[]>([]);
 
   function encodeSelection(s: ModelSelection): string {
-    // openai-compat: the daemon's own id, already fully qualified as
-    //   "openai-compat:<uuid>" or "openai-compat:<uuid>:<model>" — stored as-is.
+    // openai-compat: the daemon's own id, fully qualified as
+    //   "openai-compat:<uuid>" or "openai-compat:<uuid>:<model>".
     // native: "native:<model-id>"
-    if (s.provider === 'openai-compat') return s.modelId;
+    //
+    // `modelId` is normalized rather than passed through: a ModelSelection can
+    // legitimately carry a bare config UUID (older persisted defaults stored
+    // one, and configId is the only id a config with no discovered models
+    // has). Returning that unqualified would match no <option>, so the select
+    // would silently fall back to "None" and quietly forget the saved default.
+    if (s.provider === 'openai-compat') {
+      return s.modelId.startsWith('openai-compat:')
+        ? s.modelId
+        : `openai-compat:${s.configId ?? s.modelId}`;
+    }
     return `native:${s.modelId}`;
   }
   function decodeSelection(v: string): ModelSelection | null {

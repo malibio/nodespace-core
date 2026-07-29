@@ -270,7 +270,7 @@ impl ModelBackend {
     /// Spelled out rather than derived from `Debug`, which would render the
     /// variant as "openaicompat" and silently disagree with the hyphenated
     /// value the frontend matches on.
-    pub fn as_wire_str(&self) -> &'static str {
+    pub fn as_wire_str(self) -> &'static str {
         match self {
             ModelBackend::Gguf => "gguf",
             ModelBackend::OpenAiCompat => "openai-compat",

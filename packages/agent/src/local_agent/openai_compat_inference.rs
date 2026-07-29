@@ -104,7 +104,14 @@ impl OpenAiCompatInferenceEngine {
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+            .unwrap_or_else(|e| {
+                // Near-unreachable (TLS backend init only), but log it: the
+                // fallback client has no timeouts at all, which is precisely
+                // the hang this constant set exists to prevent. Silent here
+                // would make that invisible.
+                tracing::warn!(error = %e, "failed to build HTTP client with timeouts; falling back to an untimed client");
+                reqwest::Client::new()
+            })
     }
 
     /// The wire-protocol model identifier this engine sends as the request
