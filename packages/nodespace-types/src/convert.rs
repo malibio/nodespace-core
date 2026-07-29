@@ -172,10 +172,19 @@ fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Decoded per message, not as one `Vec`: decoding the whole array at once
+    // means a single unreadable message blanks the entire conversation in the
+    // UI. Matches `AiChatNode::from_node`, which contains the same failure the
+    // same way — the invariant has to hold on both paths or the stricter
+    // message type just relocates the problem.
     let messages = props
         .get("messages")
-        .cloned()
-        .map(|v| serde_json::from_value::<Vec<AiChatMessage>>(v).unwrap_or_default())
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| serde_json::from_value::<AiChatMessage>(m.clone()).ok())
+                .collect()
+        })
         .unwrap_or_default();
 
     let lifecycle_status = node.lifecycle_status.clone();
@@ -249,6 +258,42 @@ mod wire_contract {
         assert_eq!(out["messages"][0]["content"], "hi");
         assert!(out["properties"].get("ai-chat").is_none());
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
+
+    /// One unreadable message must not blank the whole conversation in the UI.
+    ///
+    /// `canonicalArgs` is required on a completed write, so a record without one
+    /// fails to decode. Decoding the array as a single `Vec` would fail
+    /// wholesale on that one element and send the frontend an empty history for
+    /// a conversation that still has readable messages.
+    #[test]
+    fn ai_chat_one_unreadable_message_does_not_blank_the_conversation() {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            serde_json::json!({
+                "ai-chat": {
+                    "status": "active",
+                    "messages": [
+                        { "role": "user", "content": "hi" },
+                        {
+                            "role": "assistant",
+                            "content": "Added.",
+                            "completedWrites": [
+                                { "tool": "create_node", "nodeId": "nodespace://n1" }
+                            ]
+                        },
+                        { "role": "user", "content": "thanks" }
+                    ]
+                }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        let messages = out["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 2, "only the unreadable message may be lost");
+        assert_eq!(messages[0]["content"], "hi");
+        assert_eq!(messages[1]["content"], "thanks");
     }
 
     #[test]
