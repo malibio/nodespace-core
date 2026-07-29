@@ -1971,7 +1971,7 @@ mod tests {
     /// Bounds the swap on its own task rather than awaiting it directly: if the
     /// snapshot timeout regresses away, `replace_engine` never returns, and an
     /// unbounded await here would hang the suite instead of failing it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn engine_swap_completes_when_model_info_hangs() {
         let (mut svc, _node_service, _tempdir) = test_service().await;
         // Drive the timeout path without paying the production bound in
@@ -1981,22 +1981,36 @@ mod tests {
             .expect("sole owner before any clone")
             .model_spec_snapshot_timeout = short;
 
+        // Both calls run on a runtime of their own, on a dedicated OS thread,
+        // and the test waits on a channel. Neither may share a runtime with
+        // this test: if the swap timeout regresses, `replace_engine` never
+        // returns; and if `get_status` regresses to a live engine query, it
+        // blocks its thread outright. Either one, awaited on a shared runtime,
+        // hangs the whole suite rather than failing this test — which is what
+        // it did before, but only under concurrent load, making it a latent
+        // flake. Waiting on a channel cannot be starved by tokio scheduling.
         let swap_svc = svc.clone();
-        tokio::time::timeout(
-            short + std::time::Duration::from_secs(5),
-            tokio::spawn(async move {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("swap runtime");
+            let result = rt.block_on(async move {
                 swap_svc
                     .replace_engine_if_changed("hanging-model", Arc::new(HangingModelInfoEngine))
+                    .await;
+                swap_svc
+                    .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
                     .await
-            }),
-        )
-        .await
-        .expect("engine swap must not block on a stalled model_info")
-        .expect("swap task joins");
+            });
+            // A send failure means the test already timed out and moved on.
+            let _ = done_tx.send(result);
+        });
 
-        let status = svc
-            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
-            .await
+        let status = done_rx
+            .recv_timeout(short + std::time::Duration::from_secs(5))
+            .expect("engine swap must not block on a stalled model_info")
             .expect("get_status")
             .into_inner();
 
@@ -2042,24 +2056,36 @@ mod tests {
         });
         started_rx.await.expect("generation should take the lock");
 
-        // Run the status call on its own task and bound the join, not the call.
-        // A pre-fix `get_status` blocks its worker thread outright, so a
-        // timeout wrapped directly around the future could be starved of a
-        // thread to fire on; timing out the join keeps the failure clean.
+        // Run the status call on a runtime of its own, on a dedicated OS
+        // thread, and wait on a channel rather than on the task.
+        //
+        // A pre-fix `get_status` blocks the thread it runs on outright. Any
+        // construction that shares a runtime with it — a spawned task, a
+        // timeout wrapped around the call — can have every worker consumed
+        // before the timer is scheduled, which hangs the whole suite instead
+        // of failing this test. Whether that happens depends on what else the
+        // harness is running concurrently, so it is a latent flake in any
+        // shared-runtime form. An isolated runtime cannot be starved by the
+        // blocked call, so the failure stays clean and deterministic.
         let status_svc = svc.clone();
-        let status = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            tokio::spawn(async move {
-                status_svc
-                    .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
-                    .await
-            }),
-        )
-        .await
-        .expect("get_status must return while a generation holds the engine lock")
-        .expect("status task joins")
-        .expect("get_status")
-        .into_inner();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("status runtime");
+            let result = rt.block_on(
+                status_svc.get_status(Request::new(GetLocalStatusRequest { session_id: None })),
+            );
+            // A send failure means the test already timed out and moved on.
+            let _ = done_tx.send(result);
+        });
+
+        let status = done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("get_status must return while a generation holds the engine lock")
+            .expect("get_status")
+            .into_inner();
 
         // Served from the cache, so the real geometry is still reported.
         assert_eq!(status.model_id, "held-model");
