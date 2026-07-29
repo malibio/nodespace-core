@@ -1967,10 +1967,6 @@ mod tests {
     /// A remote engine that stalls on `model_info` must not hold up the swap.
     /// Losing the geometry degrades the status report; blocking here would
     /// block the model-load RPC that awaits `replace_engine`.
-    ///
-    /// Bounds the swap on its own task rather than awaiting it directly: if the
-    /// snapshot timeout regresses away, `replace_engine` never returns, and an
-    /// unbounded await here would hang the suite instead of failing it.
     #[tokio::test]
     async fn engine_swap_completes_when_model_info_hangs() {
         let (mut svc, _node_service, _tempdir) = test_service().await;
