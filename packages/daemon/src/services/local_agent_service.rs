@@ -16,14 +16,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
     AgentToolExecutor, ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError,
-    InferenceUsage, LocalAgentStatus, ModelManager, ModelStatus, Role, StreamingChunk,
+    InferenceUsage, LocalAgentStatus, ModelManager, ModelStatus, PriorWrite, Role, StreamingChunk,
     ToolExecutionRecord,
 };
-use nodespace_agent::local_agent::agent_loop::LocalAgentService;
+use nodespace_agent::local_agent::agent_loop::{
+    canonical_args, LocalAgentService, CANONICAL_ARGS_MAX_CHARS,
+};
 use nodespace_agent::local_agent::composite_model_manager::CompositeModelManager;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::ollama_model_manager::OllamaModelManager;
-use nodespace_agent::local_agent::tools::{GraphToolExecutor, SharedEmbeddingService};
+use nodespace_agent::local_agent::tools::{
+    is_cross_turn_guarded_tool, is_write_tool, GraphToolExecutor, SharedEmbeddingService,
+};
 use nodespace_core::models::{
     AiChatCompletedWrite, AiChatMessage, AiChatNode, NodeFilter, NodeUpdate,
 };
@@ -435,6 +439,17 @@ impl LocalAgentServiceImpl {
 
         if let Ok(ctx_str) = ctx {
             service.set_session_context(&session_id, ctx_str).await;
+        }
+
+        // Seed the deterministic duplicate guard with what earlier turns wrote.
+        // The prompt note built from the same record tells the model the work is
+        // done; this makes the tool-execution path enforce it regardless of
+        // whether the model heeds that note.
+        let prior_writes = load_prior_writes(&self.inner.node_service, &node_id).await;
+        if !prior_writes.is_empty() {
+            service
+                .set_session_prior_writes(&session_id, prior_writes)
+                .await;
         }
 
         let token_tx = self.inner.token_tx.clone();
@@ -1411,24 +1426,6 @@ fn write_summary_arg(tool: &str) -> Option<&'static [&'static str]> {
     }
 }
 
-/// Whether a tool changes graph state. A repeat of one of these is a real
-/// duplicate; repeating a read is merely wasteful.
-///
-/// Kept exhaustive against the tool set in `packages/agent/src/local_agent/tools.rs`.
-fn is_write_tool(tool: &str) -> bool {
-    matches!(
-        tool,
-        "create_node"
-            | "update_node"
-            | "delete_node"
-            | "create_relationship"
-            | "create_schema"
-            | "update_schema"
-            | "create_nodes_from_markdown"
-            | "update_task_status"
-    )
-}
-
 /// Clip an evidence label, marking it when clipped so a truncated summary is
 /// not mistaken for a complete one.
 fn clip_summary(s: &str) -> String {
@@ -1490,11 +1487,42 @@ fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatComple
                 None => None,
             };
 
+            // Identity for the cross-turn duplicate guard. Canonicalised through
+            // the same function the per-turn detector uses, so the two agree on
+            // what "the same call" means. Dropped when oversized rather than
+            // truncated — see `CANONICAL_ARGS_MAX_CHARS`.
+            let canonical = canonical_args(&r.args.to_string());
+            let canonical_args =
+                (canonical.chars().count() <= CANONICAL_ARGS_MAX_CHARS).then_some(canonical);
+
             AiChatCompletedWrite {
                 tool: r.name.clone(),
                 node_id,
                 summary,
+                canonical_args,
             }
+        })
+        .collect()
+}
+
+/// Rebuild the duplicate-guard's view of earlier turns from persisted messages.
+///
+/// Only writes that carry a canonical-args identity can be matched against an
+/// incoming call, so entries without one are skipped: they would match nothing
+/// and only add noise. Filtering to the guarded tools here keeps the set small,
+/// since the execution-path check applies the same restriction anyway.
+fn prior_writes_from_history(messages: &[AiChatMessage]) -> Vec<PriorWrite> {
+    messages
+        .iter()
+        .flat_map(|m| m.completed_writes.iter())
+        .filter(|w| is_cross_turn_guarded_tool(&w.tool))
+        .filter_map(|w| {
+            w.canonical_args.as_ref().map(|args| PriorWrite {
+                tool: w.tool.clone(),
+                canonical_args: args.clone(),
+                node_id: w.node_id.clone(),
+                summary: w.summary.clone(),
+            })
         })
         .collect()
 }
@@ -1535,6 +1563,25 @@ fn completed_writes_message(writes: &[AiChatCompletedWrite]) -> Option<ChatMessa
         Role::System,
         lines.trim_end().to_string(),
     ))
+}
+
+/// Load the writes completed by earlier turns of this chat.
+///
+/// Separate from `load_node_history` because that function's return type is
+/// `ChatMessage`, which has no room for the per-message write record — the very
+/// erasure that let the original duplicate through.
+async fn load_prior_writes(node_service: &Arc<NodeService>, node_id: &str) -> Vec<PriorWrite> {
+    let node = match node_service.get_node(node_id).await {
+        Ok(Some(n)) => n,
+        // A missing or unreadable node is already logged by `load_node_history`,
+        // which runs first on the same node; staying quiet here avoids a
+        // duplicate error line for one underlying failure.
+        _ => return Vec::new(),
+    };
+    match AiChatNode::from_node(node) {
+        Ok(c) => prior_writes_from_history(&c.messages),
+        Err(_) => Vec::new(),
+    }
 }
 
 async fn load_node_history(node_service: &Arc<NodeService>, node_id: &str) -> Vec<ChatMessage> {
@@ -2522,5 +2569,171 @@ api_key = "sk-test"
             .expect("a ready event should be emitted");
         assert_eq!(ready_event.engine_swapped, Some(true));
         assert!(events.iter().all(|e| e.event_type != "error"));
+    }
+
+    // -- Cross-turn duplicate-write guard --------------------------------
+
+    /// The guard's identity is `(tool, canonical_args)`, so a write is only
+    /// usable by it if the canonical args survive persistence. Without this the
+    /// whole mechanism degrades to a no-op that still looks wired up.
+    #[tokio::test]
+    async fn completed_writes_record_canonical_args_for_the_guard() {
+        let writes = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": "Buy milk", "node_type": "task"}),
+            serde_json::json!({"id": "nodespace://n1"}),
+        )]);
+        assert_eq!(writes.len(), 1);
+        let canonical = writes[0]
+            .canonical_args
+            .as_deref()
+            .expect("a create must carry its canonical args");
+        assert!(canonical.contains("Buy milk"), "got {canonical:?}");
+    }
+
+    /// Key order is a serialisation artefact, not a difference in intent. If it
+    /// leaked into the identity, the same call re-emitted with reordered keys
+    /// would slip past the guard.
+    #[tokio::test]
+    async fn canonical_args_ignore_key_order() {
+        let a = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"content": "x", "node_type": "task"}),
+            serde_json::json!({"id": "nodespace://n1"}),
+        )]);
+        let b = completed_writes_from(&[exec(
+            "create_node",
+            serde_json::json!({"node_type": "task", "content": "x"}),
+            serde_json::json!({"id": "nodespace://n1"}),
+        )]);
+        assert_eq!(a[0].canonical_args, b[0].canonical_args);
+    }
+
+    /// Oversized args are dropped, not truncated. A truncated string could
+    /// compare equal to a different call sharing a long prefix, which would turn
+    /// a size limit into a wrongly-blocked write.
+    #[tokio::test]
+    async fn oversized_args_drop_the_identity_rather_than_truncating() {
+        let huge = "#".repeat(CANONICAL_ARGS_MAX_CHARS + 100);
+        let writes = completed_writes_from(&[exec(
+            "create_nodes_from_markdown",
+            serde_json::json!({"markdown": huge}),
+            serde_json::json!({"created": 3}),
+        )]);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes[0].canonical_args, None,
+            "oversized args must be dropped so they can never produce a false match"
+        );
+        // The evidence label is unaffected: the write is still reported.
+        assert!(writes[0].summary.is_some());
+    }
+
+    /// The guard reads its state back out of persisted messages. Entries with no
+    /// canonical args cannot match anything and are dropped rather than carried.
+    #[tokio::test]
+    async fn prior_writes_are_rebuilt_from_persisted_messages() {
+        let msgs = vec![AiChatMessage {
+            role: "assistant".to_string(),
+            content: "Added it.".to_string(),
+            timestamp: None,
+            reasoning: None,
+            completed_writes: vec![
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://n1".to_string()),
+                    summary: Some("Buy milk".to_string()),
+                    canonical_args: Some(r#"{"content":"Buy milk"}"#.to_string()),
+                },
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://n2".to_string()),
+                    summary: Some("no identity".to_string()),
+                    canonical_args: None,
+                },
+            ],
+        }];
+
+        let prior = prior_writes_from_history(&msgs);
+        assert_eq!(prior.len(), 1, "the identity-less write must be skipped");
+        assert_eq!(prior[0].tool, "create_node");
+        assert_eq!(prior[0].node_id.as_deref(), Some("nodespace://n1"));
+    }
+
+    /// Updates are idempotent: re-setting the same status or content is a no-op,
+    /// not a duplicate. Carrying them into the guard would block a user
+    /// legitimately re-asserting a value.
+    #[tokio::test]
+    async fn idempotent_updates_are_not_carried_into_the_guard() {
+        let msgs = vec![AiChatMessage {
+            role: "assistant".to_string(),
+            content: "Done.".to_string(),
+            timestamp: None,
+            reasoning: None,
+            completed_writes: vec![
+                AiChatCompletedWrite {
+                    tool: "update_task_status".to_string(),
+                    node_id: Some("nodespace://t1".to_string()),
+                    summary: Some("t1".to_string()),
+                    canonical_args: Some(r#"{"status":"done"}"#.to_string()),
+                },
+                AiChatCompletedWrite {
+                    tool: "update_node".to_string(),
+                    node_id: Some("nodespace://t2".to_string()),
+                    summary: Some("t2".to_string()),
+                    canonical_args: Some(r#"{"content":"x"}"#.to_string()),
+                },
+                AiChatCompletedWrite {
+                    tool: "update_schema".to_string(),
+                    node_id: None,
+                    summary: Some("s1".to_string()),
+                    canonical_args: Some(r#"{"schema_id":"s1"}"#.to_string()),
+                },
+            ],
+        }];
+
+        assert!(
+            prior_writes_from_history(&msgs).is_empty(),
+            "no update tool may be guarded across turns"
+        );
+    }
+
+    /// The guarded set must stay a subset of the tools recognised as writes:
+    /// a guarded tool absent from `is_write_tool` would never have its args
+    /// recorded, so the guard could never fire for it.
+    ///
+    /// Iterates the registry itself rather than a hardcoded list. A literal
+    /// list would pass vacuously on exactly the change this is meant to catch —
+    /// a newly added tool simply would not appear in it.
+    #[tokio::test]
+    async fn every_guarded_tool_is_also_recorded_as_a_write() {
+        use nodespace_agent::local_agent::tools::Tool;
+
+        for tool in Tool::ALL {
+            let name = tool.name();
+            if is_cross_turn_guarded_tool(name) {
+                assert!(
+                    is_write_tool(name),
+                    "{name} is guarded across turns but not recorded as a write, \
+                     so its canonical args are never persisted and the guard cannot fire"
+                );
+            }
+        }
+    }
+
+    /// Every guarded tool must also produce an evidence label, otherwise a
+    /// refusal can only say "duplicate" without naming what already exists.
+    #[tokio::test]
+    async fn every_guarded_tool_can_describe_what_it_wrote() {
+        use nodespace_agent::local_agent::tools::Tool;
+
+        for tool in Tool::ALL.iter().filter(|t| t.duplicate_is_destructive()) {
+            let name = tool.name();
+            assert!(
+                write_summary_arg(name).is_some() || name == "create_relationship",
+                "{name} is guarded but has no way to describe its write, so a \
+                 refusal could not name the existing node"
+            );
+        }
     }
 }

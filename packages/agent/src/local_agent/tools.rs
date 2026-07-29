@@ -847,6 +847,12 @@ pub enum Tool {
 impl Tool {
     /// Every tool in registry order. The order here is the order tools are
     /// presented to the model, so keep retrieval/discovery tools first.
+    ///
+    /// Completeness is compiler-enforced via [`Tool::ALL_IS_COMPLETE`]: a
+    /// variant added to the enum but omitted here fails to build. Without that
+    /// check this list is just another hand-maintained list, and everything
+    /// derived from it — including the duplicate-write guard — would silently
+    /// ignore the missing tool.
     pub const ALL: &'static [Tool] = &[
         Tool::SearchNodes,
         Tool::ResolveQuery,
@@ -864,8 +870,87 @@ impl Tool {
         Tool::CreateNodesFromMarkdown,
     ];
 
+    /// The number of variants, counted by walking every one of them.
+    ///
+    /// The successor chain is an exhaustive match, so a new variant cannot be
+    /// added without being threaded into it — and threading it in necessarily
+    /// increments this count. That is the whole point: a literal here would be
+    /// satisfied by the very edit it is meant to police, since adding a variant
+    /// changes nothing on the right-hand side of a comparison against a
+    /// constant. `std::mem::variant_count` would say this directly but is still
+    /// nightly-only.
+    const COUNT: usize = {
+        let mut n = 0;
+        let mut v = Tool::SearchNodes;
+        loop {
+            n += 1;
+            v = match v {
+                Tool::SearchNodes => Tool::ResolveQuery,
+                Tool::ResolveQuery => Tool::SearchSemantic,
+                Tool::SearchSemantic => Tool::GetNode,
+                Tool::GetNode => Tool::CreateNode,
+                Tool::CreateNode => Tool::UpdateNode,
+                Tool::UpdateNode => Tool::CreateSchema,
+                Tool::CreateSchema => Tool::UpdateSchema,
+                Tool::UpdateSchema => Tool::UpdateTaskStatus,
+                Tool::UpdateTaskStatus => Tool::CreateRelationship,
+                Tool::CreateRelationship => Tool::GetRelatedNodes,
+                Tool::GetRelatedNodes => Tool::SearchSkills,
+                Tool::SearchSkills => Tool::DeleteNode,
+                Tool::DeleteNode => Tool::CreateNodesFromMarkdown,
+                Tool::CreateNodesFromMarkdown => break,
+            };
+        }
+        n
+    };
+
+    /// Compile-time proof that [`Tool::ALL`] lists every variant, exactly once,
+    /// in enum order.
+    ///
+    /// Two independent failure modes, because neither check catches the other's:
+    /// the index match below catches an entry that is out of order or listed
+    /// twice, while the count catches one omitted entirely — an omission
+    /// shortens the list without disturbing the indices of what remains.
+    ///
+    /// This is worth stating precisely because the obvious version of this
+    /// check does not work. Comparing `ALL.len()` against a literal passes the
+    /// case that actually happens — someone adds a tool — since the exhaustive
+    /// match forces an edit to the *match*, not to the number. The count must
+    /// itself be derived from an exhaustive match ([`Tool::COUNT`]) for the
+    /// proof to bind. Verify any change here by adding a variant, leaving it
+    /// out of `ALL`, and confirming the build fails; inspection is not enough.
+    const ALL_IS_COMPLETE: () = {
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            // Each variant maps to its own index; any duplicate or missing
+            // entry shifts the rest and trips the comparison below.
+            let expected = match Self::ALL[i] {
+                Tool::SearchNodes => 0,
+                Tool::ResolveQuery => 1,
+                Tool::SearchSemantic => 2,
+                Tool::GetNode => 3,
+                Tool::CreateNode => 4,
+                Tool::UpdateNode => 5,
+                Tool::CreateSchema => 6,
+                Tool::UpdateSchema => 7,
+                Tool::UpdateTaskStatus => 8,
+                Tool::CreateRelationship => 9,
+                Tool::GetRelatedNodes => 10,
+                Tool::SearchSkills => 11,
+                Tool::DeleteNode => 12,
+                Tool::CreateNodesFromMarkdown => 13,
+            };
+            assert!(expected == i, "Tool::ALL lists a variant out of order");
+            i += 1;
+        }
+        assert!(
+            Self::ALL.len() == Self::COUNT,
+            "Tool::ALL is missing a variant — every variant must be listed"
+        );
+    };
+
     /// The wire/identifier name the model uses to call this tool.
-    pub(crate) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Tool::SearchNodes => "search_nodes",
             Tool::ResolveQuery => "resolve_query",
@@ -887,7 +972,7 @@ impl Tool {
     /// Resolve a wire name back to its registry entry. Returns `None` for any
     /// name not in the registry — used for dispatch and for validating
     /// skill `tool_whitelist` references.
-    pub(crate) fn from_name(name: &str) -> Option<Tool> {
+    pub fn from_name(name: &str) -> Option<Tool> {
         Tool::ALL.iter().copied().find(|t| t.name() == name)
     }
 
@@ -934,10 +1019,108 @@ impl Tool {
             Tool::CreateNodesFromMarkdown => "markdown import",
         }
     }
+
+    /// What repeating this tool with identical arguments means.
+    ///
+    /// An exhaustive match rather than a list, so adding a tool cannot silently
+    /// default to "safe to repeat": the compiler makes the author state the
+    /// semantics. Consumers derive their own sets from this — see
+    /// [`Tool::is_write`] and [`Tool::duplicate_is_destructive`].
+    pub fn write_semantics(self) -> WriteSemantics {
+        match self {
+            // Reads. Repeating one is wasteful, never a duplicate.
+            Tool::SearchNodes
+            | Tool::ResolveQuery
+            | Tool::SearchSemantic
+            | Tool::GetNode
+            | Tool::GetRelatedNodes
+            | Tool::SearchSkills => WriteSemantics::Read,
+
+            // Idempotent writes. Setting a node to the same content, or a task
+            // to the same status, twice is a no-op — the second call is not a
+            // duplicate, and refusing it would break a user legitimately
+            // re-asserting a value.
+            Tool::UpdateNode | Tool::UpdateTaskStatus => WriteSemantics::IdempotentWrite,
+
+            // Not idempotent, but not guarded either. A repeated `add_fields`
+            // or `add_relationships` rejects the field as already present, and
+            // a repeated `rename_fields` fails because the source name is gone
+            // — so a repeat is self-limiting rather than duplicating data.
+            //
+            // Left unguarded because the guard keys on whole-call arguments,
+            // and `update_schema` batches independent edits: a call repeating
+            // one already-applied rename alongside a new field is not the same
+            // write, yet would be refused wholesale. Refusing a legitimate
+            // schema edit is worse than the error the schema layer already
+            // returns for the redundant part.
+            Tool::UpdateSchema => WriteSemantics::SelfLimitingWrite,
+
+            // Writes whose repeat produces a second, unwanted copy of the
+            // user's data — or, for a delete, re-attacks a node the record
+            // already shows removed.
+            Tool::CreateNode
+            | Tool::CreateSchema
+            | Tool::CreateRelationship
+            | Tool::CreateNodesFromMarkdown
+            | Tool::DeleteNode => WriteSemantics::DuplicableWrite,
+        }
+    }
+
+    /// Whether this tool changes graph state.
+    pub fn is_write(self) -> bool {
+        !matches!(self.write_semantics(), WriteSemantics::Read)
+    }
+
+    /// Whether repeating this tool across turns duplicates the user's data.
+    pub fn duplicate_is_destructive(self) -> bool {
+        matches!(self.write_semantics(), WriteSemantics::DuplicableWrite)
+    }
+}
+
+/// What a repeat of a tool call means for graph state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteSemantics {
+    /// Does not change user-visible graph state. A repeat wastes an iteration,
+    /// nothing more. (Reads may still persist internal upkeep such as lazy
+    /// schema migration, which is convergent and invisible to the caller.)
+    Read,
+    /// Changes state, but a repeat with identical arguments converges on the
+    /// same result rather than producing a second copy.
+    IdempotentWrite,
+    /// Changes state, and a repeat is either rejected by the tool's own
+    /// validation or is a no-op — never a second copy. Both happen within one
+    /// tool: a repeated `update_schema` add or rename is an error, while a
+    /// repeated remove simply finds nothing left to remove.
+    ///
+    /// Not guarded, for a reason beyond the tool handling redundancy itself:
+    /// the guard keys on whole-call arguments, and a call in this category may
+    /// batch independent edits, so repeating one applied edit alongside a new
+    /// one is not the same write yet would be refused wholesale.
+    SelfLimitingWrite,
+    /// Changes state, and a repeat with identical arguments produces a second
+    /// copy of the user's data. These are what the cross-turn guard refuses.
+    DuplicableWrite,
+}
+
+/// Whether a repeat of this tool in a *later turn* must be refused.
+///
+/// Resolves the wire name through the registry, so the set is computed from
+/// [`Tool::write_semantics`] rather than restated. An unknown name is not
+/// guarded: the guard blocks work, so an unrecognised tool must fail open.
+pub fn is_cross_turn_guarded_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::duplicate_is_destructive)
+}
+
+/// Whether a tool changes graph state, by wire name. Computed from the registry.
+pub fn is_write_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::is_write)
 }
 
 /// All tool definitions for the graph executor, derived from the registry.
 pub fn all_tool_definitions() -> Vec<ToolDefinition> {
+    // Force evaluation of the completeness proof; an associated const is only
+    // checked where it is used.
+    const _: () = Tool::ALL_IS_COMPLETE;
     Tool::ALL.iter().map(|t| t.definition()).collect()
 }
 
