@@ -34,7 +34,7 @@ function toModelStatus(s: ChatModelStatus): ModelStatus {
 /**
  * Adapt a built-in (GGUF) `chat_model_list` catalog entry to the store's
  * `ModelInfo` shape. Callers must pre-filter to `backend === 'gguf'` (this store
- * doesn't manage Ollama rows). The lean catalog row carries no filename/url/sha256;
+ * doesn't manage remotely-served rows). The lean catalog row carries no filename/url/sha256;
  * those aren't surfaced for catalog-sourced models.
  */
 function chatEntryToModelInfo(entry: ChatModelEntry): ModelInfo {
@@ -173,7 +173,7 @@ class ModelStore {
         ]);
         // This store manages the *built-in* (GGUF) download/load lifecycle; its
         // consumers (model-manager, onboarding) download by URL and recommend a
-        // model to fetch. Ollama models are pulled out-of-band (no URL here) and
+        // model to fetch. Remotely-served models have no URL here and
         // are surfaced separately by AiChatModelSelector, so exclude them — letting
         // them in would render dead download buttons and let `recommendedModel`
         // pick an un-downloadable row.

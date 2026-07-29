@@ -38,15 +38,14 @@ function handleChangeValue(
     onSelect({ provider: 'native', modelId: value.slice('native:'.length) });
     return;
   }
-  if (value.startsWith('ollama:')) {
-    onSelect({ provider: 'ollama', modelId: value });
-    return;
-  }
   if (value.startsWith('openai-compat:')) {
+    // The config UUID is the segment up to the FIRST colon; the remainder is
+    // the discovered model name, which may itself contain colons.
+    const rest = value.slice('openai-compat:'.length);
     onSelect({
       provider: 'openai-compat',
-      modelId: value.slice('openai-compat:'.length),
-      configId: value.slice('openai-compat:'.length),
+      modelId: value,
+      configId: rest.split(':')[0],
     });
     return;
   }
@@ -102,10 +101,22 @@ describe('AiChatModelSelector — PTY agent selection', () => {
     expect(onSelect).toHaveBeenCalledWith({ provider: 'native', modelId: 'qwen2.5-3b' });
 
     onSelect.mockClear();
-    handleChangeValue('ollama:llama3.2:latest', onSelect);
+    handleChangeValue('openai-compat:abc-123', onSelect);
     expect(onSelect).toHaveBeenCalledWith({
-      provider: 'ollama',
-      modelId: 'ollama:llama3.2:latest',
+      provider: 'openai-compat',
+      modelId: 'openai-compat:abc-123',
+      configId: 'abc-123',
+    });
+
+    // A discovered model's own name routinely contains a colon
+    // ("mistral:7b"), so only the segment before the FIRST one is the config
+    // UUID — the full value stays the model id the daemon advertised.
+    onSelect.mockClear();
+    handleChangeValue('openai-compat:abc-123:mistral:7b', onSelect);
+    expect(onSelect).toHaveBeenCalledWith({
+      provider: 'openai-compat',
+      modelId: 'openai-compat:abc-123:mistral:7b',
+      configId: 'abc-123',
     });
   });
 });

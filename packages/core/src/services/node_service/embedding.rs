@@ -100,10 +100,7 @@ impl NodeService {
     /// journal content was never embedded (nor found by search, which resolved
     /// hits to the out-of-scope date root). Stopping below the container makes the
     /// top-level child the embedding root, matching the root-aggregate model.
-    pub async fn get_embedding_root_id(
-        &self,
-        node_id: &str,
-    ) -> Result<String, NodeServiceError> {
+    pub async fn get_embedding_root_id(&self, node_id: &str) -> Result<String, NodeServiceError> {
         let mut current = node_id.to_string();
         loop {
             let parent_id = self

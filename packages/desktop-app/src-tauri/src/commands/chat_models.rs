@@ -9,8 +9,7 @@ use crate::commands::nodes::CommandError;
 use crate::services::GrpcClient;
 use nodespace_proto::nodespace::{
     CancelModelDownloadRequest, DeleteModelRequest, DownloadModelRequest, GetSystemRamRequest,
-    ListModelsRequest, LoadModelRequest, RecommendedModelRequest,
-    UnloadModelRequest,
+    ListModelsRequest, LoadModelRequest, RecommendedModelRequest, UnloadModelRequest,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};

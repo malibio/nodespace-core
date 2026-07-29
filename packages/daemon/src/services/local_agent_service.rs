@@ -41,9 +41,8 @@ use crate::nodespace::{
     DeleteModelRequest, DeleteModelResponse, DownloadModelRequest, EnsureModelReadyRequest,
     GetLocalStatusRequest, GetSystemRamRequest, GetSystemRamResponse, ListModelsRequest,
     ListModelsResponse, LoadModelRequest, LoadModelResponse, LocalAgentStatusResponse, ModelEntry,
-    ModelLoadProgressEvent,
-    RecommendedModelRequest, RecommendedModelResponse, SubscribeTokenStreamRequest,
-    UnloadModelRequest, UnloadModelResponse,
+    ModelLoadProgressEvent, RecommendedModelRequest, RecommendedModelResponse,
+    SubscribeTokenStreamRequest, UnloadModelRequest, UnloadModelResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -1178,7 +1177,6 @@ impl LocalAgentServiceImpl {
                 return events;
             }
         };
-
 
         {
             let active = self.inner.active_model_id.lock().await;

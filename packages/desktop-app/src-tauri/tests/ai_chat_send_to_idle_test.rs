@@ -12,7 +12,7 @@
 //!
 //! No lightweight stub/test-double model backend exists anywhere in this
 //! codebase (confirmed: `ChatInferenceEngine`'s only implementors are the
-//! real `LlamaChatInferenceEngine` and `OllamaInferenceEngine`; the daemon's
+//! real `LlamaChatInferenceEngine` and `OpenAiCompatInferenceEngine`; the daemon's
 //! only placeholder, `NoOpInferenceEngine`, always errors rather than
 //! completing a turn, so it cannot drive this flow at all). Adding one would
 //! mean carving a test-only code path into the production model-selection

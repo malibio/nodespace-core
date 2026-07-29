@@ -25,10 +25,9 @@ pub enum NdjsonError {
 impl std::fmt::Display for NdjsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NdjsonError::LineTooLong { limit } => write!(
-                f,
-                "stream line exceeded {limit} bytes without a newline"
-            ),
+            NdjsonError::LineTooLong { limit } => {
+                write!(f, "stream line exceeded {limit} bytes without a newline")
+            }
             NdjsonError::InvalidUtf8 => {
                 write!(f, "stream line was not valid UTF-8")
             }

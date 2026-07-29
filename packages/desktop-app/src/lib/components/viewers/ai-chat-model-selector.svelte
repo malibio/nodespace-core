@@ -2,10 +2,10 @@
   AiChatModelSelector — unified single-dropdown model picker for AiChatNodeViewer.
 
   Replaces the two-step provider → model full-page flow with a compact
-  dropdown in the chat header. Renders section headers (Local, Ollama, OpenAI-compat)
+  dropdown in the chat header. Renders section headers (Local, remote endpoints)
   and "Set up..." action as a native <select>-based custom UI.
 
-  On mount fetches: chatModelList(), getSystemRamGb(), ollamaAvailable(), and
+  On mount fetches: chatModelList(), getSystemRamGb(), and
   OpenAI-compat configs from the settings store. Emits a ModelSelection via onSelect.
 
   For native models that need download, calls onSelect immediately with the selection
@@ -14,7 +14,7 @@
 
 <script lang="ts" module>
   export interface ModelSelection {
-    provider: 'native' | 'ollama' | 'openai-compat' | 'pty';
+    provider: 'native' | 'openai-compat' | 'pty';
     modelId: string;
     configId?: string; // for openai-compat
   }
@@ -26,7 +26,6 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     chatModelList,
-    ollamaAvailable,
     getSystemRamGb,
     getOpenAiCompatConfigsFromDaemon,
     type ChatModelEntry,
@@ -64,7 +63,6 @@
   // --- Async data ---
   let models = $state<ChatModelEntry[]>([]);
   let ramGb = $state(0);
-  let ollamaRunning = $state(false);
   let openAiConfigs = $state<OpenAiCompatConfig[]>([]);
   let loading = $state(true);
 
@@ -75,7 +73,10 @@
 
   // --- Derived subsets ---
   const nativeModels = $derived(models.filter((m) => m.backend === 'gguf'));
-  const ollamaModels = $derived(models.filter((m) => m.backend === 'ollama'));
+  // Models discovered at a configured OpenAI-compatible endpoint (Ollama's
+  // /v1, LM Studio, vLLM, ...). The daemon returns one row per discovered
+  // model, already carrying the full "openai-compat:<config>:<model>" id.
+  const remoteModels = $derived(models.filter((m) => m.backend === 'openai-compat'));
   const ramTooLow = $derived(ramGb > 0 && ramGb < MIN_RAM_GB);
 
   // PTY agents (Claude Code, Gemini CLI, Codex, ...) — excludes agentStore's
@@ -100,15 +101,11 @@
     return `native:${m.id}`;
   }
 
-  // Ollama model IDs from the daemon already carry the "ollama:" prefix
-  // (e.g. "ollama:llama3.2:latest"). Use the raw ID as the option value so
-  // handleChange can pass it directly to the node without double-prefixing.
-  function ollamaValue(m: ChatModelEntry): string {
+  // Discovered model IDs from the daemon already carry the full
+  // "openai-compat:<config>:<model>" prefix. Use the raw ID as the option
+  // value so handleChange can pass it straight through without rebuilding it.
+  function remoteValue(m: ChatModelEntry): string {
     return m.id;
-  }
-
-  function openAiValue(cfg: OpenAiCompatConfig): string {
-    return `openai-compat:${cfg.id}`;
   }
 
   const isTauri =
@@ -117,10 +114,9 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [list, ram, ollama, daemonConfigs] = await Promise.all([
+      const [list, ram, daemonConfigs] = await Promise.all([
         chatModelList(),
         getSystemRamGb(),
-        ollamaAvailable(),
         getOpenAiCompatConfigsFromDaemon().catch((err) => {
           log.warn('Failed to load OpenAI-compat configs from daemon, using local cache', err);
           return null;
@@ -128,7 +124,6 @@
       ]);
       models = list;
       ramGb = ram;
-      ollamaRunning = ollama;
       openAiConfigs =
         daemonConfigs?.map((c) => ({
           id: c.id,
@@ -226,21 +221,16 @@
       return;
     }
 
-    // Ollama option values are raw daemon model IDs ("ollama:<name>") — pass
-    // the full value directly so the daemon receives the correctly-prefixed ID.
-    if (value.startsWith('ollama:')) {
-      log.debug('Model selected', { provider: 'ollama', modelId: value, nodeId });
-      onSelect?.({ provider: 'ollama', modelId: value });
-      return;
-    }
-
+    // Option values for remote models are the daemon's own ids
+    // ("openai-compat:<config>:<model>") — pass the full value through so the
+    // daemon resolves the same endpoint and model it advertised. The config
+    // UUID is the segment up to the FIRST colon: a UUID never contains one,
+    // whereas a model name routinely does ("mistral:7b").
     if (value.startsWith('openai-compat:')) {
-      const configId = value.slice('openai-compat:'.length);
-      const cfg = openAiConfigs.find((c) => c.id === configId);
-      if (!cfg) return;
-      log.debug('OpenAI-compat config selected', { configId, nodeId });
-      // Persist the config UUID as modelId so the selection survives reloads.
-      onSelect?.({ provider: 'openai-compat', modelId: configId, configId });
+      const rest = value.slice('openai-compat:'.length);
+      const configId = rest.split(':')[0];
+      log.debug('Remote model selected', { configId, modelId: value, nodeId });
+      onSelect?.({ provider: 'openai-compat', modelId: value, configId });
       return;
     }
 
@@ -306,28 +296,20 @@
         {/if}
       </optgroup>
 
-      <!-- ── Ollama section ── -->
-      {#if ollamaRunning}
-        <optgroup label="Ollama">
-          {#each ollamaModels as m (m.id)}
-            <option value={ollamaValue(m)}>{m.name}</option>
+      <!-- ── Remote endpoints (OpenAI-compatible: Ollama /v1, LM Studio, …) ── -->
+      {#if remoteModels.length > 0}
+        <optgroup label="Remote endpoints">
+          {#each remoteModels as m (m.id)}
+            <option value={remoteValue(m)}>{m.name}</option>
           {/each}
-          {#if ollamaModels.length === 0}
-            <option value={`${HEADER_SENTINEL_PREFIX}no-ollama`} disabled>
-              No Ollama models — run ollama pull &lt;name&gt;
-            </option>
-          {/if}
         </optgroup>
-      {:else}
-        <optgroup label="Ollama (not running)" disabled></optgroup>
-      {/if}
-
-      <!-- ── OpenAI-compat configs ── -->
-      {#if openAiConfigs.length > 0}
-        <optgroup label="Custom endpoints">
-          {#each openAiConfigs as cfg (cfg.id)}
-            <option value={openAiValue(cfg)} disabled>{cfg.name} (coming soon)</option>
-          {/each}
+      {:else if openAiConfigs.length > 0}
+        <!-- Endpoints are configured but none answered /models: the server is
+             down or the base URL is wrong. Say so rather than showing nothing. -->
+        <optgroup label="Remote endpoints">
+          <option value={`${HEADER_SENTINEL_PREFIX}no-remote`} disabled>
+            No models found — check that the endpoint is running
+          </option>
         </optgroup>
       {/if}
 

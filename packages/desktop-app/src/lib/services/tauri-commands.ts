@@ -71,14 +71,15 @@ export interface ChatModelStatus {
 }
 
 /**
- * A model entry from `chat_model_list`. Built-in (GGUF) and Ollama models are
+ * A model entry from `chat_model_list`. Built-in (GGUF) and remotely-served
+ * (OpenAI-compatible) models are
  * merged into one list, distinguished by `backend`. Shape matches the daemon's
  * `chat_model_list` command output (camelCase).
  */
 export interface ChatModelEntry {
   id: string;
   name: string;
-  backend: 'gguf' | 'ollama';
+  backend: 'gguf' | 'openai-compat';
   status: ChatModelStatus;
   sizeBytes: number;
   quantization: string;
@@ -125,12 +126,6 @@ export async function getSystemRamGb(): Promise<number> {
   if (isTauri()) return invoke<number>('get_system_ram_gb');
   const res = await proxyGet<{ ramGb: number }>('/api/agent/system-ram');
   return res.ramGb;
-}
-
-export async function ollamaAvailable(): Promise<boolean> {
-  if (isTauri()) return invoke<boolean>('ollama_available');
-  const res = await proxyGet<{ available: boolean }>('/api/agent/ollama-available');
-  return res.available;
 }
 
 export async function ensureModelReady(modelId: string): Promise<boolean> {

@@ -91,12 +91,11 @@ pub async fn discover_models(base_url: &str, api_key: &str) -> Result<Vec<String
         .await
         .map_err(|e| ModelError::Other(anyhow::anyhow!("failed to read /models response: {e}")))?;
 
-    parse_models_response(&body)
-        .map_err(|e| {
-            ModelError::Other(anyhow::anyhow!(
-                "malformed /models response from {base_url}: {e}"
-            ))
-        })
+    parse_models_response(&body).map_err(|e| {
+        ModelError::Other(anyhow::anyhow!(
+            "malformed /models response from {base_url}: {e}"
+        ))
+    })
 }
 
 /// Discover models, degrading to an empty list when the endpoint cannot be
