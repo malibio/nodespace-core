@@ -26,6 +26,7 @@ import type {
   Provenance,
   Scenario,
   ScenarioResult,
+  ToolCallRecord,
   TurnRecord,
 } from "./types.ts";
 
@@ -89,9 +90,24 @@ function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
   }
 
   const out = r.stdout.toString();
+
+  // One pass over the [tool] lines feeds both shapes, so they cannot disagree
+  // about how many calls a turn made. aichat.ts emits:
+  //   [tool] <name>[ERROR][ [fields=N]] <args>
+  // The args are free-form and truncated, so every structured marker precedes
+  // them and nothing here parses them.
+  const toolCalls: ToolCallRecord[] = [
+    ...out.matchAll(/\[tool\] ([a-z_]+)( \[ERROR\])?( \[fields=(\d+)\])?/g),
+  ].map((m) => ({
+    name: m[1],
+    isError: m[2] !== undefined,
+    ...(m[4] === undefined ? {} : { fieldCount: Number(m[4]) }),
+  }));
+
   return {
     toolsOffered: out.match(/\[tools offered\] (.*)/)?.[1]?.trim() ?? "",
-    toolsCalled: [...out.matchAll(/\[tool\] ([a-z_]+)/g)].map((m) => m[1]),
+    toolsCalled: toolCalls.map((t) => t.name),
+    toolCalls,
     reply:
       out.match(/assistant> ([\s\S]*)$/)?.[1]?.trim() ?? "(no reply parsed)",
     latencyMs,

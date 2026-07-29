@@ -933,10 +933,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     ),
                 };
 
+                // Field count from the tool RESULT, not its arguments: the result is the
+                // executor's report of what it persisted, while args are only the model's
+                // report of what it asked for. Logged as a bare integer because both
+                // previews truncate at 300 chars — a realistic create_schema payload
+                // exceeds that, so a parser reading them would fail on exactly the
+                // well-formed calls it is meant to pass.
+                let result_field_count = result_value
+                    .get("fields")
+                    .and_then(|f| f.as_array())
+                    .map(|a| a.len());
+
                 tracing::info!(
                     tool = %tc.function_name,
                     is_error,
                     duration_ms,
+                    result_field_count,
                     args_preview = %args.to_string().chars().take(300).collect::<String>(),
                     result_preview = %result_value.to_string().chars().take(300).collect::<String>(),
                     "Tool executed"

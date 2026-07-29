@@ -21,7 +21,13 @@
  * example, and prompt tuning then has a degenerate solution.
  */
 
-import type { EvalFixture, Scenario, TurnRecord, Verdict } from "../types.ts";
+import type {
+  EvalFixture,
+  Scenario,
+  ToolCallRecord,
+  TurnRecord,
+  Verdict,
+} from "../types.ts";
 
 // ---------------------------------------------------------------------------
 // Structured expectation model
@@ -55,6 +61,48 @@ export function actionTools(toolsCalled: string[]): string[] {
 }
 
 /**
+ * Check that a create_schema call actually produced a usable type.
+ *
+ * Counting the tool name is not enough, and the gap is not hypothetical: the
+ * model has called create_schema with a title_template and no fields, been
+ * rejected outright by title-template validation, and still scored a pass
+ * because the name appeared once.
+ *
+ * Two distinct ways to call create_schema and end up with nothing usable:
+ *   - the call is REJECTED (is_error) — nothing persisted at all;
+ *   - the call SUCCEEDS with an empty field list. A call carrying neither
+ *     `fields` nor `description` is valid by design and persists a type with no
+ *     properties, against which the user cannot record anything. This one is
+ *     invisible to any check that only looks at whether the call failed.
+ *
+ * `fieldCount` is absent (rather than 0) on results recorded before it was
+ * captured, so absence is treated as unknown and passes — a stale baseline must
+ * not read as a fresh failure.
+ */
+function schemaCallsAreSound(calls: ToolCallRecord[]): Verdict {
+  for (const c of calls) {
+    if (c.name !== "create_schema") continue;
+    if (c.isError) {
+      return {
+        passed: false,
+        failure:
+          "create_schema was called but REJECTED — no schema persisted (the call " +
+          "scores as a pass on tool name alone)",
+      };
+    }
+    if (c.fieldCount === 0) {
+      return {
+        passed: false,
+        failure:
+          "create_schema succeeded but persisted a type with NO fields — nothing " +
+          "can be recorded against it",
+      };
+    }
+  }
+  return { passed: true };
+}
+
+/**
  * Decide whether a turn met its expectation.
  *
  * Pure and daemon-free so it is unit-testable without a model — see
@@ -63,6 +111,7 @@ export function actionTools(toolsCalled: string[]): string[] {
 export function assertExpectation(
   expect: Expectation,
   toolsCalled: string[],
+  toolCalls: ToolCallRecord[] = [],
 ): Verdict {
   const actions = actionTools(toolsCalled);
 
@@ -85,7 +134,9 @@ export function assertExpectation(
           failure: `Expected '${expect.tool}' exactly once, got ${count} (tools: ${actions.join(",")})`,
         };
       }
-      return { passed: true };
+      // Scenarios 8a/8b target create_schema through this branch, so the
+      // count-only hole this closes for noExtraTypes exists here too.
+      return schemaCallsAreSound(toolCalls);
     }
 
     case "toolSequence": {
@@ -125,7 +176,7 @@ export function assertExpectation(
           failure: `Expected exactly one create_schema (no extra related types), got ${count} (tools: ${actions.join(",")})`,
         };
       }
-      return { passed: true };
+      return schemaCallsAreSound(toolCalls);
     }
   }
 }
@@ -238,13 +289,22 @@ const fixture: EvalFixture = {
   groups: GROUPS,
   score(scenario, turns) {
     const toolsCalled = turns.flatMap((t) => t.toolsCalled);
-    return assertExpectation((scenario as MatrixScenario).expect, toolsCalled);
+    const toolCalls = turns.flatMap((t) => t.toolCalls ?? []);
+    return assertExpectation(
+      (scenario as MatrixScenario).expect,
+      toolsCalled,
+      toolCalls,
+    );
   },
   extra(scenario, turns: TurnRecord[]) {
     return {
       expect: (scenario as MatrixScenario).expect,
       toolsOffered: turns[0]?.toolsOffered ?? "",
       toolsCalled: turns.flatMap((t) => t.toolsCalled),
+      // Recorded so a failure carries its evidence: which call errored, and how
+      // many fields it actually persisted. Reading a results file should not
+      // require re-running the eval to find out why a scenario failed.
+      toolCalls: turns.flatMap((t) => t.toolCalls ?? []),
       latencyMs: turns.reduce((sum, t) => sum + t.latencyMs, 0),
     };
   },
