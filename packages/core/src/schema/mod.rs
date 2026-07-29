@@ -1038,7 +1038,8 @@ fn parse_single_field_description(
         Some((stripped, keyword)) => {
             warnings.push(format!(
                 "Inferred field name '{}' (type {}) from '{}' — the '{}' keyword was read as the type. \
-                 Use '{}' in title templates, filters and property lookups.",
+                 Use '{}' in title templates, filters and property lookups. To store a different \
+                 name, pass \"fields\" explicitly instead of a description.",
                 stripped, field_type, field_desc, keyword, stripped
             ));
             stripped
@@ -1126,9 +1127,10 @@ const STRIPPABLE_TYPE_KEYWORDS: &[&str] = &[
 /// identifier that is called a number. The phrases are structurally identical, so the intent
 /// cannot be derived — this table records the cases where the keyword is intrinsic.
 ///
-/// "due" is listed for "date" because `due_date` is a core task property: stripping "due date"
-/// to "due" would make it disagree with the "due_date" spelling and would also slip past the
-/// reserved-core-property warning that a collision is supposed to raise.
+/// Recoverability is asymmetric, so this errs towards keeping: a missed strip leaves a slightly
+/// clumsy name, while a wrong strip changes a user-visible key that title templates, CEL
+/// selectors and query filters all resolve against. The "number" group is the larger one because
+/// those nouns *have* a number rather than *being* one.
 const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
     (
         "number",
@@ -1143,6 +1145,18 @@ const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
             "part",
             "version",
             "page",
+            "model",
+            "ticket",
+            "flight",
+            "id",
+            "security",
+            "registration",
+            "license",
+            "batch",
+            "lot",
+            "room",
+            "seat",
+            "case",
         ],
     ),
     ("date", &["birth", "due"]),
@@ -1154,31 +1168,37 @@ const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
 /// be left alone. Operates on an already-normalized snake_case name, so splitting on '_' is
 /// enough to find word boundaries.
 ///
-/// The keyword is only removed when it is the final word, a non-empty name remains, and the
-/// preceding word does not make it intrinsic (see [`INTRINSIC_KEYWORD_PREFIXES`]).
+/// The keyword is only removed when it is the final word, a non-empty name remains, the
+/// preceding word does not make it intrinsic (see [`INTRINSIC_KEYWORD_PREFIXES`]), and the
+/// shortened name is not a reserved core property.
 fn strip_trailing_type_keyword(name: &str) -> Option<(String, String)> {
     let words: Vec<&str> = name.split('_').filter(|w| !w.is_empty()).collect();
 
     // A bare keyword is the whole name ("number"): there is nothing left to call the field.
-    if words.len() < 2 {
-        return None;
-    }
-
     let (keyword, head) = words.split_last()?;
-    if !STRIPPABLE_TYPE_KEYWORDS.contains(keyword) {
+    if head.is_empty() || !STRIPPABLE_TYPE_KEYWORDS.contains(keyword) {
         return None;
     }
 
     let preceding = head.last()?;
     let is_intrinsic = INTRINSIC_KEYWORD_PREFIXES
         .iter()
-        .find(|(kw, _)| kw == keyword)
-        .is_some_and(|(_, prefixes)| prefixes.contains(preceding));
+        .any(|(kw, prefixes)| kw == keyword && prefixes.contains(preceding));
     if is_intrinsic {
         return None;
     }
 
-    Some((head.join("_"), (*keyword).to_string()))
+    let stripped = head.join("_");
+
+    // Shortening must not invent a collision the caller never described: "status text" would
+    // otherwise become `status`, colliding with a core property that "status_text" does not.
+    // Checking here rather than listing each casualty in the table above keeps one source of
+    // truth, so a core property added later is covered without touching this function.
+    if RESERVED_CORE_PROPERTIES.contains(&stripped.as_str()) {
+        return None;
+    }
+
+    Some((stripped, (*keyword).to_string()))
 }
 
 /// Normalize field name to snake_case
@@ -1567,6 +1587,22 @@ mod tests {
             );
         }
 
+        // Stripping must not invent a reserved-core-property collision that the caller's own
+        // wording avoided: "status text" describes a field `status_text`, not `status`.
+        for input in [
+            "status_text",
+            "priority_text",
+            "content_text",
+            "id_number",
+            "due_date",
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' must not be shortened onto a reserved core property"
+            );
+        }
+
         // Nothing to strip: the keyword is the entire name, or there is no keyword.
         for input in ["number", "date", "capacity", "customer_name", ""] {
             assert_eq!(
@@ -1603,6 +1639,19 @@ mod tests {
             "Expected a warning naming the stored field and its source phrase, got {:?}",
             fields[0].warnings
         );
+    }
+
+    /// Shortening a name can only remove words, so it can land on a reserved core property that
+    /// the caller's own wording steered clear of — "status text" describes `status_text`, and
+    /// turning it into `status` manufactures a collision rather than reporting one.
+    #[test]
+    fn test_parse_field_descriptions_does_not_strip_onto_reserved_property() {
+        let fields = parse_field_descriptions("status text, priority text, id number");
+
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "status_text");
+        assert_eq!(fields[1].name, "priority_text");
+        assert_eq!(fields[2].name, "id_number");
     }
 
     /// Naive stripping would turn "invoice number" into `invoice` — a different wrong answer.
