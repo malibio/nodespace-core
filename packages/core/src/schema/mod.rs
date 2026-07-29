@@ -1131,6 +1131,11 @@ const STRIPPABLE_TYPE_KEYWORDS: &[&str] = &[
 /// clumsy name, while a wrong strip changes a user-visible key that title templates, CEL
 /// selectors and query filters all resolve against. The "number" group is the larger one because
 /// those nouns *have* a number rather than *being* one.
+///
+/// This is matched on the word immediately before the keyword, so it is not subsumed by the
+/// reserved-property guard in [`strip_trailing_type_keyword`]: that guard compares the whole
+/// shortened name, and so protects `due_date` but not `payment_due_date`, whose shortened form
+/// is the unreserved `payment_due`. The same holds for `id` and `customer_id_number`.
 const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
     (
         "number",
@@ -1565,25 +1570,56 @@ mod tests {
             );
         }
 
-        // Names where the keyword is intrinsic, not an annotation.
+        // Names where the keyword is intrinsic, not an annotation. Every entry in
+        // INTRINSIC_KEYWORD_PREFIXES appears here: an unexercised entry is indistinguishable
+        // from a missing one, since the strip would simply proceed.
         for input in [
             "invoice_number",
             "phone_number",
             "account_number",
             "serial_number",
             "order_number",
+            "reference_number",
             "tracking_number",
             "part_number",
+            "version_number",
             "page_number",
+            "model_number",
+            "ticket_number",
+            "flight_number",
+            "id_number",
+            "security_number",
+            "registration_number",
+            "license_number",
+            "batch_number",
+            "lot_number",
+            "room_number",
+            "seat_number",
+            "case_number",
             "date_of_birth",
-            // `due_date` is a core task property; stripping it would both diverge from the
-            // "due_date" spelling and dodge the reserved-core-property warning.
             "due_date",
         ] {
             assert_eq!(
                 strip_trailing_type_keyword(input),
                 None,
                 "'{input}' keeps its keyword — it is part of the intended name"
+            );
+        }
+
+        // The keep-list is keyed on the word immediately before the keyword, so it still
+        // protects these names when the head carries additional qualifiers. This is what the
+        // reserved-property guard alone cannot do: it compares the whole shortened name, which
+        // is `payment_due` here, not `due`.
+        for input in [
+            "payment_due_date",
+            "invoice_due_date",
+            "customer_id_number",
+            "purchase_order_number",
+        ] {
+            assert_eq!(
+                strip_trailing_type_keyword(input),
+                None,
+                "'{input}' keeps its keyword — a qualified head does not make it an annotation"
             );
         }
 
