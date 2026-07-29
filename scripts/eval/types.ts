@@ -7,10 +7,50 @@
  * scripts/eval/runner.ts and is not reimplemented per eval.
  */
 
+/**
+ * One tool call's outcome, beyond its name.
+ *
+ * Sourced from the executor's own report of what it did — `isError` is only
+ * false once the write returned Ok, and `fieldCount` is read from the tool
+ * RESULT rather than its arguments. Asserting on arguments would measure what
+ * the model asked for, which is a property of the model's output and so the
+ * same class of evidence as counting tool names; the result is what the system
+ * actually persisted.
+ */
+export interface ToolCallRecord {
+  name: string;
+  isError: boolean;
+  /**
+   * Length of the result's `fields` array, for tools that return one.
+   *
+   * Absent when the tool does not report fields at all; `0` when a schema
+   * persisted with no properties — a real failure that is indistinguishable
+   * from success by tool name alone, and which `create_schema` reaches by
+   * design (a call carrying neither `fields` nor `description` succeeds).
+   */
+  fieldCount?: number;
+}
+
 /** One turn's observable outcome, scraped from an aichat.ts run. */
 export interface TurnRecord {
   toolsOffered: string;
+  /**
+   * Tool names in call order.
+   *
+   * Kept as a plain string[] rather than folded into `toolCalls` below because
+   * it has a live reader: the routing fixture scores turns off these names
+   * directly and never calls into the matrix fixture's assertions. This is a
+   * field in current use, not a compatibility shim the greenfield rule would
+   * tell us to delete.
+   */
   toolsCalled: string[];
+  /**
+   * Per-call outcomes, parallel to `toolsCalled`.
+   *
+   * Optional because results files recorded before this field existed do not
+   * carry it; a scoring function must treat absence as "unknown", not "failed".
+   */
+  toolCalls?: ToolCallRecord[];
   reply: string;
   latencyMs: number;
   /**

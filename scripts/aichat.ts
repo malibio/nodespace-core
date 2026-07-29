@@ -30,7 +30,8 @@ import { fileURLToPath } from "node:url";
 
 const WORKTREE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NS_BIN = process.env.NS_BIN ?? join(WORKTREE, "target/release/nodespace");
-const SOCKET = process.env.NODESPACED_SOCKET ?? "/tmp/nodespaced-test/daemon.sock";
+const SOCKET =
+  process.env.NODESPACED_SOCKET ?? "/tmp/nodespaced-test/daemon.sock";
 const NS_LOG = process.env.NS_LOG ?? "/tmp/nodespaced-test/daemon.log";
 const NS_MODEL = process.env.NS_MODEL ?? "gemma-4-e4b-q4km";
 const TIMEOUT_MS = Number(process.env.NS_TIMEOUT_MS ?? 180_000);
@@ -44,10 +45,13 @@ interface AiChat {
 
 /** Run the nodespace CLI with --json and parse stdout. Throws on non-zero exit. */
 function ns(args: string[]): unknown {
-  const result = Bun.spawnSync([NS_BIN, "--socket", SOCKET, "--json", ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const result = Bun.spawnSync(
+    [NS_BIN, "--socket", SOCKET, "--json", ...args],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const stdout = result.stdout.toString();
   if (result.exitCode !== 0) {
     throw new Error(
@@ -84,14 +88,25 @@ function defaultAiChat(): AiChat {
   return { provider: "native", model: NS_MODEL, status: "idle", messages: [] };
 }
 
-function batchUpdateProps(id: string, version: number | null, props: Record<string, unknown>): void {
+function batchUpdateProps(
+  id: string,
+  version: number | null,
+  props: Record<string, unknown>,
+): void {
   const item: Record<string, unknown> = { node_id: id, properties: props };
   if (version !== null) item.version = version;
   nsRaw(["node", "batch-update", "--updates", JSON.stringify([item])]);
 }
 
 function cmdNew(): string {
-  const created = ns(["node", "create", "--type", "ai-chat", "--content", "CLI test chat"]) as {
+  const created = ns([
+    "node",
+    "create",
+    "--type",
+    "ai-chat",
+    "--content",
+    "CLI test chat",
+  ]) as {
     id: string;
   };
   if (!created?.id) throw new Error("create returned no id");
@@ -113,7 +128,14 @@ function reportTurnLog(sinceByte: number): void {
   try {
     const buf = Bun.file(NS_LOG);
     // Read only the bytes appended during this turn.
-    slice = stripAnsi(Bun.spawnSync(["tail", "-c", `+${sinceByte + 1}`, NS_LOG]).stdout.toString());
+    slice = stripAnsi(
+      Bun.spawnSync([
+        "tail",
+        "-c",
+        `+${sinceByte + 1}`,
+        NS_LOG,
+      ]).stdout.toString(),
+    );
     if (!slice && buf) slice = "";
   } catch {
     return;
@@ -124,7 +146,9 @@ function reportTurnLog(sinceByte: number): void {
     const m = offered.match(/selected_tools="?([^"]*)"?/);
     if (m) console.log(`[tools offered] ${m[1]}`);
   }
-  const prepared = lines.filter((l) => l.includes("system prompt and tools prepared")).pop();
+  const prepared = lines
+    .filter((l) => l.includes("system prompt and tools prepared"))
+    .pop();
   if (prepared) {
     const m = prepared.match(/tool_names="?([^"]*?)"? system_prompt_len/);
     if (m) console.log(`[tools available] ${m[1]}`);
@@ -133,14 +157,25 @@ function reportTurnLog(sinceByte: number): void {
     const tool = l.match(/tool="?([a-z_]+)"?/)?.[1] ?? "?";
     const args = l.match(/args_preview="?([^"]*?)"? result_preview/)?.[1] ?? "";
     const err = /is_error=true/.test(l) ? " [ERROR]" : "";
-    console.log(`[tool] ${tool}${err} ${args}`);
+    // Field count of the persisted result, emitted by any tool whose result
+    // carries a top-level `fields` array. tracing omits the field entirely when
+    // it is None, so "absent" (the result reports no fields) stays
+    // distinguishable from "=0" (a schema persisted with no properties) — the
+    // latter is a real failure that looks identical to success by tool name
+    // alone. Emitted before the args, which are free-form and truncated at the
+    // source and so must stay last on the line.
+    const fields = l.match(/result_field_count=(\d+)/)?.[1];
+    const fieldPart = fields === undefined ? "" : ` [fields=${fields}]`;
+    console.log(`[tool] ${tool}${err}${fieldPart} ${args}`);
   }
 }
 
 async function cmdSend(id: string, message: string): Promise<void> {
   const node = getNode(id);
   const aichat: AiChat = node.properties["ai-chat"] ?? defaultAiChat();
-  const beforeAssistant = aichat.messages.filter((m) => m.role === "assistant").length;
+  const beforeAssistant = aichat.messages.filter(
+    (m) => m.role === "assistant",
+  ).length;
 
   const logSize = (() => {
     try {
@@ -150,7 +185,11 @@ async function cmdSend(id: string, message: string): Promise<void> {
     }
   })();
 
-  aichat.messages.push({ role: "user", content: message, timestamp: new Date().toISOString() });
+  aichat.messages.push({
+    role: "user",
+    content: message,
+    timestamp: new Date().toISOString(),
+  });
   aichat.status = "processing";
   batchUpdateProps(id, node.version, { "ai-chat": aichat });
 
@@ -160,7 +199,9 @@ async function cmdSend(id: string, message: string): Promise<void> {
     await sleep(1000);
     const cur = getNode(id);
     latest = cur.properties["ai-chat"] ?? latest;
-    const afterAssistant = latest.messages.filter((m) => m.role === "assistant").length;
+    const afterAssistant = latest.messages.filter(
+      (m) => m.role === "assistant",
+    ).length;
     if (latest.status === "idle" && afterAssistant > beforeAssistant) break;
   }
   if (latest.status !== "idle") {
@@ -169,7 +210,9 @@ async function cmdSend(id: string, message: string): Promise<void> {
 
   if (logSize > 0) reportTurnLog(logSize);
 
-  const reply = [...latest.messages].reverse().find((m) => m.role === "assistant");
+  const reply = [...latest.messages]
+    .reverse()
+    .find((m) => m.role === "assistant");
   console.log(`assistant> ${reply?.content ?? "(no assistant reply)"}`);
 }
 
@@ -189,7 +232,8 @@ async function main() {
       break;
     case "send": {
       const [id, ...msg] = rest;
-      if (!id || msg.length === 0) throw new Error("usage: send <id> <message>");
+      if (!id || msg.length === 0)
+        throw new Error("usage: send <id> <message>");
       await cmdSend(id, msg.join(" "));
       break;
     }
@@ -207,7 +251,9 @@ async function main() {
       break;
     }
     default:
-      console.error("usage: aichat.ts {new | send <id> <msg> | ask <msg> | show <id>}");
+      console.error(
+        "usage: aichat.ts {new | send <id> <msg> | ask <msg> | show <id>}",
+      );
       process.exit(1);
   }
 }

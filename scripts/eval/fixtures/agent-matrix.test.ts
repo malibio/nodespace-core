@@ -176,4 +176,104 @@ describe("assertExpectation", () => {
       expect(result.passed).toBe(true);
     });
   });
+
+  /**
+   * A create_schema call can be counted once and still leave the user with
+   * nothing usable. Both cases below scored as PASSES before the outcome of the
+   * call was carried alongside its name.
+   */
+  describe("create_schema outcome", () => {
+    const noExtra: Expectation = { kind: "noExtraTypes" };
+    const once: Expectation = { kind: "toolOnce", tool: "create_schema" };
+
+    // The observed scenario-3 false pass: a title_template referencing fields
+    // that were never defined, rejected by title-template validation.
+    test("fails when the single create_schema call was rejected", () => {
+      const result = assertExpectation(
+        noExtra,
+        ["create_schema"],
+        [{ name: "create_schema", isError: true }],
+      );
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("REJECTED");
+    });
+
+    // Distinct from rejection: this call SUCCEEDS. A create_schema carrying
+    // neither fields nor description persists a type with no properties.
+    test("fails when create_schema succeeded with zero fields", () => {
+      const result = assertExpectation(
+        noExtra,
+        ["create_schema"],
+        [{ name: "create_schema", isError: false, fieldCount: 0 }],
+      );
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("NO fields");
+    });
+
+    test("passes when create_schema persisted fields", () => {
+      const result = assertExpectation(
+        noExtra,
+        ["create_schema"],
+        [{ name: "create_schema", isError: false, fieldCount: 4 }],
+      );
+      expect(result.passed).toBe(true);
+    });
+
+    // Scenarios 8a/8b reach create_schema through toolOnce, so the same hole
+    // has to be closed on that branch and not just on noExtraTypes.
+    test("toolOnce fails on a rejected create_schema", () => {
+      const result = assertExpectation(
+        once,
+        ["create_schema"],
+        [{ name: "create_schema", isError: true }],
+      );
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("REJECTED");
+    });
+
+    test("toolOnce fails on a fieldless create_schema", () => {
+      const result = assertExpectation(
+        once,
+        ["create_schema"],
+        [{ name: "create_schema", isError: false, fieldCount: 0 }],
+      );
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("NO fields");
+    });
+
+    test("toolOnce still reports a wrong call count before outcome", () => {
+      const result = assertExpectation(once, [], []);
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("got 0");
+    });
+
+    // A baseline recorded before fieldCount existed must not read as a fresh
+    // failure: absence is unknown, not zero.
+    test("passes when the outcome was never captured", () => {
+      expect(assertExpectation(noExtra, ["create_schema"], []).passed).toBe(
+        true,
+      );
+      expect(
+        assertExpectation(
+          noExtra,
+          ["create_schema"],
+          [{ name: "create_schema", isError: false }],
+        ).passed,
+      ).toBe(true);
+    });
+
+    // Only create_schema outcomes are judged here; an unrelated failing tool is
+    // some other assertion's business.
+    test("ignores non-create_schema calls", () => {
+      const result = assertExpectation(
+        once,
+        ["create_schema"],
+        [
+          { name: "search_nodes", isError: true },
+          { name: "create_schema", isError: false, fieldCount: 2 },
+        ],
+      );
+      expect(result.passed).toBe(true);
+    });
+  });
 });
