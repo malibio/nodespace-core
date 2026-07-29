@@ -56,16 +56,22 @@ pub struct AiChatCompletedWrite {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
 
-    /// The call's arguments, canonicalised (JSON key order normalised). Together
-    /// with `tool` this is the write's identity for the cross-turn duplicate
-    /// guard: a later call matching both is the same write, not a new one.
+    /// The call's arguments, canonicalised (JSON key order normalised, parameter
+    /// aliases resolved). Together with `tool` this is the write's identity for
+    /// the cross-turn duplicate guard: a later call matching both is the same
+    /// write, not a new one.
     ///
-    /// `None` when the arguments were too large to persist (see
-    /// `CANONICAL_ARGS_MAX_CHARS`). A `None` here never matches, so an
-    /// unrecorded call is executed rather than wrongly suppressed — the guard
-    /// fails open, which is the safe direction for a check that blocks work.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub canonical_args: Option<String>,
+    /// Two forms, both produced by `canonical_args_identity`: the canonical JSON
+    /// verbatim when it is small enough to store, or `sha256:<hex>` of that same
+    /// string when it is not (see `CANONICAL_ARGS_MAX_CHARS`). The digest keeps
+    /// large writes — an entire markdown import, say — guarded without copying
+    /// their content into this message history a second time. The forms cannot
+    /// be confused: canonical JSON always starts with `{`.
+    ///
+    /// Always present. An identity is what makes a recorded write enforceable,
+    /// so a write recorded without one would be indistinguishable from an
+    /// unguarded tool while still looking wired up.
+    pub canonical_args: String,
 }
 
 /// A single message in an ai-chat conversation.

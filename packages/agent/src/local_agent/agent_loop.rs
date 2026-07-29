@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use opentelemetry::trace::{Span, TraceContextExt, Tracer};
 use opentelemetry::KeyValue;
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -39,15 +40,25 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// that were about to succeed.
 const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
 
-/// Longest canonical-args string persisted as a completed write's identity.
+/// Longest canonical-args string stored verbatim as a completed write's identity.
 ///
-/// `create_nodes_from_markdown` carries an entire import in its arguments, so
-/// storing them verbatim would write that content a second time into the chat
-/// node's own message history and grow it without bound. Past this length the
-/// identity is dropped rather than truncated: a truncated string could compare
-/// equal to a *different* call sharing a long prefix, turning a size limit into
-/// a wrong-suppression bug. Dropping it only costs a redundant re-execution.
+/// `create_nodes_from_markdown` carries an entire import in its arguments, and
+/// the identity is persisted into the chat node's own message history — so
+/// storing them verbatim would write that content a second time and grow the
+/// node without bound. Past this length [`canonical_args_identity`] substitutes
+/// a digest, which keeps the identity at constant size.
+///
+/// Note this is a *representation* threshold, not a guard-coverage one: a call
+/// above it is still guarded. Truncation, by contrast, would not be safe — a
+/// truncated string could compare equal to a *different* call sharing a long
+/// prefix, turning a size limit into a wrong-suppression bug. A digest has no
+/// such failure mode, which is why it is the form used above the cap.
 pub const CANONICAL_ARGS_MAX_CHARS: usize = 4096;
+
+/// Prefix marking an identity that is a digest rather than literal canonical
+/// args. Canonical JSON always begins with `{`, so the two forms are mutually
+/// unambiguous and a digest can never be mistaken for a call's real arguments.
+const CANONICAL_ARGS_DIGEST_PREFIX: &str = "sha256:";
 
 /// Normalise a tool call's raw JSON arguments so equal calls compare equal.
 ///
@@ -57,6 +68,14 @@ pub const CANONICAL_ARGS_MAX_CHARS: usize = 4096;
 /// string. Unparseable arguments are returned unchanged: they cannot be
 /// normalised, and an exact-match comparison on the raw text is still correct.
 ///
+/// Also resolves the `node_id` → `id` parameter alias (see the `serde(alias)`
+/// attributes in `tools.rs`). Serde applies that alias when *deserialising into
+/// a params struct*, which happens after this function runs — so without this
+/// step `{"id":"x"}` and `{"node_id":"x"}` would yield two different identities
+/// for one logical call, and a repeat that switched spelling would slip the
+/// guard. Normalising here rather than per-tool means any future tool adopting
+/// the same alias is covered without a matching fix.
+///
 /// Shared by the per-turn duplicate detector and the cross-turn write guard, so
 /// the normalisation rules cannot drift apart. Note the two feed it different
 /// inputs: the loop-breaker canonicalises the raw emitted text, while the guard
@@ -65,8 +84,51 @@ pub const CANONICAL_ARGS_MAX_CHARS: usize = 4096;
 /// stuck model, whereas the guard's comparison must be exact.
 pub fn canonical_args(args_json: &str) -> String {
     serde_json::from_str::<serde_json::Value>(args_json)
-        .map(|v| v.to_string())
+        .map(|mut v| {
+            normalize_param_aliases(&mut v);
+            v.to_string()
+        })
         .unwrap_or_else(|_| args_json.to_owned())
+}
+
+/// Rewrite aliased top-level parameter keys to the name the params struct uses.
+///
+/// Only the top level: a nested `properties` blob is the user's own data, where
+/// a key named `node_id` means whatever the user's schema says and must not be
+/// renamed. When a call carries *both* spellings the object is left untouched —
+/// serde's own precedence decides which wins, and picking one here could make
+/// two genuinely different calls compare equal, which is the one failure this
+/// guard must never have.
+fn normalize_param_aliases(args: &mut serde_json::Value) {
+    let Some(obj) = args.as_object_mut() else {
+        return;
+    };
+    if obj.contains_key("node_id") && !obj.contains_key("id") {
+        if let Some(v) = obj.remove("node_id") {
+            obj.insert("id".to_string(), v);
+        }
+    }
+}
+
+/// The identity persisted for a call's canonical args.
+///
+/// Under [`CANONICAL_ARGS_MAX_CHARS`] this is the canonical JSON verbatim, so a
+/// stored identity stays readable when diagnosing a refusal. Above it, a digest
+/// of that same string — exact-match equality is all the guard needs, so hashing
+/// preserves the guarantee at constant size instead of dropping the identity and
+/// leaving the largest, most costly duplicates unguarded.
+///
+/// Both sides of the comparison must derive the identity through this one
+/// function: the record side when persisting, the execution path when checking.
+/// Deriving either independently is what would let the two drift apart.
+pub fn canonical_args_identity(canonical: &str) -> String {
+    if canonical.chars().count() <= CANONICAL_ARGS_MAX_CHARS {
+        return canonical.to_owned();
+    }
+    format!(
+        "{CANONICAL_ARGS_DIGEST_PREFIX}{:x}",
+        Sha256::digest(canonical.as_bytes())
+    )
 }
 
 /// Build the tool result returned in place of a refused duplicate write.
@@ -860,7 +922,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                             // concretely when empty arguments are read as `{}`
                             // above, which yields "" here against a stored "{}"
                             // and a write that could never match itself.
-                            let incoming = canonical_args(&args.to_string());
+                            //
+                            // Reduced to an identity by the same function the
+                            // record side uses, so an oversized call compares
+                            // digest-against-digest. Comparing raw canonical args
+                            // here against a stored digest would never match, and
+                            // would silently unguard exactly the largest writes.
+                            let incoming =
+                                canonical_args_identity(&canonical_args(&args.to_string()));
                             session.prior_writes.iter().find(|w| {
                                 w.tool == tc.function_name && w.canonical_args == incoming
                             })
@@ -4420,6 +4489,259 @@ mod tests {
             calls.lock().unwrap().iter().any(|c| c == "create_node"),
             "a distinct create must not be blocked"
         );
+    }
+
+    /// Build a session carrying one completed markdown import, stored the way
+    /// the record side stores it — through `canonical_args_identity`, so an
+    /// oversized import is held as a digest.
+    fn session_with_prior_import(markdown: &str) -> AgentSession {
+        let mut session = new_session();
+        session.prior_writes = vec![PriorWrite {
+            tool: "create_nodes_from_markdown".to_string(),
+            canonical_args: canonical_args_identity(&canonical_args(
+                &json!({ "markdown": markdown }).to_string(),
+            )),
+            node_id: Some("nodespace://n1".to_string()),
+            summary: Some("Project plan".to_string()),
+        }];
+        session
+    }
+
+    fn import_executor() -> MockToolExecutor {
+        MockToolExecutor::new().with_tool(
+            "create_nodes_from_markdown",
+            json!({"type": "object", "properties": {"markdown": {"type": "string"}}}),
+            json!({"created": 12}),
+        )
+    }
+
+    /// An import large enough to exceed the args cap — the realistic case, since
+    /// any real import does.
+    fn oversized_markdown(topic: &str) -> String {
+        format!(
+            "# {topic}\n{}",
+            "- a task line\n".repeat(CANONICAL_ARGS_MAX_CHARS / 8)
+        )
+    }
+
+    /// The acceptance criterion for the oversized-args gap: a repeated import
+    /// must be refused across turns. This is the tool where a repeat is worst —
+    /// it duplicates an entire subtree — and the one the cap used to exempt
+    /// wholesale, leaving it unguarded in every real case.
+    #[tokio::test]
+    async fn cross_turn_duplicate_oversized_import_is_not_executed() {
+        let markdown = oversized_markdown("Project plan");
+        assert!(
+            markdown.chars().count() > CANONICAL_ARGS_MAX_CHARS,
+            "the fixture must actually exceed the cap"
+        );
+        let args = json!({ "markdown": markdown }).to_string();
+
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_nodes_from_markdown",
+            &args,
+            "It already exists.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(import_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_import(&markdown);
+        agent_loop
+            .run_turn(
+                &mut session,
+                "import my project plan",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|c| c == "create_nodes_from_markdown"),
+            "a repeated import must never reach the executor, got {:?}",
+            calls.lock().unwrap()
+        );
+    }
+
+    /// The negative control for the digest. Refusing a *different* import would
+    /// be a wrong suppression — worse than the missed duplicate this change
+    /// fixes — so the identity must distinguish two large calls, not merely
+    /// recognise that both are large.
+    #[tokio::test]
+    async fn a_different_oversized_import_still_executes() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_nodes_from_markdown",
+            &json!({ "markdown": oversized_markdown("Recipes") }).to_string(),
+            "Imported.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(import_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_import(&oversized_markdown("Project plan"));
+        agent_loop
+            .run_turn(
+                &mut session,
+                "import my recipes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|c| c == "create_nodes_from_markdown"),
+            "a distinct import must not be blocked"
+        );
+    }
+
+    fn delete_node_executor() -> MockToolExecutor {
+        MockToolExecutor::new().with_tool(
+            "delete_node",
+            json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+            json!({"deleted": true}),
+        )
+    }
+
+    /// Build a session carrying one completed `delete_node`, recorded under the
+    /// given key spelling.
+    fn session_with_prior_delete(args: &str) -> AgentSession {
+        let mut session = new_session();
+        session.prior_writes = vec![PriorWrite {
+            tool: "delete_node".to_string(),
+            canonical_args: canonical_args_identity(&canonical_args(args)),
+            node_id: Some("nodespace://n1".to_string()),
+            summary: Some("Old note".to_string()),
+        }];
+        session
+    }
+
+    /// Run a turn where the model re-issues a delete under `incoming`, against a
+    /// prior write recorded under `stored`. Returns whether the executor ran.
+    async fn delete_repeat_reaches_executor(stored: &str, incoming: &str) -> bool {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "delete_node",
+            incoming,
+            "Already gone.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(delete_node_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = session_with_prior_delete(stored);
+        agent_loop
+            .run_turn(
+                &mut session,
+                "delete that node",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        let ran = calls.lock().unwrap().iter().any(|c| c == "delete_node");
+        ran
+    }
+
+    /// The acceptance criterion for the alias gap. `delete_node` takes its target
+    /// under either `id` or `node_id` (serde alias), but serde resolves that only
+    /// when deserialising into the params struct — after canonicalisation. So a
+    /// repeat that switched spelling used to produce a second identity and slip
+    /// the guard. Both directions, since either spelling can be recorded first.
+    #[tokio::test]
+    async fn delete_repeat_is_refused_across_the_node_id_alias() {
+        let id_form = r#"{"id":"nodespace://n1"}"#;
+        let alias_form = r#"{"node_id":"nodespace://n1"}"#;
+
+        assert!(
+            !delete_repeat_reaches_executor(id_form, alias_form).await,
+            "a repeat spelled `node_id` must be recognised as the stored `id` call"
+        );
+        assert!(
+            !delete_repeat_reaches_executor(alias_form, id_form).await,
+            "a repeat spelled `id` must be recognised as the stored `node_id` call"
+        );
+    }
+
+    /// The alias rule must not merge genuinely different deletes: it renames a
+    /// key, it does not ignore the value.
+    #[tokio::test]
+    async fn delete_of_a_different_node_still_executes() {
+        assert!(
+            delete_repeat_reaches_executor(
+                r#"{"id":"nodespace://n1"}"#,
+                r#"{"node_id":"nodespace://n2"}"#
+            )
+            .await,
+            "a delete targeting another node must not be blocked"
+        );
+    }
+
+    /// The alias is resolved at the top level only. A nested `properties` blob is
+    /// the user's own data, where a field named `node_id` means whatever their
+    /// schema says — renaming it would silently rewrite user data into a
+    /// different field for identity purposes.
+    #[test]
+    fn alias_normalisation_does_not_reach_into_nested_user_data() {
+        let canonical = canonical_args(r#"{"properties":{"node_id":"x"},"node_type":"venue"}"#);
+        assert!(
+            canonical.contains("node_id"),
+            "a nested user field must be left alone, got {canonical}"
+        );
+    }
+
+    /// When a call carries both spellings there is no safe rename: serde's own
+    /// precedence decides which wins, and guessing here could make two genuinely
+    /// different calls compare equal — the one failure this guard must not have.
+    #[test]
+    fn alias_normalisation_leaves_ambiguous_calls_untouched() {
+        let canonical = canonical_args(r#"{"id":"a","node_id":"b"}"#);
+        assert!(canonical.contains(r#""id":"a""#), "got {canonical}");
+        assert!(canonical.contains(r#""node_id":"b""#), "got {canonical}");
+    }
+
+    /// Under the cap the identity is the canonical args verbatim, so a stored
+    /// identity stays readable when diagnosing a refusal.
+    #[test]
+    fn identity_is_verbatim_below_the_cap() {
+        let canonical = canonical_args(r#"{"content":"Buy milk"}"#);
+        assert_eq!(canonical_args_identity(&canonical), canonical);
+    }
+
+    /// The two identity forms must be mutually unambiguous: canonical JSON always
+    /// starts with `{`, a digest with `sha256:`. Were they confusable, a call
+    /// whose arguments happened to spell a digest could impersonate another
+    /// call's identity.
+    #[test]
+    fn digest_and_verbatim_identities_cannot_be_confused() {
+        let small = canonical_args_identity(&canonical_args(r#"{"content":"x"}"#));
+        let large = canonical_args_identity(&"x".repeat(CANONICAL_ARGS_MAX_CHARS + 1));
+        assert!(small.starts_with('{'));
+        assert!(large.starts_with("sha256:"));
+        assert_ne!(small, large);
+    }
+
+    /// The digest must be a function of the content: equal args hash equal,
+    /// different args do not. Exact-match equality is the whole guarantee the
+    /// guard needs, and hashing has to preserve it in both directions.
+    #[test]
+    fn digest_identity_is_stable_and_content_sensitive() {
+        let a = "a".repeat(CANONICAL_ARGS_MAX_CHARS + 1);
+        let b = format!("{}b", "a".repeat(CANONICAL_ARGS_MAX_CHARS));
+        assert_eq!(canonical_args_identity(&a), canonical_args_identity(&a));
+        assert_ne!(canonical_args_identity(&a), canonical_args_identity(&b));
     }
 
     /// Idempotent repeats must survive the guard. Setting the same task status
