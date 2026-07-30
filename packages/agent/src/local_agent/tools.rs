@@ -1453,14 +1453,29 @@ impl GraphToolExecutor {
         // The filters came from our own prompt-constrained decomposition call
         // above, not from the model's tool-call arguments — but they are still
         // untrusted JSON (the decomposition model can emit a malformed shape).
-        // Deserialize defensively and drop anything that doesn't parse rather
-        // than failing the whole resolution.
+        // Deserialize defensively and skip anything that doesn't parse rather
+        // than failing the whole resolution, but — matching the
+        // deny_unknown_fields rigor `AgentFilterItem` carries everywhere else
+        // — log each drop rather than swallowing it outright. A silently
+        // dropped filter can turn a would-be unique match into a false
+        // multiple_matches (or a different unique match), with no signal that
+        // anything went wrong.
         let filters: Vec<query_ops::AgentFilterItem> = resolved
             .get("filters")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|f| serde_json::from_value(f.clone()).ok())
+                    .filter_map(|f| match serde_json::from_value(f.clone()) {
+                        Ok(item) => Some(item),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                filter = %f,
+                                "resolve_query: dropping unparseable filter from decomposition output"
+                            );
+                            None
+                        }
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -2745,6 +2760,22 @@ mod tests {
     /// inference engine returning fixed JSON, exercising the full
     /// `exec_resolve_query` path — schema field lookup, prompt construction,
     /// nested `generate()` call, and JSON parsing into a tool result.
+    ///
+    /// What this suite does NOT cover: the decomposition prompt's actual
+    /// accuracy against a real model — every test here wires `FixedJsonEngine`,
+    /// which ignores the prompt entirely and returns a canned response. That
+    /// means the NL→filter mapping described in `exec_resolve_query`'s prompt
+    /// (mapping a dollar amount, a relative date, or a paraphrased identifier
+    /// onto the right schema field) is unverified by `cargo test`. The one
+    /// place a real model exercises this path today is
+    /// `scripts/eval/fixtures/agent-matrix.ts` scenario 6, driven through the
+    /// full `LocalAgentLoop` — but that's a single phrasing, run through the
+    /// eval harness rather than `cargo test`/the pre-push gate. Closing this
+    /// gap in-crate would mean standing up a real-model test fixture (model
+    /// download/load, machine-load-sensitive timing) matching
+    /// `ai_chat_send_to_idle_test.rs`'s pattern — deliberately not done here;
+    /// this doc comment is the explicit acknowledgment rather than a silent
+    /// gap.
     mod resolve_query_integration {
         use super::*;
         use crate::agent_types::{ChatModelSpec, InferenceUsage};
@@ -3070,6 +3101,50 @@ mod tests {
             // empty type listing — no invoices exist, so this is a no_match.
             assert_eq!(result.result["resolved"], json!(false));
             assert_eq!(result.result["reason"], json!("no_match"));
+        }
+
+        /// A malformed filter (an unknown key, per `AgentFilterItem`'s
+        /// `deny_unknown_fields`) must be dropped individually rather than
+        /// discarding the whole resolution — a valid sibling filter still
+        /// narrows the search and resolves the node it uniquely identifies.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_drops_only_the_malformed_filter_not_the_whole_resolution() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "amount", "type": "number"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            // The second filter carries "propertyName" instead of "property" —
+            // an unknown key AgentFilterItem's deny_unknown_fields rejects.
+            let engine_json = r#"{"query": "", "filters": [
+                {"type":"property","operator":"equals","property":"amount","value":500},
+                {"type":"property","operator":"equals","propertyName":"status","value":"open"}
+            ]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(&executor, "Invoice #1", json!({"amount": 500})).await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            // The malformed filter is dropped, but the valid "amount" filter
+            // alone still uniquely resolves the node.
+            assert_eq!(result.result["resolved"], json!(true));
+            assert_eq!(result.result["properties"]["amount"], json!(500));
         }
 
         #[tokio::test(flavor = "multi_thread")]
