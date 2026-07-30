@@ -46,7 +46,16 @@ const PROMPTS: &[&str] = &[
 
 async fn resolve_backend() -> Option<(Arc<dyn ChatInferenceEngine>, String)> {
     if let Ok(models) = discover_models(LOCAL_OPENAI_COMPAT_BASE_URL, "").await {
-        if let Some(model) = models.into_iter().next() {
+        // Prefer the locked production model when the endpoint serves it, so a
+        // result describes the model NodeSpace actually ships (ADR-056).
+        // NODESPACE_BENCH_MODEL overrides for cross-model comparison.
+        let preferred = std::env::var("NODESPACE_BENCH_MODEL").ok();
+        let pick = preferred
+            .as_deref()
+            .and_then(|want| models.iter().find(|m| m.as_str() == want).cloned())
+            .or_else(|| models.iter().find(|m| m.contains("gemma")).cloned())
+            .or_else(|| models.first().cloned());
+        if let Some(model) = pick {
             let engine = OpenAiCompatInferenceEngine::new(
                 LOCAL_OPENAI_COMPAT_BASE_URL.to_string(),
                 String::new(),
