@@ -60,14 +60,40 @@ const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.2;
 /// injected ENTITY TYPES section from bloating in large workspaces.
 const MAX_SEMANTIC_SCHEMAS: usize = 5;
 
-/// Number of preceding conversation turns blended into the retrieval query.
+/// Number of preceding messages blended into the retrieval query.
 ///
-/// Two is what was measured: recall over multi-turn conversations went from 77%
-/// to 100% with the last two turns prepended, while topic-switch recall held at
-/// 100%. The latest message still dominates the embedding, and the cap is
-/// `MAX_SEMANTIC_SCHEMAS`, not one, so the extra context adds candidates rather
-/// than displacing the right one.
+/// Counts messages, not exchanges — two is typically one prior round trip
+/// (the previous user message and the assistant's reply), which is the shape
+/// that was measured.
+///
+/// Two is what that measurement produced: recall over multi-turn conversations
+/// went from 77% to 100% with the last two messages prepended, while
+/// topic-switch recall held at 100%. The latest message still dominates the
+/// embedding, and the cap is `MAX_SEMANTIC_SCHEMAS`, not one, so the extra
+/// context adds candidates rather than displacing the right one.
 const BLENDED_HISTORY_TURNS: usize = 2;
+
+/// Character budget applied to each blended prior turn.
+///
+/// A prior turn contributes context, not content: all it has to supply is the
+/// vocabulary a pronoun or ellipsis refers back to. An assistant turn is model
+/// output and has no natural length bound — it can be long-form prose or a
+/// pasted list — and the query embedding path applies no truncation of its own,
+/// so an unbounded turn would both dominate the pooled embedding and enlarge
+/// the embedding context's batch size for the life of the process.
+///
+/// The trailing characters are kept rather than the leading ones: a referent
+/// introduced mid-turn is nearest the end, and the current message is appended
+/// after, so the words closest to the follow-up survive.
+const MAX_CHARS_PER_BLENDED_TURN: usize = 400;
+
+/// Last `max_chars` characters of `text`, respecting char boundaries.
+fn trailing_chars(text: &str, max_chars: usize) -> &str {
+    match text.char_indices().nth_back(max_chars.saturating_sub(1)) {
+        Some((start, _)) if start > 0 => &text[start..],
+        _ => text,
+    }
+}
 
 /// Build the embedding query for schema retrieval from conversation context.
 ///
@@ -75,6 +101,8 @@ const BLENDED_HISTORY_TURNS: usize = 2;
 /// oldest first, so a follow-up that names its subject only by pronoun or
 /// ellipsis ("Set the Redwood one to rejected", "Which ones are still out?")
 /// still carries the discriminating words from the turn that introduced it.
+/// Each prior turn is capped at [`MAX_CHARS_PER_BLENDED_TURN`]; the current
+/// message is never truncated.
 ///
 /// Raw text is concatenated verbatim. Summarizing or entity-extracting the
 /// turns first was measured and made recall *worse* (100% → 73%): the
@@ -91,6 +119,7 @@ pub fn build_retrieval_query(prior_turns: &[&str], current_message: &str) -> Str
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .take(BLENDED_HISTORY_TURNS)
+        .map(|t| trailing_chars(t, MAX_CHARS_PER_BLENDED_TURN))
         .collect();
 
     let mut parts: Vec<&str> = recent.into_iter().rev().collect();
@@ -451,6 +480,56 @@ mod tests {
         let prior = ["real turn", "   ", ""];
         let query = build_retrieval_query(&prior, "current message");
         assert_eq!(query, "real turn\ncurrent message");
+    }
+
+    #[test]
+    fn retrieval_query_caps_each_prior_turn_but_never_the_current_message() {
+        let long_turn = "x".repeat(5_000);
+        let long_current = "y".repeat(5_000);
+        let query = build_retrieval_query(&[&long_turn], &long_current);
+
+        let (prior, current) = query.split_once('\n').expect("prior turn and current");
+        assert_eq!(
+            prior.chars().count(),
+            MAX_CHARS_PER_BLENDED_TURN,
+            "a prior turn is capped"
+        );
+        assert_eq!(
+            current.chars().count(),
+            5_000,
+            "the current message is never truncated"
+        );
+    }
+
+    #[test]
+    fn retrieval_query_keeps_the_end_of_a_long_prior_turn() {
+        // The referent a follow-up points back to sits nearest the end.
+        let long_turn = format!("{} the Redwood Summit proposal", "filler ".repeat(200));
+        let query = build_retrieval_query(&[&long_turn], "Set that one to rejected");
+
+        assert!(query.contains("the Redwood Summit proposal"));
+        assert!(query.ends_with("Set that one to rejected"));
+    }
+
+    #[test]
+    fn retrieval_query_truncation_respects_char_boundaries() {
+        // Slicing a multi-byte string on a byte index would panic.
+        let long_turn = "é".repeat(1_000);
+        let query = build_retrieval_query(&[&long_turn], "follow up");
+
+        let prior = query.split('\n').next().expect("prior turn");
+        assert_eq!(prior.chars().count(), MAX_CHARS_PER_BLENDED_TURN);
+        assert!(prior.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn retrieval_query_leaves_short_turns_untouched() {
+        let short = "Add a conference proposal";
+        assert!(short.chars().count() < MAX_CHARS_PER_BLENDED_TURN);
+        assert_eq!(
+            build_retrieval_query(&[short], "Set it to rejected"),
+            "Add a conference proposal\nSet it to rejected"
+        );
     }
 
     #[test]
