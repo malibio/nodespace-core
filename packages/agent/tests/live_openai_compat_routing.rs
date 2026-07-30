@@ -18,7 +18,7 @@
 //! | arm             | candidate block | what it isolates                    |
 //! |-----------------|-----------------|-------------------------------------|
 //! | `baseline`      | none            | can the model tool-call at all      |
-//! | `stage1_only`   | none            | does Stage 1's extra turn cost it   |
+//! | `stage1_only`   | none            | server-side statefulness (see below)|
 //! | `routed_full`   | yes, full       | ADR-064 rule 4's predicted mechanism |
 //! | `routed_names`  | yes, names only | whether *content* is the variable   |
 //!
@@ -26,6 +26,19 @@
 //! `routed_full` but not `routed_names` — or suppresses on both — the operative
 //! variable is the block's *presence*, not how procedural its content is, which
 //! is what ADR-064 rule 4 predicts and what was measured on the locked model.
+//!
+//! **`stage1_only` is expected to match `baseline` on this transport, and that
+//! is not a defect.** On the native in-process path, Stage 1's cost is a
+//! diverged KV-cache prefix — the overhead ADR-038 accepts and requires be
+//! measured. Over HTTP there is no shared prefix: each request is independent,
+//! so a discarded Stage-1 generation cannot reach the measured turn through any
+//! mechanism this test controls, and the two prompts are identical (asserted in
+//! `the_four_arms_produce_distinct_prompts`). The arm is kept because that
+//! independence is an assumption about the *server*, not a guarantee: a server
+//! that carried conversation state across requests, or rate-limited or evicted a
+//! model between them, would show up here as `stage1_only` diverging from
+//! `baseline` — and would invalidate the routed arms, which pay the same
+//! Stage-1 cost. It is a guard on the harness, not a measurement of routing.
 //!
 //! Measured against a local Ollama:
 //!
@@ -110,7 +123,9 @@ enum Arm {
     /// No routing at all — the shape `live_openai_compat_smoke.rs` covers.
     Baseline,
     /// Stage 1 runs, but retrieval surfaced nothing eligible, so no block is
-    /// injected. Separates "the extra turn" from "the injected block".
+    /// injected. Expected to match [`Arm::Baseline`] on a stateless transport;
+    /// a divergence means the server carried state between requests, which
+    /// would invalidate the routed arms too. See the module docs.
     Stage1Only,
     /// The routed path as it actually ships: candidates rendered by production
     /// code, instructions and all.
@@ -488,6 +503,12 @@ fn write_matrix_artifact(
          # Values:  fires | SUPPRESSED | ERROR\n#\n",
     );
     out.push_str(&format!("# endpoint: {BASE_URL}\n"));
+    // Dated so a pasted run is placeable in time — without it, two runs are
+    // indistinguishable as "same box later" versus "different box".
+    out.push_str(&format!(
+        "# run: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%SZ")
+    ));
     if !excluded.is_empty() {
         out.push_str(&format!(
             "# excluded (removed from the NodeSpace catalog): {}\n",
