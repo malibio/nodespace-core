@@ -24,7 +24,7 @@ use crate::skill_rules::{
     SINGLE_ITEM_PER_CALL, SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
     TITLE_TEMPLATE_PLACEHOLDERS,
 };
-use nodespace_core::markdown::NodeTemplate;
+use nodespace_core::markdown::{NodeTemplate, SeedTier};
 
 /// Builds the Schema Creation skill's markdown_content, interpolating the
 /// shared rules from [`crate::skill_rules`] (imperative form) so this text
@@ -237,6 +237,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: r#"# Research & Search Guidance
 
 When answering questions about stored knowledge:
@@ -290,6 +291,7 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
 
 ⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
@@ -330,6 +332,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: schema_creation_guidance(),
         },
         NodeTemplate {
@@ -343,6 +346,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: graph_editing_guidance(),
         },
         NodeTemplate {
@@ -356,6 +360,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: relationship_management_guidance(),
         },
         NodeTemplate {
@@ -369,6 +374,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: node_deletion_guidance(),
         },
         NodeTemplate {
@@ -382,6 +388,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: bulk_import_guidance(),
         },
         NodeTemplate {
@@ -395,6 +402,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             }),
             child_node_type: Some("prompt".to_string()),
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: organization_guidance(),
         },
     ]
@@ -436,6 +444,7 @@ pub fn seed_tool_nodes() -> Vec<NodeTemplate> {
                 }),
                 child_node_type: None,
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: String::new(),
             }
         })

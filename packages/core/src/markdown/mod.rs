@@ -1298,6 +1298,32 @@ pub async fn handle_create_nodes_from_markdown(
 ///     child_properties: None,
 /// };
 /// ```
+/// Seeding tier for a [`NodeTemplate`], controlling reconciliation behavior
+/// when the template content changes after the node already exists.
+///
+/// - `System`: an engineering artifact stored as a node (skill descriptions,
+///   tool definitions, prompt sections). Not user-editable — always replaced
+///   when the template's content hash changes, same as updating a compiled-in
+///   constant.
+/// - `Starter`: example/workspace content genuinely owned by the user once
+///   they touch it. Replaced on hash mismatch only until the user edits it;
+///   after that, reconciliation skips it and logs once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SeedTier {
+    #[default]
+    System,
+    Starter,
+}
+
+impl SeedTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SeedTier::System => "system",
+            SeedTier::Starter => "starter",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeTemplate {
     /// Human-readable name / label for the root node (stored as the node's `title`).
@@ -1321,6 +1347,9 @@ pub struct NodeTemplate {
     pub child_node_type: Option<String>,
     /// Optional properties to merge into every child node (override parsed defaults).
     pub child_properties: Option<serde_json::Value>,
+    /// Reconciliation tier. Defaults to `System` — every existing seed source
+    /// (skills, prompts, tools) is an engineering artifact, not user content.
+    pub tier: SeedTier,
 }
 
 /// Parse a [`NodeTemplate`] into a flat list of [`PreparedNode`]s.
@@ -1380,7 +1409,62 @@ pub fn prepare_nodes_from_template(
     let mut nodes = Vec::with_capacity(1 + children.len());
     nodes.push(root);
     nodes.extend(children);
+
+    // Stamp reconciliation metadata onto the root's properties *after* the
+    // content hash is computed, so the hash reflects only authored content —
+    // not the metadata describing it. `seed_key` is the template's `title`,
+    // a stable slug used to match this group to an existing DB node across
+    // runs (the root's `content`/`properties` are expected to drift; the
+    // title is the one thing seed_nodes_from_templates can rely on to find
+    // "the same template" again).
+    //
+    // Nested under a single `_seed` object key rather than flat top-level
+    // keys: `normalize_flat_properties_to_namespace` (crud.rs) moves flat
+    // properties into a `{node_type: {...}}` namespace on create, which
+    // would otherwise bury these under `properties[root_node_type]` — a
+    // different path depending on the template's type. An object-valued key
+    // is preserved as its own namespace, so `_seed` lands at a fixed,
+    // type-independent path every time.
+    let seed_version = compute_seed_version(&nodes);
+    if let Some(root_props) = nodes[0].properties.as_object_mut() {
+        root_props.insert(
+            "_seed".to_string(),
+            serde_json::json!({
+                "key": tmpl.title,
+                "version": seed_version,
+                "tier": tmpl.tier.as_str(),
+            }),
+        );
+    }
+
     Ok(nodes)
+}
+
+/// Compute a stable content hash for a template's expanded node group.
+///
+/// Hashes `node_type` + `content` + `properties` for the root and every
+/// child, in order. Ignores `id`, `parent_id`, and `order`, which are
+/// per-insertion, not part of the template's authored content — including
+/// them would make every reconciliation see a "changed" hash even when
+/// nothing about the template itself changed.
+///
+/// `serde_json::Value` objects serialize with sorted keys (no `preserve_order`
+/// feature enabled), so this is stable across process runs regardless of the
+/// order properties were inserted in Rust source.
+pub fn compute_seed_version(nodes: &[PreparedNode]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    for node in nodes {
+        hasher.update(node.node_type.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(node.content.as_bytes());
+        hasher.update(b"\0");
+        // `Value`'s Serialize impl sorts object keys, so this is deterministic.
+        hasher.update(node.properties.to_string().as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Check if a string matches the date format YYYY-MM-DD

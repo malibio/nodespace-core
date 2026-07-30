@@ -939,6 +939,30 @@ impl NodeService {
             ));
         }
 
+        // A starter-tier seeded node becomes user-owned the moment its content
+        // or properties are edited through the normal update path — reseed's
+        // replace path goes through delete_node + create_node_with_parent, not
+        // here, so it never trips this. Checked before the update so a
+        // version-conflict below doesn't leave a partial flag write behind.
+        let touches_content = update.content.is_some() || update.properties.is_some();
+        let mark_user_modified = if touches_content {
+            match self.store.get_node(node_id).await {
+                Ok(Some(existing)) => {
+                    let seed = existing.properties.get("_seed");
+                    let is_starter = seed.and_then(|s| s.get("tier")).and_then(|v| v.as_str())
+                        == Some("starter");
+                    let already_modified = seed
+                        .and_then(|s| s.get("user_modified"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    is_starter && !already_modified
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
         // NOTE: Removed redundant get_node() call here - update_with_version_check_returning_node
         // already fetches the node and handles not-found case
 
@@ -947,7 +971,22 @@ impl NodeService {
             .update_with_version_check_returning_node(node_id, expected_version, update)
             .await?
         {
-            Some(updated_node) => Ok(updated_node),
+            Some(updated_node) => {
+                if mark_user_modified {
+                    if let Err(e) = self
+                        .store
+                        .set_property_bool(node_id, "$._seed.user_modified", true)
+                        .await
+                    {
+                        tracing::warn!(
+                            node_id,
+                            error = %e,
+                            "Failed to stamp seed_user_modified after edit"
+                        );
+                    }
+                }
+                Ok(updated_node)
+            }
             None => {
                 // The version-gated UPDATE matched no row for one of two
                 // reasons — the node was concurrently DELETED, or its version

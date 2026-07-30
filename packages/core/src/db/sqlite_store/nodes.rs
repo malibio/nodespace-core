@@ -711,6 +711,32 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Set a boolean value at a JSON path within a node's properties in-place
+    /// using `json_set`. `json_path` must start with `$.` (e.g. `$._seed.user_modified`).
+    ///
+    /// Bypasses OCC (no version check, no version bump) — used to stamp
+    /// bookkeeping metadata (e.g. `_seed.user_modified`) alongside a caller's
+    /// own version-checked update without racing it or requiring the caller
+    /// to round-trip the flag through its own `NodeUpdate`.
+    pub async fn set_property_bool(
+        &self,
+        node_id: &str,
+        json_path: &str,
+        value: bool,
+    ) -> Result<()> {
+        // json_set's value argument must be JSON, not SQLite's 0/1 integer
+        // affinity, or the stored value round-trips as an int instead of a bool.
+        let json_value = if value { "true" } else { "false" };
+        self.db
+            .execute(
+                "UPDATE node SET properties = json_set(properties, ?1, json(?2)) WHERE id = ?3",
+                libsql::params![json_path.to_string(), json_value, node_id.to_string()],
+            )
+            .await
+            .context("Failed to set property key")?;
+        Ok(())
+    }
+
     pub async fn delete_with_version_check(
         &self,
         id: &str,

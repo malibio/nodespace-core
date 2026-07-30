@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use nodespace_core::markdown::NodeTemplate;
+use nodespace_core::markdown::{NodeTemplate, SeedTier};
 use nodespace_core::models::Node;
 use nodespace_core::services::{flatten_subtree_content, NodeService};
 
@@ -266,6 +266,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: "You are NodeSpace's built-in assistant. You help users work with their \
                     knowledge graph — creating, finding, updating, and connecting nodes."
                         .to_string(),
@@ -277,6 +278,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: "Current date: {{ current_date }}\nActive model: {{ model_name }}\n\n{{ workspace_context }}"
                     .to_string(),
             },
@@ -287,6 +289,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES),
             },
             NodeTemplate {
@@ -296,6 +299,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: format!(
                     "RESPONSE RULES:\n\
                     - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
@@ -315,6 +319,7 @@ impl PromptAssembler {
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
+                tier: SeedTier::System,
                 markdown_content: "TOOL CALL FORMAT: Pass arguments flat (not nested under \"properties\"/\"arguments\"). Use exact field names from the schema."
                         .to_string(),
             },
