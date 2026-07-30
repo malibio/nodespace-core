@@ -1733,7 +1733,14 @@ async fn create_node(
 // Markdown Export (get_markdown_from_node_id)
 // ============================================================================
 
-/// Parameters for get_markdown_from_node_id method
+/// Parameters for get_markdown_from_node_id method.
+///
+/// Both call sites (the agent's `get_node` tool with `format="markdown"`, and
+/// the daemon's `export_markdown` gRPC handler) build these params in Rust
+/// from already-validated fields — never deserialized directly from raw
+/// model-supplied tool-call JSON. `deny_unknown_fields` is added anyway for
+/// consistency with the rest of this module and in case a future tool wires
+/// directly to it; it is a no-op today.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetMarkdownParams {
@@ -2066,7 +2073,11 @@ fn export_node_with_context(
 // Bulk Root Update (update_root_from_markdown)
 // ============================================================================
 
-/// Parameters for update_root_from_markdown method
+/// Parameters for update_root_from_markdown method.
+///
+/// Not currently reachable from any agent tool or daemon RPC — no call site
+/// outside this crate's own unit tests. `deny_unknown_fields` is added anyway;
+/// see [`GetMarkdownParams`] for the rationale.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateRootFromMarkdownParams {

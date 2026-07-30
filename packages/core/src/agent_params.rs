@@ -4,6 +4,14 @@
 //! search tools. They previously lived under `mcp::params` (re-exported from the
 //! MCP search handler); they moved here when the MCP transport was deleted, since
 //! the agent tool executor is now their only consumer.
+//!
+//! Every struct here (and its counterparts across the agent/core crates) carries
+//! `#[serde(deny_unknown_fields)]`: a misspelled tool-call argument key must be
+//! rejected immediately, not silently dropped and surfaced two layers downstream
+//! as an unrelated error (see the `coreValues` incident this generalizes from).
+//! Serde's stock rejection message already names both the offending key and the
+//! accepted field names (`unknown field \`x\`, expected one of \`a\`, \`b\`, ...`)
+//! — no custom error formatting is needed to satisfy that requirement.
 
 use crate::ops::query_ops::{AgentFilterItem, AgentSortItem};
 use serde::Deserialize;
@@ -110,4 +118,28 @@ pub struct SearchSemanticParams {
     /// Default: false (pure similarity ranking).
     #[serde(default)]
     pub graph_boost: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `AgentFilterItem` has its own direct rejection test in `query_ops.rs`;
+    /// this confirms the same guard fires when it arrives nested inside a real
+    /// `search_nodes` payload, not just when deserialized standalone.
+    #[test]
+    fn search_nodes_params_rejects_unknown_field_in_nested_filter() {
+        let args = json!({
+            "query": "",
+            "filters": [
+                { "type": "property", "operator": "equals", "property": "status", "caseSensitive": false }
+            ]
+        });
+        let err = serde_json::from_value::<SearchNodesParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("caseSensitive"),
+            "expected error naming `caseSensitive`, got: {err}"
+        );
+    }
 }

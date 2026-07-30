@@ -2210,6 +2210,36 @@ Some content"#;
 
         result
     }
+
+    // -- Unknown-field rejection (acceptance criterion, #1816) --
+    //
+    // Neither struct is reachable from raw tool-call JSON today (see their doc
+    // comments), but both sit on the same Value-deserialization boundary as
+    // `CreateNodesFromMarkdownParams`, so they're covered the same way.
+
+    #[test]
+    fn get_markdown_params_rejects_unknown_field() {
+        use crate::markdown::GetMarkdownParams;
+
+        let args = json!({ "node_id": "abc123", "includeChildren": true });
+        let err = serde_json::from_value::<GetMarkdownParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("includeChildren"),
+            "expected error naming `includeChildren`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn update_root_from_markdown_params_rejects_unknown_field() {
+        use crate::markdown::UpdateRootFromMarkdownParams;
+
+        let args = json!({ "root_id": "abc123", "markdown": "# Title", "rootId": "abc123" });
+        let err = serde_json::from_value::<UpdateRootFromMarkdownParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("rootId"),
+            "expected error naming `rootId`, got: {err}"
+        );
+    }
 }
 
 /// Tests for link transformation

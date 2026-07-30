@@ -359,7 +359,12 @@ pub async fn handle_create_schema(
 // Schema Relationship Operations
 // ============================================================================
 
-/// Parameters for add_schema_relationship
+/// Parameters for add_schema_relationship.
+///
+/// Not currently wired to any agent tool (no `add_schema_relationship` entry
+/// in `Tool::ALL`) — `deny_unknown_fields` is added anyway since this sits on
+/// the same `Value`-deserialization boundary as the tool-reachable structs in
+/// this module, and stays a no-op until/unless a tool is wired to it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddSchemaRelationshipParams {
@@ -369,7 +374,8 @@ pub struct AddSchemaRelationshipParams {
     pub relationship: crate::models::schema::SchemaRelationship,
 }
 
-/// Parameters for remove_schema_relationship
+/// Parameters for remove_schema_relationship. Not currently tool-reachable —
+/// see [`AddSchemaRelationshipParams`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoveSchemaRelationshipParams {

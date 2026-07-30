@@ -353,6 +353,33 @@ mod tests {
         assert_eq!(input.limit, Some(25));
     }
 
+    // -- Unknown-field rejection (acceptance criterion, #1816) --
+
+    #[test]
+    fn agent_filter_item_rejects_unknown_field() {
+        let args = json!({
+            "type": "property",
+            "operator": "equals",
+            "property": "status",
+            "caseSensitive": false
+        });
+        let err = serde_json::from_value::<AgentFilterItem>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("caseSensitive"),
+            "expected error naming `caseSensitive`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn agent_sort_item_rejects_unknown_field() {
+        let args = json!({ "field": "due_date", "direction": "asc", "order": "asc" });
+        let err = serde_json::from_value::<AgentSortItem>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("order"),
+            "expected error naming `order`, got: {err}"
+        );
+    }
+
     #[test]
     fn validate_identifier_accepts_valid() {
         assert!(validate_identifier("task", "t").is_ok());
