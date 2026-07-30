@@ -134,3 +134,9 @@ results.json
 *.bak
 *.backup
 history.txt
+
+# Per-run routing matrix (tests/live_openai_compat_routing.rs). Machine-specific
+# — its rows depend on which models the runner's endpoint serves — so tracking it
+# makes an ordinary re-run look like a changed finding. Paste runs into the
+# tracking issue instead, matching how aichat-matrix.ts results are handled.
+packages/agent/tests/routing-matrix-latest.txt
