@@ -45,23 +45,30 @@ const PROMPTS: &[&str] = &[
 ];
 
 async fn resolve_backend() -> Option<(Arc<dyn ChatInferenceEngine>, String)> {
-    if let Ok(models) = discover_models(LOCAL_OPENAI_COMPAT_BASE_URL, "").await {
-        // Prefer the locked production model when the endpoint serves it, so a
-        // result describes the model NodeSpace actually ships (ADR-056).
-        // NODESPACE_BENCH_MODEL overrides for cross-model comparison.
-        let preferred = std::env::var("NODESPACE_BENCH_MODEL").ok();
-        let pick = preferred
-            .as_deref()
-            .and_then(|want| models.iter().find(|m| m.as_str() == want).cloned())
-            .or_else(|| models.iter().find(|m| m.contains("gemma")).cloned())
-            .or_else(|| models.first().cloned());
-        if let Some(model) = pick {
-            let engine = OpenAiCompatInferenceEngine::new(
-                LOCAL_OPENAI_COMPAT_BASE_URL.to_string(),
-                String::new(),
-                model.clone(),
-            );
-            return Some((Arc::new(engine) as Arc<dyn ChatInferenceEngine>, model));
+    // NODESPACE_BENCH_GGUF forces the in-process llama.cpp path, bypassing a
+    // local OpenAI-compatible endpoint. Useful when that endpoint is
+    // misconfigured (e.g. serving a context window below N_CTX_MINIMUM, which
+    // makes every turn return empty) or otherwise unhealthy.
+    let force_gguf = std::env::var("NODESPACE_BENCH_GGUF").is_ok();
+    if !force_gguf {
+        if let Ok(models) = discover_models(LOCAL_OPENAI_COMPAT_BASE_URL, "").await {
+            // Prefer the locked production model when the endpoint serves it, so a
+            // result describes the model NodeSpace actually ships (ADR-056).
+            // NODESPACE_BENCH_MODEL overrides for cross-model comparison.
+            let preferred = std::env::var("NODESPACE_BENCH_MODEL").ok();
+            let pick = preferred
+                .as_deref()
+                .and_then(|want| models.iter().find(|m| m.as_str() == want).cloned())
+                .or_else(|| models.iter().find(|m| m.contains("gemma")).cloned())
+                .or_else(|| models.first().cloned());
+            if let Some(model) = pick {
+                let engine = OpenAiCompatInferenceEngine::new(
+                    LOCAL_OPENAI_COMPAT_BASE_URL.to_string(),
+                    String::new(),
+                    model.clone(),
+                );
+                return Some((Arc::new(engine) as Arc<dyn ChatInferenceEngine>, model));
+            }
         }
     }
 
