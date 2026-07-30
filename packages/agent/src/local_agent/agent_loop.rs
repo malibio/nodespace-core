@@ -521,6 +521,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // every failure path inside returns "no candidates", which leaves the
         // turn running on the full tool surface rather than costing the user
         // their request.
+        // Stage 1 runs a generation, so the turn is already working from the
+        // caller's point of view — announce it before the routing turn rather
+        // than leaving the UI idle through it.
+        on_status(LocalAgentStatus::Thinking);
         let routed = self.route(session, user_message, &turn_cx, &cancel).await;
 
         if let Some(clarification) = routed.clarification {
@@ -5560,6 +5564,56 @@ mod tests {
         assert!(
             queries.lock().unwrap().is_empty(),
             "a clarification must not trigger retrieval"
+        );
+    }
+
+    #[tokio::test]
+    async fn clarification_still_reports_thinking_then_idle() {
+        // A clarification returns early, but the caller must still see the
+        // normal status arc — a reply with no preceding Thinking would leave a
+        // UI showing idle while the routing turn is generating.
+        let engine = MockEngine::new(vec![vec![
+            StreamingChunk::ToolCallStart {
+                id: "r1".into(),
+                name: routing::ROUTE_CLARIFY_TOOL.into(),
+            },
+            StreamingChunk::ToolCallArgs {
+                id: "r1".into(),
+                args_json: json!({"question": "Which one?", "options": ["A", "B"]}).to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 8,
+                    completion_tokens: 4,
+                },
+            },
+        ]]);
+        let statuses = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = statuses.clone();
+        let loop_ = LocalAgentLoop::new(
+            Arc::new(engine),
+            Arc::new(RoutingToolExecutor::new(MockToolExecutor::new(), vec![])),
+        );
+        let mut session = new_session();
+        loop_
+            .run_turn(
+                &mut session,
+                "something ambiguous",
+                move |s| sink.lock().unwrap().push(format!("{s:?}")),
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let seen = statuses.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|s| s.contains("Thinking")),
+            "expected a Thinking status before the clarification: {seen:?}"
+        );
+        assert!(
+            seen.last().is_some_and(|s| s.contains("Idle")),
+            "turn must end Idle: {seen:?}"
         );
     }
 
