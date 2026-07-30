@@ -491,10 +491,8 @@ mod tests {
             "TOOL STRATEGY:",
             "CLARIFICATION CONTRACT",
             "BLAST-RADIUS GATE",
-            "NEVER CLAIM ACTION WITHOUT TOOL RESULT",
             // SCHEMA_CREATION_RULES, sharing the same prompt node, must also survive.
             "NODE MODEL:",
-            "DATABASE\" = SCHEMA",
             // Response Formatting Rules node body.
             "RESPONSE RULES:",
             "nodespace://",

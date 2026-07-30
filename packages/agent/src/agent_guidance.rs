@@ -9,21 +9,30 @@
 //! not use these constants — they get all tool/capability guidance from
 //! `packages/skill/SKILL.md`, the CLI-vocabulary companion doc, not from this
 //! module's tool-call-vocabulary prose.
+//!
+//! `N_CTX_MINIMUM` in `nlp-engine`'s `chat/mod.rs` (16,384) is sized against
+//! the full tool-registered system prompt (~6,600 tokens), of which this
+//! module's resident prose was always a minority share — the rest is JSON
+//! tool schemas, untouched by any reduction here. A prose-only cut of this
+//! size (roughly 600 tokens) does not on its own justify lowering that floor;
+//! doing so needs a live measurement of the full assembled prompt including
+//! tool schemas, not just this module's character count.
 
 /// Schema creation guidance.
 ///
-/// Covers the node-vs-schema mental model: when to call `create_schema` vs.
-/// `create_node`, and how custom types relate to built-in types. More detailed
-/// `title_template` token / field alignment guidance currently lives in
-/// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
-/// should be consolidated here when that path is unified.
-pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in RELEVANT ENTITY TYPES.\n\
-    \"DATABASE\" = SCHEMA: A request to start tracking a kind of thing — worded as a database, a tracker, a list, or \"track X\" — means call create_schema IMMEDIATELY: no confirmation, no planning text. Name the schema after the single entity being tracked, in singular form, stripped of the tracking wording itself.\n\
-    INSTANCE vs TYPE: A request that supplies the particulars of ONE record — a name, an amount, a title, a date — asks for an INSTANCE of a type that already exists, not a new type. Call create_node(node_type=<id from RELEVANT ENTITY TYPES>, ...) with those particulars as properties. Never ask for confirmation — just execute. Only a request to start tracking a KIND of thing calls for create_schema.\n\
-    NO CONFIRMATION FOR KNOWN TYPES: If a type appears in RELEVANT ENTITY TYPES, you have all the information you need. Do NOT say \"Could you confirm\" or \"I want to make sure\" or \"Would you like me to\" — just call create_node immediately. Confirmation is NEVER required when the schema already exists.\n\
-    SCHEMA SUCCESS/FAILURE: After create_schema returns a schema object, respond to the user and STOP — do NOT call create_schema again. If create_schema returns an \"already exists\" error, stop immediately and tell the user the type already exists.\n\
-    TITLE TEMPLATE: Every {field_name} in title_template MUST appear in the fields array. If you want {invoice_number} in a template, you MUST add a field named invoice_number. Never reference a placeholder that is not in fields — this causes a validation error.\n\
-    FIELD RULES: Every field object MUST have both \"name\" AND \"type\". Missing either causes a validation error that will never self-correct — stop retrying and fix the field. Valid: {\"name\":\"amount\",\"type\":\"number\",\"required\":true}.";
+/// Reduced to the one ontological distinction that governs `create_schema`
+/// vs. `create_node` — kind vs. instance — per ADR-064 rule 5 and the
+/// resident-prompt-ablation measurement (10,493 chars scored 50% vs. 73% for
+/// a 445-char identity-only prompt on cases built to trip these exact rules).
+/// Everything else this constant used to carry is owned by another channel:
+/// argument mechanics (`title_template` token coupling, field `name`/`type`
+/// requirements) live on `create_schema`'s tool-schema description, where
+/// `required: ["name", "type"]` also enforces the field rule structurally;
+/// per-operation routing and the create_node/create_schema tool-call sequence
+/// live in `skill_pipeline.rs`'s retrieved skill instructions; the
+/// no-confirmation-for-known-types rule is the same invariant
+/// `TOOL_STRATEGY_RULES`'s BLAST-RADIUS GATE already states once, not twice.
+pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. A request to start tracking a KIND of thing (a database, a tracker, a list) calls create_schema. A request that supplies the particulars of ONE record calls create_node against a type that already exists. Never call create_schema for a type already in RELEVANT ENTITY TYPES.";
 
 /// Tool strategy guidance.
 ///
@@ -34,15 +43,19 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// (`skill_pipeline.rs`), delivered by the two-stage routing pipeline
 /// (`local_agent/routing.rs`); tool-usage reference facts (how search_nodes
 /// filters work, when to prefer search_semantic, etc.) now live on the tools'
-/// own descriptions in `local_agent/tools.rs`.
+/// own descriptions in `local_agent/tools.rs`. Rules that duplicated a code
+/// guard in `agent_loop.rs` are deleted outright rather than kept as inert
+/// prose: `seen_calls` already breaks identical-call loops, and
+/// `contains_action_claim` already suppresses a fabricated success claim —
+/// both structurally, regardless of what the prompt says. The former
+/// AMBIGUITY bullet is also deleted from here, not dropped: it duplicates
+/// `skill_rules::AMBIGUITY_CLARIFY`, already delivered via the retrieved
+/// skill-instruction templates in `skill_pipeline.rs`.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings, thanks, small talk, questions about your own capabilities or limits, and other meta questions about yourself — answer directly in text. Do NOT call any tool: nothing in the user's graph needs to be read to answer them.\n\
     - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
     - SCHEMA CLAIMS WITHOUT VERIFICATION: Never state that a node type has or lacks a specific property (e.g. \"task has no due_date field\") without first calling a tool to verify. If you have not called get_node or search_nodes on the schema in this turn, you do not know its fields — say so.\n\
-    - IDENTICAL TOOL CALLS: Never call the same tool with the exact same arguments twice in one turn. If a tool returned a result and you are about to call it again identically, you already have the answer — produce your response using the result you have.\n\
-    - NEVER CLAIM ACTION WITHOUT TOOL RESULT: Never tell the user a node was created, updated, or deleted without a successful tool result in this turn. If no tool was called, no action happened — call the tool.\n\
     - CLARIFICATION CONTRACT: at most one clarification per intent. If the user clarifies and the request is still ambiguous, fall through to semantic_search and answer with what's available. Never clarify twice.\n\
-    - AMBIGUITY: If a search returns 0 results or multiple results that don't clearly match, ask the user one specific clarifying question (e.g. \"Are you looking for the invoice with amount $500?\") rather than retrying the search.\n\
     - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.";
 
 /// Node reference formatting rule.
@@ -92,8 +105,26 @@ mod tests {
         }
     }
 
+    /// Rules that exactly duplicate a code guard in `agent_loop.rs` must stay
+    /// deleted — `seen_calls` and `contains_action_claim` enforce these
+    /// structurally regardless of prompt content, so restating them here
+    /// would only be re-adding paid-for-every-turn tokens with no effect.
     #[test]
-    fn tool_strategy_rules_cover_meta_question_schema_and_duplicate_call_guidance() {
+    fn tool_strategy_rules_do_not_restate_code_enforced_guards() {
+        for forbidden in [
+            "IDENTICAL TOOL CALLS",
+            "NEVER CLAIM ACTION WITHOUT TOOL RESULT",
+        ] {
+            assert!(
+                !TOOL_STRATEGY_RULES.contains(forbidden),
+                "TOOL_STRATEGY_RULES must not restate {forbidden:?} — agent_loop.rs's \
+                 seen_calls/contains_action_claim guards already enforce this in code"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_strategy_rules_cover_meta_question_and_schema_guidance() {
         // Meta-question accuracy (confabulation fix)
         assert!(
             TOOL_STRATEGY_RULES.contains("META QUESTIONS"),
@@ -107,11 +138,6 @@ mod tests {
         assert!(
             TOOL_STRATEGY_RULES.contains("SCHEMA CLAIMS WITHOUT VERIFICATION"),
             "must prohibit unverified schema claims"
-        );
-        // Duplicate-call prevention (loop fix)
-        assert!(
-            TOOL_STRATEGY_RULES.contains("IDENTICAL TOOL CALLS"),
-            "must prohibit identical repeated tool calls"
         );
     }
 
