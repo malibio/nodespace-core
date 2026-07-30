@@ -658,6 +658,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             tools_count = tools.len(),
             tool_names = %tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "),
             system_prompt_len = system_content.len(),
+            // Whether Stage 2 actually received a candidate block in its prompt.
+            // A turn that silently skipped injection (no eligible candidates, or
+            // routing produced none) falls through to the same general tool
+            // surface as one that never routed at all — the two are otherwise
+            // indistinguishable from the final pass/fail, so this line is what
+            // lets an eval tell "routed but nothing matched" apart from "never
+            // routed."
+            stage2_candidates_injected = candidate_block.is_some(),
             "Agent turn: system prompt and tools prepared"
         );
 
@@ -853,6 +861,18 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 response_len = response_text.len(),
                 response_preview = %response_text.chars().take(200).collect::<String>(),
                 "Agent loop: inference round completed"
+            );
+            // Full, untruncated generation — deliberately `debug`, not `info`, so
+            // production's default log level is unaffected and this exists only
+            // when explicitly requested (`RUST_LOG=debug`). Every false eval
+            // result on record was diagnosable from one raw generation and
+            // invisible in any aggregate score; the 200-char preview above is not
+            // enough to reconstruct what the model actually said when a scenario
+            // needs investigating.
+            tracing::debug!(
+                iteration,
+                raw_response = %response_text,
+                "Agent loop: raw generation"
             );
 
             if tool_calls.is_empty() {
@@ -1525,7 +1545,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // measure the unrouted path and blame routing quality for it.
             let mut span = tracer.start_with_context("stage1_routing_skipped", turn_cx);
             span.set_attribute(KeyValue::new("routing.available", false));
-            tracing::debug!("routing unavailable for this turn; running unrouted");
+            // `routing_decision` distinguishes this from a genuine "none" decision
+            // (Stage 1 ran and chose not to route) — an eval scraping the text log
+            // for "none" must not conflate "routing never ran" with "routing ran
+            // and declined," which would otherwise look identical downstream.
+            tracing::info!(
+                routing_decision = "unavailable",
+                "routing unavailable for this turn; running unrouted"
+            );
             return outcome;
         }
 
@@ -1577,7 +1604,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         {
             Ok(u) => u,
             Err(e) => {
-                tracing::warn!(error = %e, "stage-1 routing failed; continuing unrouted");
+                tracing::warn!(
+                    routing_decision = "failed",
+                    error = %e,
+                    "stage-1 routing failed; continuing unrouted"
+                );
                 span.set_attribute(KeyValue::new("routing.failed", true));
                 return outcome;
             }
@@ -1590,8 +1621,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .iter()
             .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
 
+        let mut routing_decision_tag = "none";
         let query = match decision {
             Some(RouteDecision::Query(q)) => {
+                routing_decision_tag = "query";
                 span.set_attribute(KeyValue::new("routing.decision", "query"));
                 span.set_attribute(KeyValue::new("routing.query", q.clone()));
                 q
@@ -1603,6 +1636,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // through to retrieval on the raw message instead, so the turn
                 // resolves with whatever the general skill can offer.
                 if session_already_clarified(session) {
+                    routing_decision_tag = "clarify_suppressed";
                     span.set_attribute(KeyValue::new("routing.decision", "clarify_suppressed"));
                     tracing::debug!(
                         "stage-1 asked to clarify twice in one intent; falling through to retrieval"
@@ -1611,10 +1645,20 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 } else {
                     span.set_attribute(KeyValue::new("routing.decision", "clarify"));
                     outcome.clarification = Some(format_clarification(&question, &options));
-                    span.set_attribute(KeyValue::new(
-                        "routing.latency_ms",
-                        started.elapsed().as_millis() as i64,
-                    ));
+                    let elapsed_ms = started.elapsed().as_millis() as i64;
+                    span.set_attribute(KeyValue::new("routing.latency_ms", elapsed_ms));
+                    // Mirrors the "two-stage routing overhead" line below, which this
+                    // path returns before reaching. Both this and that line carry
+                    // `routing_decision` as a plain text field (not only an OTel span
+                    // attribute) so an eval scraping the daemon's text log — which has
+                    // no OTel exporter attached — can observe which of Stage 1's four
+                    // outcomes (query/clarify/clarify_suppressed/none) fired, rather
+                    // than inferring it from reply text or downstream tool effects.
+                    tracing::info!(
+                        routing_decision = "clarify",
+                        routing_latency_ms = elapsed_ms,
+                        "stage-1 routing decision"
+                    );
                     return outcome;
                 }
             }
@@ -1657,7 +1701,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // two-stage flow adds ahead of the turn that previously ran alone.
         let elapsed_ms = started.elapsed().as_millis() as i64;
         span.set_attribute(KeyValue::new("routing.latency_ms", elapsed_ms));
+        // `routing_decision` here covers the three outcomes that reach this line
+        // (query/clarify_suppressed/none); the plain `clarify` outcome returns
+        // earlier and logs its own "stage-1 routing decision" line above. Both
+        // carry the same field name so a log scraper (an eval, a dashboard) can
+        // grep one key regardless of which path a turn took.
         tracing::info!(
+            routing_decision = routing_decision_tag,
             routing_latency_ms = elapsed_ms,
             candidates = outcome.candidates.len(),
             "two-stage routing overhead"

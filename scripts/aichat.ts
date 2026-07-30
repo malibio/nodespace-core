@@ -152,6 +152,48 @@ function reportTurnLog(sinceByte: number): void {
   if (prepared) {
     const m = prepared.match(/tool_names="?([^"]*?)"? system_prompt_len/);
     if (m) console.log(`[tools available] ${m[1]}`);
+    // Whether Stage 2's prompt actually carried a candidate block — distinct
+    // from whether routing ran at all. A turn that routed but matched nothing
+    // looks identical to one that never routed unless this is captured
+    // separately (see agent_loop.rs's "Agent turn: system prompt and tools
+    // prepared" line).
+    const injected = prepared.match(/stage2_candidates_injected=(true|false)/)?.[1];
+    if (injected) console.log(`[stage2 injected] ${injected}`);
+  }
+  // Stage 1's routing decision. Emitted on one of four lines depending which
+  // path a turn took (see agent_loop.rs::route): "routing unavailable for
+  // this turn", "stage-1 routing failed", "stage-1 routing decision" (the
+  // clarify path, which returns before the line below), or "two-stage
+  // routing overhead" (query/clarify_suppressed/none). Take the last, in case
+  // a prior context turn in the same slice also routed.
+  const routingLine = lines
+    .filter(
+      (l) =>
+        l.includes("routing unavailable for this turn") ||
+        l.includes("stage-1 routing failed") ||
+        l.includes("stage-1 routing decision") ||
+        l.includes("two-stage routing overhead"),
+    )
+    .pop();
+  if (routingLine) {
+    const m = routingLine.match(/routing_decision="?([a-z_]+)"?/);
+    if (m) console.log(`[routing] ${m[1]}`);
+  }
+  // Raw generation per ReAct iteration — only present when the daemon was
+  // launched with RUST_LOG=debug (or a filter including this target at
+  // debug), since agent_loop.rs logs it at debug level specifically so
+  // production's default `info` verbosity is unaffected. `raw_response` is
+  // free-form model text and may itself contain the literal substring
+  // `iteration=`; matching iteration from the FRONT of the line (tracing's
+  // field order: iteration always precedes raw_response) avoids parsing into
+  // the payload.
+  for (const l of lines.filter((l) => l.includes("Agent loop: raw generation"))) {
+    const iterMatch = l.match(/iteration=(\d+)/);
+    const respIdx = l.indexOf("raw_response=");
+    if (iterMatch && respIdx !== -1) {
+      const raw = l.slice(respIdx + "raw_response=".length);
+      console.log(`[raw] iteration=${iterMatch[1]} ${raw}`);
+    }
   }
   for (const l of lines.filter((l) => l.includes("Tool executed"))) {
     const tool = l.match(/tool="?([a-z_]+)"?/)?.[1] ?? "?";
@@ -168,6 +210,19 @@ function reportTurnLog(sinceByte: number): void {
     const fieldPart = fields === undefined ? "" : ` [fields=${fields}]`;
     console.log(`[tool] ${tool}${err}${fieldPart} ${args}`);
   }
+  // The documented degenerate-empty-generation failure mode: the model opens a
+  // turn and emits neither text nor a tool call. local_agent_service.rs then
+  // logs "inference turn failed" and resets status to idle with NO assistant
+  // message appended — from cmdSend's point of view this is indistinguishable
+  // from a hung turn that timed out, unless this specific log line is
+  // scraped. Matched on the literal error text agent_loop.rs raises so a
+  // different inference error (a real bug) is not swallowed the same way.
+  const emptyGen = lines.find(
+    (l) =>
+      l.includes("inference turn failed") &&
+      l.includes("model produced empty response with no tool calls"),
+  );
+  if (emptyGen) console.log(`[empty-generation]`);
 }
 
 async function cmdSend(id: string, message: string): Promise<void> {

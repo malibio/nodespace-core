@@ -16,6 +16,7 @@ import {
   abortOnEnvironment,
   preflight,
   readDaemonStatus,
+  readGuidanceProvenance,
   EnvironmentError,
   EXIT_FAILED,
   EXIT_USAGE,
@@ -104,6 +105,15 @@ function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
     ...(m[4] === undefined ? {} : { fieldCount: Number(m[4]) }),
   }));
 
+  // Raw generations, one per ReAct iteration:  [raw] iteration=N <text>
+  // Joined in iteration order so a multi-round turn's trace reads as one
+  // transcript rather than requiring the reader to re-sort log lines.
+  const rawLines = [...out.matchAll(/^\[raw\] iteration=(\d+) ([\s\S]*?)(?=\n\[raw\] iteration=\d+ |\n\[tool\]|\n$|$)/gm)];
+  const rawOutput =
+    rawLines.length > 0
+      ? rawLines.map((m) => `[iteration ${m[1]}] ${m[2].trim()}`).join("\n")
+      : undefined;
+
   return {
     toolsOffered: out.match(/\[tools offered\] (.*)/)?.[1]?.trim() ?? "",
     toolsCalled: toolCalls.map((t) => t.name),
@@ -111,6 +121,13 @@ function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
     reply:
       out.match(/assistant> ([\s\S]*)$/)?.[1]?.trim() ?? "(no reply parsed)",
     latencyMs,
+    routingDecision: out.match(/\[routing\] ([a-z_]+)/)?.[1],
+    stage2CandidatesInjected: (() => {
+      const m = out.match(/\[stage2 injected\] (true|false)/);
+      return m ? m[1] === "true" : undefined;
+    })(),
+    rawOutput,
+    emptyGeneration: out.includes("[empty-generation]") || undefined,
   };
 }
 
@@ -184,6 +201,18 @@ async function compareToBaseline(
       console.log(`   NEW         ${cur.id} → ${cur.passed ? "pass" : "fail"}`);
       continue;
     }
+    // An empty-generation exclusion is an inference bug, not a scoring
+    // outcome — it carries `passed: false` only so older tooling degrades
+    // safely, and must not be compared against a baseline verdict as if it
+    // were one. Otherwise every run with a stray empty generation reports a
+    // spurious REGRESSION on a scenario the model was never actually scored
+    // against this time.
+    if (cur.excludedAsEmptyGeneration) {
+      console.log(
+        `   EXCLUDED    ${cur.id}: degenerate empty generation this run — not compared`,
+      );
+      continue;
+    }
     if (base.passed && !cur.passed) {
       console.log(
         `   REGRESSION  ${cur.id}: was passing, now failing — ${cur.failure}`,
@@ -206,6 +235,94 @@ async function compareToBaseline(
       : `\n[${evalName}] ✓ No regressions vs baseline`,
   );
   return regressions;
+}
+
+// ---------------------------------------------------------------------------
+// Scoring/reporting helpers — pure, so they are unit-testable without a
+// daemon (see scripts/eval/runner.test.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a run's results into scenarios that were actually scored and those
+ * excluded as degenerate empty generations (see `TurnRecord.emptyGeneration`).
+ *
+ * Kept out of `runEval`'s body so uniformity/totals math is independently
+ * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
+ */
+export function partitionExcluded(results: ScenarioResult[]): {
+  scored: ScenarioResult[];
+  excludedCount: number;
+} {
+  const scored = results.filter((r) => !r.excludedAsEmptyGeneration);
+  return { scored, excludedCount: results.length - scored.length };
+}
+
+/**
+ * Decide whether a scored run's pass rate is uniform enough to be a harness
+ * signature rather than a result. Returns `null` when the run is fine, or an
+ * `EnvironmentError` when it should abort.
+ *
+ * A pure decision function (as opposed to inlining the check + throw in
+ * `runEval`) so the threshold and both boundary cases — one scenario under
+ * `minScenarios`, and a genuine partial result — are covered by a unit test
+ * that never spawns a daemon.
+ */
+export function checkUniformity(
+  passed: number,
+  total: number,
+  minScenarios = 4,
+): EnvironmentError | null {
+  if (total < minScenarios) return null;
+  if (passed !== 0 && passed !== total) return null;
+  return new EnvironmentError(
+    `Every scored scenario ${passed === 0 ? "FAILED" : "PASSED"} (${passed}/${total}). ` +
+      `A rate this uniform across an entire run is a harness signature, not a result — ` +
+      `real runs on this suite have never been perfectly uniform, and the two known false ` +
+      `results on record (contaminated 11/12, and the "no tools called" scenarios passing ` +
+      `while every turn died on context overflow) both looked like plausible numbers until ` +
+      `someone read the raw output.`,
+    `Read a raw generation before trusting this number: re-run with the daemon at ` +
+      `RUST_LOG=debug and inspect the [raw] lines this eval now captures (see rawOutput on ` +
+      `each turn), or check the daemon log directly for an error common to every turn.\n` +
+      `  No results file was written for this run.`,
+  );
+}
+
+/** One line of the raw-output JSONL trace. */
+export interface TraceLine {
+  scenarioId: string;
+  turnIndex: number;
+  isPriorContext: boolean;
+  rawOutput: string;
+  routingDecision?: string;
+  stage2CandidatesInjected?: boolean;
+  toolsCalled: string[];
+}
+
+/**
+ * Build the raw-output trace lines for a run's results.
+ *
+ * Only turns that actually captured `rawOutput` produce a line — a turn run
+ * against a daemon without `RUST_LOG=debug` simply contributes nothing,
+ * rather than a null placeholder.
+ */
+export function buildTraceLines(results: ScenarioResult[]): TraceLine[] {
+  const lines: TraceLine[] = [];
+  for (const r of results) {
+    for (const [idx, t] of r.turns.entries()) {
+      if (t.rawOutput === undefined) continue;
+      lines.push({
+        scenarioId: r.id,
+        turnIndex: idx,
+        isPriorContext: idx < r.turns.length - 1,
+        rawOutput: t.rawOutput,
+        routingDecision: t.routingDecision,
+        stage2CandidatesInjected: t.stage2CandidatesInjected,
+        toolsCalled: t.toolsCalled,
+      });
+    }
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +383,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outPath = outPathArg ?? `/tmp/${fixture.name}-${label}-${ts}.json`;
   const { commit, dirty } = gitCommit();
+  const guidance = readGuidanceProvenance(env);
 
   const provenance: Provenance = {
     model: status.modelId,
@@ -275,12 +393,22 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     ...(status.modelMatchedByPath ? { modelMatchedByPath: true } : {}),
     evalCommit: commit,
     dirty,
+    guidance,
   };
 
   console.error(
     `[${fixture.name}] label=${label} model=${status.modelId} n_ctx=${status.grantedNCtx}` +
       (dirty ? " (working tree dirty)" : ""),
   );
+  for (const [nodeType, entries] of Object.entries(guidance)) {
+    console.error(
+      `[${fixture.name}] guidance seeded (${nodeType}): ${
+        entries.length === 0
+          ? "none found — cannot confirm what this run measured"
+          : entries.map((e) => `${e.key}@${e.version}`).join(", ")
+      }`,
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Run
@@ -350,6 +478,30 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
 
         const scored = turn(chatId, scenario.prompt);
 
+        // The degenerate-empty-generation failure mode (agent_loop.rs: the
+        // model opens a turn and emits neither text nor a tool call) is an
+        // inference bug, not a scenario outcome — scoring it as a failure
+        // silently deflates every cell it lands in, exactly the harness-vs-model
+        // confusion this eval exists to prevent. Excluded from the denominator
+        // rather than scored, but still recorded with its turn data so the rate
+        // of empty generations stays visible rather than vanishing silently.
+        if (scored.emptyGeneration) {
+          results.push({
+            id: scenario.id,
+            scenario: scenario.scenario,
+            prompt: scenario.prompt,
+            passed: false,
+            failure: "excluded: degenerate empty generation (no text, no tool call)",
+            turns: [...priorTurns, scored],
+            extra: fixture.extra?.(scenario, [scored]),
+            excludedAsEmptyGeneration: true,
+          });
+          console.error(
+            `[${fixture.name}]   ⊘ excluded (empty generation) ${scored.latencyMs}ms`,
+          );
+          continue;
+        }
+
         const verdict = fixture.score(scenario, [scored]);
 
         results.push({
@@ -379,20 +531,51 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   // Report
   // -------------------------------------------------------------------------
 
-  const total = results.length;
-  const passed = results.filter((r) => r.passed).length;
+  const { scored, excludedCount: excludedEmptyGenerations } =
+    partitionExcluded(results);
+  const total = scored.length;
+  const passed = scored.filter((r) => r.passed).length;
   const failed = total - passed;
+
+  // Uniform 0% or 100% across every SCORED scenario is a harness signature —
+  // an environment that preflight could not catch (e.g. every send silently
+  // routing to a dead model behind a load balancer, or every turn hitting the
+  // same unhandled code path) rather than a real result. Excluded scenarios
+  // are not counted toward "every": a run that is all empty-generations is
+  // reported by excludedEmptyGenerations instead, and one that is otherwise a
+  // real 0/1 or 1/1 must not trip this on a single-scenario smoke test.
+  const uniformityError = checkUniformity(passed, total);
+  if (uniformityError) abortOnEnvironment(fixture.name, uniformityError);
 
   const evalResults: EvalResults = {
     eval: fixture.name,
     label,
     provenance,
-    summary: { total, passed, failed },
+    summary: { total, passed, failed, excludedEmptyGenerations },
     results,
   };
 
   await Bun.write(outPath, JSON.stringify(evalResults, null, 2));
   console.error(`[${fixture.name}] wrote ${total} results to ${outPath}`);
+
+  // Raw-output JSONL trace: one line per scored turn that captured raw
+  // generation text, alongside the results JSON so a scenario that needs
+  // investigating never requires a re-run to see what the model actually
+  // said. Absent turns (no RUST_LOG=debug on the daemon) are simply skipped
+  // rather than padded with nulls.
+  const tracePath = outPath.replace(/\.json$/, ".trace.jsonl");
+  const traceLines = buildTraceLines(results).map((l) => JSON.stringify(l));
+  if (traceLines.length > 0) {
+    await Bun.write(tracePath, traceLines.join("\n") + "\n");
+    console.error(
+      `[${fixture.name}] wrote ${traceLines.length} raw-output trace line(s) to ${tracePath}`,
+    );
+  } else {
+    console.error(
+      `[${fixture.name}] no raw-output trace written — daemon was not run with RUST_LOG=debug ` +
+        `(or an equivalent filter including "nodespace_agent" at debug level)`,
+    );
+  }
 
   console.log(`\n── ${fixture.description} ─────────────────────────────────`);
   console.log(`   Label:    ${label}`);
@@ -404,6 +587,11 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     `   Commit:   ${provenance.evalCommit}${provenance.dirty ? " (dirty)" : ""}`,
   );
   console.log(`   Passed:   ${passed}/${total}`);
+  if (excludedEmptyGenerations > 0) {
+    console.log(
+      `   Excluded: ${excludedEmptyGenerations} (degenerate empty generation — not scored either way)`,
+    );
+  }
   for (const line of fixture.summary?.(results) ?? []) {
     console.log(`   ${line}`);
   }
@@ -411,7 +599,8 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     `────────────────────────────────────────────────────────────────────`,
   );
   for (const r of results) {
-    console.log(`  ${r.passed ? "✓" : "✗"} ${r.id}`);
+    const marker = r.excludedAsEmptyGeneration ? "⊘" : r.passed ? "✓" : "✗";
+    console.log(`  ${marker} ${r.id}`);
     if (!r.passed) console.log(`      ↳ ${r.failure}`);
   }
   console.log(

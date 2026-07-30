@@ -24,6 +24,7 @@
  */
 
 import type { EvalEnv } from "./env.ts";
+import type { GuidanceProvenance } from "./types.ts";
 
 /** Scenario assertions failed. */
 export const EXIT_FAILED = 1;
@@ -202,6 +203,89 @@ function readServedDatabasePath(env: EvalEnv): string {
     throw unknown("the daemon reported no databases");
   }
   return path;
+}
+
+/**
+ * Seeded node types whose content the local agent's guidance is assembled
+ * from. Cross-referenced against `seed_nodes_from_templates`'s callers in
+ * packages/core/src/services/node_service/mod.rs — update here if a new
+ * seeded type is added.
+ */
+const SEEDED_GUIDANCE_TYPES = ["prompt", "skill"];
+
+/**
+ * Read back which seeded prompt/skill content the daemon is actually serving.
+ *
+ * Seeding is content-versioned (`_seed.key`/`_seed.version` on each seeded
+ * node) and only replaces stale content when `seed_nodes_from_templates` runs
+ * again, which happens on daemon startup — a long-running daemon started
+ * before a guidance edit landed keeps serving the old content indefinitely,
+ * and nothing about the daemon being reachable or the right model being
+ * loaded would reveal that. This is the eval's own check for exactly that:
+ * read every seeded prompt/skill node's version back through the same `node
+ * query --json` path an operator would use to check by hand, and record it in
+ * provenance so a stale-guidance run cannot be mistaken for a fresh one
+ * without re-querying the database.
+ *
+ * Best-effort: a query failure or a CLI predating `node query` degrades to an
+ * empty entry for that type (recorded, not thrown) rather than aborting the
+ * run — this check exists to make staleness visible, not to gate the run the
+ * way database-isolation or model-match do, since older builds legitimately
+ * lack it.
+ */
+export function readGuidanceProvenance(env: EvalEnv): GuidanceProvenance {
+  const guidance: GuidanceProvenance = {};
+  for (const nodeType of SEEDED_GUIDANCE_TYPES) {
+    const r = Bun.spawnSync(
+      [
+        env.nsBin,
+        "--socket",
+        env.socket,
+        "--json",
+        "node",
+        "query",
+        "--type",
+        nodeType,
+        "--limit",
+        "200",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    guidance[nodeType] =
+      r.exitCode === 0 ? extractSeedEntries(r.stdout.toString()) : [];
+  }
+  return guidance;
+}
+
+/**
+ * Pull `{key, version}` out of `node query --json` output for one node type.
+ *
+ * Separated from `readGuidanceProvenance` so the parsing — the part that can
+ * actually have a bug — is unit-testable against a fixed JSON string, without
+ * spawning the CLI or a daemon. Returns `[]` (never throws) on unparseable
+ * input or a node missing `_seed.key`, matching the caller's best-effort
+ * contract: a node with no seed metadata is not "this type's guidance is
+ * unseeded," it just is not counted.
+ */
+export function extractSeedEntries(
+  queryJson: string,
+): Array<{ key: string; version: string }> {
+  let parsed: { nodes?: Array<{ properties?: Record<string, unknown> }> };
+  try {
+    parsed = JSON.parse(queryJson);
+  } catch {
+    return [];
+  }
+  return (parsed.nodes ?? [])
+    .map((n) => {
+      const seed = n.properties?._seed as
+        | { key?: string; version?: string }
+        | undefined;
+      return seed?.key
+        ? { key: seed.key, version: seed.version ?? "(no version)" }
+        : null;
+    })
+    .filter((x): x is { key: string; version: string } => x !== null);
 }
 
 /**
