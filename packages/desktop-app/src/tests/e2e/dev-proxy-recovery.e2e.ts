@@ -31,7 +31,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { createNodeSpaceClients } from '../../../../dev-tools/src/grpc-client.ts';
+import { createNodeSpaceClients } from '../../../../dev-tools/src/grpc-client';
 
 const PROTO_PATH = path.resolve(__dirname, '../../../../proto/proto/node_service.proto');
 

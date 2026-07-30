@@ -124,7 +124,7 @@ When updating an existing node:
 
 FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing. Exception: see INDIRECT TARGET below when the target is not named directly.
 
-INDIRECT TARGET: If the request identifies the target indirectly — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself, then pass its returned query and filters directly into search_nodes.
+INDIRECT TARGET: If the request identifies the target indirectly — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself. resolve_query performs the search itself: if it returns resolved:true, act on the returned id directly (e.g. pass it straight to update_node) — do not call search_nodes afterward. If it returns resolved:false with reason:"no_match", tell the user nothing matched. If it returns reason:"multiple_matches", ask the user which candidate they meant.
 
 AMBIGUITY: {ambiguity_clarify} Examples:
 - 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
@@ -221,8 +221,9 @@ SUCCESS: After create_relationship returns, confirm to the user that the node ha
 
 /// Default skill node templates seeded on first run.
 ///
-/// Each template produces one skill root node plus optional `prompt` children
-/// with guidance markdown. Tool whitelists and max_iterations are still stored
+/// Each template produces one skill root node plus ordinary markdown children
+/// (header/text, inferred from the guidance markdown's structure) carrying the
+/// guidance body. Tool whitelists and max_iterations are still stored
 /// as properties on the skill node — they're consumed by external (ACP) agents
 /// that prefer the older skill-scoped flow. The local agent ignores them and
 /// just uses the description/name returned by `search_skills`.
@@ -237,7 +238,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
                 "tool_whitelist": ["search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 4,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Research & Search Guidance
@@ -291,16 +292,16 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
                 "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
 
 ⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
 
-CALL create_node NOW: You received this instruction because search_skills was called. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
+CALL create_node NOW: You received this instruction because this skill was matched to the request. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
 
-TYPE MAPPING FROM schema_metadata: When search_skills returned schema_metadata for this skill, set node_type to the type_id from that metadata, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
+TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
 
 REQUIRED FIELDS: Read the fields array from schema_metadata. Required fields (required=true) MUST be included in the properties map. Optional fields should be included if the user provided a value for them.
 
@@ -321,7 +322,7 @@ EXAMPLE — the shape of the call, NOT the values. Copy the structure; take ever
 }
 Never reuse "widget" or these field names — they are placeholders. Your node_type is the type_id from schema_metadata, and your property keys are that metadata's field names.
 
-SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call search_skills, get_node, or any other tool — the create response is sufficient. The task is complete."#.to_string(),
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete."#.to_string(),
         },
         NodeTemplate {
             title: "Schema Creation".to_string(),
@@ -332,7 +333,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: schema_creation_guidance(),
@@ -346,7 +347,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: graph_editing_guidance(),
@@ -360,7 +361,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_related_nodes", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: relationship_management_guidance(),
@@ -374,7 +375,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: node_deletion_guidance(),
@@ -388,7 +389,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_nodes_from_markdown"],
                 "max_iterations": 2,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: bulk_import_guidance(),
@@ -402,7 +403,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: organization_guidance(),
@@ -531,6 +532,47 @@ mod tests {
         }
     }
 
+    /// Skill guidance children must come out as real markdown types (`header`,
+    /// `text`, ...), not the retired `prompt` type — the entire point of
+    /// `child_node_type: None` on every seed. Every seed's `markdown_content`
+    /// starts with a `# Heading` line, so this also confirms `header` nodes
+    /// are actually produced, not just `text`.
+    #[test]
+    fn seed_skill_children_are_real_markdown_types_not_prompt() {
+        let seeds = seed_skill_nodes();
+        for seed in &seeds {
+            let nodes = prepare_nodes_from_template(seed)
+                .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
+            assert!(
+                nodes.len() > 1,
+                "Skill '{}' must have guidance children, not just the root",
+                seed.title
+            );
+
+            let children = &nodes[1..];
+            assert!(
+                children.iter().any(|c| c.node_type == "header"),
+                "Skill '{}' guidance starts with a markdown heading and must \
+                 produce at least one 'header' child",
+                seed.title
+            );
+            for child in children {
+                assert_ne!(
+                    child.node_type, "prompt",
+                    "Skill '{}' child must not be typed 'prompt' — that type is retired; \
+                     children must be ordinary markdown types",
+                    seed.title
+                );
+                assert!(
+                    matches!(child.node_type.as_str(), "header" | "text"),
+                    "Skill '{}' child has unexpected node_type '{}' — expected 'header' or 'text'",
+                    seed.title,
+                    child.node_type
+                );
+            }
+        }
+    }
+
     // -- Skill whitelist / registry validation ---------------------------
 
     /// Every tool named in a seed skill's `tool_whitelist` must resolve to a
@@ -551,6 +593,51 @@ mod tests {
                     tool_name
                 );
             }
+        }
+    }
+
+    /// Blast radius is derived from each seeded skill's `tool_whitelist`
+    /// (ADR-038), so the derivation must agree with what the seeds actually
+    /// declare. This pins the classification against the real seed data rather
+    /// than a stub, and fails if a seed's whitelist gains or loses a write tool
+    /// without that being an intentional change to its Stage-2 bar.
+    #[test]
+    fn seeded_skills_classify_by_blast_radius_as_expected() {
+        let expected_mutating = [
+            ("Node Creation", true),
+            ("Schema Creation", true),
+            ("Graph Editing", true),
+            ("Relationship Management", true),
+            ("Node Deletion", true),
+            ("Bulk Import", true),
+            ("Organization", true),
+            ("Research & Search", false),
+        ];
+
+        for (title, should_mutate) in expected_mutating {
+            let seed = seed_skill_nodes()
+                .into_iter()
+                .find(|t| t.title == title)
+                .unwrap_or_else(|| panic!("seed skill '{title}' must exist"));
+            let tools = tmpl_tool_whitelist(&seed);
+            // Exercise the production classifier rather than restating its
+            // rule: a reimplementation here would keep passing while
+            // `skill_is_mutating` regressed, which is the opposite of what
+            // this test is for.
+            let candidate = crate::agent_types::SkillCandidate {
+                id: format!("seed-{title}"),
+                name: title.to_string(),
+                description: String::new(),
+                score: 1.0,
+                tools: tools.clone(),
+                instructions: String::new(),
+                schema_metadata: serde_json::json!([]),
+            };
+            let mutates = crate::local_agent::routing::skill_is_mutating(&candidate);
+            assert_eq!(
+                mutates, should_mutate,
+                "skill '{title}' blast radius changed; whitelist is {tools:?}"
+            );
         }
     }
 

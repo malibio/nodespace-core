@@ -40,8 +40,8 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// identity and policy, nothing else). Argument shape (node_type provenance)
 /// now lives on the relevant tool schemas' parameter descriptions; per-operation
 /// tool-call routing now lives in each operation's skill instructions
-/// (`skill_pipeline.rs`) or is redundant with the model's own choice to reach
-/// a skill via `search_skills`; tool-usage reference facts (how search_nodes
+/// (`skill_pipeline.rs`), delivered by the two-stage routing pipeline
+/// (`local_agent/routing.rs`); tool-usage reference facts (how search_nodes
 /// filters work, when to prefer search_semantic, etc.) now live on the tools'
 /// own descriptions in `local_agent/tools.rs`. Rules that duplicated a code
 /// guard in `agent_loop.rs` are deleted outright rather than kept as inert

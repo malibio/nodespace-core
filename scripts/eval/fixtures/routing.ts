@@ -148,9 +148,8 @@ const FIXTURES: RoutingScenario[] = [
     prompt: "What's the weather like in Tokyo today?",
     // The ADR requires: out-of-scope queries should not silently fire a mutating tool.
     // The correct guard is "no mutating tool called" — enforced via adversarial:true on
-    // a clarify fixture (see assertFixture clarify branch). The routing pipeline may or
-    // may not be entered (search_skills may still fire to confirm no skill matches),
-    // so !calledSearchSkills is not asserted here — the key invariant is no mutation.
+    // a clarify fixture (see assertFixture clarify branch). Retrieval may still run and
+    // match nothing, which is a normal outcome, so the key invariant is no mutation.
     expected: { kind: "clarify" },
     adversarial: true, // enforces calledMutatingTool check in assertFixture clarify branch
   },
@@ -213,8 +212,8 @@ function isClarification(reply: string): boolean {
 }
 
 function skillNameFromTurns(turns: TurnRecord[]): string | null {
-  // search_skills is always called before using a skill; the matched skill name
-  // appears in the reply or is implicit from subsequent tool calls.
+  // The matched skill name appears in the reply or is implicit from subsequent
+  // tool calls.
   // We parse from the reply text as a heuristic — the name appears in the model's
   // "I'll use the Schema Creation skill..." style phrasing.
   for (const t of turns) {
@@ -236,9 +235,10 @@ function skillNameFromTurns(turns: TurnRecord[]): string | null {
   return null;
 }
 
-function calledSearchSkills(turns: TurnRecord[]): boolean {
-  return turns.some((t) => t.toolsCalled.includes("search_skills"));
-}
+// Under ADR-038's two-stage routing there is no model-visible retrieval call:
+// Stage 1 emits route_query/route_clarify and the system performs retrieval
+// itself. Skill routing is therefore observed through its effect — the action
+// tool the matched skill permits — not through a retrieval call in the trace.
 
 function calledMutatingTool(turns: TurnRecord[]): boolean {
   // All tools that write or mutate graph state — cross-referenced against Tool::ALL
@@ -263,19 +263,12 @@ function calledSchemaCreate(turns: TurnRecord[]): boolean {
 function assertFixture(fixture: RoutingScenario, turns: TurnRecord[]): Verdict {
   const allReplies = turns.map((t) => t.reply).join("\n");
   const clarified = isClarification(allReplies);
-  const searched = calledSearchSkills(turns);
 
   switch (fixture.expected.kind) {
     case "skill": {
       const expectedSkill = fixture.expected.skill.toLowerCase();
       const replyLower = allReplies.toLowerCase();
-      // Model should have called search_skills and referenced or used the expected skill
-      if (!searched) {
-        return {
-          passed: false,
-          failure: `Expected search_skills to be called for skill routing, but it was not`,
-        };
-      }
+      // Model should have referenced or used the expected skill.
       if (!replyLower.includes(expectedSkill)) {
         // Also check if the right tools were called (e.g. create_schema for Schema Creation)
         const toolCheck =
@@ -353,7 +346,6 @@ const fixture: EvalFixture = {
       loadBearing: s.loadBearing ?? false,
       mutating: s.mutating ?? false,
       adversarial: s.adversarial ?? false,
-      skillsSearched: calledSearchSkills(turns),
       matchedSkill: skillNameFromTurns(turns),
       clarified: isClarification(turns.map((t) => t.reply).join("\n")),
       toolsCalled: turns.flatMap((t) => t.toolsCalled),

@@ -543,6 +543,39 @@ pub trait ModelManager: Send + Sync {
     async fn recommended_model(&self) -> Result<String, ModelError>;
 }
 
+/// A skill candidate returned by the deterministic retrieval step.
+///
+/// Produced by [`AgentToolExecutor::retrieve_skills`], not by a model tool
+/// call. ADR-038 keeps retrieval out of the model's hands so the system can
+/// bound the candidate count and apply the trust filter; this struct is what
+/// crosses that boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCandidate {
+    /// Node id of the matched skill.
+    pub id: String,
+    /// Skill name (the node's content).
+    pub name: String,
+    /// The skill's `description` property — the index key retrieval matched on.
+    pub description: String,
+    /// Raw retrieval score. The mechanical half of the Stage-2 gate; the
+    /// model's judgment is the other, independently-sourced half.
+    pub score: f32,
+    /// Tools this skill is permitted to fire. Also the source of the skill's
+    /// blast radius — see [`SkillCandidate::is_mutating`].
+    pub tools: Vec<String>,
+    /// The skill's full instruction subtree, rendered to markdown.
+    pub instructions: String,
+    /// Schema metadata scoped to this skill, as returned by retrieval.
+    pub schema_metadata: serde_json::Value,
+}
+
+/// Outcome of the deterministic retrieval step.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillRetrieval {
+    /// Candidates, highest score first, already truncated to the bounded K.
+    pub candidates: Vec<SkillCandidate>,
+}
+
 /// Executor for agent tools (function calling).
 ///
 /// Each tool is identified by name and accepts/returns JSON values.
@@ -553,4 +586,37 @@ pub trait AgentToolExecutor: Send + Sync {
 
     /// Execute a tool by name with the given JSON arguments.
     async fn execute(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, ToolError>;
+
+    /// Whether skill retrieval is wired up and worth spending a routing turn on.
+    ///
+    /// Stage 1 costs a full model generation, so the loop asks first: with no
+    /// retrieval behind it there are no candidates to judge and the query it
+    /// produces goes nowhere. Executors that do not implement
+    /// [`AgentToolExecutor::retrieve_skills`] inherit `false` here and keep the
+    /// single-turn behaviour, which is also what keeps routing out of the way
+    /// of test doubles that never opted into it.
+    async fn routing_available(&self) -> bool {
+        false
+    }
+
+    /// Run semantic retrieval over the skill registry as a **deterministic
+    /// system step**, returning at most `limit` candidates.
+    ///
+    /// This is deliberately not a model-facing tool. ADR-038 rejects the
+    /// single-turn pull (the model calling retrieval itself) because it
+    /// "removes the system's ability to bound K and enforce the trust
+    /// boundary" — both of which happen here instead.
+    ///
+    /// The default returns no candidates, which the agent loop treats as the
+    /// documented degraded path: with nothing retrieved there is nothing for
+    /// Stage-2 to judge, so the turn proceeds on the general tool surface
+    /// rather than failing. Test doubles that do not exercise routing inherit
+    /// this and need no implementation.
+    async fn retrieve_skills(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<SkillRetrieval, ToolError> {
+        Ok(SkillRetrieval::default())
+    }
 }

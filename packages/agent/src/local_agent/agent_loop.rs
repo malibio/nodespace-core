@@ -22,6 +22,7 @@ use crate::agent_types::{
 use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
 use crate::local_agent::response_processing::{normalize_response, normalize_response_traced};
+use crate::local_agent::routing::{self, RouteDecision};
 use crate::local_agent::tools::is_cross_turn_guarded_tool;
 use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
@@ -39,6 +40,37 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// recovery and observed in practice, so tripping on the first would abort turns
 /// that were about to succeed.
 const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
+
+/// Token ceiling for the Stage-1 routing turn.
+///
+/// Stage 1 emits one short tool call — a search query, or a question with a
+/// couple of options — and nothing else. A tight ceiling bounds the latency
+/// the extra turn adds and gives a runaway generation nowhere to go.
+const STAGE1_MAX_TOKENS: u32 = 256;
+
+/// The Stage-1 system prompt.
+///
+/// Deliberately small. Stage 1 makes one structural choice and the two tool
+/// schemas carry the shape of that choice, so prose here would duplicate the
+/// channel that already decides it — the failure ADR-064 rule 5 names. It says
+/// who to be, what the single decision is, and that clarifying is the
+/// exception.
+const STAGE1_SYSTEM_PROMPT: &str = "You are routing a user's request to the right capability.\n\
+    Call route_query with a short description of the capability the request needs.\n\
+    Call route_clarify ONLY if the request is too ambiguous to describe at all.\n\
+    Prefer route_query: most requests can be described even when phrased indirectly.\n\
+    Call exactly one tool. Do not answer the user.";
+
+/// Opening phrase of a routing clarification.
+///
+/// The session is rebuilt from persisted messages every turn, so the
+/// clarification contract ("at most one per intent") cannot rely on in-memory
+/// state — whether we already clarified has to be answerable from the history
+/// alone. Clarifications are composed here and always open with this phrase,
+/// so their own text is the record. Matching on text is imprecise in general,
+/// but it is exact for strings this module wrote itself, and it avoids
+/// widening the persisted session shape for one boolean.
+const CLARIFICATION_OPENER: &str = "I can take that a couple of ways";
 
 /// Longest canonical-args string stored verbatim as a completed write's identity.
 ///
@@ -207,6 +239,110 @@ fn session_prompt_override(session: &AgentSession) -> Option<&str> {
     session.system_prompt_override.as_deref()
 }
 
+/// What Stage 1 and the retrieval step produced for Stage 2 to work with.
+#[derive(Default)]
+struct RoutingOutcome {
+    /// Candidates for Stage 2 to judge. Empty means routing produced nothing —
+    /// whether because retrieval was unavailable, matched nothing, or failed —
+    /// and the turn runs on the full tool surface.
+    candidates: Vec<crate::agent_types::SkillCandidate>,
+    /// A composed clarification to return instead of running Stage 2. `Some`
+    /// only when Stage 1 asked to clarify *and* the contract allowed it.
+    clarification: Option<String>,
+    /// Tokens spent on the Stage-1 turn, so the turn's reported usage covers
+    /// the whole two-stage flow rather than under-reporting it.
+    usage: InferenceUsage,
+}
+
+/// Build the message Stage 1 routes on: prior turns blended with the current one.
+///
+/// `run_turn` pushes the current user message into `session.messages` before
+/// routing, so the trailing entry is excluded here and supplied separately —
+/// blending it twice would double-weight it against the history it is meant to
+/// be read in light of.
+///
+/// Only user/assistant turns are blended, matching `schema_retrieval_query`:
+/// tool results are machine payloads whose vocabulary would dilute the query
+/// rather than sharpen it.
+fn stage1_query(session: &AgentSession, user_message: &str) -> String {
+    let prior = session
+        .messages
+        .split_last()
+        .map(|(_, rest)| rest)
+        .unwrap_or(&[]);
+    let prior_turns: Vec<&str> = prior
+        .iter()
+        .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+        .map(|m| m.content.as_str())
+        .collect();
+    nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, user_message)
+}
+
+/// Whether this conversation already asked the user to clarify.
+///
+/// Enforces ADR-038's "at most one clarification per intent": if the user
+/// answered a clarification and the request still cannot be routed, asking
+/// again is the loop the contract exists to prevent — the turn falls through
+/// to retrieval instead.
+///
+/// Scoped to the **current intent**, not the whole conversation. ADR-038 says
+/// "at most one clarification per intent", and a conversation is many intents:
+/// a clarification answered twenty turns ago must not stop a genuinely new
+/// ambiguous request from being clarified today.
+///
+/// The intent boundary is an assistant turn that *answered* rather than asked:
+/// once the agent has resolved something and replied normally, whatever the
+/// user says next starts a fresh intent and the mechanism re-arms.
+fn session_already_clarified(session: &AgentSession) -> bool {
+    // Everything from the last resolved turn onward is the current intent.
+    // A clarification is not a resolution, so it does not close an intent —
+    // that is what lets the "already clarified" state survive the user's reply
+    // to it, while still clearing once the turn actually completes.
+    let intent_start = session
+        .messages
+        .iter()
+        .rposition(|m| {
+            matches!(m.role, Role::Assistant) && !m.content.starts_with(CLARIFICATION_OPENER)
+        })
+        .map_or(0, |idx| idx + 1);
+
+    let current_intent = &session.messages[intent_start..];
+
+    // Within this intent: did we ask, and has the user since replied? A
+    // clarification with no user message after it is the one we just asked and
+    // are still waiting on, not a second attempt.
+    current_intent
+        .iter()
+        .position(|m| {
+            matches!(m.role, Role::Assistant) && m.content.starts_with(CLARIFICATION_OPENER)
+        })
+        .is_some_and(|idx| {
+            current_intent[idx + 1..]
+                .iter()
+                .any(|m| matches!(m.role, Role::User))
+        })
+}
+
+/// Compose a clarification from Stage 1's question and options.
+///
+/// ADR-038 requires clarification be *specific*: it surfaces the concrete
+/// candidates the model already produced, turning a dead end into a one-tap
+/// disambiguation. A bare "what do you mean?" is the failure mode to avoid,
+/// so the options are rendered as an explicit list when the model supplied
+/// them.
+fn format_clarification(question: &str, options: &[String]) -> String {
+    let usable: Vec<&String> = options.iter().filter(|o| !o.trim().is_empty()).collect();
+    if usable.is_empty() {
+        return format!("{CLARIFICATION_OPENER}. {question}");
+    }
+    let listed = usable
+        .iter()
+        .map(|o| format!("- {o}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{CLARIFICATION_OPENER}. {question}\n\n{listed}")
+}
+
 // ---------------------------------------------------------------------------
 // Tool name humanization
 // ---------------------------------------------------------------------------
@@ -328,11 +464,21 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     crate::local_agent::tools::Tool::ALL.iter().any(|tool| {
         let name = tool.name();
-        // Find each occurrence of the tool name and check the next
-        // non-whitespace character is an opening paren.
         lower.match_indices(name).any(|(idx, _)| {
-            let after = &lower[idx + name.len()..];
-            after.trim_start().starts_with('(')
+            let after = &lower[idx + name.len()..].trim_start();
+            // `create_node(...)` — the tool named as a function.
+            if after.starts_with('(') {
+                return true;
+            }
+            // `{"name": "create_node", "arguments": {...}}` — the tool named as
+            // the value of a JSON `name` key. Observed in practice: a model
+            // emits a well-formed tool call as *text*, so the loop sees no tool
+            // call at all and the turn silently does nothing. The quote before
+            // the name distinguishes this from prose that merely mentions the
+            // tool.
+            let before = &lower[..idx];
+            let quoted = before.trim_end().ends_with('"') || before.trim_end().ends_with('\'');
+            quoted && after.starts_with(['"', '\''])
         })
     })
 }
@@ -410,16 +556,49 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .messages
             .push(ChatMessage::text(Role::User, user_message.to_string()));
 
-        // Full tool list including search_skills — the model calls search_skills
-        // itself to discover capabilities (ADR-036 pull model). No pre-filtering:
-        // the model receives all tools and judges which skill applies after retrieval.
-        // Degraded path: if embedding service is unavailable, search_skills returns
-        // an error result and the model falls through to general tools — acceptable.
-        let tools = self
+        // The model-facing tool surface. `search_skills` is deliberately absent:
+        // ADR-038 makes retrieval a deterministic system step (see `route`
+        // below) rather than a model tool call, because a model-issued
+        // retrieval lets the model set K and bypasses the trust filter.
+        let all_tools = self
             .tool_executor
             .available_tools()
             .await
             .unwrap_or_default();
+
+        // Stage 1 + deterministic retrieval. Yields the candidates Stage 2 will
+        // judge, or a clarification to put to the user. Routing is best-effort:
+        // every failure path inside returns "no candidates", which leaves the
+        // turn running on the full tool surface rather than costing the user
+        // their request.
+        // Stage 1 runs a generation, so the turn is already working from the
+        // caller's point of view — announce it before the routing turn rather
+        // than leaving the UI idle through it.
+        on_status(LocalAgentStatus::Thinking);
+        let routed = self.route(session, user_message, &turn_cx, &cancel).await;
+
+        if let Some(clarification) = routed.clarification {
+            // Stage 1 chose to clarify and the contract permits it. Answer with
+            // the question directly — no retrieval, no tool surface, no second
+            // model turn to paraphrase what the model already composed.
+            session
+                .messages
+                .push(ChatMessage::text(Role::Assistant, clarification.clone()));
+            on_status(LocalAgentStatus::Idle);
+            return Ok(AgentTurnResult {
+                response: clarification,
+                reasoning: None,
+                tool_calls_made: Vec::new(),
+                usage: routed.usage,
+            });
+        }
+
+        // Stage 2's surface: scoped to what the eligible candidates permit, so
+        // the model judges among what retrieval surfaced and can only fire what
+        // the matched skills allow. Falls back to the full list when nothing
+        // was retrieved.
+        let tools = routing::stage2_tools(&routed.candidates, &all_tools);
+        let candidate_block = routing::render_candidates_for_prompt(&routed.candidates);
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -434,7 +613,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // the `testing` feature on the agent crate). Production inference always
         // wires a `PromptAssembler`; the emergency arm only fires for the
         // daemon's no-op/idle service, which never reaches live inference.
-        let system_content = if let Some(override_prompt) = session_prompt_override(session) {
+        let base_system_content = if let Some(override_prompt) = session_prompt_override(session) {
             override_prompt.to_string()
         } else if let Some(ref assembler) = self.prompt_assembler {
             assembler
@@ -443,6 +622,19 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 .system_prompt
         } else {
             EMERGENCY_FALLBACK_PROMPT.to_string()
+        };
+
+        // Stage 2 receives its candidates **in the prompt**, not as a tool
+        // result. ADR-064 rule 4 reserves tool results for resolved facts
+        // rather than procedures, and the measurement supporting skill
+        // instructions was taken on prompt-rendered text; the same payload
+        // returned as a tool result was observed to suppress tool-calling.
+        //
+        // This is the injection point where the KV-cache prefix diverges from
+        // Stage 1 — the cost ADR-038 accepts and requires be measured.
+        let system_content = match &candidate_block {
+            Some(block) => format!("{base_system_content}\n\n{block}"),
+            None => base_system_content,
         };
 
         // prompt_assembly child span: records full assembled system prompt and tools offered.
@@ -491,10 +683,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // model can burn every iteration without executing a single tool. Reset
         // on any successful parse, so only an unbroken run trips it.
         let mut consecutive_parse_failures = 0usize;
-        let mut total_usage = InferenceUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-        };
+        // Seeded with the Stage-1 routing turn's usage: it is part of what this
+        // turn cost, and reporting only the Stage-2 tokens would hide the price
+        // of the extra turn from everything that reads this figure.
+        let mut total_usage = routed.usage;
 
         // ReAct loop: iterate up to effective_max_iterations (skill-specific or global fallback)
         for iteration in 0..effective_max_iterations {
@@ -1287,6 +1479,192 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
     /// Reasoning chunks (the model's chain-of-thought, already separated from the
     /// answer at the nlp-engine parse layer) are accumulated independently of the
     /// answer text so the answer bubble stays clean.
+    /// Run Stage 1 and the deterministic retrieval step (ADR-038).
+    ///
+    /// Stage 1 asks the model for a *structural* choice — form a search query,
+    /// or ask to clarify — expressed as which of two typed tools it calls. A
+    /// tool schema is the strongest measured channel for structured output,
+    /// and using the tool-call path means there is no free text to parse and
+    /// so no parser failure to confuse with a model failure. ADR-038 rejects
+    /// gating on a self-reported confidence number, which a small model is not
+    /// calibrated to produce.
+    ///
+    /// Retrieval then runs here, in the system, rather than as a model tool
+    /// call — that is where K is bounded and the trust filter applies.
+    ///
+    /// Every failure path yields no candidates rather than an error: routing
+    /// is an optimisation over the general tool surface, and losing it must
+    /// not cost the user their turn.
+    async fn route(
+        &self,
+        session: &AgentSession,
+        user_message: &str,
+        turn_cx: &opentelemetry::Context,
+        cancel: &CancellationToken,
+    ) -> RoutingOutcome {
+        let mut outcome = RoutingOutcome::default();
+
+        if cancel.is_cancelled() {
+            return outcome;
+        }
+
+        let tracer = opentelemetry::global::tracer(TRACER_NAME);
+
+        // Routing costs a model turn, so it only runs where it can pay for
+        // itself: when retrieval is actually wired up. Without it there are no
+        // candidates to judge, and Stage 1 would spend a full generation to
+        // produce a query nothing consumes. This also keeps every test double
+        // that does not opt into routing on the single-turn path.
+        if !self.tool_executor.routing_available().await {
+            // Say so in the trace. Routing availability is a live per-turn
+            // property — the embedding service loads in the background — so two
+            // identical messages in one session can take structurally different
+            // paths, and without this nothing distinguishes "routing off, model
+            // still warming" from "this executor never routes". An eval run
+            // started before the embedding service is ready would otherwise
+            // measure the unrouted path and blame routing quality for it.
+            let mut span = tracer.start_with_context("stage1_routing_skipped", turn_cx);
+            span.set_attribute(KeyValue::new("routing.available", false));
+            tracing::debug!("routing unavailable for this turn; running unrouted");
+            return outcome;
+        }
+
+        let mut span = tracer.start_with_context("stage1_routing", turn_cx);
+        let started = Instant::now();
+
+        let stage1_tools = routing::stage1_tool_definitions();
+        // Blend the preceding turns into Stage 1's view, the same way schema
+        // retrieval does. A follow-up naming its subject only by pronoun or
+        // ellipsis ("mark it paid", "add another one") gives the model nothing
+        // to describe on its own, so it emits a weak query or asks to clarify
+        // a request the conversation had already disambiguated — and both fail
+        // silently, as worse routing rather than an error.
+        //
+        // This bites hardest right after a clarification: the answer to one is
+        // a short reply, i.e. the message with the least standalone routing
+        // signal, arriving on the turn that must succeed without clarifying
+        // again. Shares `build_retrieval_query` with schema retrieval so the
+        // two context constructions cannot drift apart.
+        let routing_query = stage1_query(session, user_message);
+        let messages = vec![
+            ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
+            ChatMessage::text(Role::User, routing_query),
+        ];
+        let request = InferenceRequest {
+            messages,
+            tools: Some(stage1_tools),
+            temperature: Some(0.1),
+            max_tokens: Some(STAGE1_MAX_TOKENS),
+        };
+
+        let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = chunks.clone();
+        // Stage 1 is internal routing, not user-facing content: its chunks are
+        // collected here and deliberately not forwarded to `on_chunk`, so the
+        // user never sees the routing turn stream past.
+        let usage = match self
+            .engine
+            .generate(
+                request,
+                Box::new(move |c| {
+                    if let Ok(mut g) = sink.lock() {
+                        g.push(c);
+                    }
+                }),
+            )
+            .await
+        {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(error = %e, "stage-1 routing failed; continuing unrouted");
+                span.set_attribute(KeyValue::new("routing.failed", true));
+                return outcome;
+            }
+        };
+        outcome.usage = usage;
+
+        let collected = chunks.lock().map(|g| g.clone()).unwrap_or_default();
+        let (_, _, tool_calls) = Self::parse_chunks(&collected);
+        let decision = tool_calls
+            .iter()
+            .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
+
+        let query = match decision {
+            Some(RouteDecision::Query(q)) => {
+                span.set_attribute(KeyValue::new("routing.decision", "query"));
+                span.set_attribute(KeyValue::new("routing.query", q.clone()));
+                q
+            }
+            Some(RouteDecision::Clarify { question, options }) => {
+                // The clarification contract: at most one per intent. If the
+                // conversation already contains a clarification, asking again
+                // is the annoying-loop failure ADR-038 specifies against — fall
+                // through to retrieval on the raw message instead, so the turn
+                // resolves with whatever the general skill can offer.
+                if session_already_clarified(session) {
+                    span.set_attribute(KeyValue::new("routing.decision", "clarify_suppressed"));
+                    tracing::debug!(
+                        "stage-1 asked to clarify twice in one intent; falling through to retrieval"
+                    );
+                    user_message.to_string()
+                } else {
+                    span.set_attribute(KeyValue::new("routing.decision", "clarify"));
+                    outcome.clarification = Some(format_clarification(&question, &options));
+                    span.set_attribute(KeyValue::new(
+                        "routing.latency_ms",
+                        started.elapsed().as_millis() as i64,
+                    ));
+                    return outcome;
+                }
+            }
+            None => {
+                // The model called neither routing tool, or emitted arguments
+                // that would not parse. Retrieve on the raw message rather than
+                // abandoning routing: a weak query still beats none.
+                span.set_attribute(KeyValue::new("routing.decision", "none"));
+                user_message.to_string()
+            }
+        };
+
+        if cancel.is_cancelled() {
+            return outcome;
+        }
+
+        match self
+            .tool_executor
+            .retrieve_skills(&query, routing::RETRIEVAL_TOP_K)
+            .await
+        {
+            Ok(r) => {
+                span.set_attribute(KeyValue::new(
+                    "routing.candidates",
+                    r.candidates.len() as i64,
+                ));
+                span.set_attribute(KeyValue::new(
+                    "routing.top_score",
+                    r.candidates.first().map(|c| c.score).unwrap_or(0.0) as f64,
+                ));
+                outcome.candidates = r.candidates;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "skill retrieval failed; continuing unrouted");
+            }
+        }
+
+        // The latency ADR-038 requires be measured rather than assumed. Covers
+        // the Stage-1 generation plus the retrieval step — i.e. everything the
+        // two-stage flow adds ahead of the turn that previously ran alone.
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        span.set_attribute(KeyValue::new("routing.latency_ms", elapsed_ms));
+        tracing::info!(
+            routing_latency_ms = elapsed_ms,
+            candidates = outcome.candidates.len(),
+            "two-stage routing overhead"
+        );
+        outcome
+    }
+
     fn parse_chunks(chunks: &[StreamingChunk]) -> (String, String, Vec<ToolCallRaw>) {
         let mut text = String::new();
         let mut reasoning = String::new();
@@ -1702,8 +2080,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Compile-time coupling check: `multi_skill_turn_invokes_skill_tools_between_searches`
-    // feeds exactly 5 inference rounds (search_skills → search_semantic →
-    // search_skills → create_node → final text) and expects the loop to make
+    // feeds exactly 5 inference rounds (search_nodes → search_semantic →
+    // search_nodes → create_node → final text) and expects the loop to make
     // it through all of them without hitting the iteration-cap fallback.
     // If `MAX_TOOL_ITERATIONS` is ever reduced below 5, that test would
     // silently start asserting on the fallback path instead of the multi-skill
@@ -3299,22 +3677,22 @@ mod tests {
         assert_eq!(sessions.len(), 1);
     }
 
-    // -- search_skills as a regular tool ---------------------------------
+    // -- multi-round tool dispatch ---------------------------------------
 
-    /// The model decides when to search for skills by calling
-    /// the `search_skills` tool, then invokes a matching skill (if any) like
-    /// any other tool. There's no pre-LLM dispatch — the loop always runs the
-    /// full tool set against the model.
+    /// A read followed by a write in one turn dispatches both correctly and
+    /// preserves their order. Uses `search_nodes` as the leading read; the
+    /// property under test is the loop's round-to-round dispatch, independent
+    /// of which tool leads.
     #[tokio::test]
-    async fn model_calls_search_skills_then_invokes_matched_skill() {
-        // Round 1: model calls search_skills
-        // Round 2: model invokes create_node (a "skill" tool) after seeing the match
+    async fn model_chains_a_read_then_a_write_in_one_turn() {
+        // Round 1: model calls search_nodes
+        // Round 2: model invokes create_node after seeing the result
         // Round 3: model produces a text summary
         let engine = Arc::new(MockEngine::new(vec![
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3358,7 +3736,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 json!({
                     "query": "create a new task",
@@ -3389,14 +3767,14 @@ mod tests {
 
         assert_eq!(result.response, "Created the task.");
         assert_eq!(result.tool_calls_made.len(), 2);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "create_node");
     }
 
-    /// Regression coverage: `update_node` must remain reachable through
-    /// `search_skills` -> Graph Editing's own routing (`search_nodes` then
-    /// `update_node`) now that `TOOL_STRATEGY_RULES` no longer hardcodes
-    /// "ALWAYS search_nodes first before update_node" in resident prose.
+    /// Regression coverage: `update_node` must remain reachable through a
+    /// find-then-act chain (`search_nodes` then `update_node`) now that
+    /// `TOOL_STRATEGY_RULES` no longer hardcodes "ALWAYS search_nodes first
+    /// before update_node" in resident prose.
     ///
     /// This scripts the full chain a real model is expected to follow and
     /// asserts the loop dispatches every step correctly against a scripted
@@ -3409,12 +3787,12 @@ mod tests {
     /// (`scripts/eval/fixtures/agent-matrix.ts`), which is not run as part
     /// of `test:all`.
     #[tokio::test]
-    async fn search_skills_then_search_nodes_then_update_node_chain_dispatches_correctly() {
+    async fn find_then_act_chain_dispatches_correctly() {
         let engine = Arc::new(MockEngine::new(vec![
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3474,7 +3852,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 json!({
                     "query": "mark an invoice as paid",
@@ -3511,7 +3889,7 @@ mod tests {
 
         assert_eq!(result.response, "Marked the invoice as paid.");
         assert_eq!(result.tool_calls_made.len(), 3);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "search_nodes");
         assert_eq!(result.tool_calls_made[2].name, "update_node");
     }
@@ -3519,7 +3897,7 @@ mod tests {
     /// When the model decides no skill is needed, it responds directly —
     /// no clarification short-circuit, no canned string.
     #[tokio::test]
-    async fn model_can_respond_without_calling_search_skills() {
+    async fn model_can_respond_without_calling_any_tool() {
         let engine = Arc::new(MockEngine::single_text("Hi there — how can I help?"));
         let executor = Arc::new(MockToolExecutor::new());
         let agent_loop = LocalAgentLoop::new(engine, executor);
@@ -3536,20 +3914,20 @@ mod tests {
         assert!(result.usage.prompt_tokens > 0);
     }
 
-    /// Multi-skill turn: the model calls `search_skills`
+    /// Multi-skill turn: the model calls a read tool
     /// for each sub-task, then invokes the matched skill's tool. This test
-    /// exercises a full chain — search_skills (notes) → search_semantic →
-    /// search_skills (task) → create_node — not just two back-to-back
+    /// exercises a full chain — search_nodes (notes) → search_semantic →
+    /// search_nodes (task) → create_node — not just two back-to-back
     /// searches, so a regression that breaks tool dispatch after a second
-    /// `search_skills` call is caught here.
+    /// tool call is caught here.
     #[tokio::test]
     async fn multi_skill_turn_invokes_skill_tools_between_searches() {
         let engine = Arc::new(MockEngine::new(vec![
-            // Round 1: search_skills for "find notes"
+            // Round 1: search_nodes for "find notes"
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3579,11 +3957,11 @@ mod tests {
                     },
                 },
             ],
-            // Round 3: search_skills for "create task"
+            // Round 3: search_nodes for "create task"
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_3".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_3".to_string(),
@@ -3629,7 +4007,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 // Same canned response works for both calls; in production
                 // the embeddings would distinguish them, but the agent loop
@@ -3679,9 +4057,9 @@ mod tests {
             "{:?}",
             result.tool_calls_made
         );
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "search_semantic");
-        assert_eq!(result.tool_calls_made[2].name, "search_skills");
+        assert_eq!(result.tool_calls_made[2].name, "search_nodes");
         assert_eq!(result.tool_calls_made[3].name, "create_node");
         assert_eq!(
             result.response,
@@ -3689,18 +4067,18 @@ mod tests {
         );
     }
 
-    /// Empty `search_skills` matches → model judges and produces a contextual
+    /// An empty tool result → model judges and produces a contextual
     /// clarification (referencing what it searched), rather than the prior
     /// hardcoded `CLARIFYING_QUESTION` string. This is the "no relevant skill"
     /// path.
     #[tokio::test]
-    async fn empty_search_skills_matches_let_model_clarify_with_context() {
+    async fn empty_tool_result_lets_the_model_clarify_with_context() {
         let engine = Arc::new(MockEngine::new(vec![
-            // Round 1: model calls search_skills
+            // Round 1: model calls a read tool
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3730,7 +4108,7 @@ mod tests {
         ]));
 
         let executor = MockToolExecutor::new().with_tool(
-            "search_skills",
+            "search_nodes",
             json!({"type": "object"}),
             // Empty matches array — the meaningful "no skill applies" signal.
             json!({"query": "send carrier pigeons", "matches": []}),
@@ -3750,7 +4128,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.tool_calls_made.len(), 1);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         // Crucially: the response is the model's contextual text, not a
         // canned constant. Just check it's non-empty and acknowledges the
         // search — exact wording belongs to the model.
@@ -3814,6 +4192,28 @@ mod tests {
         // Embedded in surrounding prose.
         assert!(looks_like_narrated_tool_call(
             "Let me run search_nodes(query='invoice') to find it."
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_detects_a_json_tool_call_emitted_as_text() {
+        // A model emitting a well-formed tool call as *text* leaves the loop
+        // with no tool call to execute, so the turn silently does nothing.
+        assert!(looks_like_narrated_tool_call(
+            r#"[{"name":"create_node","arguments":{"content":"Review billing docs"}}]"#
+        ));
+        assert!(looks_like_narrated_tool_call(
+            r#"{"name": "search_nodes", "arguments": {"query": "billing"}}"#
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_ignores_a_tool_merely_mentioned_in_prose() {
+        assert!(!looks_like_narrated_tool_call(
+            "I used create_node to add that for you."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The search_nodes results were empty."
         ));
     }
 
@@ -5013,5 +5413,565 @@ mod tests {
             !calls.lock().unwrap().iter().any(|c| c == "create_node"),
             "an empty-args repeat must still be recognised as the same call"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-stage routing (ADR-038)
+    // -----------------------------------------------------------------------
+
+    use crate::agent_types::SkillCandidate;
+
+    /// A tool executor with skill retrieval wired up, so the loop takes the
+    /// two-stage path instead of the single-turn fallback.
+    struct RoutingToolExecutor {
+        inner: MockToolExecutor,
+        candidates: Vec<SkillCandidate>,
+        /// Queries retrieval was actually asked for, so a test can assert the
+        /// system — not the model — issued the retrieval.
+        queries: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl RoutingToolExecutor {
+        fn new(inner: MockToolExecutor, candidates: Vec<SkillCandidate>) -> Self {
+            Self {
+                inner,
+                candidates,
+                queries: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn queries_handle(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
+            self.queries.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgentToolExecutor for RoutingToolExecutor {
+        async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+            self.inner.available_tools().await
+        }
+        async fn execute(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+        ) -> Result<ToolResult, ToolError> {
+            self.inner.execute(name, args).await
+        }
+        async fn routing_available(&self) -> bool {
+            true
+        }
+        async fn retrieve_skills(
+            &self,
+            query: &str,
+            limit: usize,
+        ) -> Result<crate::agent_types::SkillRetrieval, ToolError> {
+            self.queries.lock().unwrap().push(query.to_string());
+            let mut c = self.candidates.clone();
+            c.truncate(limit);
+            Ok(crate::agent_types::SkillRetrieval { candidates: c })
+        }
+    }
+
+    fn skill_candidate(name: &str, score: f32, tools: &[&str]) -> SkillCandidate {
+        SkillCandidate {
+            id: format!("skill-{name}"),
+            name: name.to_string(),
+            description: format!("Use this to {name}"),
+            score,
+            tools: tools.iter().map(|t| t.to_string()).collect(),
+            instructions: format!("INSTRUCTIONS FOR {name}"),
+            schema_metadata: json!([]),
+        }
+    }
+
+    /// A model that calls `route_query` at Stage 1, then the given tool.
+    fn routed_engine(
+        query: &str,
+        tool_name: &str,
+        tool_args: &str,
+        final_text: &str,
+    ) -> MockEngine {
+        MockEngine::new(vec![
+            // Stage 1: the structural choice, expressed as a tool call.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_QUERY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "query": query }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            // Stage 2: act on the judged candidate.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: tool_name.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: tool_args.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: final_text.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 12,
+                    },
+                },
+            ],
+        ])
+    }
+
+    #[tokio::test]
+    async fn retrieval_runs_as_a_system_step_on_stage1s_query() {
+        // ADR-038: retrieval is a deterministic system step, not a model tool
+        // call. The model supplies the query; the system issues the retrieval.
+        let engine = routed_engine(
+            "create a schema",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        );
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            queries.lock().unwrap().as_slice(),
+            &["create a schema".to_string()],
+            "the system must issue exactly one retrieval, on Stage 1's query"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage2_tool_surface_is_scoped_to_the_matched_skill() {
+        // The matched skill is read-only, so a destructive tool must not be in
+        // reach even though the executor registers one.
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let inner = MockToolExecutor::new().with_tool(
+            "delete_node",
+            json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+            json!({"deleted": true}),
+        );
+        let exec = RoutingToolExecutor::new(
+            inner,
+            vec![skill_candidate(
+                "research",
+                0.9,
+                &["search_nodes", "get_node"],
+            )],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+    }
+
+    #[tokio::test]
+    async fn a_mutating_skill_below_its_bar_is_not_offered() {
+        // Identical score, different verdict: 0.2 clears the read bar but not
+        // the mutating one, so this candidate is never rendered or actioned.
+        let cands = vec![skill_candidate("deletion", 0.2, &["delete_node"])];
+        assert!(routing::render_candidates_for_prompt(&cands).is_none());
+    }
+
+    #[tokio::test]
+    async fn stage1_clarify_answers_the_user_without_running_stage2() {
+        let engine = MockEngine::new(vec![vec![
+            StreamingChunk::ToolCallStart {
+                id: "r1".into(),
+                name: routing::ROUTE_CLARIFY_TOOL.into(),
+            },
+            StreamingChunk::ToolCallArgs {
+                id: "r1".into(),
+                args_json: json!({
+                    "question": "Did you want to track debts or search notes?",
+                    "options": ["Track who owes me money", "Search existing notes"]
+                })
+                .to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 8,
+                    completion_tokens: 4,
+                },
+            },
+        ]]);
+        let exec = RoutingToolExecutor::new(MockToolExecutor::new(), vec![]);
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "keep tabs on who owes me money",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.tool_calls_made.is_empty());
+        // Specific, with the concrete options — not a bare "what do you mean?".
+        assert!(result.response.contains("Track who owes me money"));
+        assert!(result.response.contains("Search existing notes"));
+        assert!(
+            queries.lock().unwrap().is_empty(),
+            "a clarification must not trigger retrieval"
+        );
+    }
+
+    #[tokio::test]
+    async fn clarification_still_reports_thinking_then_idle() {
+        // A clarification returns early, but the caller must still see the
+        // normal status arc — a reply with no preceding Thinking would leave a
+        // UI showing idle while the routing turn is generating.
+        let engine = MockEngine::new(vec![vec![
+            StreamingChunk::ToolCallStart {
+                id: "r1".into(),
+                name: routing::ROUTE_CLARIFY_TOOL.into(),
+            },
+            StreamingChunk::ToolCallArgs {
+                id: "r1".into(),
+                args_json: json!({"question": "Which one?", "options": ["A", "B"]}).to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 8,
+                    completion_tokens: 4,
+                },
+            },
+        ]]);
+        let statuses = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = statuses.clone();
+        let loop_ = LocalAgentLoop::new(
+            Arc::new(engine),
+            Arc::new(RoutingToolExecutor::new(MockToolExecutor::new(), vec![])),
+        );
+        let mut session = new_session();
+        loop_
+            .run_turn(
+                &mut session,
+                "something ambiguous",
+                move |s| sink.lock().unwrap().push(format!("{s:?}")),
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let seen = statuses.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|s| s.contains("Thinking")),
+            "expected a Thinking status before the clarification: {seen:?}"
+        );
+        assert!(
+            seen.last().is_some_and(|s| s.contains("Idle")),
+            "turn must end Idle: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_clarification_for_one_intent_falls_through_to_retrieval() {
+        // The contract: at most one clarification per intent. On the turn after
+        // the user answered one, Stage 1 asking again must be suppressed and
+        // the turn must retrieve on the raw message instead.
+        let engine = MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_CLARIFY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({"question": "Which one?", "options": ["A", "B"]}).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "Here is what I found.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 8,
+                    },
+                },
+            ],
+        ]);
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+
+        let mut session = new_session();
+        // A prior clarification the user has already answered.
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first one".to_string()));
+
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "the first one",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !result.response.starts_with(CLARIFICATION_OPENER),
+            "never clarify twice for one intent: {:?}",
+            result.response
+        );
+        assert_eq!(
+            queries.lock().unwrap().len(),
+            1,
+            "the suppressed clarification must fall through to retrieval"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_clarification_contract_re_arms_on_a_new_intent() {
+        // ADR-038 scopes the contract "per intent", and a conversation is many
+        // intents. A clarification answered earlier must not stop a genuinely
+        // new ambiguous request from being clarified later.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(
+            session_already_clarified(&session),
+            "still inside the clarified intent"
+        );
+
+        // The turn completes: the agent answers rather than asking again.
+        // That closes the intent.
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Done — I created it.".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "now do the other thing".to_string(),
+        ));
+        assert!(
+            !session_already_clarified(&session),
+            "a resolved turn starts a new intent; clarifying must be possible again"
+        );
+    }
+
+    #[test]
+    fn a_composed_clarification_is_recognised_as_one() {
+        // Round-trip: the contract is carried in user-visible message text, so
+        // a rewording of `format_clarification` that broke the read would
+        // silently stop the contract enforcing. Tests that hand-build the
+        // marker from the constant would still pass; this one would not.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format_clarification("Which did you mean?", &["Track debts".to_string()]),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(
+            session_already_clarified(&session),
+            "format_clarification output must be recognised by session_already_clarified"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_blends_prior_turns_into_its_query() {
+        // A follow-up naming its subject by pronoun gives the model nothing to
+        // describe on its own. The prior turns must reach Stage 1.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "create an invoice for Acme".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Created invoice INV-1 for Acme.".to_string(),
+        ));
+        // run_turn pushes the current message before routing; mirror that.
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "mark it paid".to_string()));
+
+        let q = stage1_query(&session, "mark it paid");
+        assert!(
+            q.contains("mark it paid"),
+            "current message must be present"
+        );
+        assert!(
+            q.contains("invoice"),
+            "prior turns must be blended so a pronoun-only follow-up still routes: {q:?}"
+        );
+        assert_eq!(
+            q.matches("mark it paid").count(),
+            1,
+            "the current message must not be blended twice: {q:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_query_on_a_first_turn_is_just_the_message() {
+        let mut session = new_session();
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "find my notes".to_string()));
+        assert_eq!(stage1_query(&session, "find my notes"), "find my notes");
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_clarification_is_not_treated_as_already_clarified() {
+        // The clarification we just asked and are still waiting on is not a
+        // prior one — otherwise a single clarification would disable the
+        // mechanism for the rest of the conversation.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        assert!(!session_already_clarified(&session));
+
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(session_already_clarified(&session));
+    }
+
+    #[tokio::test]
+    async fn routing_failure_leaves_the_turn_on_the_full_tool_surface() {
+        // Retrieval is best-effort: losing it must not cost the user the turn.
+        struct FailingRetrieval(MockToolExecutor);
+        #[async_trait::async_trait]
+        impl AgentToolExecutor for FailingRetrieval {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                self.0.available_tools().await
+            }
+            async fn execute(
+                &self,
+                name: &str,
+                args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.0.execute(name, args).await
+            }
+            async fn routing_available(&self) -> bool {
+                true
+            }
+            async fn retrieve_skills(
+                &self,
+                _q: &str,
+                _l: usize,
+            ) -> Result<crate::agent_types::SkillRetrieval, ToolError> {
+                Err(ToolError::ExecutionFailed("embedding down".into()))
+            }
+        }
+
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let loop_ = LocalAgentLoop::new(
+            Arc::new(engine),
+            Arc::new(FailingRetrieval(MockToolExecutor::new())),
+        );
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+        assert_eq!(result.response, "Done.");
+    }
+
+    #[tokio::test]
+    async fn stage1_usage_is_included_in_the_turns_reported_total() {
+        // The routing turn spends tokens; under-reporting them would hide the
+        // cost of the extra turn from every consumer of the usage figure.
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        // 8 (stage 1) + 20 + 30 from the scripted responses.
+        assert_eq!(result.usage.prompt_tokens, 58);
     }
 }

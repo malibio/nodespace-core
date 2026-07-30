@@ -1,7 +1,7 @@
 //! Property access helpers for namespaced node properties.
 //!
 //! Node properties may be stored flat (`properties.key`) or namespaced
-//! under the node type (`properties.skill.key`, `properties.prompt.key`).
+//! under the node type (`properties.skill.key`, `properties.tool.key`).
 //! These helpers check both locations transparently.
 
 use serde_json::Value;
@@ -15,7 +15,7 @@ use serde_json::Value;
 ///
 /// # Arguments
 /// * `properties` - The node's properties JSON value
-/// * `namespace` - The node type namespace (e.g., "skill", "prompt")
+/// * `namespace` - The node type namespace (e.g., "skill", "tool")
 /// * `key` - The property key to look up
 pub fn get_prop<'a>(properties: &'a Value, namespace: &str, key: &str) -> Option<&'a Value> {
     properties

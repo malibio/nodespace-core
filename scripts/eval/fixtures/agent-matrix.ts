@@ -11,8 +11,9 @@
  *   - this                          — END-TO-END behavior (right tool, right
  *                                     count, right effect)
  *
- * Under ADR-038 the model calls search_skills before acting, so assertions
- * check for the TARGET tool tolerating search_skills, never raw tool count.
+ * Under ADR-038 routing happens in a separate stage before the acting turn, so
+ * assertions check for the TARGET tool tolerating routing calls, never raw
+ * tool count.
  *
  * Scenario wording must stay independent of packages/agent/src/agent_guidance.rs.
  * `guidance_is_not_contaminated_by_eval_prompts` enforces it by parsing the
@@ -54,7 +55,13 @@ export type Expectation =
  * Cross-referenced against Tool::ALL in
  * packages/agent/src/local_agent/tools.rs — update here if the registry changes.
  */
-const ROUTING_TOOLS = ["search_skills"];
+// Stage-1 routing calls (ADR-038). These are not actions the scenario is
+// asserting on, so they are filtered out before the action-tool check.
+// `search_skills` remains listed because the tool still exists for external
+// agents; the local model is no longer offered it, so it should not appear in
+// a local trace — tolerating it costs nothing and avoids a false failure if it
+// ever does.
+const ROUTING_TOOLS = ["route_query", "route_clarify", "search_skills"];
 
 export function actionTools(toolsCalled: string[]): string[] {
   return toolsCalled.filter((t) => !ROUTING_TOOLS.includes(t));
@@ -237,8 +244,11 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "6",
       scenario: "6. Update",
+      // resolve_query performs the search internally and returns the resolved
+      // node directly (see ADR-064 rule 4) — the model acts on it via
+      // update_node without a separate search_nodes call of its own.
       prompt: "The 2400 one came back — set it to returned",
-      expect: { kind: "toolSequence", tools: ["search_nodes", "update_node"] },
+      expect: { kind: "toolSequence", tools: ["resolve_query", "update_node"] },
     },
     {
       id: "7",
