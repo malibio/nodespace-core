@@ -9,6 +9,14 @@
 //! not use these constants — they get all tool/capability guidance from
 //! `packages/skill/SKILL.md`, the CLI-vocabulary companion doc, not from this
 //! module's tool-call-vocabulary prose.
+//!
+//! `N_CTX_MINIMUM` in `nlp-engine`'s `chat/mod.rs` (16,384) is sized against
+//! the full tool-registered system prompt (~6,600 tokens), of which this
+//! module's resident prose was always a minority share — the rest is JSON
+//! tool schemas, untouched by any reduction here. A prose-only cut of this
+//! size (roughly 600 tokens) does not on its own justify lowering that floor;
+//! doing so needs a live measurement of the full assembled prompt including
+//! tool schemas, not just this module's character count.
 
 /// Schema creation guidance.
 ///
@@ -39,7 +47,10 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// guard in `agent_loop.rs` are deleted outright rather than kept as inert
 /// prose: `seen_calls` already breaks identical-call loops, and
 /// `contains_action_claim` already suppresses a fabricated success claim —
-/// both structurally, regardless of what the prompt says.
+/// both structurally, regardless of what the prompt says. The former
+/// AMBIGUITY bullet is also deleted from here, not dropped: it duplicates
+/// `skill_rules::AMBIGUITY_CLARIFY`, already delivered via the retrieved
+/// skill-instruction templates in `skill_pipeline.rs`.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings, thanks, small talk, questions about your own capabilities or limits, and other meta questions about yourself — answer directly in text. Do NOT call any tool: nothing in the user's graph needs to be read to answer them.\n\
     - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
