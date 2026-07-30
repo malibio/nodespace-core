@@ -8,4 +8,5 @@ pub mod otlp_tracer;
 pub mod prompt_dump;
 pub mod prompt_templates;
 pub mod response_processing;
+pub mod routing;
 pub mod tools;

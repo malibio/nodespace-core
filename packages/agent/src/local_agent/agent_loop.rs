@@ -22,6 +22,7 @@ use crate::agent_types::{
 use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
 use crate::local_agent::response_processing::{normalize_response, normalize_response_traced};
+use crate::local_agent::routing::{self, RouteDecision};
 use crate::local_agent::tools::is_cross_turn_guarded_tool;
 use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
@@ -39,6 +40,37 @@ const MAX_TOOL_ITERATIONS: usize = 5;
 /// recovery and observed in practice, so tripping on the first would abort turns
 /// that were about to succeed.
 const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
+
+/// Token ceiling for the Stage-1 routing turn.
+///
+/// Stage 1 emits one short tool call — a search query, or a question with a
+/// couple of options — and nothing else. A tight ceiling bounds the latency
+/// the extra turn adds and gives a runaway generation nowhere to go.
+const STAGE1_MAX_TOKENS: u32 = 256;
+
+/// The Stage-1 system prompt.
+///
+/// Deliberately small. Stage 1 makes one structural choice and the two tool
+/// schemas carry the shape of that choice, so prose here would duplicate the
+/// channel that already decides it — the failure ADR-064 rule 5 names. It says
+/// who to be, what the single decision is, and that clarifying is the
+/// exception.
+const STAGE1_SYSTEM_PROMPT: &str = "You are routing a user's request to the right capability.\n\
+    Call route_query with a short description of the capability the request needs.\n\
+    Call route_clarify ONLY if the request is too ambiguous to describe at all.\n\
+    Prefer route_query: most requests can be described even when phrased indirectly.\n\
+    Call exactly one tool. Do not answer the user.";
+
+/// Opening phrase of a routing clarification.
+///
+/// The session is rebuilt from persisted messages every turn, so the
+/// clarification contract ("at most one per intent") cannot rely on in-memory
+/// state — whether we already clarified has to be answerable from the history
+/// alone. Clarifications are composed here and always open with this phrase,
+/// so their own text is the record. Matching on text is imprecise in general,
+/// but it is exact for strings this module wrote itself, and it avoids
+/// widening the persisted session shape for one boolean.
+const CLARIFICATION_OPENER: &str = "I can take that a couple of ways";
 
 /// Longest canonical-args string stored verbatim as a completed write's identity.
 ///
@@ -205,6 +237,70 @@ const CONFIRMATION_REQUEST: &str =
 
 fn session_prompt_override(session: &AgentSession) -> Option<&str> {
     session.system_prompt_override.as_deref()
+}
+
+/// What Stage 1 and the retrieval step produced for Stage 2 to work with.
+#[derive(Default)]
+struct RoutingOutcome {
+    /// Candidates for Stage 2 to judge. Empty means routing produced nothing —
+    /// whether because retrieval was unavailable, matched nothing, or failed —
+    /// and the turn runs on the full tool surface.
+    candidates: Vec<crate::agent_types::SkillCandidate>,
+    /// A composed clarification to return instead of running Stage 2. `Some`
+    /// only when Stage 1 asked to clarify *and* the contract allowed it.
+    clarification: Option<String>,
+    /// Tokens spent on the Stage-1 turn, so the turn's reported usage covers
+    /// the whole two-stage flow rather than under-reporting it.
+    usage: InferenceUsage,
+}
+
+/// Whether this conversation already asked the user to clarify.
+///
+/// Enforces ADR-038's "at most one clarification per intent": if the user
+/// answered a clarification and the request still cannot be routed, asking
+/// again is the loop the contract exists to prevent — the turn falls through
+/// to retrieval instead.
+///
+/// Scoped to the current intent by looking only at messages after the last
+/// *unclarified* user turn, so a clarification early in a long conversation
+/// does not permanently disable clarifying for every later request.
+fn session_already_clarified(session: &AgentSession) -> bool {
+    // The current intent starts at the clarification we last asked, if any:
+    // everything after it is the user answering that question. So the intent
+    // is "already clarified" exactly when a clarification exists and the user
+    // has since replied — which is the case the contract forbids repeating.
+    //
+    // A clarification with no user message after it is the one we just asked
+    // and are still waiting on, not a second attempt.
+    let last_clarification = session.messages.iter().rposition(|m| {
+        matches!(m.role, Role::Assistant) && m.content.starts_with(CLARIFICATION_OPENER)
+    });
+    match last_clarification {
+        Some(idx) => session.messages[idx + 1..]
+            .iter()
+            .any(|m| matches!(m.role, Role::User)),
+        None => false,
+    }
+}
+
+/// Compose a clarification from Stage 1's question and options.
+///
+/// ADR-038 requires clarification be *specific*: it surfaces the concrete
+/// candidates the model already produced, turning a dead end into a one-tap
+/// disambiguation. A bare "what do you mean?" is the failure mode to avoid,
+/// so the options are rendered as an explicit list when the model supplied
+/// them.
+fn format_clarification(question: &str, options: &[String]) -> String {
+    let usable: Vec<&String> = options.iter().filter(|o| !o.trim().is_empty()).collect();
+    if usable.is_empty() {
+        return format!("{CLARIFICATION_OPENER}. {question}");
+    }
+    let listed = usable
+        .iter()
+        .map(|o| format!("- {o}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{CLARIFICATION_OPENER}. {question}\n\n{listed}")
 }
 
 // ---------------------------------------------------------------------------
@@ -410,16 +506,48 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .messages
             .push(ChatMessage::text(Role::User, user_message.to_string()));
 
-        // Full tool list including search_skills — the model calls search_skills
-        // itself to discover capabilities (ADR-036 pull model). No pre-filtering:
-        // the model receives all tools and judges which skill applies after retrieval.
-        // Degraded path: if embedding service is unavailable, search_skills returns
-        // an error result and the model falls through to general tools — acceptable.
-        let tools = self
+        // The model-facing tool surface. `search_skills` is deliberately absent:
+        // ADR-038 makes retrieval a deterministic system step (see `route`
+        // below) rather than a model tool call, because a model-issued
+        // retrieval lets the model set K and bypasses the trust filter.
+        let all_tools = self
             .tool_executor
             .available_tools()
             .await
             .unwrap_or_default();
+
+        // Stage 1 + deterministic retrieval. Yields the candidates Stage 2 will
+        // judge, or a clarification to put to the user. Routing is best-effort:
+        // every failure path inside returns "no candidates", which leaves the
+        // turn running on the full tool surface rather than costing the user
+        // their request.
+        let routed = self
+            .route(session, user_message, &turn_cx, &cancel)
+            .await;
+
+        if let Some(clarification) = routed.clarification {
+            // Stage 1 chose to clarify and the contract permits it. Answer with
+            // the question directly — no retrieval, no tool surface, no second
+            // model turn to paraphrase what the model already composed.
+            session.messages.push(ChatMessage::text(
+                Role::Assistant,
+                clarification.clone(),
+            ));
+            on_status(LocalAgentStatus::Idle);
+            return Ok(AgentTurnResult {
+                response: clarification,
+                reasoning: None,
+                tool_calls_made: Vec::new(),
+                usage: routed.usage,
+            });
+        }
+
+        // Stage 2's surface: scoped to what the eligible candidates permit, so
+        // the model judges among what retrieval surfaced and can only fire what
+        // the matched skills allow. Falls back to the full list when nothing
+        // was retrieved.
+        let tools = routing::stage2_tools(&routed.candidates, &all_tools);
+        let candidate_block = routing::render_candidates_for_prompt(&routed.candidates);
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -434,7 +562,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // the `testing` feature on the agent crate). Production inference always
         // wires a `PromptAssembler`; the emergency arm only fires for the
         // daemon's no-op/idle service, which never reaches live inference.
-        let system_content = if let Some(override_prompt) = session_prompt_override(session) {
+        let base_system_content = if let Some(override_prompt) = session_prompt_override(session) {
             override_prompt.to_string()
         } else if let Some(ref assembler) = self.prompt_assembler {
             assembler
@@ -443,6 +571,19 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 .system_prompt
         } else {
             EMERGENCY_FALLBACK_PROMPT.to_string()
+        };
+
+        // Stage 2 receives its candidates **in the prompt**, not as a tool
+        // result. ADR-064 rule 4 reserves tool results for resolved facts
+        // rather than procedures, and the measurement supporting skill
+        // instructions was taken on prompt-rendered text; the same payload
+        // returned as a tool result was observed to suppress tool-calling.
+        //
+        // This is the injection point where the KV-cache prefix diverges from
+        // Stage 1 — the cost ADR-038 accepts and requires be measured.
+        let system_content = match &candidate_block {
+            Some(block) => format!("{base_system_content}\n\n{block}"),
+            None => base_system_content,
         };
 
         // prompt_assembly child span: records full assembled system prompt and tools offered.
@@ -1287,6 +1428,155 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
     /// Reasoning chunks (the model's chain-of-thought, already separated from the
     /// answer at the nlp-engine parse layer) are accumulated independently of the
     /// answer text so the answer bubble stays clean.
+    /// Run Stage 1 and the deterministic retrieval step (ADR-038).
+    ///
+    /// Stage 1 asks the model for a *structural* choice — form a search query,
+    /// or ask to clarify — expressed as which of two typed tools it calls. A
+    /// tool schema is the strongest measured channel for structured output,
+    /// and using the tool-call path means there is no free text to parse and
+    /// so no parser failure to confuse with a model failure. ADR-038 rejects
+    /// gating on a self-reported confidence number, which a small model is not
+    /// calibrated to produce.
+    ///
+    /// Retrieval then runs here, in the system, rather than as a model tool
+    /// call — that is where K is bounded and the trust filter applies.
+    ///
+    /// Every failure path yields no candidates rather than an error: routing
+    /// is an optimisation over the general tool surface, and losing it must
+    /// not cost the user their turn.
+    async fn route(
+        &self,
+        session: &AgentSession,
+        user_message: &str,
+        turn_cx: &opentelemetry::Context,
+        cancel: &CancellationToken,
+    ) -> RoutingOutcome {
+        let tracer = opentelemetry::global::tracer(TRACER_NAME);
+        let mut span = tracer.start_with_context("stage1_routing", turn_cx);
+        let started = Instant::now();
+        let mut outcome = RoutingOutcome::default();
+
+        if cancel.is_cancelled() {
+            return outcome;
+        }
+
+        let stage1_tools = routing::stage1_tool_definitions();
+        let messages = vec![
+            ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
+            ChatMessage::text(Role::User, user_message.to_string()),
+        ];
+        let request = InferenceRequest {
+            messages,
+            tools: Some(stage1_tools),
+            temperature: Some(0.1),
+            max_tokens: Some(STAGE1_MAX_TOKENS),
+        };
+
+        let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = chunks.clone();
+        // Stage 1 is internal routing, not user-facing content: its chunks are
+        // collected here and deliberately not forwarded to `on_chunk`, so the
+        // user never sees the routing turn stream past.
+        let usage = match self
+            .engine
+            .generate(
+                request,
+                Box::new(move |c| {
+                    if let Ok(mut g) = sink.lock() {
+                        g.push(c);
+                    }
+                }),
+            )
+            .await
+        {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(error = %e, "stage-1 routing failed; continuing unrouted");
+                span.set_attribute(KeyValue::new("routing.failed", true));
+                return outcome;
+            }
+        };
+        outcome.usage = usage;
+
+        let collected = chunks.lock().map(|g| g.clone()).unwrap_or_default();
+        let (_, _, tool_calls) = Self::parse_chunks(&collected);
+        let decision = tool_calls
+            .iter()
+            .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
+
+        let query = match decision {
+            Some(RouteDecision::Query(q)) => {
+                span.set_attribute(KeyValue::new("routing.decision", "query"));
+                span.set_attribute(KeyValue::new("routing.query", q.clone()));
+                q
+            }
+            Some(RouteDecision::Clarify { question, options }) => {
+                // The clarification contract: at most one per intent. If the
+                // conversation already contains a clarification, asking again
+                // is the annoying-loop failure ADR-038 specifies against — fall
+                // through to retrieval on the raw message instead, so the turn
+                // resolves with whatever the general skill can offer.
+                if session_already_clarified(session) {
+                    span.set_attribute(KeyValue::new("routing.decision", "clarify_suppressed"));
+                    tracing::debug!(
+                        "stage-1 asked to clarify twice in one intent; falling through to retrieval"
+                    );
+                    user_message.to_string()
+                } else {
+                    span.set_attribute(KeyValue::new("routing.decision", "clarify"));
+                    outcome.clarification = Some(format_clarification(&question, &options));
+                    span.set_attribute(KeyValue::new(
+                        "routing.latency_ms",
+                        started.elapsed().as_millis() as i64,
+                    ));
+                    return outcome;
+                }
+            }
+            None => {
+                // The model called neither routing tool, or emitted arguments
+                // that would not parse. Retrieve on the raw message rather than
+                // abandoning routing: a weak query still beats none.
+                span.set_attribute(KeyValue::new("routing.decision", "none"));
+                user_message.to_string()
+            }
+        };
+
+        if cancel.is_cancelled() {
+            return outcome;
+        }
+
+        match self
+            .tool_executor
+            .retrieve_skills(&query, routing::RETRIEVAL_TOP_K)
+            .await
+        {
+            Ok(r) => {
+                span.set_attribute(KeyValue::new("routing.candidates", r.candidates.len() as i64));
+                span.set_attribute(KeyValue::new(
+                    "routing.top_score",
+                    r.candidates.first().map(|c| c.score).unwrap_or(0.0) as f64,
+                ));
+                outcome.candidates = r.candidates;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "skill retrieval failed; continuing unrouted");
+            }
+        }
+
+        // The latency ADR-038 requires be measured rather than assumed. Covers
+        // the Stage-1 generation plus the retrieval step — i.e. everything the
+        // two-stage flow adds ahead of the turn that previously ran alone.
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        span.set_attribute(KeyValue::new("routing.latency_ms", elapsed_ms));
+        tracing::info!(
+            routing_latency_ms = elapsed_ms,
+            candidates = outcome.candidates.len(),
+            "two-stage routing overhead"
+        );
+        outcome
+    }
+
     fn parse_chunks(chunks: &[StreamingChunk]) -> (String, String, Vec<ToolCallRaw>) {
         let mut text = String::new();
         let mut reasoning = String::new();
