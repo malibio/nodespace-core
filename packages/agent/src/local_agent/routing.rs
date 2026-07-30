@@ -192,11 +192,13 @@ pub fn parse_route_decision(tool_name: &str, arguments_json: &str) -> Option<Rou
 /// it cannot drift from what the skill is actually able to do — adding a
 /// mutating tool to a whitelist raises that skill's bar automatically, with
 /// no second field to keep in sync.
-/// An unrecognised tool name counts as mutating. `is_write_tool` answers
-/// `false` for a name not in the registry — a typo, a renamed tool, or a
-/// future externally-registered one — which would put the *lower* bar on a
-/// skill whose blast radius is unknown. ADR-038 says to bias against the
-/// expensive error, so the unknown case belongs on the restrictive side.
+///
+/// An unrecognised tool name counts as mutating. Resolving a name that is not
+/// in the registry — a typo, a renamed tool, or a future externally-registered
+/// one — yields no write classification at all, and treating that absence as
+/// read-only would put the *lower* bar on a skill whose blast radius is
+/// unknown. ADR-038 says to bias against the expensive error, so the unknown
+/// case belongs on the restrictive side.
 ///
 /// This gates a safety bar, not availability. `stage2_tools` fails open in the
 /// other direction on purpose: there, an unknown name simply is not offered,

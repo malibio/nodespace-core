@@ -620,9 +620,20 @@ mod tests {
                 .find(|t| t.title == title)
                 .unwrap_or_else(|| panic!("seed skill '{title}' must exist"));
             let tools = tmpl_tool_whitelist(&seed);
-            let mutates = tools
-                .iter()
-                .any(|t| crate::local_agent::tools::is_write_tool(t));
+            // Exercise the production classifier rather than restating its
+            // rule: a reimplementation here would keep passing while
+            // `skill_is_mutating` regressed, which is the opposite of what
+            // this test is for.
+            let candidate = crate::agent_types::SkillCandidate {
+                id: format!("seed-{title}"),
+                name: title.to_string(),
+                description: String::new(),
+                score: 1.0,
+                tools: tools.clone(),
+                instructions: String::new(),
+                schema_metadata: serde_json::json!([]),
+            };
+            let mutates = crate::local_agent::routing::skill_is_mutating(&candidate);
             assert_eq!(
                 mutates, should_mutate,
                 "skill '{title}' blast radius changed; whitelist is {tools:?}"
