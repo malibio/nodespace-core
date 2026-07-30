@@ -430,8 +430,22 @@ impl LocalAgentServiceImpl {
         let service = self.get_service().await;
 
         // Refresh workspace context before creating the session.
+        //
+        // Schema retrieval embeds the current message blended with the preceding
+        // conversational turns, so a follow-up that names its subject only by
+        // pronoun or ellipsis still matches the schema introduced earlier. Only
+        // user/assistant turns are blended — the synthetic completed-writes
+        // records are boilerplate that would dilute the query.
         let emb = self.inner.embedding_service.read().await.clone();
-        let ctx = build_workspace_context(&self.inner.node_service, emb, Some(&user_message)).await;
+        let prior_turns: Vec<&str> = prior_history
+            .iter()
+            .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+            .map(|m| m.content.as_str())
+            .collect();
+        let retrieval_query =
+            nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, &user_message);
+        let ctx =
+            build_workspace_context(&self.inner.node_service, emb, Some(&retrieval_query)).await;
 
         // Create an ephemeral session seeded with prior history.
         let session_id = service.create_session(None, prior_history).await;
