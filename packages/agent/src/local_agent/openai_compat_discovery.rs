@@ -175,16 +175,22 @@ mod tests {
 
     #[test]
     fn parses_real_ollama_models_response() {
-        // Verbatim body from Ollama 0.32.1 at /v1/models — note it carries only
+        // Body shape from Ollama 0.32.1 at /v1/models — note it carries only
         // id/object/created/owned_by, no size or context length.
+        //
+        // The ids are incidental to what this asserts (that every `id` is
+        // extracted, in order), so they name models NodeSpace actually carries.
+        // An earlier capture listed `ornith:9b`, which ADR-056 removed from the
+        // catalog outright — a removed model has no business appearing as a
+        // sample id in current code.
         let body = r#"{"object":"list","data":[
             {"id":"mistral:7b","object":"model","created":1783255193,"owned_by":"library"},
-            {"id":"ornith:9b","object":"model","created":1783252404,"owned_by":"library"},
+            {"id":"mistral-nemo:12b","object":"model","created":1783252404,"owned_by":"library"},
             {"id":"gemma4:e4b","object":"model","created":1775681349,"owned_by":"library"}
         ]}"#;
 
         let models = parse_models_response(body).expect("should parse");
-        assert_eq!(models, vec!["mistral:7b", "ornith:9b", "gemma4:e4b"]);
+        assert_eq!(models, vec!["mistral:7b", "mistral-nemo:12b", "gemma4:e4b"]);
     }
 
     #[test]

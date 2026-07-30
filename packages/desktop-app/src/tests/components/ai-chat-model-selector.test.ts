@@ -97,8 +97,8 @@ describe('AiChatModelSelector — PTY agent selection', () => {
 
   it('other provider selections remain unaffected by the PTY addition', () => {
     const onSelect = vi.fn();
-    handleChangeValue('native:qwen2.5-3b', onSelect);
-    expect(onSelect).toHaveBeenCalledWith({ provider: 'native', modelId: 'qwen2.5-3b' });
+    handleChangeValue('native:gemma-4-e4b-q4km', onSelect);
+    expect(onSelect).toHaveBeenCalledWith({ provider: 'native', modelId: 'gemma-4-e4b-q4km' });
 
     onSelect.mockClear();
     handleChangeValue('openai-compat:abc-123', onSelect);
@@ -188,7 +188,7 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
   it('nulls model when no agent id is provided', () => {
     const current: Partial<AiChatNode> = {
       provider: 'native',
-      model: 'qwen2.5-3b',
+      model: 'gemma-4-e4b-q4km',
       messages: [],
       status: 'active',
     };

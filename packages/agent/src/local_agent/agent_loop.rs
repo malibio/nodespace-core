@@ -46,7 +46,7 @@ const MAX_CONSECUTIVE_PARSE_FAILURES: usize = 2;
 /// Stage 1 emits one short tool call — a search query, or a question with a
 /// couple of options — and nothing else. A tight ceiling bounds the latency
 /// the extra turn adds and gives a runaway generation nowhere to go.
-const STAGE1_MAX_TOKENS: u32 = 256;
+pub const STAGE1_MAX_TOKENS: u32 = 256;
 
 /// The Stage-1 system prompt.
 ///
@@ -55,7 +55,8 @@ const STAGE1_MAX_TOKENS: u32 = 256;
 /// channel that already decides it — the failure ADR-064 rule 5 names. It says
 /// who to be, what the single decision is, and that clarifying is the
 /// exception.
-const STAGE1_SYSTEM_PROMPT: &str = "You are routing a user's request to the right capability.\n\
+pub const STAGE1_SYSTEM_PROMPT: &str =
+    "You are routing a user's request to the right capability.\n\
     Call route_query with a short description of the capability the request needs.\n\
     Call route_clarify ONLY if the request is too ambiguous to describe at all.\n\
     Prefer route_query: most requests can be described even when phrased indirectly.\n\
