@@ -113,7 +113,7 @@ fn has_namespace_prefix(name: &str) -> bool {
 /// rather than rejected, leaving the choice with the caller — this mirrors how
 /// the description-inference route treated the same collision before it was
 /// deleted (ADR-063). `fields` is otherwise stored verbatim.
-fn reject_reserved_property_names(fields: Vec<SchemaField>) -> (Vec<SchemaField>, Vec<String>) {
+fn warn_reserved_property_names(fields: Vec<SchemaField>) -> (Vec<SchemaField>, Vec<String>) {
     let mut warnings = Vec::new();
     for field in &fields {
         if RESERVED_CORE_PROPERTIES.contains(&field.name.as_str()) {
@@ -246,9 +246,9 @@ pub async fn handle_create_schema(
         ));
     }
 
-    // `fields` must be present (an empty array is a valid, deliberate choice — a
-    // relationship-only schema, for instance); its total absence means the caller
-    // never defined what the type holds.
+    // `fields` absent from the request (`None`) is always an error — the caller
+    // never defined what the type holds. `fields: []` (`Some(vec![])`) is always
+    // valid: an explicit, deliberate choice such as a relationship-only schema.
     let Some(explicit_fields) = params.fields else {
         return Err(MarkdownError::invalid_params(
             "\"fields\" is required. List every field explicitly, e.g. \
@@ -258,7 +258,7 @@ pub async fn handle_create_schema(
         ));
     };
 
-    let (stored_fields, warnings) = reject_reserved_property_names(explicit_fields);
+    let (stored_fields, warnings) = warn_reserved_property_names(explicit_fields);
 
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
@@ -1025,9 +1025,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_reserved_property_names_warns_on_collision() {
+    fn test_warn_reserved_property_names_warns_on_collision() {
         let (fields, warnings) =
-            reject_reserved_property_names(vec![field("status"), field("capacity")]);
+            warn_reserved_property_names(vec![field("status"), field("capacity")]);
 
         // Explicit fields are stored verbatim — never silently rewritten.
         assert_eq!(fields.len(), 2);
@@ -1047,8 +1047,8 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_reserved_property_names_no_collision_no_warnings() {
-        let (fields, warnings) = reject_reserved_property_names(vec![field("email")]);
+    fn test_warn_reserved_property_names_no_collision_no_warnings() {
+        let (fields, warnings) = warn_reserved_property_names(vec![field("email")]);
         assert_eq!(fields.len(), 1);
         assert!(warnings.is_empty());
     }
