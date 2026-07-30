@@ -641,11 +641,11 @@ fn def_create_schema() -> ToolDefinition {
                 },
                 "description": {
                     "type": "string",
-                    "description": "Brief description of what this entity type represents"
+                    "description": "Brief prose summary of what this entity type represents. This is NOT parsed into fields — define every field explicitly in \"fields\"."
                 },
                 "fields": {
                     "type": "array",
-                    "description": "Array of field definitions. Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.",
+                    "description": "REQUIRED. Array of field definitions — every field on this entity type must be listed explicitly here, even if empty ([]). Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -689,7 +689,7 @@ fn def_create_schema() -> ToolDefinition {
                     }
                 }
             },
-            "required": ["name"]
+            "required": ["name", "fields"]
         }),
     }
 }
