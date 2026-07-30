@@ -629,7 +629,7 @@ fn def_create_schema() -> ToolDefinition {
                             "description": { "type": "string", "description": "Field description" },
                             "coreValues": {
                                 "type": "array",
-                                "description": "For enum fields: array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active').",
+                                "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.",
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -697,7 +697,7 @@ fn def_update_schema() -> ToolDefinition {
                             "description": { "type": "string" },
                             "coreValues": {
                                 "type": "array",
-                                "description": "For enum fields: array of {value, label} pairs",
+                                "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.",
                                 "items": { "type": "object", "properties": { "value": { "type": "string" }, "label": { "type": "string" } } }
                             }
                         },
