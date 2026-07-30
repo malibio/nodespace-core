@@ -2757,8 +2757,8 @@ api_key = "sk-test"
     /// It does not pin that `run_ai_chat_turn` calls this rather than embedding
     /// `user_message` directly; that line needs live inference to reach, so the
     /// ADR-048 seam test is what exercises it end to end.
-    #[tokio::test]
-    async fn retrieval_query_blends_history_and_excludes_completed_writes() {
+    #[test]
+    fn retrieval_query_blends_history_and_excludes_completed_writes() {
         let history = node_history_from_messages(vec![
             AiChatMessage {
                 role: "user".to_string(),
@@ -2806,8 +2806,8 @@ api_key = "sk-test"
 
     /// A first turn has no history, so the query must be the message alone —
     /// byte-identical to what retrieval received before blending existed.
-    #[tokio::test]
-    async fn retrieval_query_for_first_turn_is_the_message_alone() {
+    #[test]
+    fn retrieval_query_for_first_turn_is_the_message_alone() {
         assert_eq!(
             schema_retrieval_query(&[], "Add an invoice for $500"),
             "Add an invoice for $500"

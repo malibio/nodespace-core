@@ -88,10 +88,14 @@ const BLENDED_HISTORY_TURNS: usize = 2;
 const MAX_CHARS_PER_BLENDED_TURN: usize = 400;
 
 /// Last `max_chars` characters of `text`, respecting char boundaries.
+///
+/// Returns `text` unchanged when it is already within the budget. `max_chars`
+/// is expected to be >= 1; `0` yields the final character rather than an empty
+/// string, since an empty budget has no caller and no useful meaning here.
 fn trailing_chars(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth_back(max_chars.saturating_sub(1)) {
-        Some((start, _)) if start > 0 => &text[start..],
-        _ => text,
+        Some((start, _)) => &text[start..],
+        None => text,
     }
 }
 
