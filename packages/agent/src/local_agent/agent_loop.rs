@@ -632,10 +632,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // model can burn every iteration without executing a single tool. Reset
         // on any successful parse, so only an unbroken run trips it.
         let mut consecutive_parse_failures = 0usize;
-        let mut total_usage = InferenceUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-        };
+        // Seeded with the Stage-1 routing turn's usage: it is part of what this
+        // turn cost, and reporting only the Stage-2 tokens would hide the price
+        // of the extra turn from everything that reads this figure.
+        let mut total_usage = routed.usage;
 
         // ReAct loop: iterate up to effective_max_iterations (skill-specific or global fallback)
         for iteration in 0..effective_max_iterations {
@@ -5313,5 +5313,410 @@ mod tests {
             !calls.lock().unwrap().iter().any(|c| c == "create_node"),
             "an empty-args repeat must still be recognised as the same call"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-stage routing (ADR-038)
+    // -----------------------------------------------------------------------
+
+    use crate::agent_types::SkillCandidate;
+
+    /// A tool executor with skill retrieval wired up, so the loop takes the
+    /// two-stage path instead of the single-turn fallback.
+    struct RoutingToolExecutor {
+        inner: MockToolExecutor,
+        candidates: Vec<SkillCandidate>,
+        /// Queries retrieval was actually asked for, so a test can assert the
+        /// system — not the model — issued the retrieval.
+        queries: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl RoutingToolExecutor {
+        fn new(inner: MockToolExecutor, candidates: Vec<SkillCandidate>) -> Self {
+            Self {
+                inner,
+                candidates,
+                queries: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn queries_handle(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
+            self.queries.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgentToolExecutor for RoutingToolExecutor {
+        async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+            self.inner.available_tools().await
+        }
+        async fn execute(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+        ) -> Result<ToolResult, ToolError> {
+            self.inner.execute(name, args).await
+        }
+        async fn routing_available(&self) -> bool {
+            true
+        }
+        async fn retrieve_skills(
+            &self,
+            query: &str,
+            limit: usize,
+        ) -> Result<crate::agent_types::SkillRetrieval, ToolError> {
+            self.queries.lock().unwrap().push(query.to_string());
+            let mut c = self.candidates.clone();
+            c.truncate(limit);
+            Ok(crate::agent_types::SkillRetrieval { candidates: c })
+        }
+    }
+
+    fn skill_candidate(name: &str, score: f32, tools: &[&str]) -> SkillCandidate {
+        SkillCandidate {
+            id: format!("skill-{name}"),
+            name: name.to_string(),
+            description: format!("Use this to {name}"),
+            score,
+            tools: tools.iter().map(|t| t.to_string()).collect(),
+            instructions: format!("INSTRUCTIONS FOR {name}"),
+            schema_metadata: json!([]),
+        }
+    }
+
+    /// A model that calls `route_query` at Stage 1, then the given tool.
+    fn routed_engine(query: &str, tool_name: &str, tool_args: &str, final_text: &str) -> MockEngine {
+        MockEngine::new(vec![
+            // Stage 1: the structural choice, expressed as a tool call.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_QUERY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "query": query }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            // Stage 2: act on the judged candidate.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: tool_name.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: tool_args.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: final_text.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 12,
+                    },
+                },
+            ],
+        ])
+    }
+
+    #[tokio::test]
+    async fn retrieval_runs_as_a_system_step_on_stage1s_query() {
+        // ADR-038: retrieval is a deterministic system step, not a model tool
+        // call. The model supplies the query; the system issues the retrieval.
+        let engine = routed_engine(
+            "create a schema",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        );
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            queries.lock().unwrap().as_slice(),
+            &["create a schema".to_string()],
+            "the system must issue exactly one retrieval, on Stage 1's query"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage2_tool_surface_is_scoped_to_the_matched_skill() {
+        // The matched skill is read-only, so a destructive tool must not be in
+        // reach even though the executor registers one.
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let inner = MockToolExecutor::new().with_tool(
+            "delete_node",
+            json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+            json!({"deleted": true}),
+        );
+        let exec = RoutingToolExecutor::new(
+            inner,
+            vec![skill_candidate("research", 0.9, &["search_nodes", "get_node"])],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+    }
+
+    #[tokio::test]
+    async fn a_mutating_skill_below_its_bar_is_not_offered() {
+        // Identical score, different verdict: 0.2 clears the read bar but not
+        // the mutating one, so this candidate is never rendered or actioned.
+        let cands = vec![skill_candidate("deletion", 0.2, &["delete_node"])];
+        assert!(routing::render_candidates_for_prompt(&cands).is_none());
+    }
+
+    #[tokio::test]
+    async fn stage1_clarify_answers_the_user_without_running_stage2() {
+        let engine = MockEngine::new(vec![vec![
+            StreamingChunk::ToolCallStart {
+                id: "r1".into(),
+                name: routing::ROUTE_CLARIFY_TOOL.into(),
+            },
+            StreamingChunk::ToolCallArgs {
+                id: "r1".into(),
+                args_json: json!({
+                    "question": "Did you want to track debts or search notes?",
+                    "options": ["Track who owes me money", "Search existing notes"]
+                })
+                .to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 8,
+                    completion_tokens: 4,
+                },
+            },
+        ]]);
+        let exec = RoutingToolExecutor::new(MockToolExecutor::new(), vec![]);
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "keep tabs on who owes me money",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.tool_calls_made.is_empty());
+        // Specific, with the concrete options — not a bare "what do you mean?".
+        assert!(result.response.contains("Track who owes me money"));
+        assert!(result.response.contains("Search existing notes"));
+        assert!(
+            queries.lock().unwrap().is_empty(),
+            "a clarification must not trigger retrieval"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_clarification_for_one_intent_falls_through_to_retrieval() {
+        // The contract: at most one clarification per intent. On the turn after
+        // the user answered one, Stage 1 asking again must be suppressed and
+        // the turn must retrieve on the raw message instead.
+        let engine = MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_CLARIFY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({"question": "Which one?", "options": ["A", "B"]})
+                        .to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "Here is what I found.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 8,
+                    },
+                },
+            ],
+        ]);
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+
+        let mut session = new_session();
+        // A prior clarification the user has already answered.
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first one".to_string()));
+
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "the first one",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !result.response.starts_with(CLARIFICATION_OPENER),
+            "never clarify twice for one intent: {:?}",
+            result.response
+        );
+        assert_eq!(
+            queries.lock().unwrap().len(),
+            1,
+            "the suppressed clarification must fall through to retrieval"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_clarification_is_not_treated_as_already_clarified() {
+        // The clarification we just asked and are still waiting on is not a
+        // prior one — otherwise a single clarification would disable the
+        // mechanism for the rest of the conversation.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        assert!(!session_already_clarified(&session));
+
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(session_already_clarified(&session));
+    }
+
+    #[tokio::test]
+    async fn routing_failure_leaves_the_turn_on_the_full_tool_surface() {
+        // Retrieval is best-effort: losing it must not cost the user the turn.
+        struct FailingRetrieval(MockToolExecutor);
+        #[async_trait::async_trait]
+        impl AgentToolExecutor for FailingRetrieval {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                self.0.available_tools().await
+            }
+            async fn execute(
+                &self,
+                name: &str,
+                args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.0.execute(name, args).await
+            }
+            async fn routing_available(&self) -> bool {
+                true
+            }
+            async fn retrieve_skills(
+                &self,
+                _q: &str,
+                _l: usize,
+            ) -> Result<crate::agent_types::SkillRetrieval, ToolError> {
+                Err(ToolError::ExecutionFailed("embedding down".into()))
+            }
+        }
+
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let loop_ = LocalAgentLoop::new(
+            Arc::new(engine),
+            Arc::new(FailingRetrieval(MockToolExecutor::new())),
+        );
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+        assert_eq!(result.response, "Done.");
+    }
+
+    #[tokio::test]
+    async fn stage1_usage_is_included_in_the_turns_reported_total() {
+        // The routing turn spends tokens; under-reporting them would hide the
+        // cost of the extra turn from every consumer of the usage figure.
+        let engine = routed_engine("find notes", "search_nodes", r#"{"query":"x"}"#, "Done.");
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        // 8 (stage 1) + 20 + 30 from the scripted responses.
+        assert_eq!(result.usage.prompt_tokens, 58);
     }
 }
