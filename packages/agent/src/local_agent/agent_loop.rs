@@ -869,9 +869,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // invisible in any aggregate score; the 200-char preview above is not
             // enough to reconstruct what the model actually said when a scenario
             // needs investigating.
+            //
+            // JSON-encoded rather than `%response_text` (Display) — Display
+            // writes the text VERBATIM, embedded newlines included, which breaks
+            // the one-line-per-record shape every log scraper here relies on. A
+            // JSON string escapes newlines and quotes, so this line is always
+            // exactly one line no matter what the model generated, including
+            // text that happens to contain another log line's marker substring.
             tracing::debug!(
                 iteration,
-                raw_response = %response_text,
+                raw_response = %serde_json::to_string(&response_text).unwrap_or_default(),
                 "Agent loop: raw generation"
             );
 

@@ -19,6 +19,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildTraceLines,
   checkUniformity,
+  parseTurnOutput,
   partitionExcluded,
 } from "./runner.ts";
 import { EnvironmentError } from "./preflight.ts";
@@ -172,5 +173,87 @@ describe("buildTraceLines", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0].isPriorContext).toBe(true);
     expect(lines[1].isPriorContext).toBe(false);
+  });
+});
+
+describe("parseTurnOutput", () => {
+  test("parses tool calls, reply, and latency from ordinary output", () => {
+    const out = [
+      "[tools offered] create_node, search_nodes",
+      "[tool] create_node [fields=3] {}",
+      "assistant> Done — created the node.",
+    ].join("\n");
+    const turn = parseTurnOutput(out, 1234);
+    expect(turn.toolsCalled).toEqual(["create_node"]);
+    expect(turn.toolCalls).toEqual([
+      { name: "create_node", isError: false, fieldCount: 3 },
+    ]);
+    expect(turn.reply).toBe("Done — created the node.");
+    expect(turn.latencyMs).toBe(1234);
+  });
+
+  test("preserves a multiline raw generation intact (regression)", () => {
+    const text = "line one\nline two\nline three";
+    const out = `[raw] iteration=0 ${JSON.stringify(text)}\nassistant> ok`;
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.rawOutput).toBe(`[iteration 0] ${text}`);
+  });
+
+  test("does not truncate raw output containing a literal [tool] marker (regression)", () => {
+    const text = "I'll use [tool] create_node to do that.";
+    const out = [
+      `[raw] iteration=0 ${JSON.stringify(text)}`,
+      "[tool] create_node [fields=1] {}",
+      "assistant> done",
+    ].join("\n");
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.rawOutput).toBe(`[iteration 0] ${text}`);
+    // The real tool call after it must still be parsed, not swallowed.
+    expect(turn.toolsCalled).toEqual(["create_node"]);
+  });
+
+  test("joins multiple iterations of raw output in order", () => {
+    const out = [
+      `[raw] iteration=0 ${JSON.stringify("first\nresponse")}`,
+      `[raw] iteration=1 ${JSON.stringify("second response")}`,
+      "assistant> done",
+    ].join("\n");
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.rawOutput).toBe(
+      "[iteration 0] first\nresponse\n[iteration 1] second response",
+    );
+  });
+
+  test("rawOutput is undefined when no [raw] lines are present", () => {
+    const turn = parseTurnOutput("assistant> hi", 100);
+    expect(turn.rawOutput).toBeUndefined();
+  });
+
+  test("parses routing decision and stage2 injection markers", () => {
+    const out = ["[routing] query", "[stage2 injected] true", "assistant> ok"].join(
+      "\n",
+    );
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.routingDecision).toBe("query");
+    expect(turn.stage2CandidatesInjected).toBe(true);
+  });
+
+  test("parses stage2 injected as false, distinct from absent", () => {
+    const out = ["[stage2 injected] false", "assistant> ok"].join("\n");
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.stage2CandidatesInjected).toBe(false);
+  });
+
+  test("marks emptyGeneration from the marker", () => {
+    const out = ["[empty-generation]", "assistant> (no assistant reply)"].join(
+      "\n",
+    );
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.emptyGeneration).toBe(true);
+  });
+
+  test("emptyGeneration is undefined (not false) when the marker is absent", () => {
+    const turn = parseTurnOutput("assistant> hi", 100);
+    expect(turn.emptyGeneration).toBeUndefined();
   });
 });

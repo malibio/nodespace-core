@@ -122,43 +122,37 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-/** Pull this turn's internal decisions out of the daemon log slice. */
-function reportTurnLog(sinceByte: number): void {
-  let slice = "";
-  try {
-    const buf = Bun.file(NS_LOG);
-    // Read only the bytes appended during this turn.
-    slice = stripAnsi(
-      Bun.spawnSync([
-        "tail",
-        "-c",
-        `+${sinceByte + 1}`,
-        NS_LOG,
-      ]).stdout.toString(),
-    );
-    if (!slice && buf) slice = "";
-  } catch {
-    return;
-  }
+/**
+ * Turn a daemon log slice (ANSI already stripped) into the `[marker] ...`
+ * lines `cmdSend` prints to stdout for the eval runner to scrape.
+ *
+ * Pure — no file or process I/O — specifically so the marker-parsing logic
+ * (where two regressions were caught in review: a multiline raw generation
+ * silently truncated by `split("\n")`, and a lookahead terminator that broke
+ * if the model's own text contained a literal `[tool]`) is unit-testable
+ * directly against a fixed string. See aichat.test.ts.
+ */
+export function formatTurnLogLines(slice: string): string[] {
+  const out: string[] = [];
   const lines = slice.split("\n");
   const offered = lines.filter((l) => l.includes("scoped tool list")).pop();
   if (offered) {
     const m = offered.match(/selected_tools="?([^"]*)"?/);
-    if (m) console.log(`[tools offered] ${m[1]}`);
+    if (m) out.push(`[tools offered] ${m[1]}`);
   }
   const prepared = lines
     .filter((l) => l.includes("system prompt and tools prepared"))
     .pop();
   if (prepared) {
     const m = prepared.match(/tool_names="?([^"]*?)"? system_prompt_len/);
-    if (m) console.log(`[tools available] ${m[1]}`);
+    if (m) out.push(`[tools available] ${m[1]}`);
     // Whether Stage 2's prompt actually carried a candidate block — distinct
     // from whether routing ran at all. A turn that routed but matched nothing
     // looks identical to one that never routed unless this is captured
     // separately (see agent_loop.rs's "Agent turn: system prompt and tools
     // prepared" line).
     const injected = prepared.match(/stage2_candidates_injected=(true|false)/)?.[1];
-    if (injected) console.log(`[stage2 injected] ${injected}`);
+    if (injected) out.push(`[stage2 injected] ${injected}`);
   }
   // Stage 1's routing decision. Emitted on one of four lines depending which
   // path a turn took (see agent_loop.rs::route): "routing unavailable for
@@ -177,22 +171,35 @@ function reportTurnLog(sinceByte: number): void {
     .pop();
   if (routingLine) {
     const m = routingLine.match(/routing_decision="?([a-z_]+)"?/);
-    if (m) console.log(`[routing] ${m[1]}`);
+    if (m) out.push(`[routing] ${m[1]}`);
   }
   // Raw generation per ReAct iteration — only present when the daemon was
   // launched with RUST_LOG=debug (or a filter including this target at
   // debug), since agent_loop.rs logs it at debug level specifically so
-  // production's default `info` verbosity is unaffected. `raw_response` is
-  // free-form model text and may itself contain the literal substring
-  // `iteration=`; matching iteration from the FRONT of the line (tracing's
-  // field order: iteration always precedes raw_response) avoids parsing into
-  // the payload.
+  // production's default `info` verbosity is unaffected.
+  //
+  // `raw_response` is free-form model text, so agent_loop.rs JSON-encodes it
+  // before logging rather than writing it verbatim (tracing's `%` Display
+  // formatter would otherwise pass embedded newlines straight through,
+  // breaking the one-line-per-record assumption every marker here relies on
+  // — a multiline generation would get silently truncated at its first
+  // newline by the `slice.split("\n")` above). The line below is therefore
+  // guaranteed to be exactly one line, and `raw_response=` is followed by a
+  // JSON string literal we can parse back into the original text, quotes,
+  // newlines, and all.
   for (const l of lines.filter((l) => l.includes("Agent loop: raw generation"))) {
     const iterMatch = l.match(/iteration=(\d+)/);
     const respIdx = l.indexOf("raw_response=");
     if (iterMatch && respIdx !== -1) {
-      const raw = l.slice(respIdx + "raw_response=".length);
-      console.log(`[raw] iteration=${iterMatch[1]} ${raw}`);
+      const jsonStr = l.slice(respIdx + "raw_response=".length);
+      try {
+        const raw = JSON.parse(jsonStr);
+        out.push(`[raw] iteration=${iterMatch[1]} ${JSON.stringify(raw)}`);
+      } catch {
+        // Older daemon build logging the pre-fix verbatim form, or a
+        // truncated line — skip rather than emit a marker downstream can't
+        // trust.
+      }
     }
   }
   for (const l of lines.filter((l) => l.includes("Tool executed"))) {
@@ -208,7 +215,7 @@ function reportTurnLog(sinceByte: number): void {
     // source and so must stay last on the line.
     const fields = l.match(/result_field_count=(\d+)/)?.[1];
     const fieldPart = fields === undefined ? "" : ` [fields=${fields}]`;
-    console.log(`[tool] ${tool}${err}${fieldPart} ${args}`);
+    out.push(`[tool] ${tool}${err}${fieldPart} ${args}`);
   }
   // The documented degenerate-empty-generation failure mode: the model opens a
   // turn and emits neither text nor a tool call. local_agent_service.rs then
@@ -222,7 +229,29 @@ function reportTurnLog(sinceByte: number): void {
       l.includes("inference turn failed") &&
       l.includes("model produced empty response with no tool calls"),
   );
-  if (emptyGen) console.log(`[empty-generation]`);
+  if (emptyGen) out.push(`[empty-generation]`);
+  return out;
+}
+
+/** Pull this turn's internal decisions out of the daemon log slice. */
+function reportTurnLog(sinceByte: number): void {
+  let slice = "";
+  try {
+    const buf = Bun.file(NS_LOG);
+    // Read only the bytes appended during this turn.
+    slice = stripAnsi(
+      Bun.spawnSync([
+        "tail",
+        "-c",
+        `+${sinceByte + 1}`,
+        NS_LOG,
+      ]).stdout.toString(),
+    );
+    if (!slice && buf) slice = "";
+  } catch {
+    return;
+  }
+  for (const line of formatTurnLogLines(slice)) console.log(line);
 }
 
 async function cmdSend(id: string, message: string): Promise<void> {
@@ -313,7 +342,13 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exit(1);
-});
+// Guarded so aichat.test.ts can import formatTurnLogLines without triggering
+// a CLI invocation — `main()` parses process.argv and exits(1) on no match,
+// which is exactly what happened before this guard existed: the test runner's
+// own argv doesn't match any subcommand.
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  });
+}

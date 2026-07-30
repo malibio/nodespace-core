@@ -90,44 +90,80 @@ function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
     };
   }
 
-  const out = r.stdout.toString();
+  return parseTurnOutput(r.stdout.toString(), latencyMs);
+}
 
+/**
+ * Parse aichat.ts's stdout for one turn into a `TurnRecord`.
+ *
+ * Split out from `runTurn` so this — the actual marker-parsing logic, where
+ * both regressions caught in review lived — is unit-testable directly against
+ * a fixed string, without spawning `aichat.ts` or a daemon (see runner.test.ts).
+ */
+export function parseTurnOutput(out: string, latencyMs: number): TurnRecord {
   // One pass over the [tool] lines feeds both shapes, so they cannot disagree
   // about how many calls a turn made. aichat.ts emits:
   //   [tool] <name>[ERROR][ [fields=N]] <args>
   // The args are free-form and truncated, so every structured marker precedes
   // them and nothing here parses them.
+  //
+  // Anchored to the START of a line (`^` with the `m` flag) — without this, a
+  // `[raw]` line's JSON-encoded payload containing the literal substring
+  // "[tool] create_node" (the model narrating a tool call in its own text,
+  // rather than actually invoking one) matched here too and was counted as a
+  // real tool call. Caught in review as a direct consequence of introducing
+  // arbitrary model text into this same stdout stream via the [raw] marker.
   const toolCalls: ToolCallRecord[] = [
-    ...out.matchAll(/\[tool\] ([a-z_]+)( \[ERROR\])?( \[fields=(\d+)\])?/g),
+    ...out.matchAll(/^\[tool\] ([a-z_]+)( \[ERROR\])?( \[fields=(\d+)\])?/gm),
   ].map((m) => ({
     name: m[1],
     isError: m[2] !== undefined,
     ...(m[4] === undefined ? {} : { fieldCount: Number(m[4]) }),
   }));
 
-  // Raw generations, one per ReAct iteration:  [raw] iteration=N <text>
-  // Joined in iteration order so a multi-round turn's trace reads as one
-  // transcript rather than requiring the reader to re-sort log lines.
-  const rawLines = [...out.matchAll(/^\[raw\] iteration=(\d+) ([\s\S]*?)(?=\n\[raw\] iteration=\d+ |\n\[tool\]|\n$|$)/gm)];
+  // Raw generations, one per ReAct iteration: `[raw] iteration=N <json-string>`.
+  // aichat.ts JSON-encodes the payload before emitting it specifically so this
+  // is always exactly one line — a plain `\n`-delimited match here would be
+  // unsafe against a lookahead terminator (`\n[tool]`, a following `\n[raw]`)
+  // that the model's own raw text could contain literally, which is exactly
+  // what an earlier version of this regex got wrong (caught in review before
+  // it shipped — see the multiline/embedded-marker tests in runner.test.ts).
+  // Iteration order is preserved by matchAll's left-to-right scan, so a
+  // multi-round turn's trace reads as one transcript without needing to
+  // re-sort.
+  const rawLines = [...out.matchAll(/^\[raw\] iteration=(\d+) (.*)$/gm)];
   const rawOutput =
     rawLines.length > 0
-      ? rawLines.map((m) => `[iteration ${m[1]}] ${m[2].trim()}`).join("\n")
+      ? rawLines
+          .map((m) => `[iteration ${m[1]}] ${JSON.parse(m[2])}`)
+          .join("\n")
       : undefined;
 
+  // Every marker below is anchored to the START of a line (`^` with the `m`
+  // flag), for the same reason the tool-call regex above is: `out` now
+  // contains arbitrary raw model text via `[raw]` lines, and an unanchored
+  // match against a marker-shaped substring inside that text — e.g. the model
+  // narrating "[routing] query" or "[empty-generation]" in its own words —
+  // would be silently counted as the harness's own signal rather than the
+  // model's. `assistant> ` is deliberately NOT anchored/multiline here: it is
+  // aichat.ts's own final-reply marker, printed exactly once as the last
+  // thing on stdout, and `[\s\S]*$` intentionally captures everything after
+  // it (a real assistant reply can itself be multiline).
   return {
-    toolsOffered: out.match(/\[tools offered\] (.*)/)?.[1]?.trim() ?? "",
+    toolsOffered: out.match(/^\[tools offered\] (.*)/m)?.[1]?.trim() ?? "",
     toolsCalled: toolCalls.map((t) => t.name),
     toolCalls,
     reply:
       out.match(/assistant> ([\s\S]*)$/)?.[1]?.trim() ?? "(no reply parsed)",
     latencyMs,
-    routingDecision: out.match(/\[routing\] ([a-z_]+)/)?.[1],
+    routingDecision: out.match(/^\[routing\] ([a-z_]+)/m)?.[1],
     stage2CandidatesInjected: (() => {
-      const m = out.match(/\[stage2 injected\] (true|false)/);
+      const m = out.match(/^\[stage2 injected\] (true|false)/m);
       return m ? m[1] === "true" : undefined;
     })(),
     rawOutput,
-    emptyGeneration: out.includes("[empty-generation]") || undefined,
+    emptyGeneration:
+      out.match(/^\[empty-generation\]$/m) !== null || undefined,
   };
 }
 
