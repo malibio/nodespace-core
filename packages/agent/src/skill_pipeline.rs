@@ -596,6 +596,40 @@ mod tests {
         }
     }
 
+    /// Blast radius is derived from each seeded skill's `tool_whitelist`
+    /// (ADR-038), so the derivation must agree with what the seeds actually
+    /// declare. This pins the classification against the real seed data rather
+    /// than a stub, and fails if a seed's whitelist gains or loses a write tool
+    /// without that being an intentional change to its Stage-2 bar.
+    #[test]
+    fn seeded_skills_classify_by_blast_radius_as_expected() {
+        let expected_mutating = [
+            ("Node Creation", true),
+            ("Schema Creation", true),
+            ("Graph Editing", true),
+            ("Relationship Management", true),
+            ("Node Deletion", true),
+            ("Bulk Import", true),
+            ("Organization", true),
+            ("Research & Search", false),
+        ];
+
+        for (title, should_mutate) in expected_mutating {
+            let seed = seed_skill_nodes()
+                .into_iter()
+                .find(|t| t.title == title)
+                .unwrap_or_else(|| panic!("seed skill '{title}' must exist"));
+            let tools = tmpl_tool_whitelist(&seed);
+            let mutates = tools
+                .iter()
+                .any(|t| crate::local_agent::tools::is_write_tool(t));
+            assert_eq!(
+                mutates, should_mutate,
+                "skill '{title}' blast radius changed; whitelist is {tools:?}"
+            );
+        }
+    }
+
     #[test]
     fn update_schema_is_reachable_via_search_skills() {
         let seeds = seed_skill_nodes();
