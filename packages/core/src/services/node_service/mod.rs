@@ -4161,7 +4161,7 @@ mod tests {
         crate::markdown::NodeTemplate {
             title: title.to_string(),
             content: None,
-            root_node_type: "prompt".to_string(),
+            root_node_type: "agent-guidance".to_string(),
             root_properties: json!({}),
             child_node_type: Some("text".to_string()),
             child_properties: None,
@@ -4182,7 +4182,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].content, "Core Identity");
 
@@ -4193,7 +4196,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         assert_eq!(
             nodes.len(),
             1,
@@ -4222,7 +4228,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         assert_eq!(nodes.len(), 1);
         let children = service.get_children(&nodes[0].id).await.unwrap();
         assert_eq!(
@@ -4243,7 +4252,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         let root = &nodes[0];
 
         // Simulate the user editing the seeded node through the normal update path.
@@ -4263,7 +4275,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         assert_eq!(
             nodes.len(),
             1,
@@ -4287,7 +4302,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         let version_before = nodes[0].version;
 
         // Re-seed with the exact same template (same content hash) — must be a no-op,
@@ -4297,7 +4315,10 @@ mod tests {
             .await
             .unwrap();
 
-        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let nodes = service
+            .query_nodes_by_type("agent-guidance", None)
+            .await
+            .unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(
             nodes[0].version, version_before,
@@ -4327,7 +4348,7 @@ mod tests {
                 "description": description,
                 "tool_whitelist": ["search_semantic"],
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: Some("text".to_string()),
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: "Guidance v1.".to_string(),
@@ -4356,7 +4377,7 @@ mod tests {
         );
 
         // Re-seed with changed description under the same seed_key — must replace,
-        // not duplicate, exactly like the empty-schema `prompt` case.
+        // not duplicate, exactly like the empty-schema `agent-guidance` case.
         service
             .seed_nodes_from_templates(vec![
                 prepare_nodes_from_template(&skill_tmpl("Search v2")).unwrap()
@@ -4437,7 +4458,7 @@ mod tests {
     }
 
     /// A single `seed_nodes_from_templates` call, as the daemon issues it, mixes
-    /// `prompt` + `skill` + `tool` template groups together. Reconciliation
+    /// `agent-guidance` + `skill` + `tool` template groups together. Reconciliation
     /// looks up existing nodes per-`node_type`, keyed by `_seed.key` — this
     /// proves that grouping doesn't cross-contaminate: changing one type's
     /// content doesn't touch, skip, or duplicate a sibling type's unrelated node
@@ -4457,7 +4478,7 @@ mod tests {
                 "description": "Skill v1",
                 "tool_whitelist": ["search_semantic"],
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: Some("text".to_string()),
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: "Guidance v1.".to_string(),
@@ -4473,12 +4494,12 @@ mod tests {
 
         assert_eq!(
             service
-                .query_nodes_by_type("prompt", None)
+                .query_nodes_by_type("agent-guidance", None)
                 .await
                 .unwrap()
                 .len(),
-            2, // the skill's own "prompt"-typed child counts here too
-            "expected the Core Identity root plus the skill's prompt child"
+            1, // only the Core Identity root — the skill's child is now "text"
+            "expected only the Core Identity root"
         );
         assert_eq!(
             service

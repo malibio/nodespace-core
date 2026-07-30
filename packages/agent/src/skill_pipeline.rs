@@ -219,8 +219,9 @@ SUCCESS: After create_relationship returns, confirm to the user that the node ha
 
 /// Default skill node templates seeded on first run.
 ///
-/// Each template produces one skill root node plus optional `prompt` children
-/// with guidance markdown. Tool whitelists and max_iterations are still stored
+/// Each template produces one skill root node plus ordinary markdown children
+/// (header/text, inferred from the guidance markdown's structure) carrying the
+/// guidance body. Tool whitelists and max_iterations are still stored
 /// as properties on the skill node — they're consumed by external (ACP) agents
 /// that prefer the older skill-scoped flow. The local agent ignores them and
 /// just uses the description/name returned by `search_skills`.
@@ -235,7 +236,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
                 "tool_whitelist": ["search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 4,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Research & Search Guidance
@@ -289,7 +290,7 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
                 "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
@@ -330,7 +331,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: schema_creation_guidance(),
@@ -344,7 +345,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: graph_editing_guidance(),
@@ -358,7 +359,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_related_nodes", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: relationship_management_guidance(),
@@ -372,7 +373,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: node_deletion_guidance(),
@@ -386,7 +387,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_nodes_from_markdown"],
                 "max_iterations": 2,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: bulk_import_guidance(),
@@ -400,7 +401,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: organization_guidance(),
