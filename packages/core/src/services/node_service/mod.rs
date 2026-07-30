@@ -1412,7 +1412,15 @@ impl NodeService {
                 }
 
                 // Replace: delete the existing subtree, then fall through to the
-                // same create path used for a brand-new node.
+                // same create path used for a brand-new node. The recreated root
+                // gets `root.id` — a fresh UUID assigned by
+                // `prepare_nodes_from_template` on every call — not the deleted
+                // node's ID. Nothing references seeded prompt/skill/tool nodes by
+                // stable ID today, so this is safe, but any future feature that
+                // does (e.g. a `mentions` edge into a skill node) would need
+                // either a stable ID carried across replace, or an explicit
+                // decision that seeded-content IDs are not a stable reference
+                // surface.
                 self.delete_node(&existing_node.id, existing_node.version)
                     .await?;
                 replaced += 1;
@@ -4294,6 +4302,212 @@ mod tests {
         assert_eq!(
             nodes[0].version, version_before,
             "unchanged seed content must not touch the existing node"
+        );
+    }
+
+    /// `prompt` (the type every other reseed test uses) is a core schema with
+    /// zero fields, so its properties never round-trip through
+    /// `normalize_flat_properties_to_namespace`'s flat-property-hoisting branch
+    /// with anything worth namespacing. `skill` has real required fields
+    /// (`description`, `tool_whitelist`) and hits that hoisting path on every
+    /// create. This proves `_seed` still survives — landing at
+    /// `properties._seed`, not buried under `properties.skill._seed` — for a
+    /// type that actually exercises the mechanism the whole fix depends on.
+    #[tokio::test]
+    async fn reseed_replaces_skill_tier_node_with_real_schema_fields() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let skill_tmpl = |description: &str| NodeTemplate {
+            title: "Research & Search".to_string(),
+            content: None,
+            root_node_type: "skill".to_string(),
+            root_properties: json!({
+                "description": description,
+                "tool_whitelist": ["search_semantic"],
+            }),
+            child_node_type: Some("prompt".to_string()),
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: "Guidance v1.".to_string(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&skill_tmpl("Search v1")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        // Real schema fields land namespaced under properties.skill.* — confirms
+        // this node actually went through the hoisting path this test targets.
+        assert_eq!(
+            nodes[0].properties["skill"]["description"], "Search v1",
+            "schema field must be namespaced under properties.skill"
+        );
+        // _seed must NOT be nested under properties.skill — it must survive at
+        // the top level, or the by-key lookup on reseed would never find it.
+        assert!(
+            nodes[0].properties.get("_seed").is_some(),
+            "_seed must land at the top level even when the node_type has real schema fields"
+        );
+
+        // Re-seed with changed description under the same seed_key — must replace,
+        // not duplicate, exactly like the empty-schema `prompt` case.
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&skill_tmpl("Search v2")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "replace must not leave the stale skill node behind"
+        );
+        assert_eq!(nodes[0].properties["skill"]["description"], "Search v2");
+    }
+
+    /// `tool` seed templates pre-namespace their own properties under a `"tool"`
+    /// key (see `skill_pipeline.rs::seed_tool_nodes`) for an unrelated reason —
+    /// `tool` isn't a core schema, so `normalize_flat_properties_to_namespace`
+    /// wouldn't hoist it on its own; the pre-namespacing exists to protect the
+    /// nested `parameter_schema` object from being misclassified. This proves
+    /// `_seed` (stamped alongside that pre-existing `"tool"` namespace) doesn't
+    /// collide with it and both survive independently.
+    #[tokio::test]
+    async fn reseed_replaces_tool_tier_node_with_pre_namespaced_properties() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let tool_tmpl = |description: &str| NodeTemplate {
+            title: "search_nodes".to_string(),
+            content: None,
+            root_node_type: "tool".to_string(),
+            root_properties: json!({
+                "tool": {
+                    "handler": "search_nodes",
+                    "description": description,
+                    "parameter_schema": {"type": "object"},
+                    "source": "internal",
+                    "enabled": true,
+                }
+            }),
+            child_node_type: None,
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: String::new(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&tool_tmpl("Search v1")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("tool", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].properties["tool"]["description"], "Search v1");
+        assert!(
+            nodes[0].properties.get("_seed").is_some(),
+            "_seed must coexist with the pre-namespaced 'tool' key, not be swallowed by it"
+        );
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&tool_tmpl("Search v2")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("tool", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "replace must not leave the stale tool node behind"
+        );
+        assert_eq!(nodes[0].properties["tool"]["description"], "Search v2");
+    }
+
+    /// A single `seed_nodes_from_templates` call, as the daemon issues it, mixes
+    /// `prompt` + `skill` + `tool` template groups together. Reconciliation
+    /// looks up existing nodes per-`node_type`, keyed by `_seed.key` — this
+    /// proves that grouping doesn't cross-contaminate: changing one type's
+    /// content doesn't touch, skip, or duplicate a sibling type's unrelated node
+    /// sharing the same batch.
+    #[tokio::test]
+    async fn reseed_handles_mixed_node_types_in_one_batch_independently() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let prompt_tmpl = seed_template("Core Identity", "Prompt v1.", SeedTier::System);
+        let skill_tmpl = NodeTemplate {
+            title: "Research & Search".to_string(),
+            content: None,
+            root_node_type: "skill".to_string(),
+            root_properties: json!({
+                "description": "Skill v1",
+                "tool_whitelist": ["search_semantic"],
+            }),
+            child_node_type: Some("prompt".to_string()),
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: "Guidance v1.".to_string(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&prompt_tmpl).unwrap(),
+                prepare_nodes_from_template(&skill_tmpl).unwrap(),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .query_nodes_by_type("prompt", None)
+                .await
+                .unwrap()
+                .len(),
+            2, // the skill's own "prompt"-typed child counts here too
+            "expected the Core Identity root plus the skill's prompt child"
+        );
+        assert_eq!(
+            service
+                .query_nodes_by_type("skill", None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Only the prompt template changes this round.
+        let prompt_v2 = seed_template("Core Identity", "Prompt v2.", SeedTier::System);
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&prompt_v2).unwrap(),
+                prepare_nodes_from_template(&skill_tmpl).unwrap(),
+            ])
+            .await
+            .unwrap();
+
+        let skills = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(
+            skills.len(),
+            1,
+            "unchanged skill template must not be duplicated by the prompt's replace"
+        );
+        assert_eq!(
+            skills[0].properties["skill"]["description"], "Skill v1",
+            "unchanged skill content must be untouched"
         );
     }
 }

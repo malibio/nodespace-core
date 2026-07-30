@@ -973,6 +973,14 @@ impl NodeService {
         {
             Some(updated_node) => {
                 if mark_user_modified {
+                    // Best-effort, OCC-bypassing second write (see set_property_bool's
+                    // doc comment). A concurrent writer landing between the update
+                    // above and this stamp could have its own version bump masked
+                    // by this call's WHERE-less json_set — the node's `version`
+                    // column would then undercount real mutations by one. Blast
+                    // radius is limited to that bookkeeping counter: `_seed.user_modified`
+                    // itself is idempotent (setting it to `true` twice is a no-op),
+                    // so no seeded content or user edit can be lost this way.
                     if let Err(e) = self
                         .store
                         .set_property_bool(node_id, "$._seed.user_modified", true)
