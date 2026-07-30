@@ -2002,8 +2002,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Compile-time coupling check: `multi_skill_turn_invokes_skill_tools_between_searches`
-    // feeds exactly 5 inference rounds (search_skills → search_semantic →
-    // search_skills → create_node → final text) and expects the loop to make
+    // feeds exactly 5 inference rounds (search_nodes → search_semantic →
+    // search_nodes → create_node → final text) and expects the loop to make
     // it through all of them without hitting the iteration-cap fallback.
     // If `MAX_TOOL_ITERATIONS` is ever reduced below 5, that test would
     // silently start asserting on the fallback path instead of the multi-skill
@@ -3599,22 +3599,22 @@ mod tests {
         assert_eq!(sessions.len(), 1);
     }
 
-    // -- search_skills as a regular tool ---------------------------------
+    // -- multi-round tool dispatch ---------------------------------------
 
-    /// The model decides when to search for skills by calling
-    /// the `search_skills` tool, then invokes a matching skill (if any) like
-    /// any other tool. There's no pre-LLM dispatch — the loop always runs the
-    /// full tool set against the model.
+    /// A read followed by a write in one turn dispatches both correctly and
+    /// preserves their order. Uses `search_nodes` as the leading read; the
+    /// property under test is the loop's round-to-round dispatch, independent
+    /// of which tool leads.
     #[tokio::test]
-    async fn model_calls_search_skills_then_invokes_matched_skill() {
-        // Round 1: model calls search_skills
-        // Round 2: model invokes create_node (a "skill" tool) after seeing the match
+    async fn model_chains_a_read_then_a_write_in_one_turn() {
+        // Round 1: model calls search_nodes
+        // Round 2: model invokes create_node after seeing the result
         // Round 3: model produces a text summary
         let engine = Arc::new(MockEngine::new(vec![
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3658,7 +3658,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 json!({
                     "query": "create a new task",
@@ -3689,14 +3689,14 @@ mod tests {
 
         assert_eq!(result.response, "Created the task.");
         assert_eq!(result.tool_calls_made.len(), 2);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "create_node");
     }
 
-    /// Regression coverage: `update_node` must remain reachable through
-    /// `search_skills` -> Graph Editing's own routing (`search_nodes` then
-    /// `update_node`) now that `TOOL_STRATEGY_RULES` no longer hardcodes
-    /// "ALWAYS search_nodes first before update_node" in resident prose.
+    /// Regression coverage: `update_node` must remain reachable through a
+    /// find-then-act chain (`search_nodes` then `update_node`) now that
+    /// `TOOL_STRATEGY_RULES` no longer hardcodes "ALWAYS search_nodes first
+    /// before update_node" in resident prose.
     ///
     /// This scripts the full chain a real model is expected to follow and
     /// asserts the loop dispatches every step correctly against a scripted
@@ -3709,12 +3709,12 @@ mod tests {
     /// (`scripts/eval/fixtures/agent-matrix.ts`), which is not run as part
     /// of `test:all`.
     #[tokio::test]
-    async fn search_skills_then_search_nodes_then_update_node_chain_dispatches_correctly() {
+    async fn find_then_act_chain_dispatches_correctly() {
         let engine = Arc::new(MockEngine::new(vec![
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3774,7 +3774,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 json!({
                     "query": "mark an invoice as paid",
@@ -3811,7 +3811,7 @@ mod tests {
 
         assert_eq!(result.response, "Marked the invoice as paid.");
         assert_eq!(result.tool_calls_made.len(), 3);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "search_nodes");
         assert_eq!(result.tool_calls_made[2].name, "update_node");
     }
@@ -3819,7 +3819,7 @@ mod tests {
     /// When the model decides no skill is needed, it responds directly —
     /// no clarification short-circuit, no canned string.
     #[tokio::test]
-    async fn model_can_respond_without_calling_search_skills() {
+    async fn model_can_respond_without_calling_any_tool() {
         let engine = Arc::new(MockEngine::single_text("Hi there — how can I help?"));
         let executor = Arc::new(MockToolExecutor::new());
         let agent_loop = LocalAgentLoop::new(engine, executor);
@@ -3836,20 +3836,20 @@ mod tests {
         assert!(result.usage.prompt_tokens > 0);
     }
 
-    /// Multi-skill turn: the model calls `search_skills`
+    /// Multi-skill turn: the model calls a read tool
     /// for each sub-task, then invokes the matched skill's tool. This test
-    /// exercises a full chain — search_skills (notes) → search_semantic →
-    /// search_skills (task) → create_node — not just two back-to-back
+    /// exercises a full chain — search_nodes (notes) → search_semantic →
+    /// search_nodes (task) → create_node — not just two back-to-back
     /// searches, so a regression that breaks tool dispatch after a second
-    /// `search_skills` call is caught here.
+    /// tool call is caught here.
     #[tokio::test]
     async fn multi_skill_turn_invokes_skill_tools_between_searches() {
         let engine = Arc::new(MockEngine::new(vec![
-            // Round 1: search_skills for "find notes"
+            // Round 1: search_nodes for "find notes"
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -3879,11 +3879,11 @@ mod tests {
                     },
                 },
             ],
-            // Round 3: search_skills for "create task"
+            // Round 3: search_nodes for "create task"
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_3".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_3".to_string(),
@@ -3929,7 +3929,7 @@ mod tests {
 
         let executor = MockToolExecutor::new()
             .with_tool(
-                "search_skills",
+                "search_nodes",
                 json!({"type": "object"}),
                 // Same canned response works for both calls; in production
                 // the embeddings would distinguish them, but the agent loop
@@ -3979,9 +3979,9 @@ mod tests {
             "{:?}",
             result.tool_calls_made
         );
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         assert_eq!(result.tool_calls_made[1].name, "search_semantic");
-        assert_eq!(result.tool_calls_made[2].name, "search_skills");
+        assert_eq!(result.tool_calls_made[2].name, "search_nodes");
         assert_eq!(result.tool_calls_made[3].name, "create_node");
         assert_eq!(
             result.response,
@@ -3989,18 +3989,18 @@ mod tests {
         );
     }
 
-    /// Empty `search_skills` matches → model judges and produces a contextual
+    /// An empty tool result → model judges and produces a contextual
     /// clarification (referencing what it searched), rather than the prior
     /// hardcoded `CLARIFYING_QUESTION` string. This is the "no relevant skill"
     /// path.
     #[tokio::test]
-    async fn empty_search_skills_matches_let_model_clarify_with_context() {
+    async fn empty_tool_result_lets_the_model_clarify_with_context() {
         let engine = Arc::new(MockEngine::new(vec![
-            // Round 1: model calls search_skills
+            // Round 1: model calls a read tool
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
-                    name: "search_skills".to_string(),
+                    name: "search_nodes".to_string(),
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -4030,7 +4030,7 @@ mod tests {
         ]));
 
         let executor = MockToolExecutor::new().with_tool(
-            "search_skills",
+            "search_nodes",
             json!({"type": "object"}),
             // Empty matches array — the meaningful "no skill applies" signal.
             json!({"query": "send carrier pigeons", "matches": []}),
@@ -4050,7 +4050,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.tool_calls_made.len(), 1);
-        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
         // Crucially: the response is the model's contextual text, not a
         // canned constant. Just check it's non-empty and acknowledges the
         // search — exact wording belongs to the model.
