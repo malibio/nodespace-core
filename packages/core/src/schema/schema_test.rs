@@ -960,18 +960,15 @@ async fn test_create_schema_with_well_formed_fields_is_unaffected() {
     );
 }
 
+/// A payload with no `fields` array at all must be rejected by the missing-fields
+/// check with an actionable error — not intercepted by `describe_malformed_fields`'s
+/// entry-locating pass (which only fires when `fields` is present and malformed),
+/// and not silently accepted as an empty-fields schema (ADR-063: `description`
+/// is no longer parsed into fields).
 #[tokio::test]
-async fn test_create_schema_without_fields_key_is_unaffected() {
+async fn test_create_schema_without_fields_key_is_rejected() {
     let (svc, _tmp) = create_test_service().await;
 
-    // Description-only creation infers its own fields; the locating pass must
-    // not intercept a payload that has no `fields` array at all.
-    //
-    // This originally asserted only that the locating pass stayed out of the way,
-    // guarded behind `if let Err`, because description-only creation was broken
-    // at the time: namespaced field names contained ':' and the field-name
-    // validator rejected them. That is now fixed, so the guard would make this
-    // test vacuous — it would pass without asserting anything at all.
     let result = handle_create_schema(
         &svc,
         json!({
@@ -981,8 +978,13 @@ async fn test_create_schema_without_fields_key_is_unaffected() {
     )
     .await;
 
-    let output = result.expect("description-only create_schema must succeed");
-    assert_eq!(output["schemaId"], "venue");
+    let msg = result
+        .expect_err("create_schema with no 'fields' key must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("fields"),
+        "error must name the missing 'fields' parameter: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -1154,50 +1156,36 @@ async fn test_update_schema_title_template_may_reference_preexisting_fields() {
 }
 
 // ============================================================================
-// create_schema from a description (no explicit fields)
+// create_schema with an explicit empty `fields` array
 // ============================================================================
 
+/// An explicit empty array is a deliberate choice (e.g. a relationship-only
+/// schema) and must be accepted — only a wholly absent `fields` key is
+/// rejected. `description` is stored for semantic discovery only; it is not
+/// parsed into fields (ADR-063).
 #[tokio::test]
-async fn test_create_schema_from_description_only() {
+async fn test_create_schema_with_explicit_empty_fields_succeeds() {
     let (svc, _tmp) = create_test_service().await;
 
-    // No `fields` array: fields are inferred from the description and stored
-    // under bare names, matching what the explicit-fields path stores.
     let result = handle_create_schema(
         &svc,
-        json!({ "name": "Venue", "description": "contact email and capacity number" }),
+        json!({
+            "name": "Venue",
+            "description": "contact email and capacity number",
+            "fields": []
+        }),
     )
     .await;
 
-    assert!(
-        result.is_ok(),
-        "Description-only create_schema should succeed: {:?}",
-        result
-    );
-
-    let val = result.expect("description-only create_schema should return Ok");
+    let val = result.expect("explicit empty fields array should succeed");
     assert_eq!(val["schemaId"], "venue");
-
-    let field_names: Vec<&str> = val["fields"]
-        .as_array()
-        .expect("fields should be an array")
-        .iter()
-        .map(|f| f["name"].as_str().expect("field name should be a string"))
-        .collect();
-
-    assert!(
-        !field_names.is_empty(),
-        "Description should infer at least one field"
-    );
-    assert!(
-        field_names.iter().all(|n| !n.contains(':')),
-        "Inferred fields should be stored under bare names: {:?}",
-        field_names
-    );
-    assert!(
-        field_names.contains(&"contact_email"),
-        "Expected 'contact_email' among {:?}",
-        field_names
+    assert_eq!(
+        val["fields"]
+            .as_array()
+            .expect("fields should be an array")
+            .len(),
+        0,
+        "description must not be parsed into fields"
     );
 
     // The schema must be readable back from storage, not merely returned.
@@ -1211,175 +1199,22 @@ async fn test_create_schema_from_description_only() {
     );
 }
 
-/// The two `create_schema` routes must apply the same *namespacing* convention
-/// to stored field names. They previously diverged — the description path
-/// applied a `custom:` prefix during inference while the explicit-fields path
-/// stored caller-supplied names verbatim — so a schema's stored keys depended on
-/// which call shape created it. Stored names are user-visible (title-template
-/// tokens, CEL selectors, query filters, frontend lookups), so this asserts on
-/// the stored node rather than the return value.
-///
-/// The description here is worded so field-name *inference* is unambiguous, keeping this test
-/// focused on the namespace convention. The companion test below covers the harder case, where
-/// the description carries a type keyword the inference has to read as a type rather than a name.
-#[tokio::test]
-async fn test_create_schema_paths_agree_on_stored_field_names() {
-    let field_names_of = |schema: &crate::models::SchemaNode| -> Vec<String> {
-        let mut names: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
-        names.sort();
-        names
-    };
-
-    // Path A: fields inferred from a natural-language description.
-    let (svc_described, _tmp_a) = create_test_service().await;
-    handle_create_schema(
-        &svc_described,
-        json!({ "name": "Venue", "description": "capacity" }),
-    )
-    .await
-    .expect("description-path create_schema should succeed");
-    let described = svc_described
-        .get_schema_node("venue")
-        .await
-        .expect("get_schema_node should succeed")
-        .expect("description-path schema should be persisted");
-
-    // Path B: the same intent expressed as an explicit field definition.
-    let (svc_explicit, _tmp_b) = create_test_service().await;
-    handle_create_schema(
-        &svc_explicit,
-        json!({
-            "name": "Venue",
-            "fields": [{ "name": "capacity", "type": "string" }]
-        }),
-    )
-    .await
-    .expect("explicit-path create_schema should succeed");
-    let explicit = svc_explicit
-        .get_schema_node("venue")
-        .await
-        .expect("get_schema_node should succeed")
-        .expect("explicit-path schema should be persisted");
-
-    assert_eq!(
-        field_names_of(&described),
-        field_names_of(&explicit),
-        "Both create_schema paths must store identical field names"
-    );
-    assert_eq!(
-        field_names_of(&explicit),
-        vec!["capacity".to_string()],
-        "Stored field names are bare, not namespace-prefixed"
-    );
-}
-
-/// The two routes must also agree when the description carries a type keyword. "capacity number"
-/// once stored `capacity_number` while the explicit-fields route stored `capacity` — the keyword
-/// was consumed for type inference *and* kept in the name, so a schema's user-visible keys
-/// depended on which call shape created it. Asserts on the stored node, not the return value.
-#[tokio::test]
-async fn test_create_schema_paths_agree_on_stored_field_names_with_type_keyword() {
-    let field_names_of = |schema: &crate::models::SchemaNode| -> Vec<String> {
-        let mut names: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
-        names.sort();
-        names
-    };
-
-    // Path A: the type keyword sits in a natural-language description.
-    let (svc_described, _tmp_a) = create_test_service().await;
-    handle_create_schema(
-        &svc_described,
-        json!({ "name": "Venue", "description": "capacity number" }),
-    )
-    .await
-    .expect("description-path create_schema should succeed");
-    let described = svc_described
-        .get_schema_node("venue")
-        .await
-        .expect("get_schema_node should succeed")
-        .expect("description-path schema should be persisted");
-
-    // Path B: the same intent, with the type given explicitly instead of in prose.
-    let (svc_explicit, _tmp_b) = create_test_service().await;
-    handle_create_schema(
-        &svc_explicit,
-        json!({
-            "name": "Venue",
-            "fields": [{ "name": "capacity", "type": "number" }]
-        }),
-    )
-    .await
-    .expect("explicit-path create_schema should succeed");
-    let explicit = svc_explicit
-        .get_schema_node("venue")
-        .await
-        .expect("get_schema_node should succeed")
-        .expect("explicit-path schema should be persisted");
-
-    assert_eq!(
-        field_names_of(&described),
-        field_names_of(&explicit),
-        "Both create_schema paths must store identical field names when the description \
-         carries a type keyword"
-    );
-    assert_eq!(
-        field_names_of(&explicit),
-        vec!["capacity".to_string()],
-        "The type keyword is read as the type, not folded into the stored name"
-    );
-
-    // The keyword was read as the type, not merely discarded.
-    let capacity = described
-        .fields
-        .iter()
-        .find(|f| f.name == "capacity")
-        .expect("described schema should define 'capacity'");
-    assert_eq!(
-        capacity.field_type, "number",
-        "'capacity number' should still infer a number type"
-    );
-}
-
-/// Names where the type keyword is intrinsic must survive the description route unchanged —
-/// stripping it would turn `invoice_number` into `invoice`, a different wrong stored key.
-#[tokio::test]
-async fn test_create_schema_description_keeps_intrinsic_type_keyword() {
-    let (svc, _tmp) = create_test_service().await;
-
-    handle_create_schema(
-        &svc,
-        json!({ "name": "Bill", "description": "invoice number, capacity number" }),
-    )
-    .await
-    .expect("description-path create_schema should succeed");
-
-    let stored = svc
-        .get_schema_node("bill")
-        .await
-        .expect("get_schema_node should succeed")
-        .expect("schema should be persisted");
-
-    let mut names: Vec<String> = stored.fields.iter().map(|f| f.name.clone()).collect();
-    names.sort();
-    assert_eq!(
-        names,
-        vec!["capacity".to_string(), "invoice_number".to_string()],
-        "'invoice number' keeps its keyword while 'capacity number' drops it"
-    );
-}
-
-/// The reserved-core-property warning has to survive all the way into the
-/// response JSON. It previously did not: warnings were snapshotted before the
-/// normalization step that appends them, so every collision was dropped
-/// silently. A unit test on the normalization function alone would not have
-/// caught that, because the defect was in the caller.
+/// The reserved-core-property shadowing warning must fire on explicit `fields`
+/// (moved there from the deleted description-inference route, ADR-063) and
+/// survive all the way into the response JSON.
 #[tokio::test]
 async fn test_create_schema_reserved_property_warning_reaches_response() {
     let (svc, _tmp) = create_test_service().await;
 
-    let result = handle_create_schema(&svc, json!({ "name": "Ticket", "description": "status" }))
-        .await
-        .expect("create_schema should succeed");
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Ticket",
+            "fields": [{ "name": "status", "type": "text" }]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
 
     let warnings = result["warnings"]
         .as_array()
@@ -1390,6 +1225,17 @@ async fn test_create_schema_reserved_property_warning_reaches_response() {
             w.contains("status") && w.contains("reserved core property")
         }),
         "Expected a reserved-core-property warning for 'status', got {warnings:?}"
+    );
+
+    // The field itself is stored verbatim — the warning does not rewrite it.
+    let stored = svc
+        .get_schema_node("ticket")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("schema should be persisted");
+    assert!(
+        stored.fields.iter().any(|f| f.name == "status"),
+        "Field name should be stored as given, not rewritten"
     );
 }
 
@@ -1576,10 +1422,11 @@ async fn test_update_schema_rejects_unknown_field() {
     );
 }
 
-/// `additional_constraints` is a nested struct on `create_schema`'s own params;
-/// an unknown key inside it must be rejected the same way as a top-level one.
+/// `additional_constraints` no longer exists as a param — the description-
+/// inference route it configured was deleted (ADR-063). An unknown top-level
+/// key by that name must be rejected the same as any other unknown key.
 #[tokio::test]
-async fn test_create_schema_rejects_unknown_field_in_additional_constraints() {
+async fn test_create_schema_rejects_additional_constraints_as_unknown_field() {
     let (svc, _tmp) = create_test_service().await;
 
     let err = handle_create_schema(
@@ -1587,18 +1434,19 @@ async fn test_create_schema_rejects_unknown_field_in_additional_constraints() {
         json!({
             "name": "Invoice",
             "description": "An invoice",
+            "fields": [],
             "additional_constraints": {
                 "requiredFields": ["status"]
             }
         }),
     )
     .await
-    .expect_err("unknown key in additional_constraints must be rejected, not ignored");
+    .expect_err("additional_constraints must be rejected as an unknown field, not accepted");
 
     let msg = err.to_string();
     assert!(
-        msg.contains("requiredFields"),
-        "expected error naming unknown field `requiredFields`, got: {msg}"
+        msg.contains("additional_constraints"),
+        "expected error naming unknown field `additional_constraints`, got: {msg}"
     );
 }
 

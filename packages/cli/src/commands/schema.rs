@@ -2,8 +2,8 @@
 //!
 //! `create`/`update` take a single JSON params blob rather than per-field
 //! flags: schema params (fields, relationships, title_template, enum
-//! definitions, additional_constraints) are a nested, evolving shape defined
-//! once in `packages/core/src/schema/mod.rs` (`CreateSchemaParams` /
+//! definitions) are a nested, evolving shape defined once in
+//! `packages/core/src/schema/mod.rs` (`CreateSchemaParams` /
 //! `UpdateSchemaParams`). Mirroring that as a flat CLI flag surface would
 //! duplicate and drift from the Rust structs; JSON keeps the CLI a thin,
 //! schema-agnostic passthrough — the daemon validates and reports errors.

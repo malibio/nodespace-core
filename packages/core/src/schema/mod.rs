@@ -1,12 +1,11 @@
 //! Schema creation and updates.
 //!
-//! Provides the `create_schema` tool for creating custom schemas with fields and relationships.
-//! Supports both explicit field/relationship definitions and natural language descriptions
-//! with intelligent type inference.
+//! Provides the `create_schema` tool for creating custom schemas with explicit
+//! field and relationship definitions.
 
 use crate::behaviors::SchemaNodeBehavior;
 use crate::markdown::MarkdownError;
-use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
+use crate::models::schema::SchemaField;
 use crate::models::{Node, NodeUpdate, SchemaNode};
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
@@ -108,6 +107,26 @@ fn has_namespace_prefix(name: &str) -> bool {
     )
 }
 
+/// Warn on explicit field names that shadow a reserved core property.
+///
+/// A name colliding with a reserved core property is reported as a warning
+/// rather than rejected, leaving the choice with the caller — this mirrors how
+/// the description-inference route treated the same collision before it was
+/// deleted (ADR-063). `fields` is otherwise stored verbatim.
+fn reject_reserved_property_names(fields: Vec<SchemaField>) -> (Vec<SchemaField>, Vec<String>) {
+    let mut warnings = Vec::new();
+    for field in &fields {
+        if RESERVED_CORE_PROPERTIES.contains(&field.name.as_str()) {
+            warnings.push(format!(
+                "Field name '{}' matches a reserved core property and may be shadowed by it. \
+                 Consider a more specific name.",
+                field.name
+            ));
+        }
+    }
+    (fields, warnings)
+}
+
 /// Whether `schema_id` names a schema NodeSpace ships, rather than a
 /// user-defined one. A missing schema is reported as non-core; the update path
 /// below surfaces the not-found error with better context.
@@ -140,18 +159,16 @@ fn json_type_name(v: &Value) -> &'static str {
 pub struct CreateSchemaParams {
     /// Schema name (e.g., "Invoice", "Customer")
     pub name: String,
-    /// Natural language description of entity fields (optional if fields provided directly)
+    /// Brief prose summary of what this entity type represents. Stored as a
+    /// child subtree for semantic discovery; not parsed into fields.
     #[serde(default)]
     pub description: Option<String>,
-    /// Optional explicit field definitions (takes precedence over description parsing)
+    /// Explicit field definitions
     #[serde(default)]
     pub fields: Option<Vec<SchemaField>>,
     /// Optional relationship definitions
     #[serde(default)]
     pub relationships: Option<Vec<crate::models::schema::SchemaRelationship>>,
-    /// Optional additional constraints for explicit type hints (used with description)
-    #[serde(default)]
-    pub additional_constraints: Option<AdditionalConstraints>,
     /// Optional template for computing display title from field values.
     /// Use `{field_name}` tokens that reference fields defined in `fields`.
     /// Example: `"{first_name} {last_name}"` for a customer schema.
@@ -162,21 +179,6 @@ pub struct CreateSchemaParams {
     /// Example: `"{status} · {company}"` → `"Active · Acme Corp"`.
     #[serde(default)]
     pub properties_header_summary_template: Option<String>,
-}
-
-/// Additional constraints for schema creation
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdditionalConstraints {
-    /// List of field names that are required
-    #[serde(default)]
-    pub required_fields: Option<Vec<String>>,
-    /// Default values for specific fields
-    #[serde(default)]
-    pub default_values: Option<std::collections::HashMap<String, Value>>,
-    /// Enum values for specific fields
-    #[serde(default)]
-    pub enum_values: Option<std::collections::HashMap<String, Vec<String>>>,
 }
 
 /// Output from schema creation
@@ -196,46 +198,33 @@ pub struct CreateSchemaOutput {
     /// List of created relationships
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub relationships: Vec<crate::models::schema::SchemaRelationship>,
-    /// Optional warnings about ambiguous descriptions
+    /// Optional warnings, e.g. a field name shadowing a reserved core property
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<String>>,
-}
-
-/// Inferred field information from natural language
-#[derive(Debug, Clone)]
-struct InferredField {
-    name: String,
-    field_type: String,
-    required: bool,
-    enum_values: Option<Vec<String>>,
-    warnings: Vec<String>,
 }
 
 /// Create a custom schema with fields and relationships
 ///
 /// # Tool: create_schema
 ///
-/// Creates a new schema definition with optional fields and relationships.
-/// Fields can be provided explicitly or inferred from a natural language description.
-/// Both routes store field names as given (bare, not namespace-prefixed), so the
-/// same intent yields the same stored keys whichever route created the schema.
+/// Creates a new schema definition from explicit field and relationship
+/// definitions. Field names are stored as given (bare, not namespace-prefixed).
 /// A name colliding with a reserved core property is reported in `warnings`.
 ///
 /// # Parameters
 /// - `name`: Schema name (e.g., "Invoice", "Customer")
-/// - `description`: Optional natural language description of fields
-/// - `fields`: Optional explicit field definitions (takes precedence over description)
+/// - `description`: Optional prose summary, stored for semantic discovery only
+/// - `fields`: Explicit field definitions
 /// - `relationships`: Optional relationship definitions to other schemas
-/// - `additional_constraints`: Optional type hints for description parsing
 ///
 /// # Returns
 /// - `schema_id`: Generated schema ID (snake_case)
 /// - `fields`: List of created fields
 /// - `relationships`: List of created relationships
-/// - `warnings`: Any ambiguities or assumptions made
+/// - `warnings`: e.g. a field name shadowing a reserved core property
 ///
 /// # Errors
-/// - `INVALID_PARAMS`: If name is empty or both description and fields are missing
+/// - `INVALID_PARAMS`: If name is empty or `fields` is missing
 /// - `INTERNAL_ERROR`: If schema creation fails
 pub async fn handle_create_schema(
     node_service: &Arc<NodeService>,
@@ -257,27 +246,19 @@ pub async fn handle_create_schema(
         ));
     }
 
-    // Determine fields: explicit fields take precedence, otherwise parse description
-    let (stored_fields, warnings) = if let Some(explicit_fields) = params.fields {
-        // Use explicit fields directly (already properly typed by caller)
-        (explicit_fields, Vec::new())
-    } else if let Some(ref description) = params.description {
-        if description.trim().is_empty() {
-            return Err(MarkdownError::invalid_params(
-                "Either 'fields' or non-empty 'description' must be provided".to_string(),
-            ));
-        }
-        // Parse natural language and infer fields
-        let inferred_fields = parse_field_descriptions(description);
-        let fields = apply_constraints(inferred_fields, params.additional_constraints);
-        // Collect warnings AFTER normalization: it appends the reserved-core-property
-        // warning, which is dropped entirely if the snapshot is taken beforehand.
-        let (normalized, warnings) = normalize_inferred_fields(fields);
-        (normalized, warnings)
-    } else {
-        // No fields and no description - create schema with empty fields
-        (Vec::new(), Vec::new())
+    // `fields` must be present (an empty array is a valid, deliberate choice — a
+    // relationship-only schema, for instance); its total absence means the caller
+    // never defined what the type holds.
+    let Some(explicit_fields) = params.fields else {
+        return Err(MarkdownError::invalid_params(
+            "\"fields\" is required. List every field explicitly, e.g. \
+             [{\"name\":\"amount\",\"type\":\"number\"}]. \"description\" is a prose \
+             summary only and is not parsed into fields."
+                .to_string(),
+        ));
     };
+
+    let (stored_fields, warnings) = reject_reserved_property_names(explicit_fields);
 
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
@@ -980,510 +961,6 @@ async fn replace_description_subtree(
     create_description_subtree(node_service, schema_id, new_description).await
 }
 
-/// Parse natural language description and extract fields
-fn parse_field_descriptions(description: &str) -> Vec<InferredField> {
-    let mut fields = Vec::new();
-
-    // Split by common delimiters: commas, "and", semicolons
-    let field_descriptions = split_field_descriptions(description);
-
-    for field_desc in field_descriptions {
-        if let Some(inferred) = parse_single_field_description(&field_desc, description) {
-            fields.push(inferred);
-        }
-    }
-
-    fields
-}
-
-/// Split description into individual field descriptions
-fn split_field_descriptions(description: &str) -> Vec<String> {
-    // Split by comma, semicolon, or " and "
-    let parts: Vec<&str> = description
-        .split([',', ';'])
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    // Further split by " and " within each part
-    let mut result = Vec::new();
-    for part in parts {
-        let subparts: Vec<&str> = part.split(" and ").map(|s| s.trim()).collect();
-        for subpart in subparts {
-            if !subpart.is_empty() {
-                result.push(subpart.to_string());
-            }
-        }
-    }
-
-    result
-}
-
-/// Parse a single field description and infer its properties
-fn parse_single_field_description(
-    field_desc: &str,
-    _full_description: &str,
-) -> Option<InferredField> {
-    let field_desc = field_desc.trim();
-    if field_desc.is_empty() {
-        return None;
-    }
-
-    // Extract field name (first word or phrase before parentheses/keywords)
-    let field_name = extract_field_name(field_desc)?;
-
-    // Infer field type from the full description, before the name is shortened, so a phrase
-    // like "capacity number" still yields `number` once the name becomes `capacity`.
-    let field_type = infer_field_type(field_desc, &field_name);
-
-    // Extract enum values if present
-    let enum_values = extract_enum_values(field_desc);
-
-    // Check if field is required
-    let required = is_field_required(field_desc);
-
-    // Collect warnings
-    let mut warnings = Vec::new();
-
-    // A trailing type keyword is an annotation, not part of the name the caller wants stored.
-    let field_name = match strip_trailing_type_keyword(&field_name) {
-        Some((stripped, keyword)) => {
-            warnings.push(format!(
-                "Inferred field name '{}' (type {}) from '{}' — the '{}' keyword was read as the type. \
-                 Use '{}' in title templates, filters and property lookups. To store a different \
-                 name, pass \"fields\" explicitly instead of a description.",
-                stripped, field_type, field_desc, keyword, stripped
-            ));
-            stripped
-        }
-        None => field_name,
-    };
-
-    if field_type == "string" && contains_any(field_desc, &["amount", "price", "cost"]) {
-        warnings.push(format!(
-            "Field '{}' mentions monetary amount but inferred as string. Consider using number type.",
-            field_name
-        ));
-    }
-
-    Some(InferredField {
-        name: field_name,
-        field_type,
-        required,
-        enum_values,
-        warnings,
-    })
-}
-
-/// Extract field name from description
-fn extract_field_name(field_desc: &str) -> Option<String> {
-    // Pattern 1: "field_name (required)" or "field_name (something/else)"
-    if let Some(name) = extract_before_paren(field_desc) {
-        return Some(name);
-    }
-
-    // Pattern 2: "field_name in USD" or similar
-    if let Some(name) = extract_before_keyword(field_desc, &["in ", "with ", "that "]) {
-        return Some(name);
-    }
-
-    // Pattern 3: Just take the first few words until a keyword
-    let words: Vec<&str> = field_desc.split_whitespace().take(3).collect();
-    if !words.is_empty() {
-        let combined = words.join("_").to_lowercase();
-        if !combined.is_empty() && combined.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Some(combined);
-        }
-    }
-
-    None
-}
-
-/// Extract text before first parenthesis
-fn extract_before_paren(text: &str) -> Option<String> {
-    if let Some(idx) = text.find('(') {
-        let name = text[..idx].trim();
-        if !name.is_empty() {
-            return Some(normalize_field_name(name));
-        }
-    }
-    None
-}
-
-/// Extract text before specific keyword
-fn extract_before_keyword(text: &str, keywords: &[&str]) -> Option<String> {
-    for keyword in keywords {
-        if let Some(idx) = text.find(keyword) {
-            let name = text[..idx].trim();
-            if !name.is_empty() {
-                return Some(normalize_field_name(name));
-            }
-        }
-    }
-    None
-}
-
-/// Bare type keywords that may be dropped from the tail of an inferred field name.
-///
-/// Deliberately narrower than the vocabulary [`infer_field_type`] recognises: words like
-/// "amount", "price", "count" and "total" also signal a type, but they are legitimate field
-/// names in their own right, so removing them would leave the caller with a worse name than
-/// the one they described.
-const STRIPPABLE_TYPE_KEYWORDS: &[&str] = &[
-    "number", "date", "text", "string", "boolean", "list", "array",
-];
-
-/// Words that make a trailing type keyword part of the field name rather than a type annotation.
-///
-/// "capacity number" describes a capacity held as a number; "invoice number" describes an
-/// identifier that is called a number. The phrases are structurally identical, so the intent
-/// cannot be derived — this table records the cases where the keyword is intrinsic.
-///
-/// Recoverability is asymmetric, so this errs towards keeping: a missed strip leaves a slightly
-/// clumsy name, while a wrong strip changes a user-visible key that title templates, CEL
-/// selectors and query filters all resolve against. The "number" group is the larger one because
-/// those nouns *have* a number rather than *being* one.
-///
-/// This is matched on the word immediately before the keyword, so it is not subsumed by the
-/// reserved-property guard in [`strip_trailing_type_keyword`]: that guard compares the whole
-/// shortened name, and so protects `due_date` but not `payment_due_date`, whose shortened form
-/// is the unreserved `payment_due`. The same holds for `id` and `customer_id_number`.
-const INTRINSIC_KEYWORD_PREFIXES: &[(&str, &[&str])] = &[
-    (
-        "number",
-        &[
-            "invoice",
-            "phone",
-            "account",
-            "serial",
-            "order",
-            "reference",
-            "tracking",
-            "part",
-            "version",
-            "page",
-            "model",
-            "ticket",
-            "flight",
-            "id",
-            "security",
-            "registration",
-            "license",
-            "batch",
-            "lot",
-            "room",
-            "seat",
-            "case",
-        ],
-    ),
-    ("date", &["birth", "due"]),
-];
-
-/// Drop a trailing bare type keyword from an inferred field name.
-///
-/// Returns the shortened name and the keyword that was removed, or `None` when the name should
-/// be left alone. Operates on an already-normalized snake_case name, so splitting on '_' is
-/// enough to find word boundaries.
-///
-/// The keyword is only removed when it is the final word, a non-empty name remains, the
-/// preceding word does not make it intrinsic (see [`INTRINSIC_KEYWORD_PREFIXES`]), and the
-/// shortened name is not a reserved core property.
-fn strip_trailing_type_keyword(name: &str) -> Option<(String, String)> {
-    let words: Vec<&str> = name.split('_').filter(|w| !w.is_empty()).collect();
-
-    // A bare keyword is the whole name ("number"): there is nothing left to call the field.
-    let (keyword, head) = words.split_last()?;
-    if head.is_empty() || !STRIPPABLE_TYPE_KEYWORDS.contains(keyword) {
-        return None;
-    }
-
-    let preceding = head.last()?;
-    let is_intrinsic = INTRINSIC_KEYWORD_PREFIXES
-        .iter()
-        .any(|(kw, prefixes)| kw == keyword && prefixes.contains(preceding));
-    if is_intrinsic {
-        return None;
-    }
-
-    let stripped = head.join("_");
-
-    // Shortening must not invent a collision the caller never described: "status text" would
-    // otherwise become `status`, colliding with a core property that "status_text" does not.
-    // Checking here rather than listing each casualty in the table above keeps one source of
-    // truth, so a core property added later is covered without touching this function.
-    if RESERVED_CORE_PROPERTIES.contains(&stripped.as_str()) {
-        return None;
-    }
-
-    Some((stripped, (*keyword).to_string()))
-}
-
-/// Normalize field name to snake_case
-fn normalize_field_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace([' ', '-'], "_")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<String>()
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
-/// Convert a value string to title case for display label
-/// e.g., "in_progress" -> "In Progress", "DRAFT" -> "Draft"
-fn to_title_case(s: &str) -> String {
-    s.replace('_', " ")
-        .split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Infer field type from description
-///
-/// # Type Inference Priority (in order of precedence)
-/// 1. **Date/Time** - Keywords: "date", "deadline", "due", "created", etc.
-///    - Highest priority because date/time are specific and unambiguous
-/// 2. **Boolean** - Keywords: "yes/no", "enabled/disabled", "active/inactive"
-///    - High priority because boolean is explicit
-/// 3. **Numeric** - Keywords: "amount", "price", "quantity", "count", "usd"
-///    - Also checked in field name (e.g., "invoice_amount" → number)
-/// 4. **Enum** - Pattern: "(option1/option2)" with parentheses and forward slashes
-///    - High specificity, explicit syntax
-/// 5. **Array** - Keywords: "list", "items", "tags", "array", "multiple"
-/// 6. **String** - Default fallback for any ambiguous descriptions
-///
-/// Note: If a description mentions "enabled date", the date check will match first,
-/// so it returns "date" (most specific keyword wins).
-fn infer_field_type(field_desc: &str, field_name: &str) -> String {
-    let lower = field_desc.to_lowercase();
-    let name_lower = field_name.to_lowercase();
-
-    // Priority 1: Check for date/time (most specific, highest priority)
-    if contains_any(
-        &lower,
-        &[
-            "date",
-            "when",
-            "time",
-            "deadline",
-            "due",
-            "expires",
-            "scheduled",
-            "created",
-        ],
-    ) {
-        return "date".to_string();
-    }
-
-    // Priority 2: Check for boolean (explicit yes/no values)
-    if contains_any(
-        &lower,
-        &[
-            "yes", "no", "enabled", "disabled", "active", "inactive", "true", "false",
-        ],
-    ) {
-        return "boolean".to_string();
-    }
-
-    // Priority 3: Check for numeric values
-    if contains_any(
-        &lower,
-        &[
-            "amount",
-            "price",
-            "cost",
-            "count",
-            "number",
-            "quantity",
-            "value",
-            "total",
-            "sum",
-            "average",
-            "percentage",
-            "rate",
-            "usd",
-            "dollars",
-            "euros",
-            "cents",
-        ],
-    ) || contains_any(
-        &name_lower,
-        &["amount", "price", "cost", "count", "quantity"],
-    ) {
-        return "number".to_string();
-    }
-
-    // Priority 4: Check for enum (explicit option syntax)
-    if field_desc.contains('(') && field_desc.contains('/') {
-        return "enum".to_string();
-    }
-
-    // Priority 5: Check for array/collection types
-    if contains_any(&lower, &["list", "items", "tags", "array", "multiple"]) {
-        return "array".to_string();
-    }
-
-    // Priority 6: Default to string for any ambiguous descriptions
-    "string".to_string()
-}
-
-/// Extract enum values from "(option1/option2)" pattern
-fn extract_enum_values(field_desc: &str) -> Option<Vec<String>> {
-    // Match pattern: (value1/value2/value3)
-    if let Some(start) = field_desc.find('(') {
-        if let Some(end) = field_desc.find(')') {
-            if start < end {
-                let content = &field_desc[start + 1..end];
-                if content.contains('/') {
-                    let values: Vec<String> = content
-                        .split('/')
-                        .map(|s| s.trim().to_uppercase())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    if !values.is_empty() {
-                        return Some(values);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Check if field is marked as required
-fn is_field_required(field_desc: &str) -> bool {
-    let lower = field_desc.to_lowercase();
-    contains_any(
-        &lower,
-        &["required", "must", "mandatory", "essential", "critical"],
-    )
-}
-
-/// Check if any keyword is contained in text
-fn contains_any(text: &str, keywords: &[&str]) -> bool {
-    let lower = text.to_lowercase();
-    keywords.iter().any(|kw| lower.contains(kw))
-}
-
-/// Apply additional constraints to inferred fields
-fn apply_constraints(
-    mut fields: Vec<InferredField>,
-    constraints: Option<AdditionalConstraints>,
-) -> Vec<InferredField> {
-    let constraints = match constraints {
-        Some(c) => c,
-        None => return fields,
-    };
-
-    // Apply required field constraints
-    if let Some(required_list) = constraints.required_fields {
-        for field in &mut fields {
-            if required_list.iter().any(|req| {
-                req.to_lowercase().contains(&field.name.to_lowercase())
-                    || field.name.to_lowercase().contains(&req.to_lowercase())
-            }) {
-                field.required = true;
-            }
-        }
-    }
-
-    // Apply enum value constraints
-    if let Some(enum_map) = constraints.enum_values {
-        for field in &mut fields {
-            for (enum_field, values) in &enum_map {
-                if enum_field
-                    .to_lowercase()
-                    .contains(&field.name.to_lowercase())
-                    || field
-                        .name
-                        .to_lowercase()
-                        .contains(&enum_field.to_lowercase())
-                {
-                    field.field_type = "enum".to_string();
-                    field.enum_values = Some(values.iter().map(|v| v.to_uppercase()).collect());
-                }
-            }
-        }
-    }
-
-    fields
-}
-
-/// Normalize inferred field names into stored field names.
-///
-/// Stored field names are bare (`capacity`), never namespace-prefixed. Both
-/// `create_schema` paths must agree on this: the explicit-fields path stores
-/// caller-supplied names verbatim, so inferring a `custom:` prefix here would
-/// make the same user intent produce a different stored key depending on which
-/// path created the schema. Stored names are user-visible keys — they appear in
-/// `titleTemplate` tokens, CEL selectors, query filters and frontend lookups —
-/// so the two paths disagreeing is a correctness problem, not a cosmetic one.
-///
-/// A name colliding with a reserved core property is reported as a warning
-/// rather than silently rewritten, leaving the choice with the caller.
-fn normalize_inferred_fields(
-    inferred_fields: Vec<InferredField>,
-) -> (Vec<SchemaField>, Vec<String>) {
-    let mut warnings: Vec<String> = Vec::new();
-    let fields = inferred_fields
-        .into_iter()
-        .map(|inferred| {
-            let stored_name = normalize_field_name(&inferred.name);
-
-            warnings.extend(inferred.warnings.iter().cloned());
-
-            // Warn if field name matches a reserved core property
-            if RESERVED_CORE_PROPERTIES.contains(&stored_name.as_str()) {
-                warnings.push(format!(
-                    "Field name '{}' matches a reserved core property and may be shadowed by it. Consider a more specific name.",
-                    stored_name
-                ));
-            }
-
-            // Convert string enum values to EnumValue with auto-generated labels
-            let user_values = inferred.enum_values.as_ref().map(|values| {
-                values.iter().map(|v| EnumValue {
-                    value: v.clone(),
-                    label: to_title_case(v),
-                }).collect()
-            });
-
-            SchemaField {
-                name: stored_name,
-                field_type: inferred.field_type.clone(),
-                protection: SchemaProtectionLevel::User,
-                core_values: None,
-                user_values,
-                indexed: false, // Not indexed by default
-                required: Some(inferred.required),
-                extensible: Some(inferred.field_type == "enum"), // Enums are extensible by default
-                default: None,
-                description: None,
-                item_type: if inferred.field_type == "array" {
-                    Some("string".to_string())
-                } else {
-                    None
-                },
-                fields: None,
-                item_fields: None,
-            }
-        })
-        .collect();
-
-    (fields, warnings)
-}
-
 #[cfg(test)]
 #[path = "schema_test.rs"]
 mod schema_test;
@@ -1491,263 +968,7 @@ mod schema_test;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_field_name_with_parens() {
-        let desc = "invoice number (required)";
-        let name = extract_field_name(desc);
-        assert_eq!(name, Some("invoice_number".to_string()));
-    }
-
-    #[test]
-    fn test_extract_field_name_with_keyword() {
-        let desc = "amount in USD";
-        let name = extract_field_name(desc);
-        assert_eq!(name, Some("amount".to_string()));
-    }
-
-    #[test]
-    fn test_infer_number_type() {
-        assert_eq!(infer_field_type("amount in USD", "amount"), "number");
-        assert_eq!(infer_field_type("price", "price"), "number");
-        assert_eq!(infer_field_type("total cost", "cost"), "number");
-    }
-
-    #[test]
-    fn test_infer_date_type() {
-        assert_eq!(infer_field_type("due date", "due_date"), "date");
-        assert_eq!(infer_field_type("when is it due", "due"), "date");
-        assert_eq!(infer_field_type("deadline", "deadline"), "date");
-    }
-
-    #[test]
-    fn test_infer_enum_type() {
-        assert_eq!(
-            infer_field_type("status (draft/sent/paid)", "status"),
-            "enum"
-        );
-    }
-
-    #[test]
-    fn test_infer_boolean_type() {
-        // "yes/no" keywords match boolean type first (priority 2) before enum pattern (priority 4)
-        assert_eq!(infer_field_type("enabled (yes/no)", "enabled"), "boolean");
-        assert_eq!(infer_field_type("active or inactive", "active"), "boolean");
-    }
-
-    #[test]
-    fn test_extract_enum_values() {
-        let values = extract_enum_values("status (draft/sent/paid)");
-        assert_eq!(
-            values,
-            Some(vec![
-                "DRAFT".to_string(),
-                "SENT".to_string(),
-                "PAID".to_string()
-            ])
-        );
-    }
-
-    #[test]
-    fn test_is_field_required() {
-        assert!(is_field_required("invoice number (required)"));
-        assert!(is_field_required("must have email"));
-        assert!(!is_field_required("optional notes"));
-    }
-
-    #[test]
-    fn test_normalize_field_name() {
-        assert_eq!(normalize_field_name("Invoice Number"), "invoice_number");
-        assert_eq!(normalize_field_name("first-name"), "first_name");
-        assert_eq!(normalize_field_name("email address"), "email_address");
-    }
-
-    #[test]
-    fn test_strip_trailing_type_keyword() {
-        // A trailing keyword is a type annotation: the caller wants the noun.
-        for (input, expected_name, expected_keyword) in [
-            ("capacity_number", "capacity", "number"),
-            ("score_number", "score", "number"),
-            ("tags_list", "tags", "list"),
-            ("bio_text", "bio", "text"),
-            ("start_date", "start", "date"),
-            ("labels_array", "labels", "array"),
-            // Only the final word is considered, so a multi-word head survives intact.
-            ("max_room_capacity_number", "max_room_capacity", "number"),
-        ] {
-            assert_eq!(
-                strip_trailing_type_keyword(input),
-                Some((expected_name.to_string(), expected_keyword.to_string())),
-                "'{input}' should strip its trailing type keyword"
-            );
-        }
-
-        // Names where the keyword is intrinsic, not an annotation. Every entry in
-        // INTRINSIC_KEYWORD_PREFIXES appears here: an unexercised entry is indistinguishable
-        // from a missing one, since the strip would simply proceed.
-        for input in [
-            "invoice_number",
-            "phone_number",
-            "account_number",
-            "serial_number",
-            "order_number",
-            "reference_number",
-            "tracking_number",
-            "part_number",
-            "version_number",
-            "page_number",
-            "model_number",
-            "ticket_number",
-            "flight_number",
-            "id_number",
-            "security_number",
-            "registration_number",
-            "license_number",
-            "batch_number",
-            "lot_number",
-            "room_number",
-            "seat_number",
-            "case_number",
-            "date_of_birth",
-            "due_date",
-        ] {
-            assert_eq!(
-                strip_trailing_type_keyword(input),
-                None,
-                "'{input}' keeps its keyword — it is part of the intended name"
-            );
-        }
-
-        // The keep-list is keyed on the word immediately before the keyword, so it still
-        // protects these names when the head carries additional qualifiers. This is what the
-        // reserved-property guard alone cannot do: it compares the whole shortened name, which
-        // is `payment_due` here, not `due`.
-        for input in [
-            "payment_due_date",
-            "invoice_due_date",
-            "customer_id_number",
-            "purchase_order_number",
-        ] {
-            assert_eq!(
-                strip_trailing_type_keyword(input),
-                None,
-                "'{input}' keeps its keyword — a qualified head does not make it an annotation"
-            );
-        }
-
-        // Stripping must not invent a reserved-core-property collision that the caller's own
-        // wording avoided: "status text" describes a field `status_text`, not `status`.
-        for input in [
-            "status_text",
-            "priority_text",
-            "content_text",
-            "id_number",
-            "due_date",
-        ] {
-            assert_eq!(
-                strip_trailing_type_keyword(input),
-                None,
-                "'{input}' must not be shortened onto a reserved core property"
-            );
-        }
-
-        // Nothing to strip: the keyword is the entire name, or there is no keyword.
-        for input in ["number", "date", "capacity", "customer_name", ""] {
-            assert_eq!(
-                strip_trailing_type_keyword(input),
-                None,
-                "'{input}' has no strippable trailing keyword"
-            );
-        }
-
-        // A keyword away from the tail is an ordinary word.
-        assert_eq!(strip_trailing_type_keyword("number_of_guests"), None);
-    }
-
-    /// The description route used to fold the type keyword into the stored name, so
-    /// "capacity number" produced a field called `capacity_number` while the explicit-fields
-    /// route produced `capacity` for the same intent. Stored names are user-visible keys, so
-    /// the keyword is now read as the type only.
-    #[test]
-    fn test_parse_field_descriptions_strips_type_keyword() {
-        let fields = parse_field_descriptions("capacity number");
-
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].name, "capacity");
-        // The type still comes from the full phrase, even though the name no longer carries it.
-        assert_eq!(fields[0].field_type, "number");
-
-        // The caller is told which key was stored, so later title templates and filters can
-        // reference it without guessing.
-        assert!(
-            fields[0]
-                .warnings
-                .iter()
-                .any(|w| w.contains("capacity") && w.contains("capacity number")),
-            "Expected a warning naming the stored field and its source phrase, got {:?}",
-            fields[0].warnings
-        );
-    }
-
-    /// Shortening a name can only remove words, so it can land on a reserved core property that
-    /// the caller's own wording steered clear of — "status text" describes `status_text`, and
-    /// turning it into `status` manufactures a collision rather than reporting one.
-    #[test]
-    fn test_parse_field_descriptions_does_not_strip_onto_reserved_property() {
-        let fields = parse_field_descriptions("status text, priority text, id number");
-
-        assert_eq!(fields.len(), 3);
-        assert_eq!(fields[0].name, "status_text");
-        assert_eq!(fields[1].name, "priority_text");
-        assert_eq!(fields[2].name, "id_number");
-    }
-
-    /// Naive stripping would turn "invoice number" into `invoice` — a different wrong answer.
-    #[test]
-    fn test_parse_field_descriptions_keeps_intrinsic_type_keyword() {
-        let fields = parse_field_descriptions("invoice number, phone number, due date");
-
-        assert_eq!(fields.len(), 3);
-        assert_eq!(fields[0].name, "invoice_number");
-        assert_eq!(fields[1].name, "phone_number");
-        assert_eq!(fields[2].name, "due_date");
-
-        // Nothing was rewritten, so nothing is reported as rewritten.
-        for field in &fields {
-            assert!(
-                !field
-                    .warnings
-                    .iter()
-                    .any(|w| w.contains("was read as the type")),
-                "'{}' should not report a stripped keyword, got {:?}",
-                field.name,
-                field.warnings
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_field_descriptions_simple() {
-        let desc = "invoice number, amount, status";
-        let fields = parse_field_descriptions(desc);
-
-        assert_eq!(fields.len(), 3);
-        assert_eq!(fields[0].name, "invoice_number");
-        assert_eq!(fields[1].name, "amount");
-        assert_eq!(fields[2].name, "status");
-    }
-
-    #[test]
-    fn test_parse_field_descriptions_with_types() {
-        let desc = "invoice number (required), amount in USD, status (draft/sent/paid), due date";
-        let fields = parse_field_descriptions(desc);
-
-        assert_eq!(fields.len(), 4);
-        assert_eq!(fields[0].field_type, "number"); // "number" keyword detected in "invoice number"
-        assert_eq!(fields[1].field_type, "number"); // amount in USD
-        assert_eq!(fields[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern detected
-        assert_eq!(fields[3].field_type, "date"); // due date
-    }
+    use crate::models::schema::SchemaProtectionLevel;
 
     #[test]
     fn test_has_namespace_prefix() {
@@ -1766,186 +987,12 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_inferred_field_names() {
-        let inferred = vec![
-            InferredField {
-                name: "invoice_number".to_string(),
-                field_type: "string".to_string(),
-                required: true,
-                enum_values: None,
-                warnings: vec![],
-            },
-            InferredField {
-                name: "status".to_string(),
-                field_type: "enum".to_string(),
-                required: false,
-                enum_values: Some(vec!["DRAFT".to_string(), "SENT".to_string()]),
-                warnings: vec![],
-            },
-        ];
-
-        let (fields, warnings) = normalize_inferred_fields(inferred);
-
-        assert_eq!(fields[0].name, "invoice_number");
-        assert_eq!(fields[1].name, "status");
-        assert!(fields[0].required.unwrap());
-        assert!(fields[1].extensible.unwrap()); // enum is extensible
-
-        // "status" collides with a reserved core property, so the caller is warned
-        // rather than having the name silently rewritten.
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("status") && w.contains("reserved core property")),
-            "Expected a reserved-core-property warning for 'status', got {warnings:?}"
-        );
-    }
-
-    #[test]
     fn test_normalize_schema_id() {
         use crate::services::node_service::normalize_schema_id;
         assert_eq!(normalize_schema_id("Invoice"), "invoice");
         assert_eq!(normalize_schema_id("Customer Profile"), "customer_profile");
         assert_eq!(normalize_schema_id("code_block"), "code_block");
         assert_eq!(normalize_schema_id("Project"), "project");
-    }
-
-    #[test]
-    fn test_apply_constraints_required() {
-        let fields = vec![InferredField {
-            name: "email".to_string(),
-            field_type: "string".to_string(),
-            required: false,
-            enum_values: None,
-            warnings: vec![],
-        }];
-
-        let constraints = Some(AdditionalConstraints {
-            required_fields: Some(vec!["email".to_string()]),
-            default_values: None,
-            enum_values: None,
-        });
-
-        let result = apply_constraints(fields, constraints);
-        assert!(result[0].required);
-    }
-
-    #[test]
-    fn test_apply_constraints_enum_values() {
-        let fields = vec![InferredField {
-            name: "status".to_string(),
-            field_type: "string".to_string(),
-            required: false,
-            enum_values: None,
-            warnings: vec![],
-        }];
-
-        let mut enum_map = std::collections::HashMap::new();
-        enum_map.insert(
-            "status".to_string(),
-            vec!["active".to_string(), "inactive".to_string()],
-        );
-
-        let constraints = Some(AdditionalConstraints {
-            required_fields: None,
-            default_values: None,
-            enum_values: Some(enum_map),
-        });
-
-        let result = apply_constraints(fields, constraints);
-        assert_eq!(result[0].field_type, "enum");
-        assert_eq!(
-            result[0].enum_values,
-            Some(vec!["ACTIVE".to_string(), "INACTIVE".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_split_field_descriptions_comma() {
-        let desc = "field1, field2, field3";
-        let parts = split_field_descriptions(desc);
-        assert_eq!(parts.len(), 3);
-    }
-
-    #[test]
-    fn test_split_field_descriptions_and() {
-        let desc = "field1 and field2 and field3";
-        let parts = split_field_descriptions(desc);
-        assert_eq!(parts.len(), 3);
-    }
-
-    #[test]
-    fn test_split_field_descriptions_mixed() {
-        let desc = "field1, field2 and field3; field4";
-        let parts = split_field_descriptions(desc);
-        assert_eq!(parts.len(), 4);
-    }
-
-    #[test]
-    fn test_normalize_empty_field_name() {
-        // Edge case: field name becomes empty after normalization
-        let desc = "!@#$%^&*()";
-        let normalized = normalize_field_name(desc);
-        // Should return empty string for invalid input
-        assert_eq!(normalized, "");
-    }
-
-    #[test]
-    fn test_integration_full_schema_creation() {
-        let desc = "invoice number (required), amount in USD, status (draft/sent/paid), due date";
-        let fields = parse_field_descriptions(desc);
-        let (normalized, _warnings) = normalize_inferred_fields(fields);
-
-        // Stored names are bare — no namespace prefix is applied during inference
-        assert!(normalized.iter().all(|f| !f.name.contains(':')));
-
-        // Exact names, not substrings: these are the keys title templates and filters use,
-        // and a `contains` assertion would pass whether or not a type keyword was folded in.
-        assert_eq!(normalized.len(), 4);
-        assert_eq!(normalized[0].name, "invoice_number");
-        assert_eq!(normalized[1].name, "amount");
-        assert_eq!(normalized[2].name, "status");
-        assert_eq!(normalized[3].name, "due_date");
-
-        // Verify types are inferred correctly (following priority order)
-        assert_eq!(normalized[0].field_type, "number"); // "number" keyword in "invoice number"
-        assert_eq!(normalized[1].field_type, "number"); // amount in USD
-        assert_eq!(normalized[2].field_type, "enum"); // "(options/separated/by/slashes)" pattern
-        assert_eq!(normalized[3].field_type, "date"); // due date
-    }
-
-    #[test]
-    fn test_integration_ambiguous_description() {
-        let desc = "some field";
-        let fields = parse_field_descriptions(desc);
-        let (normalized, _warnings) = normalize_inferred_fields(fields);
-
-        // Even with ambiguous description, should still create valid schema
-        assert_eq!(normalized.len(), 1);
-        assert_eq!(normalized[0].field_type, "string"); // Defaults to string
-        assert_eq!(normalized[0].name, "some_field");
-    }
-
-    #[test]
-    fn test_integration_edge_case_empty_enum_values() {
-        let desc = "status ()";
-        let fields = parse_field_descriptions(desc);
-
-        // Should not create enum if no values found
-        assert_eq!(fields[0].enum_values, None);
-        assert_eq!(fields[0].field_type, "string");
-    }
-
-    #[test]
-    fn test_integration_multiple_inferred_fields() {
-        let desc = "customer name, total amount in USD, invoice date, is_paid (yes/no)";
-        let fields = parse_field_descriptions(desc);
-
-        assert_eq!(fields.len(), 4);
-        assert_eq!(fields[0].field_type, "string");
-        assert_eq!(fields[1].field_type, "number");
-        assert_eq!(fields[2].field_type, "date");
-        assert_eq!(fields[3].field_type, "boolean");
     }
 
     #[test]
@@ -1959,26 +1006,50 @@ mod tests {
         assert_eq!(schema_id, "customer_invoice");
     }
 
-    #[test]
-    fn test_integration_reserved_property_names() {
-        // Fields matching core properties keep the caller's bare name and are
-        // surfaced as warnings instead of being silently rewritten.
-        let desc = "status, priority, due_date";
-        let fields = parse_field_descriptions(desc);
-        let (normalized, warnings) = normalize_inferred_fields(fields);
-
-        assert_eq!(normalized[0].name, "status");
-        assert_eq!(normalized[1].name, "priority");
-        assert_eq!(normalized[2].name, "due_date");
-
-        // Each collision is reported to the caller.
-        for name in ["status", "priority", "due_date"] {
-            assert!(
-                warnings
-                    .iter()
-                    .any(|w| w.contains(name) && w.contains("reserved core property")),
-                "Expected a reserved-core-property warning for '{name}', got {warnings:?}"
-            );
+    fn field(name: &str) -> SchemaField {
+        SchemaField {
+            name: name.to_string(),
+            field_type: "string".to_string(),
+            protection: SchemaProtectionLevel::User,
+            core_values: None,
+            user_values: None,
+            indexed: false,
+            required: None,
+            extensible: None,
+            default: None,
+            description: None,
+            item_type: None,
+            fields: None,
+            item_fields: None,
         }
+    }
+
+    #[test]
+    fn test_reject_reserved_property_names_warns_on_collision() {
+        let (fields, warnings) =
+            reject_reserved_property_names(vec![field("status"), field("capacity")]);
+
+        // Explicit fields are stored verbatim — never silently rewritten.
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "status");
+        assert_eq!(fields[1].name, "capacity");
+
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("status") && w.contains("reserved core property")),
+            "Expected a reserved-core-property warning for 'status', got {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("capacity")),
+            "Unreserved field name should not warn, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_reject_reserved_property_names_no_collision_no_warnings() {
+        let (fields, warnings) = reject_reserved_property_names(vec![field("email")]);
+        assert_eq!(fields.len(), 1);
+        assert!(warnings.is_empty());
     }
 }
