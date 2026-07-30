@@ -14,6 +14,7 @@ use serde::Deserialize;
 /// Plain title/type listing (no `filters`) runs through the title-index path;
 /// any `filters`/`sorting` route through `QueryService` for SQL property queries.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchNodesParams {
     /// Keyword or phrase to search for in node titles. Pass an empty string to
     /// skip the title filter (useful when filtering only by node_type). Defaults
@@ -43,6 +44,7 @@ pub struct SearchNodesParams {
 
 /// Parameters for the `search_semantic` tool.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchSemanticParams {
     /// Natural language search query.
     pub query: String,

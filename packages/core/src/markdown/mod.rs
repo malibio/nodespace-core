@@ -741,6 +741,7 @@ pub fn prepare_nodes_from_markdown(
 
 /// Parameters for create_nodes_from_markdown method
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateNodesFromMarkdownParams {
     /// Markdown content to parse into nodes.
     ///
@@ -1734,6 +1735,7 @@ async fn create_node(
 
 /// Parameters for get_markdown_from_node_id method
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetMarkdownParams {
     /// Root node ID to export
     pub node_id: String,
@@ -2066,6 +2068,7 @@ fn export_node_with_context(
 
 /// Parameters for update_root_from_markdown method
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateRootFromMarkdownParams {
     /// Root node ID to update
     pub root_id: String,

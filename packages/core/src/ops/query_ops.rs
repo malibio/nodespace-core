@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 /// A single filter item as passed by the agent tool.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentFilterItem {
     /// Filter category: "property", "content", "relationship", "metadata".
     #[serde(rename = "type")]
@@ -47,6 +48,7 @@ pub struct AgentFilterItem {
 
 /// A single sort config item as passed by the agent tool.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSortItem {
     pub field: String,
     #[serde(default)]

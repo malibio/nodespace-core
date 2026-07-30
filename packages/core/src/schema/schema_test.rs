@@ -1543,3 +1543,61 @@ async fn test_update_schema_user_defined_type_allows_bare_names() {
         "Expected bare 'seats' and 'address', got {names:?}"
     );
 }
+
+// ============================================================================
+// Unknown-field rejection (acceptance criterion, #1816)
+// ============================================================================
+
+/// `update_schema` is `create_schema`'s sibling — same silent-discard risk the
+/// `coreValues` incident exposed on `create_schema` — so it must reject an
+/// unknown top-level key through the real dispatch path rather than ignore it.
+#[tokio::test]
+async fn test_update_schema_rejects_unknown_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "status", "type": "text" }]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let err = handle_update_schema(&svc, json!({ "schema_id": "invoice", "addFields": [] }))
+        .await
+        .expect_err("update_schema with an unknown key must be rejected, not ignored");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("addFields"),
+        "expected error naming unknown field `addFields`, got: {msg}"
+    );
+}
+
+/// `additional_constraints` is a nested struct on `create_schema`'s own params;
+/// an unknown key inside it must be rejected the same way as a top-level one.
+#[tokio::test]
+async fn test_create_schema_rejects_unknown_field_in_additional_constraints() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "description": "An invoice",
+            "additional_constraints": {
+                "requiredFields": ["status"]
+            }
+        }),
+    )
+    .await
+    .expect_err("unknown key in additional_constraints must be rejected, not ignored");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("requiredFields"),
+        "expected error naming unknown field `requiredFields`, got: {msg}"
+    );
+}

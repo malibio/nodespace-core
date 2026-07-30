@@ -14,12 +14,14 @@ use std::sync::Arc;
 
 /// Parameters for [`get_nodes_batch`].
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetNodesBatchParams {
     pub node_ids: Vec<String>,
 }
 
 /// A single update in a batch request.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BatchUpdateItem {
     /// Node ID to update.
     pub id: String,
@@ -40,6 +42,7 @@ pub struct BatchUpdateItem {
 
 /// Parameters for [`update_nodes_batch`].
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateNodesBatchParams {
     pub updates: Vec<BatchUpdateItem>,
 }
