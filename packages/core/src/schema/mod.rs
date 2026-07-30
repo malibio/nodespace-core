@@ -136,6 +136,7 @@ fn json_type_name(v: &Value) -> &'static str {
 
 /// Input parameters for create_schema
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateSchemaParams {
     /// Schema name (e.g., "Invoice", "Customer")
     pub name: String,

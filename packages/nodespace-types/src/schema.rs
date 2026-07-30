@@ -27,7 +27,7 @@ pub enum SchemaProtectionLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchemaField {
     pub name: String,
     #[serde(rename = "type")]
@@ -290,6 +290,28 @@ mod tests {
         assert_eq!(core_values.len(), 2);
         assert_eq!(core_values[0].value, "open");
         assert_eq!(core_values[0].label, "Open");
+    }
+
+    #[test]
+    fn test_schema_field_rejects_snake_case_core_values() {
+        // core_values is the Rust field name; the wire key is coreValues
+        // (rename_all = "camelCase"). A payload using the snake_case name must
+        // be rejected outright, not silently dropped as an unknown field.
+        let json = json!({
+            "name": "status",
+            "type": "enum",
+            "core_values": [
+                { "value": "open", "label": "Open" },
+                { "value": "done", "label": "Done" }
+            ]
+        });
+
+        let err = serde_json::from_value::<SchemaField>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("core_values"),
+            "expected error naming the unknown field `core_values`, got: {}",
+            err
+        );
     }
 
     #[test]
