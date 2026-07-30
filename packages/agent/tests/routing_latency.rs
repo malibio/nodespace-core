@@ -93,6 +93,11 @@ struct BenchExecutor {
     /// When false, candidates carry no instruction text — isolating "tool
     /// surface was scoped" from "procedural instructions were injected".
     with_instructions: bool,
+    /// When true, retrieval returns nothing, so only the Stage-1 turn is added.
+    empty_retrieval: bool,
+    /// When true, candidates keep only their names — isolates "a block was
+    /// injected at all" from "the block carried procedures".
+    minimal_block: bool,
 }
 
 fn stub_tools() -> Vec<ToolDefinition> {
@@ -174,6 +179,15 @@ impl AgentToolExecutor for BenchExecutor {
                 schema_metadata: json!([]),
             },
         ];
+        if !self.with_instructions && self.empty_retrieval {
+            return Ok(SkillRetrieval::default());
+        }
+        if self.minimal_block {
+            for c in &mut candidates {
+                c.instructions.clear();
+                c.schema_metadata = json!([]);
+            }
+        }
         candidates.truncate(limit);
         Ok(SkillRetrieval { candidates })
     }
@@ -200,6 +214,8 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmSta
                 Arc::new(BenchExecutor {
                     routing,
                     with_instructions: true,
+                    empty_retrieval: false,
+                    minimal_block: false,
                 }) as Arc<dyn AgentToolExecutor>,
             );
             let session = service.create_session(None, Vec::new()).await;
@@ -326,14 +342,21 @@ async fn dump_one_routed_turn() {
 
     for (label, routing, with_instructions) in [
         ("baseline (no routing)", false, false),
-        ("routed, scoped tools only", true, false),
+        // Stage 1 runs, but retrieval returns nothing — isolates the cost of
+        // the extra routing turn from the cost of the injected block.
+        ("stage-1 only, no candidates", true, false),
         ("routed + injected instructions", true, true),
-    ] {
+    ]
+    .into_iter()
+    .chain(std::iter::once(("routed, minimal block", true, false)))
+    {
         let service = LocalAgentService::new(
             engine.clone(),
             Arc::new(BenchExecutor {
                 routing,
                 with_instructions,
+                empty_retrieval: label.contains("no candidates"),
+                minimal_block: label.contains("minimal block"),
             }) as Arc<dyn AgentToolExecutor>,
         );
         let session = service.create_session(None, Vec::new()).await;
