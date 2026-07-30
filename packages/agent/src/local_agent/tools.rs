@@ -2172,7 +2172,7 @@ impl AgentToolExecutor for GraphToolExecutor {
     async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
         let ns = match &self.node_service {
             Some(svc) => svc,
-            None => return Ok(all_tool_definitions()),
+            None => return Ok(model_facing_tool_definitions()),
         };
 
         let query_result = node_ops::query_nodes(
@@ -2319,6 +2319,15 @@ impl AgentToolExecutor for GraphToolExecutor {
                     .await
             }
         }
+    }
+
+    /// Routing is available once both services backing retrieval are loaded.
+    ///
+    /// The embedding service loads asynchronously after startup, so this is
+    /// read per-call rather than cached: early turns run unrouted and later
+    /// ones route, without the executor being rebuilt.
+    async fn routing_available(&self) -> bool {
+        self.node_service.is_some() && self.embedding_service.read().await.is_some()
     }
 
     /// Run skill retrieval as a deterministic system step (ADR-038).
@@ -3579,10 +3588,9 @@ mod tests {
     // -- Available tools --
 
     #[tokio::test]
-    async fn available_tools_returns_all() {
+    async fn available_tools_returns_every_model_facing_tool() {
         let executor = test_executor();
         let tools = executor.available_tools().await.unwrap();
-        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_nodes"));
         assert!(names.contains(&"resolve_query"));
@@ -3592,12 +3600,45 @@ mod tests {
         assert!(names.contains(&"update_node"));
         assert!(names.contains(&"create_relationship"));
         assert!(names.contains(&"get_related_nodes"));
-        assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"create_schema"));
         assert!(names.contains(&"update_schema"));
         assert!(names.contains(&"update_task_status"));
         assert!(names.contains(&"delete_node"));
         assert!(names.contains(&"create_nodes_from_markdown"));
+        // Every registered tool except the ones the system reserves.
+        assert_eq!(tools.len(), Tool::ALL.len() - 1);
+    }
+
+    #[tokio::test]
+    async fn search_skills_is_withheld_from_the_model_facing_surface() {
+        // ADR-038 makes retrieval a deterministic system step. Offering
+        // `search_skills` back to the model is the single-turn pull that ADR
+        // rejects: it lets the model set K and bypasses the trust filter.
+        let executor = test_executor();
+        let names: Vec<String> = executor
+            .available_tools()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "search_skills"),
+            "search_skills must not reach the model: {names:?}"
+        );
+    }
+
+    #[test]
+    fn search_skills_stays_in_the_registry_for_external_agents() {
+        // Withheld from the local model, but still a real tool: the MCP
+        // `find_skills` handler shares its implementation, and the seeded tool
+        // node backing that surface is generated from `Tool::ALL`.
+        assert!(Tool::ALL.contains(&Tool::SearchSkills));
+        assert!(all_tool_definitions()
+            .iter()
+            .any(|t| t.name == "search_skills"));
+        assert!(is_system_only_tool("search_skills"));
+        assert!(!is_system_only_tool("search_nodes"));
     }
 
     // -- Embedding handle is read live (race fix) --

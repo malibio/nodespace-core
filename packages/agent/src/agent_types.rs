@@ -587,6 +587,18 @@ pub trait AgentToolExecutor: Send + Sync {
     /// Execute a tool by name with the given JSON arguments.
     async fn execute(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, ToolError>;
 
+    /// Whether skill retrieval is wired up and worth spending a routing turn on.
+    ///
+    /// Stage 1 costs a full model generation, so the loop asks first: with no
+    /// retrieval behind it there are no candidates to judge and the query it
+    /// produces goes nowhere. Executors that do not implement
+    /// [`AgentToolExecutor::retrieve_skills`] inherit `false` here and keep the
+    /// single-turn behaviour, which is also what keeps routing out of the way
+    /// of test doubles that never opted into it.
+    async fn routing_available(&self) -> bool {
+        false
+    }
+
     /// Run semantic retrieval over the skill registry as a **deterministic
     /// system step**, returning at most `limit` candidates.
     ///

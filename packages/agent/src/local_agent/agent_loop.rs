@@ -1451,14 +1451,24 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         turn_cx: &opentelemetry::Context,
         cancel: &CancellationToken,
     ) -> RoutingOutcome {
-        let tracer = opentelemetry::global::tracer(TRACER_NAME);
-        let mut span = tracer.start_with_context("stage1_routing", turn_cx);
-        let started = Instant::now();
         let mut outcome = RoutingOutcome::default();
 
         if cancel.is_cancelled() {
             return outcome;
         }
+
+        // Routing costs a model turn, so it only runs where it can pay for
+        // itself: when retrieval is actually wired up. Without it there are no
+        // candidates to judge, and Stage 1 would spend a full generation to
+        // produce a query nothing consumes. This also keeps every test double
+        // that does not opt into routing on the single-turn path.
+        if !self.tool_executor.routing_available().await {
+            return outcome;
+        }
+
+        let tracer = opentelemetry::global::tracer(TRACER_NAME);
+        let mut span = tracer.start_with_context("stage1_routing", turn_cx);
+        let started = Instant::now();
 
         let stage1_tools = routing::stage1_tool_definitions();
         let messages = vec![

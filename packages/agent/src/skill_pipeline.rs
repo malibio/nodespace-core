@@ -299,9 +299,9 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
 
 ⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
 
-CALL create_node NOW: You received this instruction because search_skills was called. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
+CALL create_node NOW: You received this instruction because this skill was matched to the request. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
 
-TYPE MAPPING FROM schema_metadata: When search_skills returned schema_metadata for this skill, set node_type to the type_id from that metadata, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
+TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
 
 REQUIRED FIELDS: Read the fields array from schema_metadata. Required fields (required=true) MUST be included in the properties map. Optional fields should be included if the user provided a value for them.
 
@@ -322,7 +322,7 @@ EXAMPLE — the shape of the call, NOT the values. Copy the structure; take ever
 }
 Never reuse "widget" or these field names — they are placeholders. Your node_type is the type_id from schema_metadata, and your property keys are that metadata's field names.
 
-SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call search_skills, get_node, or any other tool — the create response is sufficient. The task is complete."#.to_string(),
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete."#.to_string(),
         },
         NodeTemplate {
             title: "Schema Creation".to_string(),

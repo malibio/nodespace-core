@@ -454,9 +454,9 @@ mod tests {
     /// then assembles the system prompt through the real graph path. Before the
     /// fix, `fetch_prompt_body` flattened only the prompt node's direct children,
     /// so the `TOOL STRATEGY:` bullets (nested one level under the header line)
-    /// were dropped and the assembled prompt was missing the search_skills
-    /// mandate, CLARIFICATION CONTRACT, and BLAST-RADIUS GATE. The fix walks the
-    /// full subtree, so all of that text must now reach the assembled prompt.
+    /// were dropped and the assembled prompt was missing the CLARIFICATION
+    /// CONTRACT and BLAST-RADIUS GATE. The fix walks the full subtree, so all
+    /// of that text must now reach the assembled prompt.
     #[tokio::test]
     async fn assembled_prompt_contains_full_tool_strategy_body() {
         use nodespace_core::db::SqliteStore;
@@ -489,7 +489,6 @@ mod tests {
         // The full TOOL_STRATEGY_RULES body must be present in the assembled prompt.
         for needle in [
             "TOOL STRATEGY:",
-            "search_skills",
             "CLARIFICATION CONTRACT",
             "BLAST-RADIUS GATE",
             "NEVER CLAIM ACTION WITHOUT TOOL RESULT",
