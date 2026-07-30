@@ -27,25 +27,29 @@
 //! variable is the block's *presence*, not how procedural its content is, which
 //! is what ADR-064 rule 4 predicts and what was measured on the locked model.
 //!
-//! Measured against a local Ollama serving three models:
+//! Measured against a local Ollama:
 //!
 //! ```text
 //! model        baseline  stage1_only  routed_full  routed_names
-//! mistral:7b   fires     fires        SUPPRESSED   SUPPRESSED
-//! ornith:9b    fires     fires        fires        fires
 //! gemma4:e4b   fires     fires        fires        fires
+//! mistral:7b   fires     fires        SUPPRESSED   SUPPRESSED
 //! ```
 //!
-//! Two conclusions that shape what the code around this may assume:
+//! What this establishes, and only this:
 //!
-//! 1. On `mistral:7b` the block's *presence* suppresses tool-calling, not its
+//! 1. The locked model routes cleanly on every arm — the shipped configuration
+//!    is unaffected, which is the result that matters for what NodeSpace runs.
+//! 2. On `mistral:7b` the block's *presence* suppresses tool-calling, not its
 //!    content — `routed_names` carries a name and nothing else and still
 //!    suppresses. ADR-064 rule 4's mechanism, measured on the locked model,
 //!    does not explain this.
-//! 2. Suppression is **not** a property of being non-native. `ornith:9b` is
-//!    neither locked nor native and routes cleanly. So "disable routing for
-//!    everything that isn't the locked model" would be wrong — it would cost
-//!    routing on models that handle it fine.
+//!
+//! What it does **not** establish is how far the failure generalises. One
+//! served model exhibits it and none is yet confirmed clean, so neither "all
+//! served models are at risk" nor "this is specific to `mistral:7b`" follows.
+//! Settling that needs a broader matrix — of models NodeSpace would actually
+//! run, not whatever a dev box happens to serve; see
+//! [`EXCLUDED_MODEL_FRAGMENTS`].
 //!
 //! Ignored by default — it needs a real server. Run explicitly:
 //!
@@ -68,6 +72,28 @@ const BASE_URL: &str = "http://127.0.0.1:11434/v1";
 /// unambiguous — a model that does not call `search_nodes` here has not made a
 /// defensible judgement call, it has failed to tool-call.
 const USER_MESSAGE: &str = "Find my notes about the Q3 budget.";
+
+/// Model-name fragments this matrix refuses to measure.
+///
+/// A dev box accumulates models NodeSpace has deliberately removed. Measuring
+/// one and reporting the number produces evidence for a model the project does
+/// not carry, which is worse than no evidence: it invites conclusions about
+/// NodeSpace's behaviour drawn from something NodeSpace does not run.
+///
+/// ADR-056 removed the Qwen family from the catalog outright — including the
+/// Qwen3.5-based `ornith-1-9b-q4km` — along with its `ModelFamily` variants and
+/// its format-specific parser and response-cleanup code. A local Ollama may
+/// still serve `ornith:9b`; this matrix must not treat that as a NodeSpace
+/// model.
+const EXCLUDED_MODEL_FRAGMENTS: &[&str] = &["qwen", "ornith"];
+
+/// Whether a served model is one this matrix should measure.
+fn is_measurable(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    !EXCLUDED_MODEL_FRAGMENTS
+        .iter()
+        .any(|frag| lower.contains(frag))
+}
 
 /// A minimal system prompt standing in for the assembled one.
 ///
@@ -180,8 +206,45 @@ fn system_prompt_for(arm: Arm) -> String {
     }
 }
 
-/// Run one arm against one model. Returns the tool calls it produced.
-async fn run_arm(model: &str, arm: Arm) -> Vec<String> {
+/// What one arm produced.
+///
+/// `Errored` is deliberately distinct from `Fired(vec![])`. A model that throws
+/// or times out produces no tool calls, and so does a model that suppresses —
+/// but they are opposite findings, and collapsing them lets a harness failure
+/// masquerade as evidence. Keeping them separate types makes it impossible to
+/// count one as the other by accident.
+#[derive(Debug, Clone)]
+enum ArmResult {
+    /// The generation completed; these are the tool calls it made (possibly none).
+    Completed(Vec<String>),
+    /// The generation failed. Not a finding about routing.
+    Errored(String),
+}
+
+impl ArmResult {
+    /// Whether the arm produced the expected tool call.
+    ///
+    /// An errored arm is not "suppressed" — it is unmeasured, and callers must
+    /// treat it as such rather than folding it into the negative case.
+    fn fired(&self) -> bool {
+        matches!(self, ArmResult::Completed(calls) if calls.iter().any(|c| c == "search_nodes"))
+    }
+
+    fn errored(&self) -> bool {
+        matches!(self, ArmResult::Errored(_))
+    }
+
+    fn display(&self) -> String {
+        match self {
+            ArmResult::Completed(calls) if self.fired() => format!("fires      {calls:?}"),
+            ArmResult::Completed(calls) => format!("SUPPRESSED {calls:?}"),
+            ArmResult::Errored(e) => format!("ERROR      {e}"),
+        }
+    }
+}
+
+/// Run one arm against one model.
+async fn run_arm(model: &str, arm: Arm) -> ArmResult {
     let engine =
         OpenAiCompatInferenceEngine::new(BASE_URL.to_string(), String::new(), model.to_string());
 
@@ -228,63 +291,99 @@ async fn run_arm(model: &str, arm: Arm) -> Vec<String> {
         )
         .await;
 
+    // Surfaced as `Errored`, not as an empty result: one model failing must not
+    // hide the matrix for the others, but it must also never be read as a
+    // suppression finding.
     if let Err(e) = generated {
-        // Report rather than panic: one model erroring should not hide the
-        // matrix for every other model the box serves.
-        println!("    [{}] generation error: {e}", arm.label());
-        return Vec::new();
+        return ArmResult::Errored(e.to_string());
     }
 
     let observed = calls.lock().expect("sink not poisoned").clone();
-    observed
+    ArmResult::Completed(observed)
 }
 
 #[tokio::test]
 #[ignore = "requires a running OpenAI-compatible server"]
 async fn routing_does_not_suppress_tool_calling_on_served_models() {
-    let models = discover_models(BASE_URL, "")
+    let served = discover_models(BASE_URL, "")
         .await
         .expect("discovery should reach the endpoint");
-    assert!(!models.is_empty(), "expected at least one served model");
+    assert!(!served.is_empty(), "expected at least one served model");
+
+    let (models, excluded): (Vec<String>, Vec<String>) =
+        served.into_iter().partition(|m| is_measurable(m));
 
     println!("\nrouting reliability matrix — {BASE_URL}");
-    println!("served: {models:?}\n");
+    println!("measuring: {models:?}");
+    if !excluded.is_empty() {
+        println!("excluded (removed from the NodeSpace catalog): {excluded:?}");
+    }
+    println!();
+
+    assert!(
+        !models.is_empty(),
+        "every served model is excluded; nothing to measure"
+    );
 
     // Models whose baseline fires but which lose tool-calling under an
-    // injected block. This is the finding the issue is about; it is reported,
-    // not asserted, because it is a property of the served model rather than a
-    // NodeSpace regression.
+    // injected block. Reported rather than asserted per-model: suppression is a
+    // property of the served model, not a NodeSpace regression to redden a
+    // build on.
     let mut suppressed: Vec<(String, Vec<&'static str>)> = Vec::new();
     // Models that cannot tool-call even unrouted. A different failure — not
     // routing's fault, and not something this test should report as one.
     let mut cannot_tool_call: Vec<String> = Vec::new();
+    // Models where at least one arm failed to complete. These are *unmeasured*,
+    // not clean and not suppressed, and the run is not trustworthy while any
+    // remain — a timeout that silently vanished from the matrix would look
+    // exactly like a model nobody thought to test.
+    let mut errored: Vec<(String, Vec<String>)> = Vec::new();
+    // Every arm of every measured model, for the diffable artifact.
+    let mut rows: Vec<(String, Vec<(Arm, ArmResult)>)> = Vec::new();
 
     for model in &models {
         println!("  {model}");
-        let mut fired: Vec<(Arm, bool)> = Vec::new();
+        let mut results: Vec<(Arm, ArmResult)> = Vec::new();
 
         for arm in Arm::ALL {
-            let calls = run_arm(model, arm).await;
-            let ok = calls.iter().any(|c| c == "search_nodes");
-            println!(
-                "    {:<13} {:<10} {calls:?}",
-                arm.label(),
-                if ok { "fires" } else { "SUPPRESSED" }
-            );
-            fired.push((arm, ok));
+            let result = run_arm(model, arm).await;
+            println!("    {:<13} {}", arm.label(), result.display());
+            results.push((arm, result));
         }
 
-        let baseline_fires = fired.iter().any(|(a, ok)| *a == Arm::Baseline && *ok);
+        let arm_errors: Vec<String> = results
+            .iter()
+            .filter(|(_, r)| r.errored())
+            .map(|(a, r)| match r {
+                ArmResult::Errored(e) => format!("{}: {e}", a.label()),
+                ArmResult::Completed(_) => unreachable!("filtered to errored"),
+            })
+            .collect();
+
+        if !arm_errors.is_empty() {
+            println!(
+                "    -> UNMEASURED: {} arm(s) failed to complete\n",
+                arm_errors.len()
+            );
+            errored.push((model.clone(), arm_errors));
+            rows.push((model.clone(), results));
+            continue;
+        }
+
+        let baseline_fires = results
+            .iter()
+            .any(|(a, r)| *a == Arm::Baseline && r.fired());
 
         if !baseline_fires {
             cannot_tool_call.push(model.clone());
             println!("    -> cannot tool-call unrouted; routing arms are not interpretable\n");
+            rows.push((model.clone(), results));
             continue;
         }
 
-        let lost: Vec<&'static str> = fired
+        let lost: Vec<&'static str> = results
             .iter()
-            .filter(|(a, ok)| a.injects_block() && !ok)
+            .filter(|(a, r)| a.injects_block() && !r.fired())
             .map(|(a, _)| a.label())
             .collect();
 
@@ -294,6 +393,7 @@ async fn routing_does_not_suppress_tool_calling_on_served_models() {
             println!("    -> SUPPRESSED under: {}\n", lost.join(", "));
             suppressed.push((model.clone(), lost));
         }
+        rows.push((model.clone(), results));
     }
 
     if !cannot_tool_call.is_empty() {
@@ -301,7 +401,7 @@ async fn routing_does_not_suppress_tool_calling_on_served_models() {
     }
 
     if suppressed.is_empty() {
-        println!("no served model lost tool-calling under routing.");
+        println!("no measured model lost tool-calling under routing.");
     } else {
         println!("ROUTING-SUPPRESSED MODELS:");
         for (model, arms) in &suppressed {
@@ -318,13 +418,102 @@ async fn routing_does_not_suppress_tool_calling_on_served_models() {
         }
     }
 
-    // The only hard assertion: at least one served model must be able to
-    // tool-call unrouted, otherwise the run measured nothing and a green
-    // result would be misleading.
+    let artifact = write_matrix_artifact(&rows, &excluded);
+    println!("\nmatrix written to {}", artifact.display());
+    println!("commit it, or paste it into the tracking issue, so runs are diffable.");
+
+    // --- Assertions: every one of these is a harness/config failure, not a
+    // finding about a model. A model that suppresses is data; a run that could
+    // not produce data is a broken run and must fail loudly.
+
+    assert!(
+        errored.is_empty(),
+        "arms failed to complete, so the matrix is incomplete and a green result \
+         would be misleading — a failed arm must never read as a clean or \
+         suppressed one: {errored:?}"
+    );
+
     assert!(
         cannot_tool_call.len() < models.len(),
-        "no served model could tool-call even unrouted — the matrix is uninterpretable"
+        "no measured model could tool-call even unrouted — the matrix is uninterpretable"
     );
+
+    // Every model must have produced a verdict in exactly one bucket. Guards
+    // the bookkeeping itself: a model silently falling through every branch
+    // would otherwise shrink the matrix without shrinking the model list.
+    assert_eq!(
+        rows.len(),
+        models.len(),
+        "every measured model must appear in the matrix"
+    );
+}
+
+/// Write the run to a diffable file next to the test.
+///
+/// Without this the matrix degrades into "run it once, eyeball the printout,
+/// forget the result" — which is how this class of finding went unnoticed
+/// until it turned up by accident as a comparison arm in an unrelated
+/// diagnostic. A file can be committed, diffed across runs, and pasted into
+/// the tracking issue.
+///
+/// Deliberately not asserted against a checked-in golden: the values depend on
+/// which models the box serves, so a golden would fail for everyone whose
+/// Ollama differs. It is a record, not an expectation.
+fn write_matrix_artifact(
+    rows: &[(String, Vec<(Arm, ArmResult)>)],
+    excluded: &[String],
+) -> std::path::PathBuf {
+    let mut out = String::from(
+        "# OpenAI-compat routing reliability matrix\n#\n\
+         # Generated by tests/live_openai_compat_routing.rs.\n\
+         # Columns: baseline stage1_only routed_full routed_names\n\
+         # Values:  fires | SUPPRESSED | ERROR\n#\n",
+    );
+    out.push_str(&format!("# endpoint: {BASE_URL}\n"));
+    if !excluded.is_empty() {
+        out.push_str(&format!(
+            "# excluded (removed from the NodeSpace catalog): {}\n",
+            excluded.join(", ")
+        ));
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "{:<18}{}\n",
+        "model",
+        Arm::ALL
+            .iter()
+            .map(|a| format!("{:<12}", a.label()))
+            .collect::<String>()
+            .trim_end()
+    ));
+
+    for (model, results) in rows {
+        let cells: Vec<&str> = results
+            .iter()
+            .map(|(_, r)| {
+                if r.errored() {
+                    "ERROR"
+                } else if r.fired() {
+                    "fires"
+                } else {
+                    "SUPPRESSED"
+                }
+            })
+            .collect();
+        // Fixed-width cells so a diff between runs lines up column-wise and a
+        // changed verdict is visible at a glance.
+        let padded: Vec<String> = cells.iter().map(|c| format!("{c:<12}")).collect();
+        out.push_str(&format!("{model:<18}{}\n", padded.join("").trim_end()));
+    }
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("routing-matrix-latest.txt");
+    if let Err(e) = std::fs::write(&path, out) {
+        // A failed write must not sink a run that already produced its data.
+        println!("could not write matrix artifact: {e}");
+    }
+    path
 }
 
 #[cfg(test)]
