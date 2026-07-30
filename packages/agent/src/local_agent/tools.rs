@@ -174,6 +174,12 @@ const DEFAULT_SEMANTIC_LIMIT: usize = 5;
 /// Minimum similarity threshold for semantic search.
 const SEMANTIC_THRESHOLD: f32 = 0.3;
 
+/// Max candidates `resolve_query` fetches to discriminate zero/one/many
+/// matches. Small — this exists to tell "unique" from "ambiguous" from
+/// "not found", not to page through a large result set (the model would
+/// call `search_nodes` directly for that).
+const RESOLVE_QUERY_MATCH_LIMIT: usize = 10;
+
 /// Extract the first balanced `{...}` JSON object from arbitrary text.
 ///
 /// Small local models sometimes wrap a requested JSON-only response in prose
@@ -369,14 +375,18 @@ fn def_search_nodes() -> ToolDefinition {
 fn def_resolve_query() -> ToolDefinition {
     ToolDefinition {
         name: "resolve_query".into(),
-        description: "Resolve an ambiguous natural-language request into precise search_nodes arguments \
-            BEFORE calling search_nodes, when the request bundles an implicit semantic decision you \
-            are not certain how to phrase as a query — e.g. which property a value like '$500' refers \
-            to, what a relative date like 'next Friday' or 'overdue' resolves to, or how to identify \
-            a specific node from a paraphrased description. Looks up the target type's real schema \
-            fields and returns ready-to-use 'query' and 'filters' values — pass them directly to \
-            search_nodes's matching parameters, do not re-derive them yourself. Skip this for simple, \
-            unambiguous requests (e.g. 'list all my invoices') — call search_nodes directly instead."
+        description: "Find the single node an ambiguous natural-language request refers to, when the \
+            request bundles an implicit semantic decision you are not certain how to phrase as a search \
+            — e.g. which property a value like '$500' refers to, what a relative date like 'next Friday' \
+            or 'overdue' resolves to, or how to identify a specific node from a paraphrased description. \
+            This performs the search itself — it does NOT return query arguments for you to pass to \
+            search_nodes. On a unique match, returns 'resolved: true' with the node's id, title, and \
+            properties — act on that node directly (e.g. pass its id straight to update_node). On no \
+            match, returns 'resolved: false, reason: \"no_match\"' — tell the user nothing matched, do \
+            not retry the same request. On more than one match, returns 'resolved: false, \
+            reason: \"multiple_matches\"' with a 'candidates' list — ask the user which one they meant, \
+            do not guess. Skip this for simple, unambiguous requests (e.g. 'list all my invoices') — \
+            call search_nodes directly instead."
             .into(),
         parameters_schema: json!({
             "type": "object",
@@ -1182,36 +1192,41 @@ impl GraphToolExecutor {
     ///   `json_extract` — the correct path for operators and date comparisons.
     ///
     /// Both paths return each node's `properties` in the summary.
-    async fn exec_search_nodes(
+    /// Shared search core behind `search_nodes` and `resolve_query`.
+    ///
+    /// Both tools resolve a `(node_type, query, filters, sorting, limit)`
+    /// tuple to the same node summaries — `resolve_query` differs only in
+    /// where that tuple comes from (an LLM decomposition step rather than
+    /// the model's direct arguments) and in what it does with the result
+    /// (pick/discriminate rather than hand back the whole list). Sharing
+    /// this core keeps both tools' notion of "what a query means" identical.
+    async fn run_node_query(
         &self,
-        tool_call_id: &str,
-        args: Value,
-    ) -> Result<ToolResult, ToolError> {
-        let params: SearchNodesParams =
-            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
-                tool: "search_nodes".to_string(),
-                reason: e.to_string(),
-            })?;
-        let limit = params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
-
+        node_type: Option<String>,
+        query: String,
+        filters: Vec<query_ops::AgentFilterItem>,
+        sorting: Option<Vec<query_ops::AgentSortItem>>,
+        limit: usize,
+        tool_name: &str,
+    ) -> Result<Vec<Value>, ToolError> {
         let ns = self.node_service()?;
 
-        let output = if params.filters.is_empty() {
+        let output = if filters.is_empty() {
             // Title/type listing: only `node_ops::query_nodes` filters by title.
-            let filters = if params.query.is_empty() {
+            let filters = if query.is_empty() {
                 None
             } else {
                 Some(vec![node_ops::QueryFilterItem {
                     field: "title".to_string(),
                     operator: "contains".to_string(),
-                    value: Value::String(params.query),
+                    value: Value::String(query),
                 }])
             };
 
             node_ops::query_nodes(
                 &ns,
                 node_ops::QueryNodesInput {
-                    node_type: params.node_type,
+                    node_type,
                     parent_id: None,
                     root_id: None,
                     limit: Some(limit),
@@ -1222,18 +1237,18 @@ impl GraphToolExecutor {
                 },
             )
             .await
-            .map_err(|e| ops_error_to_tool(e, "search_nodes"))?
+            .map_err(|e| ops_error_to_tool(e, tool_name))?
         } else {
             // Typed property query: route through QueryService (SQL json_extract).
             // A non-empty title keyword is added as a content filter alongside the
             // property predicates (QueryService has no title path).
-            let mut filters = params.filters;
-            if !params.query.is_empty() {
+            let mut filters = filters;
+            if !query.is_empty() {
                 filters.push(query_ops::AgentFilterItem {
                     filter_type: "content".to_string(),
                     operator: "contains".to_string(),
                     property: None,
-                    value: Some(Value::String(params.query)),
+                    value: Some(Value::String(query)),
                     case_sensitive: Some(false),
                     relationship_type: None,
                     node_id: None,
@@ -1243,19 +1258,19 @@ impl GraphToolExecutor {
             query_ops::execute_query(
                 &ns,
                 query_ops::ExecuteQueryInput {
-                    target_type: params.node_type.unwrap_or_else(|| "*".to_string()),
+                    target_type: node_type.unwrap_or_else(|| "*".to_string()),
                     filters,
-                    sorting: params.sorting,
+                    sorting,
                     limit: Some(limit),
                 },
             )
             .await
-            .map_err(|e| ops_error_to_tool(e, "search_nodes"))?
+            .map_err(|e| ops_error_to_tool(e, tool_name))?
         };
 
         // Truncate node data for token efficiency. Properties are always included
         // so the model can see and act on typed fields (status, amount, etc.).
-        let summaries: Vec<Value> = output
+        Ok(output
             .nodes
             .iter()
             .map(|v| {
@@ -1273,7 +1288,31 @@ impl GraphToolExecutor {
                     "properties": v.get("properties").cloned().unwrap_or(json!({})),
                 })
             })
-            .collect();
+            .collect())
+    }
+
+    async fn exec_search_nodes(
+        &self,
+        tool_call_id: &str,
+        args: Value,
+    ) -> Result<ToolResult, ToolError> {
+        let params: SearchNodesParams =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments {
+                tool: "search_nodes".to_string(),
+                reason: e.to_string(),
+            })?;
+        let limit = params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
+
+        let summaries = self
+            .run_node_query(
+                params.node_type,
+                params.query,
+                params.filters,
+                params.sorting,
+                limit,
+                "search_nodes",
+            )
+            .await?;
 
         Ok(ok_result(
             tool_call_id,
@@ -1282,8 +1321,9 @@ impl GraphToolExecutor {
         ))
     }
 
-    /// Resolve an ambiguous natural-language request into precise `search_nodes`
-    /// arguments (`query` + `filters`) before the main tool-calling turn.
+    /// Resolve an ambiguous natural-language request directly to the node it
+    /// identifies, performing the search internally rather than handing back
+    /// query fragments for the caller to route.
     ///
     /// Looks up the target type's real schema fields via `NodeService`
     /// (deterministic — not the semantically-truncated schema summary injected
@@ -1293,6 +1333,15 @@ impl GraphToolExecutor {
     /// those fields. This is a genuinely separate LLM call from the main ReAct
     /// loop's turn — see `agent_loop::maybe_summarize_history` for the existing
     /// single-shot sub-call precedent this mirrors.
+    ///
+    /// Per ADR-064 rule 4 (tool results own facts, not plans): the decomposed
+    /// `query`/`filters` never reach the model. They are consumed here, fed
+    /// straight into the same search core `search_nodes` uses
+    /// (`run_node_query`), and the result is discriminated down to a single
+    /// resolved node — or an explicit zero/multi-match outcome — before it is
+    /// returned. There is no return shape in which the model receives a plan
+    /// to execute; a resolve_query result is always either a fact ("this is
+    /// the node") or an explicit "resolution failed, do X" instruction.
     async fn exec_resolve_query(
         &self,
         tool_call_id: &str,
@@ -1391,20 +1440,82 @@ impl GraphToolExecutor {
         let json_slice = extract_json_object(&text).unwrap_or(&text);
         let resolved: Value = serde_json::from_str(json_slice).unwrap_or_else(|_| {
             // Decomposition failed to produce parseable JSON — fall back to an
-            // empty resolution so the caller falls through to its own judgment
-            // (e.g. AMBIGUITY clarification) rather than erroring the turn.
+            // empty resolution so the search below degrades to a bare
+            // type listing rather than erroring the turn.
             json!({ "query": "", "filters": [] })
         });
 
-        Ok(ok_result(
-            tool_call_id,
-            "resolve_query",
-            json!({
+        let query = resolved
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        // The filters came from our own prompt-constrained decomposition call
+        // above, not from the model's tool-call arguments — but they are still
+        // untrusted JSON (the decomposition model can emit a malformed shape).
+        // Deserialize defensively and skip anything that doesn't parse rather
+        // than failing the whole resolution, but — matching the
+        // deny_unknown_fields rigor `AgentFilterItem` carries everywhere else
+        // — log each drop rather than swallowing it outright. A silently
+        // dropped filter can turn a would-be unique match into a false
+        // multiple_matches (or a different unique match), with no signal that
+        // anything went wrong.
+        let filters: Vec<query_ops::AgentFilterItem> = resolved
+            .get("filters")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| match serde_json::from_value(f.clone()) {
+                        Ok(item) => Some(item),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                filter = %f,
+                                "resolve_query: dropping unparseable filter from decomposition output"
+                            );
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let matches = self
+            .run_node_query(
+                Some(params.node_type.clone()),
+                query,
+                filters,
+                None,
+                RESOLVE_QUERY_MATCH_LIMIT,
+                "resolve_query",
+            )
+            .await?;
+
+        let payload = match matches.len() {
+            0 => json!({
+                "resolved": false,
+                "reason": "no_match",
                 "node_type": params.node_type,
-                "query": resolved.get("query").cloned().unwrap_or(json!("")),
-                "filters": resolved.get("filters").cloned().unwrap_or(json!([])),
             }),
-        ))
+            1 => {
+                let node = &matches[0];
+                json!({
+                    "resolved": true,
+                    "id": node["id"],
+                    "title": node["title"],
+                    "type": node["type"],
+                    "properties": node["properties"],
+                })
+            }
+            _ => json!({
+                "resolved": false,
+                "reason": "multiple_matches",
+                "node_type": params.node_type,
+                "candidates": matches,
+            }),
+        };
+
+        Ok(ok_result(tool_call_id, "resolve_query", payload))
     }
 
     async fn exec_search_semantic(
@@ -2649,6 +2760,22 @@ mod tests {
     /// inference engine returning fixed JSON, exercising the full
     /// `exec_resolve_query` path — schema field lookup, prompt construction,
     /// nested `generate()` call, and JSON parsing into a tool result.
+    ///
+    /// What this suite does NOT cover: the decomposition prompt's actual
+    /// accuracy against a real model — every test here wires `FixedJsonEngine`,
+    /// which ignores the prompt entirely and returns a canned response. That
+    /// means the NL→filter mapping described in `exec_resolve_query`'s prompt
+    /// (mapping a dollar amount, a relative date, or a paraphrased identifier
+    /// onto the right schema field) is unverified by `cargo test`. The one
+    /// place a real model exercises this path today is
+    /// `scripts/eval/fixtures/agent-matrix.ts` scenario 6, driven through the
+    /// full `LocalAgentLoop` — but that's a single phrasing, run through the
+    /// eval harness rather than `cargo test`/the pre-push gate. Closing this
+    /// gap in-crate would mean standing up a real-model test fixture (model
+    /// download/load, machine-load-sensitive timing) matching
+    /// `ai_chat_send_to_idle_test.rs`'s pattern — deliberately not done here;
+    /// this doc comment is the explicit acknowledgment rather than a silent
+    /// gap.
     mod resolve_query_integration {
         use super::*;
         use crate::agent_types::{ChatModelSpec, InferenceUsage};
@@ -2713,8 +2840,26 @@ mod tests {
             }
         }
 
+        /// Creates an `invoice` node with the given typed properties via the
+        /// real `create_node` tool path, so `resolve_query`'s internal search
+        /// exercises the same storage/query round trip production does.
+        async fn create_invoice(executor: &GraphToolExecutor, title: &str, properties: Value) {
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": title,
+                        "node_type": "invoice",
+                        "properties": properties,
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error, "fixture node creation failed: {result:?}");
+        }
+
         #[tokio::test(flavor = "multi_thread")]
-        async fn resolve_query_returns_engine_resolved_filters() {
+        async fn resolve_query_returns_resolved_node_on_unique_match() {
             let (ns, _tmp) = make_test_service().await;
             handle_create_schema(
                 &ns,
@@ -2731,6 +2876,12 @@ mod tests {
 
             let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"amount","value":500}]}"#;
             let executor = executor_with(ns, engine_json);
+            create_invoice(
+                &executor,
+                "Consulting invoice",
+                json!({"amount": 500, "status": "open"}),
+            )
+            .await;
 
             let result = executor
                 .execute(
@@ -2741,12 +2892,181 @@ mod tests {
                 .unwrap();
 
             assert!(!result.is_error);
-            assert_eq!(result.result["node_type"], json!("invoice"));
-            assert_eq!(result.result["query"], json!(""));
-            assert_eq!(
-                result.result["filters"],
-                json!([{"type":"property","operator":"equals","property":"amount","value":500}])
+            assert_eq!(result.result["resolved"], json!(true));
+            assert!(
+                result.result["id"].as_str().is_some_and(|s| !s.is_empty()),
+                "resolved result must carry a usable node id: {result:?}"
             );
+            assert_eq!(result.result["properties"]["amount"], json!(500));
+            // The old fragment shape must not leak back onto a resolved result —
+            // regressing to it is exactly the bug this issue fixes.
+            assert!(result.result.get("filters").is_none());
+            assert!(result.result.get("query").is_none());
+        }
+
+        /// Regression test for the three phrasings measured in the issue: a
+        /// request that identifies a node via an implicit property match
+        /// (dollar amount) must resolve straight to the node, not to filters
+        /// the model has to route itself.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_regression_dollar_amount_phrasing() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [{"name": "amount", "type": "number"}]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"amount","value":500}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(&executor, "Invoice #1", json!({"amount": 500})).await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.result["resolved"], json!(true));
+        }
+
+        /// Regression test for the relative-date phrasing ("due next Friday").
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_regression_relative_date_phrasing() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [{"name": "due_date", "type": "date"}]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"due_date","value":"2026-08-07"}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(&executor, "Invoice #2", json!({"due_date": "2026-08-07"})).await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the invoice due next Friday as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.result["resolved"], json!(true));
+        }
+
+        /// Regression test for the paraphrased-identifier phrasing
+        /// ("the 2400 one") — mirrors eval scenario 6.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_regression_paraphrased_identifier_phrasing() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "replacement_cost", "type": "number"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"replacement_cost","value":2400}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(
+                &executor,
+                "Laser cutter",
+                json!({"replacement_cost": 2400, "status": "checked_out"}),
+            )
+            .await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "The 2400 one came back — set it to returned", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.result["resolved"], json!(true));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_reports_no_match_without_a_plan_to_route() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [{"name": "amount", "type": "number"}]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"amount","value":999}]}"#;
+            let executor = executor_with(ns, engine_json);
+            // No invoice created — the filter matches nothing.
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $999 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["resolved"], json!(false));
+            assert_eq!(result.result["reason"], json!("no_match"));
+            assert!(result.result.get("filters").is_none());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_reports_multiple_matches_as_candidates_not_a_retry_plan() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [{"name": "status", "type": "text"}]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"status","value":"open"}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(&executor, "Invoice A", json!({"status": "open"})).await;
+            create_invoice(&executor, "Invoice B", json!({"status": "open"})).await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the open invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["resolved"], json!(false));
+            assert_eq!(result.result["reason"], json!("multiple_matches"));
+            let candidates = result.result["candidates"]
+                .as_array()
+                .expect("multiple_matches must carry a candidates list to discriminate, not a query to retry");
+            assert_eq!(candidates.len(), 2);
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -2777,8 +3097,54 @@ mod tests {
                 !result.is_error,
                 "unparseable engine output must fall back, not error"
             );
-            assert_eq!(result.result["query"], json!(""));
-            assert_eq!(result.result["filters"], json!([]));
+            // With no schema-derived filters/query, the search degrades to an
+            // empty type listing — no invoices exist, so this is a no_match.
+            assert_eq!(result.result["resolved"], json!(false));
+            assert_eq!(result.result["reason"], json!("no_match"));
+        }
+
+        /// A malformed filter (an unknown key, per `AgentFilterItem`'s
+        /// `deny_unknown_fields`) must be dropped individually rather than
+        /// discarding the whole resolution — a valid sibling filter still
+        /// narrows the search and resolves the node it uniquely identifies.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_drops_only_the_malformed_filter_not_the_whole_resolution() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "amount", "type": "number"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            // The second filter carries "propertyName" instead of "property" —
+            // an unknown key AgentFilterItem's deny_unknown_fields rejects.
+            let engine_json = r#"{"query": "", "filters": [
+                {"type":"property","operator":"equals","property":"amount","value":500},
+                {"type":"property","operator":"equals","propertyName":"status","value":"open"}
+            ]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(&executor, "Invoice #1", json!({"amount": 500})).await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            // The malformed filter is dropped, but the valid "amount" filter
+            // alone still uniquely resolves the node.
+            assert_eq!(result.result["resolved"], json!(true));
+            assert_eq!(result.result["properties"]["amount"], json!(500));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -2796,7 +3162,11 @@ mod tests {
 
             // No schema found: still resolves (engine still gets called with a
             // "no typed fields" fallback description), just with no field context.
+            // No nodes of this type exist, so this reports no_match rather than
+            // erroring the turn.
             assert!(!result.is_error);
+            assert_eq!(result.result["resolved"], json!(false));
+            assert_eq!(result.result["reason"], json!("no_match"));
         }
 
         /// Isolates the "no inference engine" failure path from "no node
