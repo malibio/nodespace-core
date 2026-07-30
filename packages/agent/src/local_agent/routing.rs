@@ -264,7 +264,11 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
     }
     let mut lines = Vec::new();
     for entry in arr {
-        let type_id = entry.get("type_id").and_then(|v| v.as_str())?;
+        // Skip a malformed entry rather than propagating out of the loop: `?`
+        // here would discard every remaining type because one lacked an id.
+        let Some(type_id) = entry.get("type_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
         let fields: Vec<String> = entry
             .get("fields")
             .and_then(|f| f.as_array())
@@ -286,6 +290,9 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
             })
             .unwrap_or_default();
         lines.push(format!("- {type_id}: {}", fields.join(", ")));
+    }
+    if lines.is_empty() {
+        return None;
     }
     Some(lines.join("\n"))
 }
@@ -500,6 +507,28 @@ mod tests {
             1,
             "stranding the model with zero tools is worse than a wide surface"
         );
+    }
+
+    #[test]
+    fn a_malformed_metadata_entry_does_not_discard_the_others() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([
+            {"fields": [{"name": "orphan", "type": "text"}]},
+            {"type_id": "task", "fields": [{"name": "title", "type": "text"}]}
+        ]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        assert!(
+            rendered.contains("- task: title (text)"),
+            "an entry missing type_id must not take the valid ones with it: {rendered}"
+        );
+    }
+
+    #[test]
+    fn metadata_with_no_usable_entries_renders_no_section() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([{"fields": []}]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        assert!(!rendered.contains("RELEVANT ENTITY TYPES"));
     }
 
     #[test]
