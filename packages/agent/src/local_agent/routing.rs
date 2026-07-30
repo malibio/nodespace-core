@@ -416,11 +416,11 @@ mod tests {
 
     #[test]
     fn mutating_skills_carry_a_strictly_higher_bar() {
-        assert!(
-            MUTATING_SKILL_SCORE_BAR > READ_SKILL_SCORE_BAR,
-            "ADR-038 requires the expensive error — firing the wrong mutating \
-             tool — to be gated harder than a wrong read"
-        );
+        // Compile-time: ADR-038 requires the expensive error — firing the
+        // wrong *mutating* tool — to be gated harder than a wrong read. Tuning
+        // the values is expected; inverting the ordering is not, so it fails
+        // the build rather than a test run.
+        const _: () = assert!(MUTATING_SKILL_SCORE_BAR > READ_SKILL_SCORE_BAR);
         let read = candidate("research", 0.2, &["search_nodes"]);
         let write = candidate("schema", 0.2, &["create_schema"]);
         // Identical score, different verdict — the bar is a property of the

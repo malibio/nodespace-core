@@ -521,18 +521,15 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // every failure path inside returns "no candidates", which leaves the
         // turn running on the full tool surface rather than costing the user
         // their request.
-        let routed = self
-            .route(session, user_message, &turn_cx, &cancel)
-            .await;
+        let routed = self.route(session, user_message, &turn_cx, &cancel).await;
 
         if let Some(clarification) = routed.clarification {
             // Stage 1 chose to clarify and the contract permits it. Answer with
             // the question directly — no retrieval, no tool surface, no second
             // model turn to paraphrase what the model already composed.
-            session.messages.push(ChatMessage::text(
-                Role::Assistant,
-                clarification.clone(),
-            ));
+            session
+                .messages
+                .push(ChatMessage::text(Role::Assistant, clarification.clone()));
             on_status(LocalAgentStatus::Idle);
             return Ok(AgentTurnResult {
                 response: clarification,
@@ -1562,7 +1559,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .await
         {
             Ok(r) => {
-                span.set_attribute(KeyValue::new("routing.candidates", r.candidates.len() as i64));
+                span.set_attribute(KeyValue::new(
+                    "routing.candidates",
+                    r.candidates.len() as i64,
+                ));
                 span.set_attribute(KeyValue::new(
                     "routing.top_score",
                     r.candidates.first().map(|c| c.score).unwrap_or(0.0) as f64,
@@ -5385,7 +5385,12 @@ mod tests {
     }
 
     /// A model that calls `route_query` at Stage 1, then the given tool.
-    fn routed_engine(query: &str, tool_name: &str, tool_args: &str, final_text: &str) -> MockEngine {
+    fn routed_engine(
+        query: &str,
+        tool_name: &str,
+        tool_args: &str,
+        final_text: &str,
+    ) -> MockEngine {
         MockEngine::new(vec![
             // Stage 1: the structural choice, expressed as a tool call.
             vec![
@@ -5482,7 +5487,11 @@ mod tests {
         );
         let exec = RoutingToolExecutor::new(
             inner,
-            vec![skill_candidate("research", 0.9, &["search_nodes", "get_node"])],
+            vec![skill_candidate(
+                "research",
+                0.9,
+                &["search_nodes", "get_node"],
+            )],
         );
         let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
         let mut session = new_session();
@@ -5567,8 +5576,7 @@ mod tests {
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
-                    args_json: json!({"question": "Which one?", "options": ["A", "B"]})
-                        .to_string(),
+                    args_json: json!({"question": "Which one?", "options": ["A", "B"]}).to_string(),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {

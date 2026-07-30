@@ -2385,10 +2385,7 @@ impl AgentToolExecutor for GraphToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                score: s
-                    .get("confidence")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32,
+                score: s.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                 tools: s
                     .get("tools")
                     .and_then(|v| v.as_array())
