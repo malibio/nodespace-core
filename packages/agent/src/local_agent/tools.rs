@@ -6,8 +6,8 @@
 //! returns a compact, token-efficient result suitable for an 8k-context local model.
 
 use crate::agent_types::{
-    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceRequest, Role, StreamingChunk,
-    ToolDefinition, ToolError, ToolResult,
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, InferenceRequest, Role, SkillCandidate,
+    SkillRetrieval, StreamingChunk, ToolDefinition, ToolError, ToolResult,
 };
 use async_trait::async_trait;
 use nodespace_core::agent_params::{SearchNodesParams, SearchSemanticParams};
@@ -1151,6 +1151,27 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
     Tool::ALL.iter().map(|t| t.definition()).collect()
 }
 
+/// Whether a tool is withheld from the local agent's model-facing surface.
+///
+/// `search_skills` is retrieval, and ADR-038 makes retrieval a deterministic
+/// system step rather than a model tool call — offering it back to the model
+/// is the single-turn pull that ADR rejects, because it lets the model set K
+/// and bypasses the trust filter. The tool stays in [`Tool::ALL`] because it
+/// remains a legitimate surface for external agents (the MCP `find_skills`
+/// handler shares its implementation); only the local loop withholds it.
+pub fn is_system_only_tool(tool: &str) -> bool {
+    matches!(Tool::from_name(tool), Some(Tool::SearchSkills))
+}
+
+/// Tool definitions offered to the local agent's model, excluding those the
+/// system reserves for itself. See [`is_system_only_tool`].
+pub fn model_facing_tool_definitions() -> Vec<ToolDefinition> {
+    all_tool_definitions()
+        .into_iter()
+        .filter(|t| !is_system_only_tool(&t.name))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // GraphToolExecutor
 // ---------------------------------------------------------------------------
@@ -2151,7 +2172,7 @@ impl AgentToolExecutor for GraphToolExecutor {
     async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
         let ns = match &self.node_service {
             Some(svc) => svc,
-            None => return Ok(all_tool_definitions()),
+            None => return Ok(model_facing_tool_definitions()),
         };
 
         let query_result = node_ops::query_nodes(
@@ -2173,11 +2194,11 @@ impl AgentToolExecutor for GraphToolExecutor {
             Ok(output) if !output.nodes.is_empty() => output.nodes,
             Ok(_) => {
                 tracing::debug!("available_tools: no tool nodes in DB, using hardcoded list");
-                return Ok(all_tool_definitions());
+                return Ok(model_facing_tool_definitions());
             }
             Err(e) => {
                 tracing::warn!(error = %e, "available_tools: node query failed, using hardcoded list");
-                return Ok(all_tool_definitions());
+                return Ok(model_facing_tool_definitions());
             }
         };
 
@@ -2236,7 +2257,7 @@ impl AgentToolExecutor for GraphToolExecutor {
 
         if node_defs.is_empty() {
             tracing::debug!("available_tools: no valid tool nodes found, using hardcoded list");
-            return Ok(all_tool_definitions());
+            return Ok(model_facing_tool_definitions());
         }
 
         // Emit ToolDefinitions in canonical registry order so the model always
@@ -2245,6 +2266,14 @@ impl AgentToolExecutor for GraphToolExecutor {
         // are appended after the registered tools.
         let mut result: Vec<ToolDefinition> = Vec::with_capacity(node_defs.len());
         for &tool in Tool::ALL {
+            // Tools the system reserves for itself are dropped even when a
+            // node for them exists: the seeded tool node is what backs the
+            // external (MCP) surface, so it must stay in the DB while staying
+            // out of the local model's reach. See `is_system_only_tool`.
+            if is_system_only_tool(tool.name()) {
+                node_defs.remove(tool.name());
+                continue;
+            }
             if let Some(def) = node_defs.remove(tool.name()) {
                 result.push(def);
             }
@@ -2290,6 +2319,95 @@ impl AgentToolExecutor for GraphToolExecutor {
                     .await
             }
         }
+    }
+
+    /// Routing is available once both services backing retrieval are loaded.
+    ///
+    /// The embedding service loads asynchronously after startup, so this is
+    /// read per-call rather than cached: early turns run unrouted and later
+    /// ones route, without the executor being rebuilt.
+    async fn routing_available(&self) -> bool {
+        self.node_service.is_some() && self.embedding_service.read().await.is_some()
+    }
+
+    /// Run skill retrieval as a deterministic system step (ADR-038).
+    ///
+    /// Shares `skill_ops::find_skills` with the `search_skills` handler — the
+    /// retrieval itself is identical. What differs is who initiates it: here
+    /// the system does, so `limit` is a bound the model cannot widen and the
+    /// results pass through the score gate before the model sees them.
+    ///
+    /// An unavailable embedding service yields no candidates rather than an
+    /// error, matching the documented degraded path: routing is best-effort,
+    /// and losing it must not cost the user their turn.
+    async fn retrieve_skills(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<SkillRetrieval, ToolError> {
+        use nodespace_core::ops::skill_ops;
+
+        let (Some(ns), Some(emb)) = (
+            self.node_service.as_ref(),
+            self.embedding_service.read().await.clone(),
+        ) else {
+            tracing::debug!("retrieve_skills: services unavailable, no candidates");
+            return Ok(SkillRetrieval::default());
+        };
+
+        let output = skill_ops::find_skills(
+            &emb,
+            ns,
+            skill_ops::FindSkillsInput {
+                query: query.to_string(),
+                limit: Some(limit),
+            },
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("skill retrieval failed: {}", e)))?;
+
+        let candidates = output
+            .skills
+            .iter()
+            .map(|s| SkillCandidate {
+                id: s
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                name: s
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                description: s
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                score: s.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                tools: s
+                    .get("tools")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|t| t.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                instructions: s
+                    .get("instructions")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                schema_metadata: s
+                    .get("schema_metadata")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            })
+            .collect();
+
+        Ok(SkillRetrieval { candidates })
     }
 }
 
@@ -3467,10 +3585,9 @@ mod tests {
     // -- Available tools --
 
     #[tokio::test]
-    async fn available_tools_returns_all() {
+    async fn available_tools_returns_every_model_facing_tool() {
         let executor = test_executor();
         let tools = executor.available_tools().await.unwrap();
-        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_nodes"));
         assert!(names.contains(&"resolve_query"));
@@ -3480,12 +3597,45 @@ mod tests {
         assert!(names.contains(&"update_node"));
         assert!(names.contains(&"create_relationship"));
         assert!(names.contains(&"get_related_nodes"));
-        assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"create_schema"));
         assert!(names.contains(&"update_schema"));
         assert!(names.contains(&"update_task_status"));
         assert!(names.contains(&"delete_node"));
         assert!(names.contains(&"create_nodes_from_markdown"));
+        // Every registered tool except the ones the system reserves.
+        assert_eq!(tools.len(), Tool::ALL.len() - 1);
+    }
+
+    #[tokio::test]
+    async fn search_skills_is_withheld_from_the_model_facing_surface() {
+        // ADR-038 makes retrieval a deterministic system step. Offering
+        // `search_skills` back to the model is the single-turn pull that ADR
+        // rejects: it lets the model set K and bypasses the trust filter.
+        let executor = test_executor();
+        let names: Vec<String> = executor
+            .available_tools()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "search_skills"),
+            "search_skills must not reach the model: {names:?}"
+        );
+    }
+
+    #[test]
+    fn search_skills_stays_in_the_registry_for_external_agents() {
+        // Withheld from the local model, but still a real tool: the MCP
+        // `find_skills` handler shares its implementation, and the seeded tool
+        // node backing that surface is generated from `Tool::ALL`.
+        assert!(Tool::ALL.contains(&Tool::SearchSkills));
+        assert!(all_tool_definitions()
+            .iter()
+            .any(|t| t.name == "search_skills"));
+        assert!(is_system_only_tool("search_skills"));
+        assert!(!is_system_only_tool("search_nodes"));
     }
 
     // -- Embedding handle is read live (race fix) --

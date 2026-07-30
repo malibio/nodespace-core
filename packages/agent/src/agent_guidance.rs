@@ -18,9 +18,9 @@
 /// `skill_pipeline.rs` (used only by the skill-based schema-creation path) and
 /// should be consolidated here when that path is unified.
 pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. Custom types need a schema first (create_schema). Once a schema exists, create instances with create_node(node_type=<schema_id>). Never call create_schema for a type already in RELEVANT ENTITY TYPES.\n\
-    \"DATABASE\" = SCHEMA: A request to start tracking a kind of thing — worded as a database, a tracker, a list, or \"track X\" — means call create_schema IMMEDIATELY: no confirmation, no search_skills, no planning text. Name the schema after the single entity being tracked, in singular form, stripped of the tracking wording itself.\n\
-    INSTANCE vs TYPE: A request that supplies the particulars of ONE record — a name, an amount, a title, a date — asks for an INSTANCE of a type that already exists, not a new type. Call search_skills, then create_node(node_type=<id from RELEVANT ENTITY TYPES>, ...) with those particulars as properties. Never ask for confirmation — just execute. Only a request to start tracking a KIND of thing calls for create_schema.\n\
-    NO CONFIRMATION FOR KNOWN TYPES: If a type appears in RELEVANT ENTITY TYPES, you have all the information you need. Do NOT say \"Could you confirm\" or \"I want to make sure\" or \"Would you like me to\" — just call search_skills then create_node immediately. Confirmation is NEVER required when the schema already exists.\n\
+    \"DATABASE\" = SCHEMA: A request to start tracking a kind of thing — worded as a database, a tracker, a list, or \"track X\" — means call create_schema IMMEDIATELY: no confirmation, no planning text. Name the schema after the single entity being tracked, in singular form, stripped of the tracking wording itself.\n\
+    INSTANCE vs TYPE: A request that supplies the particulars of ONE record — a name, an amount, a title, a date — asks for an INSTANCE of a type that already exists, not a new type. Call create_node(node_type=<id from RELEVANT ENTITY TYPES>, ...) with those particulars as properties. Never ask for confirmation — just execute. Only a request to start tracking a KIND of thing calls for create_schema.\n\
+    NO CONFIRMATION FOR KNOWN TYPES: If a type appears in RELEVANT ENTITY TYPES, you have all the information you need. Do NOT say \"Could you confirm\" or \"I want to make sure\" or \"Would you like me to\" — just call create_node immediately. Confirmation is NEVER required when the schema already exists.\n\
     SCHEMA SUCCESS/FAILURE: After create_schema returns a schema object, respond to the user and STOP — do NOT call create_schema again. If create_schema returns an \"already exists\" error, stop immediately and tell the user the type already exists.\n\
     TITLE TEMPLATE: Every {field_name} in title_template MUST appear in the fields array. If you want {invoice_number} in a template, you MUST add a field named invoice_number. Never reference a placeholder that is not in fields — this causes a validation error.\n\
     FIELD RULES: Every field object MUST have both \"name\" AND \"type\". Missing either causes a validation error that will never self-correct — stop retrying and fix the field. Valid: {\"name\":\"amount\",\"type\":\"number\",\"required\":true}.";
@@ -31,8 +31,8 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// identity and policy, nothing else). Argument shape (node_type provenance)
 /// now lives on the relevant tool schemas' parameter descriptions; per-operation
 /// tool-call routing now lives in each operation's skill instructions
-/// (`skill_pipeline.rs`) or is redundant with the model's own choice to reach
-/// a skill via `search_skills`; tool-usage reference facts (how search_nodes
+/// (`skill_pipeline.rs`), delivered by the two-stage routing pipeline
+/// (`local_agent/routing.rs`); tool-usage reference facts (how search_nodes
 /// filters work, when to prefer search_semantic, etc.) now live on the tools'
 /// own descriptions in `local_agent/tools.rs`.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
