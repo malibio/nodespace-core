@@ -27,34 +27,24 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 
 /// Tool strategy guidance.
 ///
-/// Compressed "TOOL STRATEGY:" bulleted list. Covers the search-first mandate
-/// (never invent placeholder IDs), tool selection hints for search_nodes vs.
-/// search_semantic, and canonical create/update/connect patterns. Parameter-level
-/// detail is intentionally deferred to tool schemas to avoid duplication.
+/// Safety-invariant policy only, per ADR-064 rule 5 (resident prose owns
+/// identity and policy, nothing else). Argument shape (node_type provenance)
+/// now lives on the relevant tool schemas' parameter descriptions; per-operation
+/// tool-call routing now lives in each operation's skill instructions
+/// (`skill_pipeline.rs`) or is redundant with the model's own choice to reach
+/// a skill via `search_skills`; tool-usage reference facts (how search_nodes
+/// filters work, when to prefer search_semantic, etc.) now live on the tools'
+/// own descriptions in `local_agent/tools.rs`. See issue #1820 and its audit
+/// trail for the per-line disposition.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
-    - NODE_TYPE COMES FROM RELEVANT ENTITY TYPES: Every node_type argument (search_nodes, create_node, update_node, resolve_query) MUST be an id copied exactly from the RELEVANT ENTITY TYPES block in this prompt — character for character, including any underscores. Never shorten, singularize, paraphrase, or guess it from the user's wording: the user's noun is usually NOT the id, because the id was derived from whatever the type was named when its schema was created. If the type you need is not listed in RELEVANT ENTITY TYPES, it does not exist yet — do not invent an id for it.\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings, thanks, small talk, questions about your own capabilities or limits, and other meta questions about yourself — answer directly in text. Do NOT call any tool: nothing in the user's graph needs to be read to answer them.\n\
     - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
     - SCHEMA CLAIMS WITHOUT VERIFICATION: Never state that a node type has or lacks a specific property (e.g. \"task has no due_date field\") without first calling a tool to verify. If you have not called get_node or search_nodes on the schema in this turn, you do not know its fields — say so.\n\
     - IDENTICAL TOOL CALLS: Never call the same tool with the exact same arguments twice in one turn. If a tool returned a result and you are about to call it again identically, you already have the answer — produce your response using the result you have.\n\
-    - For create_node (adding an instance): call search_skills(query) THEN immediately call create_node in the SAME turn — no text between them. After search_skills returns, your next step MUST be create_node, not a planning message.\n\
-    - For create_schema (new entity type): call create_schema DIRECTLY — no search_skills needed. See DATABASE=SCHEMA rule above.\n\
-    - SKILL COMPLETION: Once create_node, update_node, create_schema, or delete_node returns successfully, respond to the user immediately. Do NOT call search_skills again or call create_schema again — the task is done.\n\
     - NEVER CLAIM ACTION WITHOUT TOOL RESULT: Never tell the user a node was created, updated, or deleted without a successful tool result in this turn. If no tool was called, no action happened — call the tool.\n\
     - CLARIFICATION CONTRACT: at most one clarification per intent. If the user clarifies and the request is still ambiguous, fall through to semantic_search and answer with what's available. Never clarify twice.\n\
     - AMBIGUITY: If a search returns 0 results or multiple results that don't clearly match, ask the user one specific clarifying question (e.g. \"Are you looking for the invoice with amount $500?\") rather than retrying the search.\n\
-    - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.\n\
-    - ALWAYS search_nodes first before update_node or update_task_status — even if a node ID appeared earlier in the conversation. Never skip the search step.\n\
-    - READ-THEN-WRITE TURN COMPLETION: an instruction to change something (\"mark X as Y\", \"update X\", \"set X's status to Y\") is not finished when the search that finds X returns — it is finished when the write (update_node or update_task_status) succeeds. Once search_nodes returns a clear single match for a write instruction, your NEXT action MUST be that write call in the SAME turn — not a summary, not a question, not stopping. Searching and then stopping is a FAILED turn, not a completed one.\n\
-    - search_nodes is the ONE tool for finding, listing, and filtering nodes. By keyword/title: search_nodes(query, node_type). To LIST EVERY NODE OF A TYPE — any request naming a type with no narrowing condition — call search_nodes(query=\"\", node_type=<type>); the empty query is what makes it return the whole type, so do NOT invent a keyword to put there. To FILTER BY A TYPED PROPERTY (status, due_date, amount, operators like gt/lt): add filters, e.g. search_nodes(node_type=<type>, filters=[{\"type\":\"property\",\"operator\":\"equals\",\"property\":\"status\",\"value\":\"open\"}]). search_nodes returns each node's properties. Use search_semantic(query, node_types, scope, threshold, graph_boost) ONLY for meaning-based / fuzzy questions.\n\
-    - search_nodes filter \"type\" values: use \"property\" for schema/node fields (e.g. status, due_date, priority — anything defined on the node type). Use \"metadata\" ONLY for created_at, modified_at, node_type, or content. Using \"metadata\" for a property field (e.g. status) always fails with \"Invalid metadata field\".\n\
-    - search_semantic result: if 'markdown' is non-empty, summarize from it directly — skip get_node.\n\
-    - To get full content: get_node(id, format=markdown). To get connections: get_related_nodes(id).\n\
-    - To update a CUSTOM schema node's property: if the request identifies the target indirectly — by a paraphrased description, an implicit property reference (a bare value such as an amount or code, without naming which field it belongs to), or a relative date/status word (a weekday, \"overdue\", \"recent\") — call resolve_query(request=<the user's request verbatim>, node_type=<id from RELEVANT ENTITY TYPES>) FIRST, then pass its returned \"query\" and \"filters\" directly into search_nodes, then update_node(id=<found_id>, properties={...}). Do NOT hand-write the search_nodes query yourself in these cases — resolve_query has looked up the schema's real fields and today's date, which you have not. Skip resolve_query only when the target is already named directly and unambiguously (a proper name or exact title you can pass straight to search_nodes as query). Use update_task_status ONLY for built-in task nodes — for every custom schema type, use update_node.\n\
-    - To create a node: call search_skills first to get schema_metadata, then call create_node(content, node_type=<type_id>, properties=<fields from schema_metadata>). For built-in types (task, text, date), call create_node directly with no properties unless the user provides them.\n\
-    - To add/modify an entity type: create_schema or update_schema(schema_id).\n\
-    - To connect nodes: create_relationship with names from schemas above.\n\
-    - Tool arguments must be valid JSON. No comments (#) in JSON.";
+    - BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_schema when the user explicitly and unambiguously asks to delete. Never clarify before create_schema, create_node, or update operations. \"Could you confirm?\" and \"I want to make sure\" are FORBIDDEN before any non-delete operation.";
 
 /// Node reference formatting rule.
 ///
@@ -78,8 +68,29 @@ mod tests {
     #[test]
     fn tool_strategy_rules_non_empty() {
         assert!(TOOL_STRATEGY_RULES.contains("TOOL STRATEGY:"));
-        assert!(TOOL_STRATEGY_RULES.contains("ALWAYS search_nodes first"));
-        assert!(TOOL_STRATEGY_RULES.contains("Never skip the search step"));
+        assert!(TOOL_STRATEGY_RULES.contains("BLAST-RADIUS GATE"));
+    }
+
+    /// Per-operation routing (which tool to call in what order for a given
+    /// request shape) is now owned by skill instructions (`skill_pipeline.rs`)
+    /// and tool descriptions (`local_agent/tools.rs`), not resident prose — see
+    /// ADR-064 rules 2 and 5, and issue #1820. Nothing that names a specific
+    /// tool-call sequence for an operation may reappear here.
+    #[test]
+    fn tool_strategy_rules_contain_no_per_operation_routing() {
+        for forbidden in [
+            "ALWAYS search_nodes first",
+            "READ-THEN-WRITE TURN COMPLETION",
+            "SKILL COMPLETION",
+            "NODE_TYPE COMES FROM RELEVANT ENTITY TYPES",
+            "resolve_query",
+            "schema_metadata",
+        ] {
+            assert!(
+                !TOOL_STRATEGY_RULES.contains(forbidden),
+                "TOOL_STRATEGY_RULES must not contain per-operation routing text {forbidden:?} — it belongs in a skill's instructions or a tool's description"
+            );
+        }
     }
 
     #[test]
@@ -102,57 +113,6 @@ mod tests {
         assert!(
             TOOL_STRATEGY_RULES.contains("IDENTICAL TOOL CALLS"),
             "must prohibit identical repeated tool calls"
-        );
-    }
-
-    #[test]
-    fn tool_strategy_rules_cover_read_then_write_completion() {
-        assert!(
-            TOOL_STRATEGY_RULES.contains("READ-THEN-WRITE TURN COMPLETION"),
-            "must instruct the model to continue to the write call after a successful search, not stop"
-        );
-        assert!(
-            TOOL_STRATEGY_RULES.contains("FAILED turn"),
-            "must frame search-then-stop as a failed turn"
-        );
-    }
-
-    #[test]
-    fn tool_strategy_rules_reference_resolve_query_for_ambiguous_updates() {
-        assert!(
-            TOOL_STRATEGY_RULES.contains("resolve_query"),
-            "must instruct the model to call resolve_query for ambiguous update targets"
-        );
-        assert!(
-            !TOOL_STRATEGY_RULES.contains("ONE WORD ONLY"),
-            "the ineffective ONE-WORD-ONLY prompt workaround must be removed, not layered under resolve_query"
-        );
-    }
-
-    /// `node_type` must be taught as a lookup into the injected RELEVANT ENTITY
-    /// TYPES block, never as a literal. A hardcoded type id is wrong for
-    /// essentially every real workspace, because the id is derived from whatever
-    /// the schema happened to be named at creation time.
-    #[test]
-    fn tool_strategy_rules_bind_node_type_to_relevant_entity_types() {
-        assert!(
-            TOOL_STRATEGY_RULES.contains("NODE_TYPE COMES FROM RELEVANT ENTITY TYPES"),
-            "must state where node_type values come from"
-        );
-        for tool in [
-            "search_nodes",
-            "create_node",
-            "update_node",
-            "resolve_query",
-        ] {
-            assert!(
-                TOOL_STRATEGY_RULES.contains(tool),
-                "node_type guidance must cover {tool}"
-            );
-        }
-        assert!(
-            !TOOL_STRATEGY_RULES.contains("node_type=\"invoice\""),
-            "node_type must never be taught as a hardcoded literal"
         );
     }
 

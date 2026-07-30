@@ -124,6 +124,8 @@ When updating an existing node:
 
 FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing.
 
+INDIRECT TARGET: If the request identifies the target indirectly — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself, then pass its returned query and filters directly into search_nodes.
+
 AMBIGUITY: {ambiguity_clarify} Examples:
 - 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
 - Multiple results: "I found 3 invoices — which one did you mean: Invoice #001 ($500), Invoice #002 ($750), or Invoice #003 ($500 overdue)?"
@@ -341,7 +343,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use update_task_status to change status.",
-                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic"],
+                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query"],
                 "max_iterations": 3,
             }),
             child_node_type: Some("prompt".to_string()),
