@@ -489,7 +489,6 @@ mod tests {
             "search_skills",
             "CLARIFICATION CONTRACT",
             "BLAST-RADIUS GATE",
-            "ALWAYS search_nodes first",
             "NEVER CLAIM ACTION WITHOUT TOOL RESULT",
             // SCHEMA_CREATION_RULES, sharing the same prompt node, must also survive.
             "NODE MODEL:",

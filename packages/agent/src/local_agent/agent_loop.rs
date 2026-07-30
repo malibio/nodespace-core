@@ -3393,6 +3393,129 @@ mod tests {
         assert_eq!(result.tool_calls_made[1].name, "create_node");
     }
 
+    /// Regression coverage: `update_node` must remain reachable through
+    /// `search_skills` -> Graph Editing's own routing (`search_nodes` then
+    /// `update_node`) now that `TOOL_STRATEGY_RULES` no longer hardcodes
+    /// "ALWAYS search_nodes first before update_node" in resident prose.
+    ///
+    /// This scripts the full chain a real model is expected to follow and
+    /// asserts the loop dispatches every step correctly against a scripted
+    /// `MockEngine` — it proves the DISPATCH PLUMBING supports the routed
+    /// path (tool execution order, argument passing, session state), not
+    /// that a real model will choose this sequence. `MockEngine` returns a
+    /// fixed queue of responses regardless of prompt content, so it cannot
+    /// exercise routing choice. Live-model adherence to this routing is a
+    /// separate, not-yet-closed concern for the agent-matrix eval
+    /// (`scripts/eval/fixtures/agent-matrix.ts`), which is not run as part
+    /// of `test:all`.
+    #[tokio::test]
+    async fn search_skills_then_search_nodes_then_update_node_chain_dispatches_correctly() {
+        let engine = Arc::new(MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_skills".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"query":"mark an invoice as paid"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_2".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_2".to_string(),
+                    args_json: r#"{"query":"","node_type":"invoice","filters":[{"type":"property","operator":"equals","property":"amount","value":500}]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 8,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_3".to_string(),
+                    name: "update_node".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_3".to_string(),
+                    args_json: r#"{"id":"nodespace://invoice-1","properties":{"status":"paid"}}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 8,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "Marked the invoice as paid.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 40,
+                        completion_tokens: 6,
+                    },
+                },
+            ],
+        ]));
+
+        let executor = MockToolExecutor::new()
+            .with_tool(
+                "search_skills",
+                json!({"type": "object"}),
+                json!({
+                    "query": "mark an invoice as paid",
+                    "matches": [
+                        {"id": "skill-graph-editing", "name": "Graph Editing", "confidence": 0.9,
+                         "description": "Modify existing nodes in the knowledge graph",
+                         "tools": ["update_node", "search_nodes", "resolve_query"]}
+                    ]
+                }),
+            )
+            .with_tool(
+                "search_nodes",
+                json!({"type": "object"}),
+                json!({"results": [{"id": "nodespace://invoice-1", "title": "Invoice #001", "properties": {"amount": 500, "status": "open"}}]}),
+            )
+            .with_tool(
+                "update_node",
+                json!({"type": "object"}),
+                json!({"id": "nodespace://invoice-1", "properties": {"status": "paid"}}),
+            );
+
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(executor));
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Mark the $500 invoice as paid",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.response, "Marked the invoice as paid.");
+        assert_eq!(result.tool_calls_made.len(), 3);
+        assert_eq!(result.tool_calls_made[0].name, "search_skills");
+        assert_eq!(result.tool_calls_made[1].name, "search_nodes");
+        assert_eq!(result.tool_calls_made[2].name, "update_node");
+    }
+
     /// When the model decides no skill is needed, it responds directly —
     /// no clarification short-circuit, no canned string.
     #[tokio::test]

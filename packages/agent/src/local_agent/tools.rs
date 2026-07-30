@@ -278,7 +278,7 @@ fn def_search_nodes() -> ToolDefinition {
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). Omit to search all types."
+                    "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types."
                 },
                 "filters": {
                     "type": "array",
@@ -370,7 +370,7 @@ fn def_resolve_query() -> ToolDefinition {
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "The target node type to resolve against (e.g. 'invoice')."
+                    "description": "The target node type to resolve against (e.g. 'invoice'). Copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording."
                 }
             },
             "required": ["request", "node_type"]
@@ -381,7 +381,7 @@ fn def_resolve_query() -> ToolDefinition {
 fn def_search_semantic() -> ToolDefinition {
     ToolDefinition {
         name: "search_semantic".into(),
-        description: "Find nodes semantically related to a natural-language query. By default returns full content for the top result (include_markdown=1). Increase include_markdown to get full content for more results, or set to 0 for IDs and snippets only.".into(),
+        description: "Find nodes semantically related to a natural-language query. By default returns full content for the top result (include_markdown=1). Increase include_markdown to get full content for more results, or set to 0 for IDs and snippets only. If a result's 'markdown' field is non-empty, that is the complete document — summarize or answer from it directly, do not call get_node or search_nodes again for that result.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -478,7 +478,7 @@ fn def_create_node() -> ToolDefinition {
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'project', 'customer')"
+                    "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'project', 'customer'). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it."
                 },
                 "properties": {
                     "type": "object",
@@ -536,7 +536,7 @@ fn def_create_relationship() -> ToolDefinition {
                 },
                 "relationship_type": {
                     "type": "string",
-                    "description": "Type of relationship (member_of, mentions, etc.)"
+                    "description": "Type of relationship. Use a relationship name defined on the relevant schema(s) (e.g. 'has_task', 'billed_to') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
                 }
             },
             "required": ["from_id", "to_id", "relationship_type"]
@@ -2274,6 +2274,53 @@ mod tests {
         // Derived from the registry: one definition per `Tool::ALL` entry.
         assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
         assert_eq!(all_tool_definitions().len(), 14);
+    }
+
+    /// `node_type` argument-shape guidance (copy the id exactly from RELEVANT
+    /// ENTITY TYPES, never paraphrase/guess) moved here from resident prose per
+    /// ADR-064 rule 1 (tool schemas own argument shape). `update_node` has no
+    /// `node_type` parameter — it addresses by `id` — so it is intentionally
+    /// excluded.
+    #[test]
+    fn node_type_params_bind_to_relevant_entity_types() {
+        for tool in [Tool::SearchNodes, Tool::CreateNode, Tool::ResolveQuery] {
+            let def = tool.definition();
+            let node_type_desc = def.parameters_schema["properties"]["node_type"]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} must have a node_type parameter", tool.name()));
+            assert!(
+                node_type_desc.contains("RELEVANT ENTITY TYPES")
+                    && node_type_desc.to_lowercase().contains("copy"),
+                "{}'s node_type description must instruct copying the id exactly from RELEVANT ENTITY TYPES, got: {node_type_desc:?}",
+                tool.name()
+            );
+        }
+    }
+
+    /// The markdown-shortcut rule (non-empty `markdown` field is the complete
+    /// document — skip get_node/search_nodes) moved here from resident prose.
+    #[test]
+    fn search_semantic_description_covers_markdown_shortcut() {
+        let desc = Tool::SearchSemantic.definition().description;
+        assert!(
+            desc.contains("markdown") && desc.contains("summarize"),
+            "search_semantic description must instruct summarizing directly from a non-empty markdown field, got: {desc:?}"
+        );
+    }
+
+    /// `relationship_type` should steer the model toward schema-defined
+    /// relationship names before generic labels.
+    #[test]
+    fn create_relationship_type_prefers_schema_defined_names() {
+        let def = Tool::CreateRelationship.definition();
+        let desc = def.parameters_schema["properties"]["relationship_type"]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            desc.contains("relevant schema"),
+            "relationship_type description must point at schema-defined relationship names, got: {desc:?}"
+        );
     }
 
     // -- Tool registry invariants --
