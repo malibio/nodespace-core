@@ -3020,7 +3020,7 @@ Some text here.
 
 #[cfg(test)]
 mod template_tests {
-    use crate::markdown::{prepare_nodes_from_template, NodeTemplate};
+    use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
 
     fn skill_template(name: &str, guidance: &str) -> NodeTemplate {
         NodeTemplate {
@@ -3037,6 +3037,7 @@ mod template_tests {
                 "priority": 1,
                 "source": "built-in",
             })),
+            tier: SeedTier::System,
             markdown_content: guidance.to_string(),
         }
     }
@@ -3052,6 +3053,7 @@ mod template_tests {
             }),
             child_node_type: None,
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: String::new(),
         }
     }
@@ -3136,6 +3138,7 @@ mod template_tests {
             root_properties: serde_json::json!({}),
             child_node_type: None,
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: String::new(),
         };
         let nodes = prepare_nodes_from_template(&tmpl).unwrap();
@@ -3153,6 +3156,7 @@ mod template_tests {
             root_properties: serde_json::json!({}),
             child_node_type: Some("prompt".to_string()),
             child_properties: Some(serde_json::json!("plain-string")), // not an object
+            tier: SeedTier::System,
             markdown_content: "- A guidance item".to_string(),
         };
         let nodes = prepare_nodes_from_template(&tmpl).unwrap();
@@ -3175,6 +3179,7 @@ mod template_tests {
             }),
             child_node_type: None,
             child_properties: None,
+            tier: SeedTier::System,
             markdown_content: String::new(),
         };
         let nodes = prepare_nodes_from_template(&tmpl).unwrap();

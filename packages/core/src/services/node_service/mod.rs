@@ -1298,12 +1298,29 @@ impl NodeService {
     /// Seed node hierarchies from pre-expanded template node lists.
     ///
     /// Each element of `template_groups` is a flat `Vec<PreparedNode>` produced
-    /// by [`crate::markdown::prepare_nodes_from_template`].
-    /// The first element of each group is the root node; subsequent elements are
-    /// its children.
+    /// by [`crate::markdown::prepare_nodes_from_template`], which stamps the
+    /// root node's properties with a `_seed` object containing `key` (the
+    /// template's stable title), `version` (a content hash), and `tier`
+    /// (`"system"` or `"starter"`). Nested under one object key (rather than
+    /// flat top-level keys) so [`Self::normalize_flat_properties_to_namespace`]
+    /// preserves it as a dormant namespace instead of hoisting its contents
+    /// into `properties[node_type]` on write — the same pattern the `tool`
+    /// seed template comment (`skill_pipeline.rs`) uses for the same reason.
     ///
-    /// Idempotency rule: if any node of a given `node_type` already exists in the
-    /// database, the entire type is skipped.
+    /// Reconciliation is per node, keyed by `_seed.key` within each `node_type`:
+    ///
+    /// | state                                          | action              |
+    /// |-------------------------------------------------|---------------------|
+    /// | absent                                           | create              |
+    /// | present, hash matches                            | skip (up to date)   |
+    /// | present, `system`, hash differs                  | replace             |
+    /// | present, `starter`, not user-modified, hash differs | replace          |
+    /// | present, `starter`, user-modified                | skip, log once      |
+    ///
+    /// A "replace" deletes the existing subtree and recreates it fresh — the
+    /// same insert path used for a first-time create — rather than diffing
+    /// individual children, since template content (including which children
+    /// exist) can change between versions.
     pub async fn seed_nodes_from_templates(
         &self,
         template_groups: Vec<Vec<crate::markdown::PreparedNode>>,
@@ -1312,37 +1329,101 @@ impl NodeService {
             return Ok(());
         }
 
-        // Collect the root node_types we need to check for existence.
+        // One query per distinct node_type covers every existing seeded node of
+        // that type in a single round trip — bounded by the number of seeded
+        // types (currently 3: prompt, skill, tool), not the number of nodes.
         let root_types: std::collections::HashSet<String> = template_groups
             .iter()
             .filter_map(|g| g.first())
             .map(|n| n.node_type.clone())
             .collect();
 
-        let mut seeded_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut existing_by_key: HashMap<String, HashMap<String, Node>> = HashMap::new();
         for node_type in &root_types {
             let filter = crate::models::NodeFilter {
                 node_type: Some(node_type.clone()),
                 ..Default::default()
             };
-            if !self.query_nodes(filter).await?.is_empty() {
-                seeded_types.insert(node_type.clone());
+            let mut by_key = HashMap::new();
+            for node in self.query_nodes(filter).await? {
+                if let Some(key) = node
+                    .properties
+                    .get("_seed")
+                    .and_then(|s| s.get("key"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                {
+                    by_key.insert(key, node);
+                }
             }
+            existing_by_key.insert(node_type.clone(), by_key);
         }
 
         let mut created_roots = 0u32;
         let mut created_children = 0u32;
-        let mut skipped = 0u32;
+        let mut replaced = 0u32;
+        let mut skipped_current = 0u32;
+        let mut skipped_user_modified = 0u32;
 
         for group in template_groups {
             let root = match group.first() {
                 Some(r) => r,
                 None => continue,
             };
+            let seed_meta = root.properties.get("_seed");
+            let seed_key = seed_meta
+                .and_then(|s| s.get("key"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let seed_version = seed_meta
+                .and_then(|s| s.get("version"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
 
-            if seeded_types.contains(&root.node_type) {
-                skipped += 1;
-                continue;
+            let existing = existing_by_key
+                .get(&root.node_type)
+                .and_then(|by_key| by_key.get(seed_key));
+
+            if let Some(existing_node) = existing {
+                let existing_seed = existing_node.properties.get("_seed");
+                let existing_version = existing_seed
+                    .and_then(|s| s.get("version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if existing_version == seed_version {
+                    skipped_current += 1;
+                    continue;
+                }
+
+                let user_modified = existing_seed
+                    .and_then(|s| s.get("user_modified"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if user_modified {
+                    tracing::info!(
+                        seed_key,
+                        node_type = %root.node_type,
+                        "Seed content changed but node was user-modified; skipping"
+                    );
+                    skipped_user_modified += 1;
+                    continue;
+                }
+
+                // Replace: delete the existing subtree, then fall through to the
+                // same create path used for a brand-new node. The recreated root
+                // gets `root.id` — a fresh UUID assigned by
+                // `prepare_nodes_from_template` on every call — not the deleted
+                // node's ID. Nothing references seeded prompt/skill/tool nodes by
+                // stable ID today, so this is safe, but any future feature that
+                // does (e.g. a `mentions` edge into a skill node) would need
+                // either a stable ID carried across replace, or an explicit
+                // decision that seeded-content IDs are not a stable reference
+                // surface.
+                self.delete_node(&existing_node.id, existing_node.version)
+                    .await?;
+                replaced += 1;
             }
 
             // Insert root node (no parent).
@@ -1385,12 +1466,14 @@ impl NodeService {
             }
         }
 
-        if created_roots > 0 {
+        if created_roots > 0 || replaced > 0 {
             tracing::info!(
                 created_roots,
                 created_children,
-                skipped,
-                "Agent nodes seeded from templates"
+                replaced,
+                skipped_current,
+                skipped_user_modified,
+                "Agent nodes reconciled from templates"
             );
         }
 
@@ -4067,6 +4150,364 @@ mod tests {
             edges.len(),
             1,
             "owner edge must not be duplicated on reopen"
+        );
+    }
+
+    fn seed_template(
+        title: &str,
+        markdown: &str,
+        tier: crate::markdown::SeedTier,
+    ) -> crate::markdown::NodeTemplate {
+        crate::markdown::NodeTemplate {
+            title: title.to_string(),
+            content: None,
+            root_node_type: "prompt".to_string(),
+            root_properties: json!({}),
+            child_node_type: Some("text".to_string()),
+            child_properties: None,
+            tier,
+            markdown_content: markdown.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn reseed_replaces_system_tier_node_on_content_change() {
+        use crate::markdown::{prepare_nodes_from_template, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let v1 = seed_template("Core Identity", "You are v1.", SeedTier::System);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v1).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].content, "Core Identity");
+
+        // Re-seed with changed content under the same seed_key ("Core Identity").
+        let v2 = seed_template("Core Identity", "You are v2, rewritten.", SeedTier::System);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v2).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "replace must not leave the stale node behind"
+        );
+        let children = service.get_children(&nodes[0].id).await.unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].content, "You are v2, rewritten.");
+    }
+
+    #[tokio::test]
+    async fn reseed_updates_unmodified_starter_tier_node() {
+        use crate::markdown::{prepare_nodes_from_template, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let v1 = seed_template("Welcome Note", "Starter v1.", SeedTier::Starter);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v1).unwrap()])
+            .await
+            .unwrap();
+
+        let v2 = seed_template("Welcome Note", "Starter v2.", SeedTier::Starter);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v2).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        let children = service.get_children(&nodes[0].id).await.unwrap();
+        assert_eq!(
+            children[0].content, "Starter v2.",
+            "unedited starter-tier node must be updated on reseed"
+        );
+    }
+
+    #[tokio::test]
+    async fn reseed_skips_user_modified_starter_tier_node() {
+        use crate::markdown::{prepare_nodes_from_template, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let v1 = seed_template("Welcome Note", "Starter v1.", SeedTier::Starter);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v1).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let root = &nodes[0];
+
+        // Simulate the user editing the seeded node through the normal update path.
+        service
+            .update_node(
+                &root.id,
+                root.version,
+                NodeUpdate::new().with_content("User's own title".to_string()),
+            )
+            .await
+            .unwrap();
+
+        // Re-seed with changed content under the same seed_key.
+        let v2 = seed_template("Welcome Note", "Starter v2.", SeedTier::Starter);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&v2).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "user-modified starter node must survive reseed, not be duplicated"
+        );
+        assert_eq!(
+            nodes[0].content, "User's own title",
+            "user-modified starter node must not be overwritten by reseed"
+        );
+    }
+
+    #[tokio::test]
+    async fn reseed_is_noop_when_hash_unchanged() {
+        use crate::markdown::{prepare_nodes_from_template, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let tmpl = seed_template("Core Identity", "Stable content.", SeedTier::System);
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&tmpl).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        let version_before = nodes[0].version;
+
+        // Re-seed with the exact same template (same content hash) — must be a no-op,
+        // not a delete+recreate, so the node's identity/version is untouched.
+        service
+            .seed_nodes_from_templates(vec![prepare_nodes_from_template(&tmpl).unwrap()])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("prompt", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].version, version_before,
+            "unchanged seed content must not touch the existing node"
+        );
+    }
+
+    /// `prompt` (the type every other reseed test uses) is a core schema with
+    /// zero fields, so its properties never round-trip through
+    /// `normalize_flat_properties_to_namespace`'s flat-property-hoisting branch
+    /// with anything worth namespacing. `skill` has real required fields
+    /// (`description`, `tool_whitelist`) and hits that hoisting path on every
+    /// create. This proves `_seed` still survives — landing at
+    /// `properties._seed`, not buried under `properties.skill._seed` — for a
+    /// type that actually exercises the mechanism the whole fix depends on.
+    #[tokio::test]
+    async fn reseed_replaces_skill_tier_node_with_real_schema_fields() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let skill_tmpl = |description: &str| NodeTemplate {
+            title: "Research & Search".to_string(),
+            content: None,
+            root_node_type: "skill".to_string(),
+            root_properties: json!({
+                "description": description,
+                "tool_whitelist": ["search_semantic"],
+            }),
+            child_node_type: Some("prompt".to_string()),
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: "Guidance v1.".to_string(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&skill_tmpl("Search v1")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        // Real schema fields land namespaced under properties.skill.* — confirms
+        // this node actually went through the hoisting path this test targets.
+        assert_eq!(
+            nodes[0].properties["skill"]["description"], "Search v1",
+            "schema field must be namespaced under properties.skill"
+        );
+        // _seed must NOT be nested under properties.skill — it must survive at
+        // the top level, or the by-key lookup on reseed would never find it.
+        assert!(
+            nodes[0].properties.get("_seed").is_some(),
+            "_seed must land at the top level even when the node_type has real schema fields"
+        );
+
+        // Re-seed with changed description under the same seed_key — must replace,
+        // not duplicate, exactly like the empty-schema `prompt` case.
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&skill_tmpl("Search v2")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "replace must not leave the stale skill node behind"
+        );
+        assert_eq!(nodes[0].properties["skill"]["description"], "Search v2");
+    }
+
+    /// `tool` seed templates pre-namespace their own properties under a `"tool"`
+    /// key (see `skill_pipeline.rs::seed_tool_nodes`) for an unrelated reason —
+    /// `tool` isn't a core schema, so `normalize_flat_properties_to_namespace`
+    /// wouldn't hoist it on its own; the pre-namespacing exists to protect the
+    /// nested `parameter_schema` object from being misclassified. This proves
+    /// `_seed` (stamped alongside that pre-existing `"tool"` namespace) doesn't
+    /// collide with it and both survive independently.
+    #[tokio::test]
+    async fn reseed_replaces_tool_tier_node_with_pre_namespaced_properties() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let tool_tmpl = |description: &str| NodeTemplate {
+            title: "search_nodes".to_string(),
+            content: None,
+            root_node_type: "tool".to_string(),
+            root_properties: json!({
+                "tool": {
+                    "handler": "search_nodes",
+                    "description": description,
+                    "parameter_schema": {"type": "object"},
+                    "source": "internal",
+                    "enabled": true,
+                }
+            }),
+            child_node_type: None,
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: String::new(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&tool_tmpl("Search v1")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("tool", None).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].properties["tool"]["description"], "Search v1");
+        assert!(
+            nodes[0].properties.get("_seed").is_some(),
+            "_seed must coexist with the pre-namespaced 'tool' key, not be swallowed by it"
+        );
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&tool_tmpl("Search v2")).unwrap()
+            ])
+            .await
+            .unwrap();
+
+        let nodes = service.query_nodes_by_type("tool", None).await.unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "replace must not leave the stale tool node behind"
+        );
+        assert_eq!(nodes[0].properties["tool"]["description"], "Search v2");
+    }
+
+    /// A single `seed_nodes_from_templates` call, as the daemon issues it, mixes
+    /// `prompt` + `skill` + `tool` template groups together. Reconciliation
+    /// looks up existing nodes per-`node_type`, keyed by `_seed.key` — this
+    /// proves that grouping doesn't cross-contaminate: changing one type's
+    /// content doesn't touch, skip, or duplicate a sibling type's unrelated node
+    /// sharing the same batch.
+    #[tokio::test]
+    async fn reseed_handles_mixed_node_types_in_one_batch_independently() {
+        use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
+
+        let (service, _temp) = create_test_service().await;
+
+        let prompt_tmpl = seed_template("Core Identity", "Prompt v1.", SeedTier::System);
+        let skill_tmpl = NodeTemplate {
+            title: "Research & Search".to_string(),
+            content: None,
+            root_node_type: "skill".to_string(),
+            root_properties: json!({
+                "description": "Skill v1",
+                "tool_whitelist": ["search_semantic"],
+            }),
+            child_node_type: Some("prompt".to_string()),
+            child_properties: None,
+            tier: SeedTier::System,
+            markdown_content: "Guidance v1.".to_string(),
+        };
+
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&prompt_tmpl).unwrap(),
+                prepare_nodes_from_template(&skill_tmpl).unwrap(),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .query_nodes_by_type("prompt", None)
+                .await
+                .unwrap()
+                .len(),
+            2, // the skill's own "prompt"-typed child counts here too
+            "expected the Core Identity root plus the skill's prompt child"
+        );
+        assert_eq!(
+            service
+                .query_nodes_by_type("skill", None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Only the prompt template changes this round.
+        let prompt_v2 = seed_template("Core Identity", "Prompt v2.", SeedTier::System);
+        service
+            .seed_nodes_from_templates(vec![
+                prepare_nodes_from_template(&prompt_v2).unwrap(),
+                prepare_nodes_from_template(&skill_tmpl).unwrap(),
+            ])
+            .await
+            .unwrap();
+
+        let skills = service.query_nodes_by_type("skill", None).await.unwrap();
+        assert_eq!(
+            skills.len(),
+            1,
+            "unchanged skill template must not be duplicated by the prompt's replace"
+        );
+        assert_eq!(
+            skills[0].properties["skill"]["description"], "Skill v1",
+            "unchanged skill content must be untouched"
         );
     }
 }
