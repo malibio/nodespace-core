@@ -22,7 +22,7 @@
 use crate::agent_types::{SkillCandidate, ToolDefinition};
 use serde::Deserialize;
 
-use super::tools::is_write_tool;
+use super::tools::Tool;
 
 /// How many skill candidates retrieval may return.
 ///
@@ -192,8 +192,20 @@ pub fn parse_route_decision(tool_name: &str, arguments_json: &str) -> Option<Rou
 /// it cannot drift from what the skill is actually able to do — adding a
 /// mutating tool to a whitelist raises that skill's bar automatically, with
 /// no second field to keep in sync.
+/// An unrecognised tool name counts as mutating. `is_write_tool` answers
+/// `false` for a name not in the registry — a typo, a renamed tool, or a
+/// future externally-registered one — which would put the *lower* bar on a
+/// skill whose blast radius is unknown. ADR-038 says to bias against the
+/// expensive error, so the unknown case belongs on the restrictive side.
+///
+/// This gates a safety bar, not availability. `stage2_tools` fails open in the
+/// other direction on purpose: there, an unknown name simply is not offered,
+/// and stranding the model with no tools would be the worse outcome.
 pub fn skill_is_mutating(candidate: &SkillCandidate) -> bool {
-    candidate.tools.iter().any(|t| is_write_tool(t))
+    candidate
+        .tools
+        .iter()
+        .any(|t| Tool::from_name(t).is_none_or(Tool::is_write))
 }
 
 /// The retrieval score a candidate must clear to be actionable.
@@ -426,6 +438,19 @@ mod tests {
             0.5,
             &["search_nodes", "delete_node"]
         )));
+    }
+
+    #[test]
+    fn an_unrecognised_whitelist_tool_is_treated_as_mutating() {
+        // Fail-safe: a typo, a renamed tool, or a future externally-registered
+        // one is of unknown blast radius, so it takes the higher bar rather
+        // than defaulting to read-only.
+        let ghost = candidate("ghost", 0.2, &["delete_everything_v2"]);
+        assert!(skill_is_mutating(&ghost));
+        assert!(
+            !clears_score_gate(&ghost),
+            "0.2 clears the read bar but must not clear the mutating one"
+        );
     }
 
     #[test]

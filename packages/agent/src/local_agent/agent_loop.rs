@@ -254,6 +254,30 @@ struct RoutingOutcome {
     usage: InferenceUsage,
 }
 
+/// Build the message Stage 1 routes on: prior turns blended with the current one.
+///
+/// `run_turn` pushes the current user message into `session.messages` before
+/// routing, so the trailing entry is excluded here and supplied separately —
+/// blending it twice would double-weight it against the history it is meant to
+/// be read in light of.
+///
+/// Only user/assistant turns are blended, matching `schema_retrieval_query`:
+/// tool results are machine payloads whose vocabulary would dilute the query
+/// rather than sharpen it.
+fn stage1_query(session: &AgentSession, user_message: &str) -> String {
+    let prior = session
+        .messages
+        .split_last()
+        .map(|(_, rest)| rest)
+        .unwrap_or(&[]);
+    let prior_turns: Vec<&str> = prior
+        .iter()
+        .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+        .map(|m| m.content.as_str())
+        .collect();
+    nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, user_message)
+}
+
 /// Whether this conversation already asked the user to clarify.
 ///
 /// Enforces ADR-038's "at most one clarification per intent": if the user
@@ -261,26 +285,42 @@ struct RoutingOutcome {
 /// again is the loop the contract exists to prevent — the turn falls through
 /// to retrieval instead.
 ///
-/// Scoped to the current intent by looking only at messages after the last
-/// *unclarified* user turn, so a clarification early in a long conversation
-/// does not permanently disable clarifying for every later request.
+/// Scoped to the **current intent**, not the whole conversation. ADR-038 says
+/// "at most one clarification per intent", and a conversation is many intents:
+/// a clarification answered twenty turns ago must not stop a genuinely new
+/// ambiguous request from being clarified today.
+///
+/// The intent boundary is an assistant turn that *answered* rather than asked:
+/// once the agent has resolved something and replied normally, whatever the
+/// user says next starts a fresh intent and the mechanism re-arms.
 fn session_already_clarified(session: &AgentSession) -> bool {
-    // The current intent starts at the clarification we last asked, if any:
-    // everything after it is the user answering that question. So the intent
-    // is "already clarified" exactly when a clarification exists and the user
-    // has since replied — which is the case the contract forbids repeating.
-    //
-    // A clarification with no user message after it is the one we just asked
-    // and are still waiting on, not a second attempt.
-    let last_clarification = session.messages.iter().rposition(|m| {
-        matches!(m.role, Role::Assistant) && m.content.starts_with(CLARIFICATION_OPENER)
-    });
-    match last_clarification {
-        Some(idx) => session.messages[idx + 1..]
-            .iter()
-            .any(|m| matches!(m.role, Role::User)),
-        None => false,
-    }
+    // Everything from the last resolved turn onward is the current intent.
+    // A clarification is not a resolution, so it does not close an intent —
+    // that is what lets the "already clarified" state survive the user's reply
+    // to it, while still clearing once the turn actually completes.
+    let intent_start = session
+        .messages
+        .iter()
+        .rposition(|m| {
+            matches!(m.role, Role::Assistant) && !m.content.starts_with(CLARIFICATION_OPENER)
+        })
+        .map_or(0, |idx| idx + 1);
+
+    let current_intent = &session.messages[intent_start..];
+
+    // Within this intent: did we ask, and has the user since replied? A
+    // clarification with no user message after it is the one we just asked and
+    // are still waiting on, not a second attempt.
+    current_intent
+        .iter()
+        .position(|m| {
+            matches!(m.role, Role::Assistant) && m.content.starts_with(CLARIFICATION_OPENER)
+        })
+        .is_some_and(|idx| {
+            current_intent[idx + 1..]
+                .iter()
+                .any(|m| matches!(m.role, Role::User))
+        })
 }
 
 /// Compose a clarification from Stage 1's question and options.
@@ -1468,23 +1508,47 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             return outcome;
         }
 
+        let tracer = opentelemetry::global::tracer(TRACER_NAME);
+
         // Routing costs a model turn, so it only runs where it can pay for
         // itself: when retrieval is actually wired up. Without it there are no
         // candidates to judge, and Stage 1 would spend a full generation to
         // produce a query nothing consumes. This also keeps every test double
         // that does not opt into routing on the single-turn path.
         if !self.tool_executor.routing_available().await {
+            // Say so in the trace. Routing availability is a live per-turn
+            // property — the embedding service loads in the background — so two
+            // identical messages in one session can take structurally different
+            // paths, and without this nothing distinguishes "routing off, model
+            // still warming" from "this executor never routes". An eval run
+            // started before the embedding service is ready would otherwise
+            // measure the unrouted path and blame routing quality for it.
+            let mut span = tracer.start_with_context("stage1_routing_skipped", turn_cx);
+            span.set_attribute(KeyValue::new("routing.available", false));
+            tracing::debug!("routing unavailable for this turn; running unrouted");
             return outcome;
         }
 
-        let tracer = opentelemetry::global::tracer(TRACER_NAME);
         let mut span = tracer.start_with_context("stage1_routing", turn_cx);
         let started = Instant::now();
 
         let stage1_tools = routing::stage1_tool_definitions();
+        // Blend the preceding turns into Stage 1's view, the same way schema
+        // retrieval does. A follow-up naming its subject only by pronoun or
+        // ellipsis ("mark it paid", "add another one") gives the model nothing
+        // to describe on its own, so it emits a weak query or asks to clarify
+        // a request the conversation had already disambiguated — and both fail
+        // silently, as worse routing rather than an error.
+        //
+        // This bites hardest right after a clarification: the answer to one is
+        // a short reply, i.e. the message with the least standalone routing
+        // signal, arriving on the turn that must succeed without clarifying
+        // again. Shares `build_retrieval_query` with schema retrieval so the
+        // two context constructions cannot drift apart.
+        let routing_query = stage1_query(session, user_message);
         let messages = vec![
             ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
-            ChatMessage::text(Role::User, user_message.to_string()),
+            ChatMessage::text(Role::User, routing_query),
         ];
         let request = InferenceRequest {
             messages,
@@ -5721,6 +5785,103 @@ mod tests {
             1,
             "the suppressed clarification must fall through to retrieval"
         );
+    }
+
+    #[tokio::test]
+    async fn the_clarification_contract_re_arms_on_a_new_intent() {
+        // ADR-038 scopes the contract "per intent", and a conversation is many
+        // intents. A clarification answered earlier must not stop a genuinely
+        // new ambiguous request from being clarified later.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format!("{CLARIFICATION_OPENER}. Which one?"),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(
+            session_already_clarified(&session),
+            "still inside the clarified intent"
+        );
+
+        // The turn completes: the agent answers rather than asking again.
+        // That closes the intent.
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Done — I created it.".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "now do the other thing".to_string(),
+        ));
+        assert!(
+            !session_already_clarified(&session),
+            "a resolved turn starts a new intent; clarifying must be possible again"
+        );
+    }
+
+    #[test]
+    fn a_composed_clarification_is_recognised_as_one() {
+        // Round-trip: the contract is carried in user-visible message text, so
+        // a rewording of `format_clarification` that broke the read would
+        // silently stop the contract enforcing. Tests that hand-build the
+        // marker from the constant would still pass; this one would not.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            format_clarification("Which did you mean?", &["Track debts".to_string()]),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "the first".to_string()));
+        assert!(
+            session_already_clarified(&session),
+            "format_clarification output must be recognised by session_already_clarified"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_blends_prior_turns_into_its_query() {
+        // A follow-up naming its subject by pronoun gives the model nothing to
+        // describe on its own. The prior turns must reach Stage 1.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "create an invoice for Acme".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Created invoice INV-1 for Acme.".to_string(),
+        ));
+        // run_turn pushes the current message before routing; mirror that.
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "mark it paid".to_string()));
+
+        let q = stage1_query(&session, "mark it paid");
+        assert!(
+            q.contains("mark it paid"),
+            "current message must be present"
+        );
+        assert!(
+            q.contains("invoice"),
+            "prior turns must be blended so a pronoun-only follow-up still routes: {q:?}"
+        );
+        assert_eq!(
+            q.matches("mark it paid").count(),
+            1,
+            "the current message must not be blended twice: {q:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_query_on_a_first_turn_is_just_the_message() {
+        let mut session = new_session();
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "find my notes".to_string()));
+        assert_eq!(stage1_query(&session, "find my notes"), "find my notes");
     }
 
     #[tokio::test]
