@@ -629,7 +629,7 @@ fn def_create_schema() -> ToolDefinition {
                             "description": { "type": "string", "description": "Field description" },
                             "coreValues": {
                                 "type": "array",
-                                "description": "For enum fields: array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active').",
+                                "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.",
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -697,7 +697,7 @@ fn def_update_schema() -> ToolDefinition {
                             "description": { "type": "string" },
                             "coreValues": {
                                 "type": "array",
-                                "description": "For enum fields: array of {value, label} pairs",
+                                "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.",
                                 "items": { "type": "object", "properties": { "value": { "type": "string" }, "label": { "type": "string" } } }
                             }
                         },
@@ -3074,6 +3074,60 @@ mod tests {
                 key
             );
         }
+    }
+
+    // -- create_schema enum field end-to-end (acceptance criterion) --
+
+    /// Exercises `create_schema` through the real `GraphToolExecutor` dispatch
+    /// path — not just `handle_create_schema` directly — with an enum field
+    /// using the tool-schema-correct "coreValues" key. Confirms the wire-format
+    /// contract the tool schema advertises actually round-trips end to end.
+    #[tokio::test]
+    async fn create_schema_enum_field_succeeds_end_to_end() {
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        let executor = GraphToolExecutor {
+            node_service: Some(svc),
+            embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: None,
+        };
+
+        let result = executor
+            .execute(
+                "create_schema",
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {
+                            "name": "status",
+                            "type": "enum",
+                            "coreValues": [
+                                { "value": "pending", "label": "Pending" },
+                                { "value": "paid", "label": "Paid" }
+                            ]
+                        }
+                    ]
+                }),
+            )
+            .await
+            .expect("execute should not return a ToolError");
+
+        assert!(
+            !result.is_error,
+            "create_schema with a coreValues enum field must succeed, got: {}",
+            result.result
+        );
+        assert_eq!(result.result["schemaId"], "invoice");
+        let core_values = result.result["fields"][0]["coreValues"]
+            .as_array()
+            .expect("coreValues array present on the created field");
+        assert_eq!(core_values.len(), 2);
     }
 
     // -- Scope passthrough test (acceptance criterion) --

@@ -868,6 +868,74 @@ async fn test_create_schema_reports_non_object_field_entry() {
 }
 
 #[tokio::test]
+async fn test_create_schema_snake_case_core_values_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The tool schema declares "coreValues" (camelCase). A caller that sends
+    // the snake_case Rust field name instead must be rejected with an error
+    // naming the unknown key, not silently produce an enum with no values.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "core_values": [
+                        { "value": "pending", "label": "Pending" },
+                        { "value": "paid", "label": "Paid" }
+                    ]
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("core_values is not a recognized key on a schema field")
+        .to_string();
+    assert!(
+        msg.contains("core_values"),
+        "error must name the unknown field so the caller can correct it: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_enum_field_with_core_values_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "coreValues": [
+                        { "value": "pending", "label": "Pending" },
+                        { "value": "paid", "label": "Paid" }
+                    ]
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let val = result.expect("enum field with coreValues should succeed end to end");
+    assert_eq!(val["schemaId"], "invoice");
+    let fields = val["fields"].as_array().expect("fields array");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0]["name"], "status");
+    let core_values = fields[0]["coreValues"]
+        .as_array()
+        .expect("coreValues array");
+    assert_eq!(core_values.len(), 2);
+    assert_eq!(core_values[0]["value"], "pending");
+}
+
+#[tokio::test]
 async fn test_create_schema_with_well_formed_fields_is_unaffected() {
     let (svc, _tmp) = create_test_service().await;
 
