@@ -166,6 +166,7 @@ pub struct CreateSchemaParams {
 
 /// Additional constraints for schema creation
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdditionalConstraints {
     /// List of field names that are required
     #[serde(default)]
@@ -358,8 +359,14 @@ pub async fn handle_create_schema(
 // Schema Relationship Operations
 // ============================================================================
 
-/// Parameters for add_schema_relationship
+/// Parameters for add_schema_relationship.
+///
+/// Not currently wired to any agent tool (no `add_schema_relationship` entry
+/// in `Tool::ALL`) — `deny_unknown_fields` is added anyway since this sits on
+/// the same `Value`-deserialization boundary as the tool-reachable structs in
+/// this module, and stays a no-op until/unless a tool is wired to it.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddSchemaRelationshipParams {
     /// Schema ID to add the relationship to
     pub schema_id: String,
@@ -367,8 +374,10 @@ pub struct AddSchemaRelationshipParams {
     pub relationship: crate::models::schema::SchemaRelationship,
 }
 
-/// Parameters for remove_schema_relationship
+/// Parameters for remove_schema_relationship. Not currently tool-reachable —
+/// see [`AddSchemaRelationshipParams`].
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoveSchemaRelationshipParams {
     /// Schema ID to remove the relationship from
     pub schema_id: String,
@@ -378,6 +387,7 @@ pub struct RemoveSchemaRelationshipParams {
 
 /// A single field rename operation within update_schema
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FieldRename {
     /// Current field name
     pub from: String,
@@ -387,6 +397,7 @@ pub struct FieldRename {
 
 /// Parameters for update_schema (batch operations)
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateSchemaParams {
     /// Schema ID to update
     pub schema_id: String,

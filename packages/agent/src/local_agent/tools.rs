@@ -60,6 +60,13 @@ pub type SharedChatInferenceEngine = Option<Arc<dyn ChatInferenceEngine>>;
 /// display title automatically — from `title_template`+`properties` if the schema
 /// defines one, or from `strip_markdown(content)` for root nodes otherwise.
 /// The agent never sets or manipulates the title field.
+///
+/// Deliberately NOT `deny_unknown_fields`: `exec_create_node` tolerates a model
+/// that passes schema fields flat at the top level (instead of nested under
+/// `properties`) by pre-scanning the raw args for keys outside `content`/
+/// `node_type`/`parent_id`/`properties` and promoting them into `properties`
+/// itself. Those same "unknown" keys must still deserialize cleanly here, or
+/// that tolerance would break.
 #[derive(Debug, Deserialize)]
 struct AgentCreateNodeParams {
     #[serde(default)]
@@ -72,6 +79,9 @@ struct AgentCreateNodeParams {
 }
 
 /// Parameters for the agent's update_node tool.
+///
+/// Deliberately NOT `deny_unknown_fields` — same flat-schema-field tolerance
+/// as [`AgentCreateNodeParams`], via `exec_update_node`'s own flat-extras scan.
 #[derive(Debug, Deserialize)]
 struct AgentUpdateNodeParams {
     #[serde(alias = "node_id")]
@@ -84,6 +94,7 @@ struct AgentUpdateNodeParams {
 
 /// Parameters for the agent's get_node tool (includes optional format field)
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AgentGetNodeParams {
     #[serde(alias = "node_id")]
     pub id: String,
@@ -93,6 +104,7 @@ struct AgentGetNodeParams {
 
 /// Parameters for the create_relationship tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateRelationshipParams {
     pub from_id: String,
     pub to_id: String,
@@ -101,6 +113,7 @@ struct CreateRelationshipParams {
 
 /// Parameters for the get_related_nodes tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetRelatedNodesParams {
     #[serde(alias = "node_id")]
     pub id: String,
@@ -112,6 +125,7 @@ struct GetRelatedNodesParams {
 
 /// Parameters for the resolve_query tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResolveQueryParams {
     /// The user's natural-language request, verbatim (e.g. "Mark the $500 invoice as paid").
     pub request: String,
@@ -121,6 +135,7 @@ struct ResolveQueryParams {
 
 /// Parameters for the search_skills tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SearchSkillsParams {
     pub query: String,
     #[serde(default)]
@@ -129,6 +144,7 @@ struct SearchSkillsParams {
 
 /// Parameters for the update_task_status tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateTaskStatusParams {
     #[serde(alias = "node_id")]
     pub id: String,
@@ -137,6 +153,7 @@ struct UpdateTaskStatusParams {
 
 /// Parameters for the delete_node tool
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeleteNodeParams {
     #[serde(alias = "node_id")]
     pub id: String,
@@ -2257,6 +2274,122 @@ mod tests {
         let params: AgentUpdateNodeParams = serde_json::from_value(args).unwrap();
         assert_eq!(params.id, "node-456");
         assert_eq!(params.content, Some("New content".to_string()));
+    }
+
+    // -- Unknown-argument rejection (acceptance criterion) --
+    //
+    // Every agent-facing param struct reachable directly from a tool call must
+    // reject an unknown key rather than silently drop it (the `coreValues`
+    // incident: a misspelled key was dropped, and the failure surfaced two
+    // layers away as an unrelated validation error). `AgentCreateNodeParams`
+    // and `AgentUpdateNodeParams` are intentionally exempt — see their
+    // doc comments — so they have no test here.
+
+    #[test]
+    fn search_nodes_params_rejects_unknown_field() {
+        let args = json!({ "query": "hello", "qeury": "typo" });
+        let err = serde_json::from_value::<SearchNodesParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("qeury"),
+            "expected error naming `qeury`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn search_semantic_params_rejects_unknown_field() {
+        let args = json!({ "query": "hello", "treshold": 0.5 });
+        let err = serde_json::from_value::<SearchSemanticParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("treshold"),
+            "expected error naming `treshold`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn agent_get_node_params_rejects_unknown_field() {
+        let args = json!({ "id": "node-123", "formatt": "markdown" });
+        let err = serde_json::from_value::<AgentGetNodeParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("formatt"),
+            "expected error naming `formatt`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn create_relationship_params_rejects_unknown_field() {
+        let args = json!({
+            "from_id": "a",
+            "to_id": "b",
+            "relationship_type": "mentions",
+            "relationshipType": "mentions"
+        });
+        let err = serde_json::from_value::<CreateRelationshipParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("relationshipType"),
+            "expected error naming `relationshipType`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn get_related_nodes_params_rejects_unknown_field() {
+        let args = json!({ "id": "node-123", "reltype": "mentions" });
+        let err = serde_json::from_value::<GetRelatedNodesParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("reltype"),
+            "expected error naming `reltype`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_query_params_rejects_unknown_field() {
+        let args = json!({ "request": "mark it done", "node_type": "task", "nodeType": "task" });
+        let err = serde_json::from_value::<ResolveQueryParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("nodeType"),
+            "expected error naming `nodeType`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn search_skills_params_rejects_unknown_field() {
+        let args = json!({ "query": "invoices", "top_k": 3 });
+        let err = serde_json::from_value::<SearchSkillsParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("top_k"),
+            "expected error naming `top_k`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn update_task_status_params_rejects_unknown_field() {
+        let args = json!({ "id": "task-1", "status": "done", "state": "done" });
+        let err = serde_json::from_value::<UpdateTaskStatusParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("state"),
+            "expected error naming `state`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_node_params_rejects_unknown_field() {
+        let args = json!({ "id": "node-123", "hard_delete": true });
+        let err = serde_json::from_value::<DeleteNodeParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("hard_delete"),
+            "expected error naming `hard_delete`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn create_nodes_from_markdown_params_rejects_unknown_field() {
+        use nodespace_core::markdown::CreateNodesFromMarkdownParams;
+
+        let args = json!({ "markdown_content": "# Title", "syncImport": true });
+        let err = serde_json::from_value::<CreateNodesFromMarkdownParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("syncImport"),
+            "expected error naming `syncImport`, got: {err}"
+        );
     }
 
     // -- Tool definitions --

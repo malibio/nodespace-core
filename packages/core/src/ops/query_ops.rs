@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 /// A single filter item as passed by the agent tool.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentFilterItem {
     /// Filter category: "property", "content", "relationship", "metadata".
     #[serde(rename = "type")]
@@ -47,6 +48,7 @@ pub struct AgentFilterItem {
 
 /// A single sort config item as passed by the agent tool.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSortItem {
     pub field: String,
     #[serde(default)]
@@ -349,6 +351,33 @@ mod tests {
         assert_eq!(input.filters.len(), 1);
         assert_eq!(input.sorting.as_ref().unwrap().len(), 1);
         assert_eq!(input.limit, Some(25));
+    }
+
+    // -- Unknown-field rejection (acceptance criterion, #1816) --
+
+    #[test]
+    fn agent_filter_item_rejects_unknown_field() {
+        let args = json!({
+            "type": "property",
+            "operator": "equals",
+            "property": "status",
+            "caseSensitive": false
+        });
+        let err = serde_json::from_value::<AgentFilterItem>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("caseSensitive"),
+            "expected error naming `caseSensitive`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn agent_sort_item_rejects_unknown_field() {
+        let args = json!({ "field": "due_date", "direction": "asc", "order": "asc" });
+        let err = serde_json::from_value::<AgentSortItem>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("order"),
+            "expected error naming `order`, got: {err}"
+        );
     }
 
     #[test]
