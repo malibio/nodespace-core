@@ -14,7 +14,7 @@
 //! Run with:
 //!   cargo test -p nodespace-agent --test routing_latency -- --nocapture
 //!
-//! Skips gracefully when no inference backend is reachable.
+//! Skips gracefully when the locked model is not downloaded.
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
@@ -24,14 +24,14 @@ use nodespace_agent::agent_types::{
 use nodespace_agent::local_agent::agent_loop::LocalAgentService;
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
-use nodespace_agent::local_agent::openai_compat_discovery::discover_models;
-use nodespace_agent::local_agent::openai_compat_inference::OpenAiCompatInferenceEngine;
 use nodespace_nlp_engine::ChatConfig;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 
-const LOCAL_OPENAI_COMPAT_BASE_URL: &str = "http://127.0.0.1:11434/v1";
+/// The locked native agent model (ADR-056). This benchmark measures only this
+/// model — a routing result on anything else does not describe what ships.
+const LOCKED_NATIVE_MODEL: &str = "gemma-4-e4b-q4km";
 
 /// Repetitions per arm. Small — this is a wall-clock cost estimate to inform
 /// the workstream, not a variance study.
@@ -44,60 +44,32 @@ const PROMPTS: &[&str] = &[
     "start tracking the invoices my clients owe me",
 ];
 
+/// Load the locked native model in-process, the way NodeSpace runs it.
+///
+/// There is deliberately no OpenAI-compatible/HTTP path here. NodeSpace's
+/// native agent is Gemma 4 E4B loaded in-process via llama.cpp (ADR-056);
+/// measuring through a local HTTP server measures a different stack, on
+/// whatever model that server happens to have loaded. Both of those went
+/// wrong on this issue — an incidental model produced a suppression result
+/// that does not apply to what ships, and a 4096-token server context against
+/// the engine's `N_CTX_MINIMUM` produced a full table of error timings.
 async fn resolve_backend() -> Option<(Arc<dyn ChatInferenceEngine>, String)> {
-    // NODESPACE_BENCH_GGUF forces the in-process llama.cpp path, bypassing a
-    // local OpenAI-compatible endpoint. Useful when that endpoint is
-    // misconfigured (e.g. serving a context window below N_CTX_MINIMUM, which
-    // makes every turn return empty) or otherwise unhealthy.
-    let force_gguf = std::env::var("NODESPACE_BENCH_GGUF").is_ok();
-    if !force_gguf {
-        if let Ok(models) = discover_models(LOCAL_OPENAI_COMPAT_BASE_URL, "").await {
-            // Prefer the locked production model when the endpoint serves it, so a
-            // result describes the model NodeSpace actually ships (ADR-056).
-            // NODESPACE_BENCH_MODEL overrides for cross-model comparison.
-            let preferred = std::env::var("NODESPACE_BENCH_MODEL").ok();
-            let pick = preferred
-                .as_deref()
-                .and_then(|want| models.iter().find(|m| m.as_str() == want).cloned())
-                .or_else(|| models.iter().find(|m| m.contains("gemma")).cloned())
-                .or_else(|| models.first().cloned());
-            if let Some(model) = pick {
-                let engine = OpenAiCompatInferenceEngine::new(
-                    LOCAL_OPENAI_COMPAT_BASE_URL.to_string(),
-                    String::new(),
-                    model.clone(),
-                );
-                return Some((Arc::new(engine) as Arc<dyn ChatInferenceEngine>, model));
-            }
-        }
-    }
-
     let gguf = GgufModelManager::new().ok()?;
-    for id in ["gemma-4-e4b-q4km", "ministral-3b-q4km"] {
-        let Ok(path) = gguf.model_path(id) else {
-            continue;
-        };
-        if !path.exists() {
-            continue;
-        }
-        let family = if id.starts_with("gemma") {
-            ModelFamily::Gemma4
-        } else {
-            ModelFamily::Ministral
-        };
-        let path_str = path.to_string_lossy().to_string();
-        let engine = tokio::task::spawn_blocking(move || {
-            LlamaChatInferenceEngine::load(&path_str, family, ChatConfig::default())
-        })
-        .await
-        .ok()?
-        .ok()?;
-        return Some((
-            Arc::new(engine) as Arc<dyn ChatInferenceEngine>,
-            id.to_string(),
-        ));
+    let path = gguf.model_path(LOCKED_NATIVE_MODEL).ok()?;
+    if !path.exists() {
+        return None;
     }
-    None
+    let path_str = path.to_string_lossy().to_string();
+    let engine = tokio::task::spawn_blocking(move || {
+        LlamaChatInferenceEngine::load(&path_str, ModelFamily::Gemma4, ChatConfig::default())
+    })
+    .await
+    .ok()?
+    .ok()?;
+    Some((
+        Arc::new(engine) as Arc<dyn ChatInferenceEngine>,
+        LOCKED_NATIVE_MODEL.to_string(),
+    ))
 }
 
 /// Executor whose only variable is whether routing is on. Retrieval is served
