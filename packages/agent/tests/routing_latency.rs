@@ -168,8 +168,20 @@ impl AgentToolExecutor for BenchExecutor {
     }
 }
 
-async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> Vec<u128> {
-    let mut samples = Vec::new();
+struct ArmStats {
+    latencies: Vec<u128>,
+    tool_rounds: Vec<usize>,
+    prompt_tokens: Vec<u32>,
+    completion_tokens: Vec<u32>,
+}
+
+async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmStats {
+    let mut stats = ArmStats {
+        latencies: Vec::new(),
+        tool_rounds: Vec::new(),
+        prompt_tokens: Vec::new(),
+        completion_tokens: Vec::new(),
+    };
     for prompt in PROMPTS {
         for _ in 0..RUNS {
             let service = LocalAgentService::new(
@@ -178,11 +190,33 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> Vec<u1
             );
             let session = service.create_session(None, Vec::new()).await;
             let started = Instant::now();
-            let _ = service.send_message(&session, prompt, |_| {}, |_| {}).await;
-            samples.push(started.elapsed().as_millis());
+            let result = service.send_message(&session, prompt, |_| {}, |_| {}).await;
+            stats.latencies.push(started.elapsed().as_millis());
+            // Rounds and tokens explain the wall-clock delta. Without them a
+            // surprising number is unattributable — and an unattributable
+            // benchmark number is how false conclusions get recorded.
+            if let Ok(r) = result {
+                stats.tool_rounds.push(r.tool_calls_made.len());
+                stats.prompt_tokens.push(r.usage.prompt_tokens);
+                stats.completion_tokens.push(r.usage.completion_tokens);
+            }
         }
     }
-    samples
+    stats
+}
+
+fn mean_u32(v: &[u32]) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64
+}
+
+fn mean_usize(v: &[usize]) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.iter().map(|x| *x as f64).sum::<f64>() / v.len() as f64
 }
 
 fn mean(v: &[u128]) -> f64 {
@@ -215,21 +249,29 @@ async fn two_stage_routing_latency_vs_single_turn() {
     let baseline = time_arm(engine.clone(), false).await;
     let routed = time_arm(engine.clone(), true).await;
 
-    let (b_mean, r_mean) = (mean(&baseline), mean(&routed));
+    let (b_mean, r_mean) = (mean(&baseline.latencies), mean(&routed.latencies));
     let overhead = r_mean - b_mean;
 
     println!("\n=== ADR-038 two-stage routing latency ===");
     println!("model: {model}");
     println!("prompts: {}  runs each: {RUNS}", PROMPTS.len());
     println!(
-        "single-turn (baseline): mean {:.0} ms   median {} ms",
+        "single-turn (baseline): mean {:.0} ms   median {} ms   \
+         tool rounds {:.2}   tokens {:.0} in / {:.0} out",
         b_mean,
-        median(&baseline)
+        median(&baseline.latencies),
+        mean_usize(&baseline.tool_rounds),
+        mean_u32(&baseline.prompt_tokens),
+        mean_u32(&baseline.completion_tokens),
     );
     println!(
-        "two-stage (routed):     mean {:.0} ms   median {} ms",
+        "two-stage (routed):     mean {:.0} ms   median {} ms   \
+         tool rounds {:.2}   tokens {:.0} in / {:.0} out",
         r_mean,
-        median(&routed)
+        median(&routed.latencies),
+        mean_usize(&routed.tool_rounds),
+        mean_u32(&routed.prompt_tokens),
+        mean_u32(&routed.completion_tokens),
     );
     println!(
         "routing overhead:       {:+.0} ms  ({:+.1}%)",

@@ -186,7 +186,7 @@ impl LocalAgentServiceImpl {
     async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
         // Hand the executor the *shared* embedding handle, not a snapshot. The
         // executor reads the current value per call, so search_semantic and
-        // search_skills work as soon as the embedding model finishes loading
+        // skill retrieval work as soon as the embedding model finishes loading
         // in the background — no engine swap required, and no construction
         // site can wire a stale or `None` service.
         //
