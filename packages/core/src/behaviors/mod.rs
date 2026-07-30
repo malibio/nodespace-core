@@ -164,7 +164,8 @@ pub enum ProcessingError {
 /// `container_type_parity_tests::non_embeddable_container_types_match_behaviors`
 /// asserts this list is exactly the set of built-in behaviors that are both
 /// non-embeddable and child-bearing, so a new such type can't silently drift.
-pub const NON_EMBEDDABLE_CONTAINER_TYPES: &[&str] = &["date", "task", "collection", "prompt"];
+pub const NON_EMBEDDABLE_CONTAINER_TYPES: &[&str] =
+    &["date", "task", "collection", "agent-guidance"];
 
 pub trait NodeBehavior: Send + Sync {
     /// Returns the unique type identifier for this node type
@@ -1821,35 +1822,37 @@ impl NodeBehavior for AiChatNodeBehavior {
     }
 }
 
-/// Behavior for prompt nodes (AI agent prompt templates)
+/// Behavior for agent-guidance nodes (unconditional base system-prompt sections)
 ///
-/// Prompt root nodes store only the title in `content`; body content lives in
-/// child nodes. The PromptAssembler fetches children and concatenates their
-/// content for assembly. All prompts are rendered through Minijinja.
+/// Agent-guidance root nodes store only a short label in `content`; body
+/// content lives in child nodes. `PromptAssembler` fetches children and
+/// concatenates their content for assembly, on every turn — unlike `skill`
+/// nodes, which are discovered on demand via `search_skills`. All guidance is
+/// rendered through Minijinja.
 ///
 /// # Embedding
 ///
-/// Prompt nodes are NOT semantically indexed — they are internal agent
-/// infrastructure, not user knowledge content.
-pub struct PromptNodeBehavior;
+/// Agent-guidance nodes are NOT semantically indexed — they are internal
+/// agent infrastructure, not user knowledge content.
+pub struct AgentGuidanceNodeBehavior;
 
-impl NodeBehavior for PromptNodeBehavior {
+impl NodeBehavior for AgentGuidanceNodeBehavior {
     fn type_name(&self) -> &'static str {
-        "prompt"
+        "agent-guidance"
     }
 
     fn validate(&self, node: &Node) -> Result<(), NodeValidationError> {
-        // Prompt title (content) should not be empty
+        // Agent-guidance title (content) should not be empty
         if node.content.trim().is_empty() {
             return Err(NodeValidationError::InvalidProperties(
-                "Prompt title (content) cannot be empty".to_string(),
+                "Agent-guidance title (content) cannot be empty".to_string(),
             ));
         }
         Ok(())
     }
 
     fn can_have_children(&self) -> bool {
-        true // Prompt body lives in child nodes
+        true // Guidance body lives in child nodes
     }
 
     fn supports_markdown(&self) -> bool {
@@ -1860,12 +1863,12 @@ impl NodeBehavior for PromptNodeBehavior {
         serde_json::json!({})
     }
 
-    /// Prompt nodes are not semantically indexed
+    /// Agent-guidance nodes are not semantically indexed
     fn get_embeddable_content(&self, _node: &Node) -> Option<String> {
         None
     }
 
-    /// Prompts don't contribute to parent embeddings
+    /// Agent-guidance nodes don't contribute to parent embeddings
     fn get_parent_contribution(&self, _node: &Node) -> Option<String> {
         None
     }
@@ -2466,7 +2469,7 @@ impl NodeBehaviorRegistry {
         registry.register(Arc::new(HorizontalLineNodeBehavior));
         registry.register(Arc::new(TableNodeBehavior));
         registry.register(Arc::new(AiChatNodeBehavior));
-        registry.register(Arc::new(PromptNodeBehavior));
+        registry.register(Arc::new(AgentGuidanceNodeBehavior));
         registry.register(Arc::new(SkillNodeBehavior));
         registry.register(Arc::new(ToolNodeBehavior));
         registry.register(Arc::new(PersonNodeBehavior));
@@ -3274,7 +3277,7 @@ mod tests {
         assert!(types.contains(&"horizontal-line".to_string()));
         assert!(types.contains(&"table".to_string()));
         assert!(types.contains(&"ai-chat".to_string()));
-        assert!(types.contains(&"prompt".to_string()));
+        assert!(types.contains(&"agent-guidance".to_string()));
         assert!(types.contains(&"skill".to_string()));
         assert!(types.contains(&"tool".to_string()));
         assert!(types.contains(&"person".to_string()));

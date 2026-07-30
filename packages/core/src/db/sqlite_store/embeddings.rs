@@ -643,7 +643,7 @@ impl SqliteStore {
         // parents, and for each seed keep the deepest ancestor reached.
         //
         // The walk stops BELOW a non-embeddable *container* (a `date` page, but also
-        // a `task`/`collection`/`prompt` — see `NON_EMBEDDABLE_CONTAINER_TYPES`):
+        // a `task`/`collection`/`agent-guidance` — see `NON_EMBEDDABLE_CONTAINER_TYPES`):
         // such a node is a non-embeddable organizational root whose children each
         // carry their own content and are their own embedding roots. This mirrors
         // the behavior probe in `NodeService::get_embedding_root_id`, which SQL

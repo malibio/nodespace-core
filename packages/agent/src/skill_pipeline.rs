@@ -221,8 +221,9 @@ SUCCESS: After create_relationship returns, confirm to the user that the node ha
 
 /// Default skill node templates seeded on first run.
 ///
-/// Each template produces one skill root node plus optional `prompt` children
-/// with guidance markdown. Tool whitelists and max_iterations are still stored
+/// Each template produces one skill root node plus ordinary markdown children
+/// (header/text, inferred from the guidance markdown's structure) carrying the
+/// guidance body. Tool whitelists and max_iterations are still stored
 /// as properties on the skill node — they're consumed by external (ACP) agents
 /// that prefer the older skill-scoped flow. The local agent ignores them and
 /// just uses the description/name returned by `search_skills`.
@@ -237,7 +238,7 @@ pub fn seed_skill_nodes() -> Vec<NodeTemplate> {
                 "tool_whitelist": ["search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 4,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Research & Search Guidance
@@ -291,7 +292,7 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
                 "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
@@ -332,7 +333,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: schema_creation_guidance(),
@@ -346,7 +347,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: graph_editing_guidance(),
@@ -360,7 +361,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_related_nodes", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: relationship_management_guidance(),
@@ -374,7 +375,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: node_deletion_guidance(),
@@ -388,7 +389,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_nodes_from_markdown"],
                 "max_iterations": 2,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: bulk_import_guidance(),
@@ -402,7 +403,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
                 "tool_whitelist": ["create_relationship", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
-            child_node_type: Some("prompt".to_string()),
+            child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: organization_guidance(),
@@ -528,6 +529,47 @@ mod tests {
             assert_eq!(root.id.len(), 36, "Node ID should be a UUID");
             assert_eq!(root.id.chars().filter(|c| *c == '-').count(), 4);
             assert_eq!(root.content, seed.title);
+        }
+    }
+
+    /// Skill guidance children must come out as real markdown types (`header`,
+    /// `text`, ...), not the retired `prompt` type — the entire point of
+    /// `child_node_type: None` on every seed. Every seed's `markdown_content`
+    /// starts with a `# Heading` line, so this also confirms `header` nodes
+    /// are actually produced, not just `text`.
+    #[test]
+    fn seed_skill_children_are_real_markdown_types_not_prompt() {
+        let seeds = seed_skill_nodes();
+        for seed in &seeds {
+            let nodes = prepare_nodes_from_template(seed)
+                .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
+            assert!(
+                nodes.len() > 1,
+                "Skill '{}' must have guidance children, not just the root",
+                seed.title
+            );
+
+            let children = &nodes[1..];
+            assert!(
+                children.iter().any(|c| c.node_type == "header"),
+                "Skill '{}' guidance starts with a markdown heading and must \
+                 produce at least one 'header' child",
+                seed.title
+            );
+            for child in children {
+                assert_ne!(
+                    child.node_type, "prompt",
+                    "Skill '{}' child must not be typed 'prompt' — that type is retired; \
+                     children must be ordinary markdown types",
+                    seed.title
+                );
+                assert!(
+                    matches!(child.node_type.as_str(), "header" | "text"),
+                    "Skill '{}' child has unexpected node_type '{}' — expected 'header' or 'text'",
+                    seed.title,
+                    child.node_type
+                );
+            }
         }
     }
 

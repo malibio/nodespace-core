@@ -1,11 +1,12 @@
 //! Prompt assembly service: graph-only prompt composition.
 //!
-//! Composes the final agent prompt exclusively from prompt nodes stored in the
-//! knowledge graph, assembled in natural child order. Supports Minijinja template rendering.
-//! If no prompt nodes are found (corrupted/empty database), falls back to a
-//! minimal emergency prompt and logs a warning.
+//! Composes the final agent prompt exclusively from `agent-guidance` nodes
+//! stored in the knowledge graph, assembled in natural child order. Supports
+//! Minijinja template rendering. If no `agent-guidance` nodes are found
+//! (corrupted/empty database), falls back to a minimal emergency prompt and
+//! logs a warning.
 //!
-//! ADR-030 Phase 2.
+//! ADR-030 Phase 2; `agent-guidance` node type per ADR-057.
 
 use std::sync::Arc;
 
@@ -41,10 +42,10 @@ pub struct AssembledPrompt {
 // PromptAssembler
 // ---------------------------------------------------------------------------
 
-/// Maximum number of prompt nodes to fetch from the graph.
+/// Maximum number of agent-guidance nodes to fetch from the graph.
 const MAX_PROMPT_NODES: usize = 50;
 
-/// Minimal emergency fallback when no prompt nodes exist in the graph.
+/// Minimal emergency fallback when no agent-guidance nodes exist in the graph.
 /// This should only fire on corrupted/empty databases — normal operation
 /// reads all prompt content from graph nodes seeded on first run. Also used
 /// by the agent loop when no `PromptAssembler` is wired (only the daemon's
@@ -54,13 +55,13 @@ You are NodeSpace's built-in assistant. You help users work with their \
 knowledge graph — creating, finding, updating, and connecting nodes.\n\n\
 Use the available tools to accomplish tasks. Summarize results in natural language.";
 
-/// Assembles final prompts exclusively from graph-stored prompt nodes.
+/// Assembles final prompts exclusively from graph-stored `agent-guidance` nodes.
 ///
 /// The assembly order is:
-/// 1. Fetch root prompt nodes from the graph
-/// 2. For each prompt node, fetch children in natural child order and concatenate
+/// 1. Fetch root agent-guidance nodes from the graph
+/// 2. For each agent-guidance node, fetch children in natural child order and concatenate
 /// 3. Render through Minijinja with context variables
-/// 4. If no prompt nodes found, use emergency fallback and log a warning
+/// 4. If no agent-guidance nodes found, use emergency fallback and log a warning
 pub struct PromptAssembler {
     node_service: Arc<NodeService>,
 }
@@ -70,7 +71,7 @@ impl PromptAssembler {
         Self { node_service }
     }
 
-    /// Assemble the final prompt from graph-stored prompt nodes only.
+    /// Assemble the final prompt from graph-stored `agent-guidance` nodes only.
     ///
     /// `template_ctx` provides variables for Minijinja template rendering, including
     /// `workspace_context` (entity types, collections, playbooks).
@@ -80,14 +81,14 @@ impl PromptAssembler {
         template_ctx: &TemplateContext,
         tools: Vec<ToolDefinition>,
     ) -> AssembledPrompt {
-        // 1. Fetch root prompt nodes from the graph
+        // 1. Fetch root agent-guidance nodes from the graph
         let prompt_nodes = self.fetch_prompt_overrides().await;
 
-        // 2. If no prompt nodes found, use emergency fallback
+        // 2. If no agent-guidance nodes found, use emergency fallback
         if prompt_nodes.is_empty() {
             tracing::warn!(
-                "No prompt nodes found in graph — using emergency fallback. \
-                 Seed prompt nodes on first run to restore full functionality."
+                "No agent-guidance nodes found in graph — using emergency fallback. \
+                 Seed agent-guidance nodes on first run to restore full functionality."
             );
             return AssembledPrompt {
                 system_prompt: EMERGENCY_FALLBACK_PROMPT.to_string(),
@@ -95,7 +96,7 @@ impl PromptAssembler {
             };
         }
 
-        // 3. Fetch children for each prompt node, render through minijinja, and concatenate
+        // 3. Fetch children for each agent-guidance node, render through minijinja, and concatenate
         let mut sections = Vec::new();
 
         for node in &prompt_nodes {
@@ -116,10 +117,10 @@ impl PromptAssembler {
         }
     }
 
-    /// Fetch root-level prompt nodes from the graph (no parent).
+    /// Fetch root-level `agent-guidance` nodes from the graph (no parent).
     async fn fetch_prompt_overrides(&self) -> Vec<Node> {
         let filter = nodespace_core::ops::node_ops::QueryNodesInput {
-            node_type: Some("prompt".to_string()),
+            node_type: Some("agent-guidance".to_string()),
             parent_id: None,
             root_id: None,
             limit: Some(MAX_PROMPT_NODES),
@@ -141,20 +142,20 @@ impl PromptAssembler {
                 .filter_map(|v| match serde_json::from_value(v) {
                     Ok(node) => Some(node),
                     Err(e) => {
-                        tracing::warn!(error = %e, "Failed to deserialize prompt node, skipping");
+                        tracing::warn!(error = %e, "Failed to deserialize agent-guidance node, skipping");
                         None
                     }
                 })
                 .collect(),
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to fetch prompt overrides, using base only");
+                tracing::warn!(error = %e, "Failed to fetch agent-guidance overrides, using base only");
                 return Vec::new();
             }
         };
 
         // Keep only true root nodes (no parent edge pointing to them).
-        // query_nodes ignores parent_id filter, so all prompt nodes are returned;
-        // we must post-filter to avoid treating mid-hierarchy nodes as roots.
+        // query_nodes ignores parent_id filter, so all agent-guidance nodes are
+        // returned; we must post-filter to avoid treating mid-hierarchy nodes as roots.
         let mut roots = Vec::new();
         for node in all_nodes {
             match self.node_service.get_parent(&node.id).await {
@@ -168,17 +169,18 @@ impl PromptAssembler {
         roots
     }
 
-    /// Fetch the full descendant subtree of a prompt node and concatenate every
-    /// descendant's content as the body, in natural document (depth-first,
-    /// fractional-order) order.
+    /// Fetch the full descendant subtree of an agent-guidance node and
+    /// concatenate every descendant's content as the body, in natural
+    /// document (depth-first, fractional-order) order.
     ///
-    /// This walks the **entire** subtree, not just the prompt node's direct
-    /// children. Seeded prompt bodies that contain a `HEADER:` line followed by
-    /// indented bullets (e.g. the Tool Strategy Guide's `TOOL STRATEGY:` block)
-    /// parse into a nested tree: the header line is a direct child of the prompt
-    /// node and the bullets are children of that header line. A direct-children-
-    /// only flatten silently dropped the bullet body (issue: seed prompt body
-    /// dropped). Walking the subtree preserves the full intended prompt.
+    /// This walks the **entire** subtree, not just the node's direct
+    /// children. Seeded guidance bodies that contain a `HEADER:` line followed
+    /// by indented bullets (e.g. the Tool Strategy Guide's `TOOL STRATEGY:`
+    /// block) parse into a nested tree: the header line is a direct child of
+    /// the root node and the bullets are children of that header line. A
+    /// direct-children-only flatten silently dropped the bullet body (issue:
+    /// seed prompt body dropped). Walking the subtree preserves the full
+    /// intended guidance.
     async fn fetch_prompt_body(&self, node: &Node) -> String {
         let (_root, node_map, adjacency_list) = match self
             .node_service
@@ -187,15 +189,15 @@ impl PromptAssembler {
         {
             Ok(data) => data,
             Err(e) => {
-                tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch prompt subtree");
+                tracing::warn!(error = %e, node_id = %node.id, "Failed to fetch agent-guidance subtree");
                 return String::new();
             }
         };
 
-        // Depth-first pre-order traversal starting from the prompt node's
+        // Depth-first pre-order traversal starting from the root node's
         // children, following adjacency_list which is already sorted by
-        // fractional order. The prompt node itself is excluded (its content is
-        // the short title/label, not prompt body).
+        // fractional order. The root node itself is excluded (its content is
+        // the short title/label, not the guidance body).
         flatten_subtree_content(&node.id, &node_map, &adjacency_list).join("\n\n")
     }
 
@@ -249,11 +251,12 @@ impl PromptAssembler {
         sections.join("\n\n")
     }
 
-    /// Get seed prompt templates for first-run creation.
+    /// Get seed agent-guidance templates for first-run creation.
     ///
-    /// Each [`NodeTemplate`] produces a prompt root node with text child nodes for body content.
-    /// All prompt content lives in these graph nodes — there is no hardcoded
-    /// base prompt.  Users can customise any seed by editing the graph node.
+    /// Each [`NodeTemplate`] produces an `agent-guidance` root node with text
+    /// child nodes for body content. All base-prompt content lives in these
+    /// graph nodes — there is no hardcoded base prompt. Users can customise
+    /// any seed by editing the graph node.
     ///
     /// Use [`nodespace_core::markdown::prepare_nodes_from_template`]
     /// to expand into a [`PreparedNode`] for insertion via `NodeService`.
@@ -262,7 +265,7 @@ impl PromptAssembler {
             NodeTemplate {
                 title: "Core Identity".to_string(),
                 content: None,
-                root_node_type: "prompt".to_string(),
+                root_node_type: "agent-guidance".to_string(),
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
@@ -274,7 +277,7 @@ impl PromptAssembler {
             NodeTemplate {
                 title: "Workspace Context Template".to_string(),
                 content: None,
-                root_node_type: "prompt".to_string(),
+                root_node_type: "agent-guidance".to_string(),
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
@@ -285,7 +288,7 @@ impl PromptAssembler {
             NodeTemplate {
                 title: "Tool Strategy Guide".to_string(),
                 content: None,
-                root_node_type: "prompt".to_string(),
+                root_node_type: "agent-guidance".to_string(),
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
@@ -295,7 +298,7 @@ impl PromptAssembler {
             NodeTemplate {
                 title: "Response Formatting Rules".to_string(),
                 content: None,
-                root_node_type: "prompt".to_string(),
+                root_node_type: "agent-guidance".to_string(),
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
@@ -315,7 +318,7 @@ impl PromptAssembler {
             NodeTemplate {
                 title: "Tool Call Formatting".to_string(),
                 content: None,
-                root_node_type: "prompt".to_string(),
+                root_node_type: "agent-guidance".to_string(),
                 root_properties: serde_json::json!({}),
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
@@ -343,7 +346,7 @@ mod tests {
                 seed.title
             );
             assert!(!seed.title.is_empty(), "Seed title must not be empty");
-            assert_eq!(seed.root_node_type, "prompt");
+            assert_eq!(seed.root_node_type, "agent-guidance");
         }
     }
 
@@ -388,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_prompt_template_produces_prompt_node() {
+    fn seed_prompt_template_produces_agent_guidance_node() {
         use nodespace_core::markdown::prepare_nodes_from_template;
         let seeds = PromptAssembler::seed_prompt_nodes();
         for seed in &seeds {
@@ -396,10 +399,10 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
             assert!(!nodes.is_empty());
             let root = &nodes[0];
-            assert_eq!(root.node_type, "prompt");
+            assert_eq!(root.node_type, "agent-guidance");
             assert_eq!(root.id.len(), 36, "Node ID should be a UUID");
             assert_eq!(root.id.chars().filter(|c| *c == '-').count(), 4);
-            // content is the title (no content override on prompt root nodes)
+            // content is the title (no content override on agent-guidance root nodes)
             assert_eq!(root.content, seed.title);
         }
     }

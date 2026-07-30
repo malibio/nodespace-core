@@ -1266,7 +1266,9 @@ pub async fn handle_create_nodes_from_markdown(
 /// # Example — building a skill node with guidance children
 ///
 /// ```ignore
-/// // Skill node: title used as content, guidance body becomes prompt children.
+/// // Skill node: title used as content, guidance body becomes ordinary
+/// // markdown children (header/text, inferred from the markdown structure —
+/// // no child_node_type override).
 /// let tmpl = NodeTemplate {
 ///     title: "Research & Search".to_string(),
 ///     content: None, // title is used as the node content
@@ -1276,28 +1278,12 @@ pub async fn handle_create_nodes_from_markdown(
 ///         "description": "Search and explore the knowledge graph…",
 ///         "tool_whitelist": ["search_semantic", "search_nodes", "get_node"],
 ///         "max_iterations": 4,
-///         "output_format": "text",
 ///     }),
-///     child_node_type: Some("prompt".to_string()),
-///     child_properties: Some(serde_json::json!({
-///         "priority": 1,
-///         "template_syntax": "plain",
-///         "source": "built-in",
-///     })),
-/// };
-/// let nodes = prepare_nodes_from_template(&tmpl)?;
-/// // nodes[0] is the skill root; nodes[1..] are prompt children
-///
-/// // Prompt node: long body text goes in `content`, `title` is the short label.
-/// let prompt_tmpl = NodeTemplate {
-///     title: "Tool Strategy Guide".to_string(),
-///     content: Some("TOOL STRATEGY: Always search before updating…".to_string()),
-///     markdown_content: String::new(), // no children
-///     root_node_type: "prompt".to_string(),
-///     root_properties: serde_json::json!({ "priority": 50, "source": "built-in" }),
 ///     child_node_type: None,
 ///     child_properties: None,
 /// };
+/// let nodes = prepare_nodes_from_template(&tmpl)?;
+/// // nodes[0] is the skill root; nodes[1..] are its markdown-typed children
 /// ```
 /// Seeding tier for a [`NodeTemplate`], controlling reconciliation behavior
 /// when the template content changes after the node already exists.
@@ -1334,13 +1320,13 @@ pub struct NodeTemplate {
     /// When `Some`, this value becomes the root node's content field.
     /// When `None` (default), `title` is used as the content.
     ///
-    /// Use this for node types where the content is a long body (e.g. `prompt`
-    /// nodes whose content is the actual prompt text, while `title` is just the
-    /// short label).
+    /// Use this for node types where the content is a long body (e.g.
+    /// `agent-guidance` nodes whose content is the actual prompt text, while
+    /// `title` is just the short label).
     pub content: Option<String>,
     /// Markdown body that becomes the children.  May be empty.
     pub markdown_content: String,
-    /// Override for the root node's `node_type` (e.g. `"skill"`, `"prompt"`).
+    /// Override for the root node's `node_type` (e.g. `"skill"`, `"agent-guidance"`).
     pub root_node_type: String,
     /// Extra properties to merge into the root node (override parsed defaults).
     pub root_properties: serde_json::Value,

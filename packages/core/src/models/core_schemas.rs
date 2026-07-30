@@ -974,10 +974,17 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
-        // Prompt schema for AI agent prompts (ADR-030)
+        // Agent Guidance schema — unconditional, always-on base system-prompt
+        // sections (identity, tool strategy, formatting rules, etc.), assembled
+        // by PromptAssembler on every turn. Distinct from `skill`: skill nodes
+        // are discovered on demand via search_skills and require a description
+        // for semantic matching; agent-guidance nodes carry no discovery
+        // metadata and are simply fetched by type. Supersedes the `prompt`
+        // schema (ADR-057), which shipped with this same empty shape but no
+        // name that described what it was for.
         SchemaNode {
-            id: "prompt".to_string(),
-            content: "Prompt".to_string(),
+            id: "agent-guidance".to_string(),
+            content: "Agent Guidance".to_string(),
             version: 1,
             created_at: now,
             modified_at: now,
@@ -1269,11 +1276,11 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_schema_has_fields() {
+    fn test_agent_guidance_schema_has_fields() {
         let schemas = get_core_schemas();
-        let prompt = schemas.iter().find(|s| s.id == "prompt").unwrap();
+        let agent_guidance = schemas.iter().find(|s| s.id == "agent-guidance").unwrap();
 
-        assert_eq!(prompt.fields.len(), 0);
+        assert_eq!(agent_guidance.fields.len(), 0);
     }
 
     #[test]
