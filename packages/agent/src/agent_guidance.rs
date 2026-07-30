@@ -34,8 +34,7 @@ pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built
 /// (`skill_pipeline.rs`) or is redundant with the model's own choice to reach
 /// a skill via `search_skills`; tool-usage reference facts (how search_nodes
 /// filters work, when to prefer search_semantic, etc.) now live on the tools'
-/// own descriptions in `local_agent/tools.rs`. See issue #1820 and its audit
-/// trail for the per-line disposition.
+/// own descriptions in `local_agent/tools.rs`.
 pub const TOOL_STRATEGY_RULES: &str = "TOOL STRATEGY:\n\
     - CONVERSATIONAL TURNS USE NO TOOLS. Greetings, thanks, small talk, questions about your own capabilities or limits, and other meta questions about yourself — answer directly in text. Do NOT call any tool: nothing in the user's graph needs to be read to answer them.\n\
     - META QUESTIONS (\"how did you check?\", \"what tool did you use?\", \"did you look up X?\"): answer ONLY from what is visible in this conversation's tool call history. Do NOT fabricate tool names, arguments, or results. If you cannot see a tool call in the history that matches the claim, say so honestly — \"I did not make that search\" or \"I don't see a record of that in this conversation.\"\n\
@@ -73,9 +72,9 @@ mod tests {
 
     /// Per-operation routing (which tool to call in what order for a given
     /// request shape) is now owned by skill instructions (`skill_pipeline.rs`)
-    /// and tool descriptions (`local_agent/tools.rs`), not resident prose — see
-    /// ADR-064 rules 2 and 5, and issue #1820. Nothing that names a specific
-    /// tool-call sequence for an operation may reappear here.
+    /// and tool descriptions (`local_agent/tools.rs`), not resident prose —
+    /// see ADR-064 rules 2 and 5. Nothing that names a specific tool-call
+    /// sequence for an operation may reappear here.
     #[test]
     fn tool_strategy_rules_contain_no_per_operation_routing() {
         for forbidden in [

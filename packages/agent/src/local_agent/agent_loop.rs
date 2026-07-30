@@ -3393,14 +3393,21 @@ mod tests {
         assert_eq!(result.tool_calls_made[1].name, "create_node");
     }
 
-    /// Regression coverage for issue #1820: `update_node` must remain
-    /// reachable through `search_skills` -> Graph Editing's own routing
-    /// (`search_nodes` then `update_node`) now that `TOOL_STRATEGY_RULES`
-    /// no longer hardcodes "ALWAYS search_nodes first before update_node" in
-    /// resident prose. This scripts the full chain a real model is expected
-    /// to follow and asserts the loop dispatches every step correctly — it
-    /// proves the plumbing supports the routed path; live-model adherence to
-    /// it is a separate concern covered by the agent-matrix eval.
+    /// Regression coverage: `update_node` must remain reachable through
+    /// `search_skills` -> Graph Editing's own routing (`search_nodes` then
+    /// `update_node`) now that `TOOL_STRATEGY_RULES` no longer hardcodes
+    /// "ALWAYS search_nodes first before update_node" in resident prose.
+    ///
+    /// This scripts the full chain a real model is expected to follow and
+    /// asserts the loop dispatches every step correctly against a scripted
+    /// `MockEngine` — it proves the DISPATCH PLUMBING supports the routed
+    /// path (tool execution order, argument passing, session state), not
+    /// that a real model will choose this sequence. `MockEngine` returns a
+    /// fixed queue of responses regardless of prompt content, so it cannot
+    /// exercise routing choice. Live-model adherence to this routing is a
+    /// separate, not-yet-closed concern for the agent-matrix eval
+    /// (`scripts/eval/fixtures/agent-matrix.ts`), which is not run as part
+    /// of `test:all`.
     #[tokio::test]
     async fn search_skills_then_search_nodes_then_update_node_chain_dispatches_correctly() {
         let engine = Arc::new(MockEngine::new(vec![

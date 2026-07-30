@@ -122,7 +122,7 @@ fn graph_editing_guidance() -> String {
 
 When updating an existing node:
 
-FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing.
+FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing. Exception: see INDIRECT TARGET below when the target is not named directly.
 
 INDIRECT TARGET: If the request identifies the target indirectly — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself, then pass its returned query and filters directly into search_nodes.
 

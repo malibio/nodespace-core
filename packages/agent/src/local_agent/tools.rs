@@ -2277,10 +2277,10 @@ mod tests {
     }
 
     /// `node_type` argument-shape guidance (copy the id exactly from RELEVANT
-    /// ENTITY TYPES, never paraphrase/guess) moved here from resident prose
-    /// per ADR-064 rule 1 (tool schemas own argument shape) and issue #1820.
-    /// `update_node` has no `node_type` parameter — it addresses by `id` — so
-    /// it is intentionally excluded.
+    /// ENTITY TYPES, never paraphrase/guess) moved here from resident prose per
+    /// ADR-064 rule 1 (tool schemas own argument shape). `update_node` has no
+    /// `node_type` parameter — it addresses by `id` — so it is intentionally
+    /// excluded.
     #[test]
     fn node_type_params_bind_to_relevant_entity_types() {
         for tool in [Tool::SearchNodes, Tool::CreateNode, Tool::ResolveQuery] {
@@ -2298,8 +2298,7 @@ mod tests {
     }
 
     /// The markdown-shortcut rule (non-empty `markdown` field is the complete
-    /// document — skip get_node/search_nodes) moved here from resident prose;
-    /// see issue #1820.
+    /// document — skip get_node/search_nodes) moved here from resident prose.
     #[test]
     fn search_semantic_description_covers_markdown_shortcut() {
         let desc = Tool::SearchSemantic.definition().description;
@@ -2310,7 +2309,7 @@ mod tests {
     }
 
     /// `relationship_type` should steer the model toward schema-defined
-    /// relationship names before generic labels; see issue #1820.
+    /// relationship names before generic labels.
     #[test]
     fn create_relationship_type_prefers_schema_defined_names() {
         let def = Tool::CreateRelationship.definition();
