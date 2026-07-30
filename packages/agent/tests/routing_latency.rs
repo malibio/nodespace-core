@@ -204,6 +204,9 @@ impl AgentToolExecutor for BenchExecutor {
 
 struct ArmStats {
     latencies: Vec<u128>,
+    /// Turns that never reached the model. A run with any of these cannot be
+    /// reported as a latency result.
+    errors: usize,
     tool_rounds: Vec<usize>,
     prompt_tokens: Vec<u32>,
     completion_tokens: Vec<u32>,
@@ -212,6 +215,7 @@ struct ArmStats {
 async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmStats {
     let mut stats = ArmStats {
         latencies: Vec::new(),
+        errors: 0,
         tool_rounds: Vec::new(),
         prompt_tokens: Vec::new(),
         completion_tokens: Vec::new(),
@@ -230,12 +234,14 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmSta
             let session = service.create_session(None, Vec::new()).await;
             let started = Instant::now();
             let result = service.send_message(&session, prompt, |_| {}, |_| {}).await;
-            stats.latencies.push(started.elapsed().as_millis());
+            let elapsed = started.elapsed().as_millis();
             // Rounds and tokens explain the wall-clock delta. Without them a
             // surprising number is unattributable — and an unattributable
             // benchmark number is how false conclusions get recorded.
             match result {
                 Ok(r) => {
+                    // Only a turn that actually reached the model is a sample.
+                    stats.latencies.push(elapsed);
                     if r.tool_calls_made.is_empty() {
                         println!(
                             "[{}] NO TOOL CALL for {prompt:?} -> {:?}",
@@ -247,10 +253,15 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmSta
                     stats.prompt_tokens.push(r.usage.prompt_tokens);
                     stats.completion_tokens.push(r.usage.completion_tokens);
                 }
-                Err(e) => println!(
-                    "[{}] ERROR for {prompt:?}: {e}",
-                    if routing { "routed" } else { "baseline" }
-                ),
+                Err(e) => {
+                    // A failed turn returns in error-path time, not turn time.
+                    // Timing it would report a fast mean for a broken run.
+                    stats.errors += 1;
+                    println!(
+                        "[{}] ERROR for {prompt:?}: {e}",
+                        if routing { "routed" } else { "baseline" }
+                    );
+                }
             }
         }
     }
@@ -300,6 +311,24 @@ async fn two_stage_routing_latency_vs_single_turn() {
 
     let baseline = time_arm(engine.clone(), false).await;
     let routed = time_arm(engine.clone(), true).await;
+
+    // A benchmark that silently reports error-path timings is worse than no
+    // benchmark: it produces a confident number for a run that never reached
+    // the model. Refuse rather than print one.
+    let total_errors = baseline.errors + routed.errors;
+    if total_errors > 0 || baseline.latencies.is_empty() || routed.latencies.is_empty() {
+        panic!(
+            "routing latency benchmark did not produce a usable result: \
+             {total_errors} turn(s) failed to reach the model \
+             (baseline {} ok / {} failed, routed {} ok / {} failed). \
+             The locked model is likely unloaded or the endpoint is cold — \
+             warm it and re-run.",
+            baseline.latencies.len(),
+            baseline.errors,
+            routed.latencies.len(),
+            routed.errors,
+        );
+    }
 
     let (b_mean, r_mean) = (mean(&baseline.latencies), mean(&routed.latencies));
     let overhead = r_mean - b_mean;
