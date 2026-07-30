@@ -530,6 +530,47 @@ mod tests {
         }
     }
 
+    /// Skill guidance children must come out as real markdown types (`header`,
+    /// `text`, ...), not the retired `prompt` type — the entire point of
+    /// `child_node_type: None` on every seed. Every seed's `markdown_content`
+    /// starts with a `# Heading` line, so this also confirms `header` nodes
+    /// are actually produced, not just `text`.
+    #[test]
+    fn seed_skill_children_are_real_markdown_types_not_prompt() {
+        let seeds = seed_skill_nodes();
+        for seed in &seeds {
+            let nodes = prepare_nodes_from_template(seed)
+                .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
+            assert!(
+                nodes.len() > 1,
+                "Skill '{}' must have guidance children, not just the root",
+                seed.title
+            );
+
+            let children = &nodes[1..];
+            assert!(
+                children.iter().any(|c| c.node_type == "header"),
+                "Skill '{}' guidance starts with a markdown heading and must \
+                 produce at least one 'header' child",
+                seed.title
+            );
+            for child in children {
+                assert_ne!(
+                    child.node_type, "prompt",
+                    "Skill '{}' child must not be typed 'prompt' — that type is retired; \
+                     children must be ordinary markdown types",
+                    seed.title
+                );
+                assert!(
+                    matches!(child.node_type.as_str(), "header" | "text"),
+                    "Skill '{}' child has unexpected node_type '{}' — expected 'header' or 'text'",
+                    seed.title,
+                    child.node_type
+                );
+            }
+        }
+    }
+
     // -- Skill whitelist / registry validation ---------------------------
 
     /// Every tool named in a seed skill's `tool_whitelist` must resolve to a

@@ -1223,10 +1223,18 @@ impl NodeService {
             .to_string())
     }
 
-    /// Seed core schema definitions if database is fresh
+    /// Seed core schema definitions, per-schema, on every start.
     ///
-    /// Checks if schema nodes exist. If not, creates all core schemas
-    /// (task, text, date, header, code-block, quote-block, ordered-list).
+    /// Schema node IDs are the schema's own `id` (e.g. `"task"`,
+    /// `"agent-guidance"`) per [`crate::models::SchemaNode::into_node`], so
+    /// existence is checked per schema rather than gating the whole batch on
+    /// one representative type. This mirrors the per-node reconciliation
+    /// `seed_nodes_from_templates` uses for seeded content — a type-level
+    /// skip (checking only whether `task` exists) means a schema added after
+    /// a database's first run would never reach that database, exactly the
+    /// gap fixed there for content nodes. Existing core schemas are left
+    /// untouched; only schemas from [`crate::models::core_schemas::get_core_schemas`]
+    /// missing from the database are created.
     ///
     /// This is idempotent - safe to call multiple times.
     async fn seed_core_schemas_if_needed(
@@ -1234,28 +1242,37 @@ impl NodeService {
     ) -> Result<(), NodeServiceError> {
         use crate::models::core_schemas::get_core_schemas;
 
-        // Check if schemas already exist by trying to get task schema
-        // If task exists, assume all core schemas are seeded
-        let task_exists = store
-            .get_node("task")
-            .await
-            .map_err(|e| {
-                NodeServiceError::QueryFailed(format!("Failed to check for schemas: {}", e))
-            })?
-            .is_some();
+        let core_schemas = get_core_schemas();
 
-        if task_exists {
+        let mut missing_schemas = Vec::new();
+        for schema in &core_schemas {
+            let exists = store
+                .get_node(&schema.id)
+                .await
+                .map_err(|e| {
+                    NodeServiceError::QueryFailed(format!(
+                        "Failed to check for schema '{}': {}",
+                        schema.id, e
+                    ))
+                })?
+                .is_some();
+            if !exists {
+                missing_schemas.push(schema.clone());
+            }
+        }
+
+        if missing_schemas.is_empty() {
             tracing::info!("✅ Core schemas already seeded");
             return Ok(());
         }
 
-        tracing::info!("🌱 Seeding core schemas...");
-
-        // Get core schemas from canonical source
-        let core_schemas = get_core_schemas();
+        tracing::info!(
+            "🌱 Seeding {} missing core schema(s)...",
+            missing_schemas.len()
+        );
 
         // Collect schema info for cache updates (before we start creating nodes)
-        let schema_cache_updates: Vec<(String, bool)> = core_schemas
+        let schema_cache_updates: Vec<(String, bool)> = missing_schemas
             .iter()
             .map(|s| (s.id.clone(), !s.fields.is_empty()))
             .collect();
@@ -1263,7 +1280,7 @@ impl NodeService {
         // Universal Graph Architecture: Properties stored in node.properties.
         // Schema nodes go through the normal create path.
         {
-            for schema in &core_schemas {
+            for schema in &missing_schemas {
                 let schema_id = schema.id.clone();
                 let node = schema.clone().into_node();
 
@@ -1910,6 +1927,70 @@ mod tests {
         let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
         let service = NodeService::new(&mut store).await.unwrap();
         (service, temp_dir)
+    }
+
+    /// A schema added to `get_core_schemas()` after a database's first run
+    /// must still reach that database on the next start — the same
+    /// per-node-not-per-type reconciliation guarantee `06a94eee` established
+    /// for seeded content. Simulates "pre-existing DB predates this schema" by
+    /// deleting one schema node post-seed, then constructing a fresh
+    /// `NodeService` against the same DB file exactly as the daemon does on
+    /// every restart, and confirming only the missing schema is recreated —
+    /// an unrelated, already-present schema is left untouched.
+    #[tokio::test]
+    async fn seed_core_schemas_reconciles_missing_schema_on_next_service_new() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let task_before = {
+            let mut store = Arc::new(SqliteStore::new(db_path.clone()).await.unwrap());
+            let service = NodeService::new(&mut store).await.unwrap();
+
+            // Sanity: agent-guidance is present after the normal initial seed.
+            assert!(
+                service.get_node("agent-guidance").await.unwrap().is_some(),
+                "agent-guidance schema must exist after initial seed"
+            );
+            let task_before = service
+                .get_node("task")
+                .await
+                .unwrap()
+                .expect("task schema must exist after initial seed");
+
+            // Simulate a pre-existing database that predates the agent-guidance
+            // schema: remove it directly at the store level (schema nodes
+            // aren't deletable through the validated NodeService::delete_node
+            // path).
+            service
+                .store
+                .delete_node("agent-guidance", None)
+                .await
+                .expect("store-level delete succeeds");
+            assert!(
+                service.get_node("agent-guidance").await.unwrap().is_none(),
+                "agent-guidance must be gone after the simulated pre-existing-DB delete"
+            );
+
+            task_before
+            // service's Arc<SqliteStore> is dropped here, leaving no other
+            // owner — required by seed_core_schemas_if_needed's Arc::get_mut.
+        };
+
+        // Reopen against the same DB file, exactly as the daemon does on restart.
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let service = NodeService::new(&mut store)
+            .await
+            .expect("reconciliation on restart succeeds");
+
+        assert!(
+            service.get_node("agent-guidance").await.unwrap().is_some(),
+            "agent-guidance must be recreated by reconciliation, not left orphaned"
+        );
+        let task_after = service.get_node("task").await.unwrap().unwrap();
+        assert_eq!(
+            task_after.version, task_before.version,
+            "an unrelated, already-present schema (task) must not be touched by reconciliation"
+        );
     }
 
     /// Adding existing nodes as children one at a time appends each after the
