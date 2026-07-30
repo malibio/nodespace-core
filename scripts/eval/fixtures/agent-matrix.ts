@@ -237,8 +237,11 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "6",
       scenario: "6. Update",
+      // resolve_query performs the search internally and returns the resolved
+      // node directly (see ADR-064 rule 4) — the model acts on it via
+      // update_node without a separate search_nodes call of its own.
       prompt: "The 2400 one came back — set it to returned",
-      expect: { kind: "toolSequence", tools: ["search_nodes", "update_node"] },
+      expect: { kind: "toolSequence", tools: ["resolve_query", "update_node"] },
     },
     {
       id: "7",
