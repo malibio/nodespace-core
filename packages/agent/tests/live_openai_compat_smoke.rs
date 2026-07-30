@@ -4,6 +4,12 @@
 //! serves both model discovery and tool-calling inference, so the native
 //! Ollama client is genuinely redundant rather than merely similar.
 //!
+//! Scope: this covers the transport and an **unrouted** tool-calling turn. It
+//! deliberately does not exercise ADR-038's two-stage routing, and cannot
+//! detect a served model that loses tool-calling once Stage 2 injects its
+//! candidate block — a real failure on at least one model reachable by this
+//! path. `live_openai_compat_routing.rs` is the check for that.
+//!
 //! Ignored by default — it needs a real server. Run explicitly with Ollama (or
 //! any OpenAI-compatible server) listening on [`BASE_URL`]:
 //!
