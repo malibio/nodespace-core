@@ -235,10 +235,17 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
         return None;
     }
 
+    // Phrased as a direct instruction to act, not to deliberate. An earlier
+    // wording ("Pick the ONE that fits and carry out its instructions") framed
+    // the turn as a selection exercise, and the model answered it in kind:
+    // it narrated which tool it would use — in one case emitting the tool-call
+    // JSON inside a code block — instead of calling it. Measured on
+    // mistral:7b, that wording produced zero tool calls where the unrouted
+    // control produced one.
     let mut out = String::from(
-        "CANDIDATE SKILLS (retrieved for this request). Pick the ONE that fits and carry out its \
-         instructions by calling the appropriate tool. If none fits, say so plainly instead of \
-         forcing a match.\n",
+        "REFERENCE — procedures relevant to this request. Use whichever applies and IGNORE the \
+         rest. Do not describe, quote, or summarise any of it. Your reply must be the tool call \
+         itself. If none applies, answer the user normally.\n",
     );
     for (i, c) in eligible.iter().enumerate() {
         out.push_str(&format!("\n--- Candidate {}: {}\n", i + 1, c.name));

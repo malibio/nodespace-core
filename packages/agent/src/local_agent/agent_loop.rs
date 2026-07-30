@@ -424,11 +424,21 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     crate::local_agent::tools::Tool::ALL.iter().any(|tool| {
         let name = tool.name();
-        // Find each occurrence of the tool name and check the next
-        // non-whitespace character is an opening paren.
         lower.match_indices(name).any(|(idx, _)| {
-            let after = &lower[idx + name.len()..];
-            after.trim_start().starts_with('(')
+            let after = &lower[idx + name.len()..].trim_start();
+            // `create_node(...)` — the tool named as a function.
+            if after.starts_with('(') {
+                return true;
+            }
+            // `{"name": "create_node", "arguments": {...}}` — the tool named as
+            // the value of a JSON `name` key. Observed in practice: a model
+            // emits a well-formed tool call as *text*, so the loop sees no tool
+            // call at all and the turn silently does nothing. The quote before
+            // the name distinguishes this from prose that merely mentions the
+            // tool.
+            let before = &lower[..idx];
+            let quoted = before.trim_end().ends_with('"') || before.trim_end().ends_with('\'');
+            quoted && after.starts_with(['"', '\''])
         })
     })
 }
@@ -4118,6 +4128,28 @@ mod tests {
         // Embedded in surrounding prose.
         assert!(looks_like_narrated_tool_call(
             "Let me run search_nodes(query='invoice') to find it."
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_detects_a_json_tool_call_emitted_as_text() {
+        // A model emitting a well-formed tool call as *text* leaves the loop
+        // with no tool call to execute, so the turn silently does nothing.
+        assert!(looks_like_narrated_tool_call(
+            r#"[{"name":"create_node","arguments":{"content":"Review billing docs"}}]"#
+        ));
+        assert!(looks_like_narrated_tool_call(
+            r#"{"name": "search_nodes", "arguments": {"query": "billing"}}"#
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_ignores_a_tool_merely_mentioned_in_prose() {
+        assert!(!looks_like_narrated_tool_call(
+            "I used create_node to add that for you."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The search_nodes results were empty."
         ));
     }
 

@@ -90,6 +90,9 @@ async fn resolve_backend() -> Option<(Arc<dyn ChatInferenceEngine>, String)> {
 /// unchanged by this work — the same `find_skills` ran before, as a tool).
 struct BenchExecutor {
     routing: bool,
+    /// When false, candidates carry no instruction text — isolating "tool
+    /// surface was scoped" from "procedural instructions were injected".
+    with_instructions: bool,
 }
 
 fn stub_tools() -> Vec<ToolDefinition> {
@@ -141,10 +144,14 @@ impl AgentToolExecutor for BenchExecutor {
                 description: "Create new records, entries, or instances of a type".into(),
                 score: 0.72,
                 tools: vec!["create_node".into(), "search_nodes".into()],
-                instructions: "Call create_node with the values from the user message. \
+                instructions: if self.with_instructions {
+                    "Call create_node with the values from the user message. \
                      Set node_type to the type id, copied exactly. Do not ask for \
                      confirmation when the type already exists."
-                    .into(),
+                        .into()
+                } else {
+                    String::new()
+                },
                 schema_metadata: json!([{
                     "type_id": "task",
                     "fields": [
@@ -159,7 +166,11 @@ impl AgentToolExecutor for BenchExecutor {
                 description: "Search and explore the knowledge graph".into(),
                 score: 0.55,
                 tools: vec!["search_nodes".into(), "get_node".into()],
-                instructions: "Call search_nodes with a query drawn from the request.".into(),
+                instructions: if self.with_instructions {
+                    "Call search_nodes with a query drawn from the request.".into()
+                } else {
+                    String::new()
+                },
                 schema_metadata: json!([]),
             },
         ];
@@ -186,7 +197,10 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmSta
         for _ in 0..RUNS {
             let service = LocalAgentService::new(
                 engine.clone(),
-                Arc::new(BenchExecutor { routing }) as Arc<dyn AgentToolExecutor>,
+                Arc::new(BenchExecutor {
+                    routing,
+                    with_instructions: true,
+                }) as Arc<dyn AgentToolExecutor>,
             );
             let session = service.create_session(None, Vec::new()).await;
             let started = Instant::now();
@@ -195,10 +209,23 @@ async fn time_arm(engine: Arc<dyn ChatInferenceEngine>, routing: bool) -> ArmSta
             // Rounds and tokens explain the wall-clock delta. Without them a
             // surprising number is unattributable — and an unattributable
             // benchmark number is how false conclusions get recorded.
-            if let Ok(r) = result {
-                stats.tool_rounds.push(r.tool_calls_made.len());
-                stats.prompt_tokens.push(r.usage.prompt_tokens);
-                stats.completion_tokens.push(r.usage.completion_tokens);
+            match result {
+                Ok(r) => {
+                    if r.tool_calls_made.is_empty() {
+                        println!(
+                            "[{}] NO TOOL CALL for {prompt:?} -> {:?}",
+                            if routing { "routed" } else { "baseline" },
+                            r.response.chars().take(220).collect::<String>()
+                        );
+                    }
+                    stats.tool_rounds.push(r.tool_calls_made.len());
+                    stats.prompt_tokens.push(r.usage.prompt_tokens);
+                    stats.completion_tokens.push(r.usage.completion_tokens);
+                }
+                Err(e) => println!(
+                    "[{}] ERROR for {prompt:?}: {e}",
+                    if routing { "routed" } else { "baseline" }
+                ),
             }
         }
     }
@@ -283,4 +310,51 @@ async fn two_stage_routing_latency_vs_single_turn() {
         }
     );
     println!("=========================================\n");
+}
+
+/// One routed turn, with the assembled Stage-2 prompt and the model's raw
+/// reply printed. Diagnostic for "the routed arm makes no tool calls" — the
+/// aggregate benchmark can show that it happened but not why.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "diagnostic; requires a local inference backend"]
+async fn dump_one_routed_turn() {
+    let Some((engine, model)) = resolve_backend().await else {
+        eprintln!("no backend");
+        return;
+    };
+    println!("model: {model}");
+
+    for (label, routing, with_instructions) in [
+        ("baseline (no routing)", false, false),
+        ("routed, scoped tools only", true, false),
+        ("routed + injected instructions", true, true),
+    ] {
+        let service = LocalAgentService::new(
+            engine.clone(),
+            Arc::new(BenchExecutor {
+                routing,
+                with_instructions,
+            }) as Arc<dyn AgentToolExecutor>,
+        );
+        let session = service.create_session(None, Vec::new()).await;
+        let r = service
+            .send_message(
+                &session,
+                "add a task to review the billing docs tomorrow",
+                |_| {},
+                |_| {},
+            )
+            .await;
+        match r {
+            Ok(res) => println!(
+                "\n--- {label}: tools_called={:?} ---\nreply: {}\n",
+                res.tool_calls_made
+                    .iter()
+                    .map(|t| t.name.clone())
+                    .collect::<Vec<_>>(),
+                res.response.chars().take(400).collect::<String>()
+            ),
+            Err(e) => println!("\n--- {label} ERROR: {e} ---\n"),
+        }
+    }
 }
