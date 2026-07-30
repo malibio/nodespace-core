@@ -430,8 +430,15 @@ impl LocalAgentServiceImpl {
         let service = self.get_service().await;
 
         // Refresh workspace context before creating the session.
+        //
+        // Schema retrieval embeds the blended query, NOT `user_message` alone —
+        // passing the bare message here is the regression this call site exists
+        // to avoid, and it fails silently (retrieval just gets worse). See
+        // `schema_retrieval_query`.
         let emb = self.inner.embedding_service.read().await.clone();
-        let ctx = build_workspace_context(&self.inner.node_service, emb, Some(&user_message)).await;
+        let retrieval_query = schema_retrieval_query(&prior_history, &user_message);
+        let ctx =
+            build_workspace_context(&self.inner.node_service, emb, Some(&retrieval_query)).await;
 
         // Create an ephemeral session seeded with prior history.
         let session_id = service.create_session(None, prior_history).await;
@@ -1592,6 +1599,25 @@ fn node_history_from_messages(messages: Vec<AiChatMessage>) -> Vec<ChatMessage> 
         .collect()
 }
 
+/// Build the embedding query that schema retrieval runs for this turn.
+///
+/// Blends the preceding conversational turns with the current message, so a
+/// follow-up that names its subject only by pronoun or ellipsis still matches
+/// the schema the earlier turn introduced.
+///
+/// Only user/assistant turns are blended. `node_history_from_messages` also
+/// interleaves the synthetic `completed_writes` records, which are fixed
+/// boilerplate ("Record of graph writes already completed…") carrying no
+/// discriminating vocabulary — embedding them would dilute the query.
+fn schema_retrieval_query(prior_history: &[ChatMessage], user_message: &str) -> String {
+    let prior_turns: Vec<&str> = prior_history
+        .iter()
+        .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+        .map(|m| m.content.as_str())
+        .collect();
+    nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, user_message)
+}
+
 async fn build_workspace_context(
     node_service: &Arc<NodeService>,
     embedding_service: Option<Arc<NodeEmbeddingService>>,
@@ -2716,6 +2742,75 @@ api_key = "sk-test"
         assert_eq!(
             prior[1].canonical_args, "sha256:abc123",
             "a digested identity must be carried through unchanged"
+        );
+    }
+
+    /// The blended retrieval query is assembled from the same history the turn
+    /// renders, so this drives real `AiChatMessage`s through
+    /// `node_history_from_messages` rather than hand-building `ChatMessage`s.
+    ///
+    /// Pins the query builder against the real history shape: the earlier
+    /// turn's discriminating words reach the query, and the synthetic
+    /// completed-writes record — which sits between the assistant turn and the
+    /// follow-up — does not.
+    ///
+    /// It does not pin that `run_ai_chat_turn` calls this rather than embedding
+    /// `user_message` directly; that line needs live inference to reach, so the
+    /// ADR-048 seam test is what exercises it end to end.
+    #[test]
+    fn retrieval_query_blends_history_and_excludes_completed_writes() {
+        let history = node_history_from_messages(vec![
+            AiChatMessage {
+                role: "user".to_string(),
+                content: "Add a conference proposal for Redwood Summit".to_string(),
+                timestamp: None,
+                reasoning: None,
+                completed_writes: vec![],
+            },
+            AiChatMessage {
+                role: "assistant".to_string(),
+                content: "Added the Redwood Summit proposal.".to_string(),
+                timestamp: None,
+                reasoning: None,
+                completed_writes: vec![AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://p1".to_string()),
+                    summary: Some("Redwood Summit".to_string()),
+                    canonical_args: r#"{"content":"Redwood Summit"}"#.to_string(),
+                }],
+            },
+        ]);
+
+        // The completed-writes record really is in the rendered history — so its
+        // absence from the query below is the filter working, not a vacuous pass.
+        assert!(
+            history.iter().any(|m| m.role == Role::System),
+            "fixture must contain the synthetic completed-writes message"
+        );
+
+        let query = schema_retrieval_query(&history, "Set the Redwood one to rejected");
+
+        assert!(
+            query.contains("conference proposal"),
+            "the earlier turn's discriminating words must reach the query: {query:?}"
+        );
+        assert!(
+            !query.contains("Record of graph writes"),
+            "completed-writes boilerplate must not dilute the query: {query:?}"
+        );
+        assert!(
+            query.ends_with("Set the Redwood one to rejected"),
+            "the current message must stay last: {query:?}"
+        );
+    }
+
+    /// A first turn has no history, so the query must be the message alone —
+    /// byte-identical to what retrieval received before blending existed.
+    #[test]
+    fn retrieval_query_for_first_turn_is_the_message_alone() {
+        assert_eq!(
+            schema_retrieval_query(&[], "Add an invoice for $500"),
+            "Add an invoice for $500"
         );
     }
 
