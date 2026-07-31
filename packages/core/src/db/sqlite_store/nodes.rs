@@ -514,6 +514,30 @@ impl SqliteStore {
         Ok(to_delete)
     }
 
+    /// Walk `has_child` recursively from `node_id` and return the target followed by every
+    /// descendant id. Used both by `delete_subtree_atomic` (to know what to delete) and by a
+    /// pre-delete access gate (to know what to check access for) — computed once and shared so
+    /// the two never see different sets.
+    pub async fn collect_subtree_ids(&self, node_id: &str) -> Result<Vec<String>> {
+        let mut id_rows = self.db.query(
+            r#"WITH RECURSIVE subtree(node_id) AS (
+                SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                UNION ALL
+                SELECT r.out_node FROM relationship r
+                JOIN subtree s ON r.in_node = s.node_id
+                WHERE r.relationship_type = 'has_child'
+            )
+            SELECT DISTINCT node_id FROM subtree"#,
+            libsql::params![node_id.to_string()],
+        ).await.context("Failed to collect subtree descendants")?;
+
+        let mut all_ids: Vec<String> = vec![node_id.to_string()];
+        while let Some(row) = id_rows.next().await? {
+            all_ids.push(row.get(0)?);
+        }
+        Ok(all_ids)
+    }
+
     /// Atomically delete a node and its entire `has_child` subtree in a single transaction.
     ///
     /// **OCC contract:** Version-checks only the target node at `expected_version`. Descendants
@@ -523,12 +547,18 @@ impl SqliteStore {
     /// **Event emission:** Emits one `NodeDeleted` notification per deleted node (target +
     /// every descendant) after the commit, so the frontend store reconciles each removal.
     ///
+    /// `subtree_ids`: the target + all descendants, as previously computed by
+    /// `collect_subtree_ids`. Passed in (rather than re-walked here) so a caller that already
+    /// ran a pre-delete access gate check against this exact set doesn't pay for — or risk
+    /// drifting from — a second walk.
+    ///
     /// Returns `(existed, deleted_nodes)` where `deleted_nodes` contains the target and all
     /// descendants that were deleted (empty vec when target didn't exist).
     pub async fn delete_subtree_atomic(
         &self,
         node_id: &str,
         expected_version: i64,
+        subtree_ids: &[String],
         source: Option<String>,
     ) -> Result<(bool, Vec<Node>)> {
         // Collect the target + all descendants before mutating.
@@ -547,23 +577,7 @@ impl SqliteStore {
             ));
         }
 
-        // Walk has_child recursively to collect the full descendant set.
-        let mut id_rows = self.db.query(
-            r#"WITH RECURSIVE subtree(node_id) AS (
-                SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
-                UNION ALL
-                SELECT r.out_node FROM relationship r
-                JOIN subtree s ON r.in_node = s.node_id
-                WHERE r.relationship_type = 'has_child'
-            )
-            SELECT DISTINCT node_id FROM subtree"#,
-            libsql::params![node_id.to_string()],
-        ).await.context("Failed to collect subtree descendants")?;
-
-        let mut all_ids: Vec<String> = vec![node_id.to_string()];
-        while let Some(row) = id_rows.next().await? {
-            all_ids.push(row.get(0)?);
-        }
+        let all_ids: Vec<String> = subtree_ids.to_vec();
 
         // Fetch all node records (needed for post-commit notifications).
         let placeholders: Vec<String> = (1..=all_ids.len()).map(|i| format!("?{}", i)).collect();

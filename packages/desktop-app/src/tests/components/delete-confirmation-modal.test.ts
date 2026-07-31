@@ -13,13 +13,15 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import DeleteConfirmationModal from '$lib/components/delete-confirmation-modal.svelte';
 import {
   confirmNodeDeletion,
+  showInaccessibleDescendantsRefusal,
   getDeleteConfirmationState
 } from '$lib/services/delete-confirmation.svelte';
 
 describe('DeleteConfirmationModal', () => {
   afterEach(() => {
-    // Resolve any pending confirmation so module state doesn't leak between tests.
+    // Resolve any pending confirmation/refusal so module state doesn't leak between tests.
     getDeleteConfirmationState().cancel();
+    getDeleteConfirmationState().acknowledge();
   });
 
   it('auto-focuses Cancel and does NOT delete on Enter while Cancel is focused (#1414)', async () => {
@@ -61,5 +63,40 @@ describe('DeleteConfirmationModal', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await Promise.resolve();
     expect(result).toBe(false);
+  });
+
+  describe('inaccessible-descendants refusal (ADR-041)', () => {
+    it('shows a terminal refusal with the inaccessible count and no Delete button', async () => {
+      let resolved = false;
+      showInaccessibleDescendantsRefusal(3).then(() => (resolved = true));
+      await tick();
+
+      render(DeleteConfirmationModal);
+
+      expect(screen.getByText(/3 items you don't have access to/)).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+      expect(resolved).toBe(false);
+    });
+
+    it('singularizes the count for exactly 1 inaccessible item', async () => {
+      showInaccessibleDescendantsRefusal(1);
+      await tick();
+
+      render(DeleteConfirmationModal);
+
+      expect(screen.getByText(/1 item you don't have access to/)).toBeTruthy();
+    });
+
+    it('resolves when OK is activated', async () => {
+      let resolved = false;
+      showInaccessibleDescendantsRefusal(2).then(() => (resolved = true));
+      await tick();
+
+      render(DeleteConfirmationModal);
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+      await Promise.resolve();
+      expect(resolved).toBe(true);
+    });
   });
 });

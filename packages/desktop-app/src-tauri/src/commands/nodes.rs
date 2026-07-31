@@ -118,19 +118,35 @@ pub struct CommandError {
 }
 
 fn status_to_command_error(status: tonic::Status) -> CommandError {
-    let code = match status.code() {
-        tonic::Code::NotFound => "NODE_NOT_FOUND",
-        tonic::Code::Aborted => "VERSION_CONFLICT",
-        tonic::Code::AlreadyExists => "COLLECTION_EXISTS",
-        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
-        _ => "GRPC_ERROR",
-    }
-    .to_string();
+    let has_inaccessible_descendants = status
+        .metadata()
+        .get("x-inaccessible-descendants")
+        .is_some();
+
+    let code =
+        if status.code() == tonic::Code::FailedPrecondition && has_inaccessible_descendants {
+            "INACCESSIBLE_DESCENDANTS"
+        } else {
+            match status.code() {
+                tonic::Code::NotFound => "NODE_NOT_FOUND",
+                tonic::Code::Aborted => "VERSION_CONFLICT",
+                tonic::Code::AlreadyExists => "COLLECTION_EXISTS",
+                tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+                _ => "GRPC_ERROR",
+            }
+        }
+        .to_string();
 
     let conflict_data = if status.code() == tonic::Code::Aborted {
         status
             .metadata()
             .get("x-version-conflict")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| serde_json::from_str(s).ok())
+    } else if has_inaccessible_descendants {
+        status
+            .metadata()
+            .get("x-inaccessible-descendants")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| serde_json::from_str(s).ok())
     } else {

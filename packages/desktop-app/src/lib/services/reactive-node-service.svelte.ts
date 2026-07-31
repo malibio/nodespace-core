@@ -28,7 +28,8 @@ import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { waitForPendingMoveOperations, trackMoveOperation } from './pending-operations';
-import { confirmNodeDeletion } from './delete-confirmation.svelte';
+import { confirmNodeDeletion, showInaccessibleDescendantsRefusal } from './delete-confirmation.svelte';
+import { isInaccessibleDescendants } from '$lib/types/errors';
 
 const log = createLogger('ReactiveNodeService');
 // Schema defaults extraction removed in a simplification
@@ -1270,9 +1271,14 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
    * Deletes a node and its entire subtree (cascade).
    *
    * Shows a confirmation dialog when the node has descendants. If confirmed (or the node
-   * has no descendants), the deletion is dispatched to the backend atomically. Descendant
-   * cleanup happens automatically via `NodeDeleted` domain events arriving through the
-   * sync listener — no manual tree pruning is needed here.
+   * has no descendants), the deletion is dispatched to the backend.
+   *
+   * **Access gate (ADR-041):** a node with descendants is deleted non-optimistically — the
+   * backend call is awaited *before* touching local state — because the subtree may contain
+   * nodes the actor cannot read, in which case the backend refuses the whole delete and
+   * nothing should disappear from the UI. A leaf node (no descendants) has no subtree to
+   * gate, so it keeps the prior optimistic path via `sharedNodeStore.deleteNode`, with
+   * descendant cleanup arriving via `NodeDeleted` domain events through the sync listener.
    *
    * **For Backspace/empty-node deletion** use `combineNodes()`, which promotes children
    * first and does not cascade.
@@ -1293,9 +1299,28 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       return;
     }
 
+    if (descendantCount > 0) {
+      // Non-optimistic: wait for the backend's access-gate decision before removing
+      // anything from local state. A refusal must leave the UI untouched.
+      try {
+        await backendAdapter.deleteNode(nodeId, node.version ?? 1);
+      } catch (err) {
+        if (isInaccessibleDescendants(err)) {
+          await showInaccessibleDescendantsRefusal(err.conflictData.inaccessible_count);
+          log.debug(`Delete refused for node ${nodeId}: subtree contains inaccessible items`);
+          return;
+        }
+        log.error(`Delete failed for node ${nodeId}:`, err);
+        return;
+      }
+    }
+
     cleanupDebouncedOperations(nodeId);
 
-    sharedNodeStore.deleteNode(nodeId, viewerSource);
+    // skipPersistence=true for the descendant-checked path: the backend delete above
+    // already happened, so sharedNodeStore.deleteNode only needs to update local state,
+    // not re-issue the write. Leaf nodes (no prior backend call) still persist normally.
+    sharedNodeStore.deleteNode(nodeId, viewerSource, descendantCount > 0);
     delete _uiState[nodeId];
 
     // CRITICAL: Must reassign (not mutate) for Svelte 5 reactivity
