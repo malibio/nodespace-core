@@ -1235,10 +1235,23 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // previews truncate at 300 chars — a realistic create_schema payload
                 // exceeds that, so a parser reading them would fail on exactly the
                 // well-formed calls it is meant to pass.
+                //
+                // Two shapes report it: `fields` (create_schema — the array it
+                // persisted) and `property_count` (create_node — a bare count,
+                // since its result carries only the new node's id). Both answer
+                // the same question, "did this call persist anything the user
+                // can actually record against", so both feed one field rather
+                // than two the scraper would have to reconcile.
                 let result_field_count = result_value
                     .get("fields")
                     .and_then(|f| f.as_array())
-                    .map(|a| a.len());
+                    .map(|a| a.len())
+                    .or_else(|| {
+                        result_value
+                            .get("property_count")
+                            .and_then(|c| c.as_u64())
+                            .map(|c| c as usize)
+                    });
 
                 tracing::info!(
                     tool = %tc.function_name,
@@ -1714,10 +1727,25 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // earlier and logs its own "stage-1 routing decision" line above. Both
         // carry the same field name so a log scraper (an eval, a dashboard) can
         // grep one key regardless of which path a turn took.
+        // `routed_skills` names the candidates that clear the score gate — the
+        // ones `render_candidates_for_prompt` actually writes into Stage 2's
+        // prompt and `stage2_tools` scopes the tool surface from. The count
+        // alone cannot answer "which skill was routed to", so a routing claim
+        // about any eval scenario required reading source rather than results;
+        // an empty value here means retrieval returned nothing above the bar,
+        // which is exactly the "routed but matched nothing" case
+        // `stage2_candidates_injected` distinguishes on the assembly line.
         tracing::info!(
             routing_decision = routing_decision_tag,
             routing_latency_ms = elapsed_ms,
             candidates = outcome.candidates.len(),
+            routed_skills = %outcome
+                .candidates
+                .iter()
+                .filter(|c| routing::clears_score_gate(c))
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
             "two-stage routing overhead"
         );
         outcome

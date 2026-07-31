@@ -184,6 +184,10 @@ describe("parseTurnOutput", () => {
       "assistant> Done — created the node.",
     ].join("\n");
     const turn = parseTurnOutput(out, 1234);
+    // The marker was already present in this fixture but never asserted, which
+    // is part of why an always-empty `toolsOffered` reached committed traces
+    // unnoticed.
+    expect(turn.toolsOffered).toBe("create_node, search_nodes");
     expect(turn.toolsCalled).toEqual(["create_node"]);
     expect(turn.toolCalls).toEqual([
       { name: "create_node", isError: false, fieldCount: 3 },
@@ -236,6 +240,23 @@ describe("parseTurnOutput", () => {
     const turn = parseTurnOutput(out, 100);
     expect(turn.routingDecision).toBe("query");
     expect(turn.stage2CandidatesInjected).toBe(true);
+  });
+
+  test("parses the routed-skills marker", () => {
+    const out = [
+      "[routed skills] equipment_log, checkout_flow",
+      "assistant> ok",
+    ].join("\n");
+    const turn = parseTurnOutput(out, 100);
+    expect(turn.routedSkills).toBe("equipment_log, checkout_flow");
+  });
+
+  test("routedSkills is undefined (not empty) when the marker is absent", () => {
+    // "not recorded" must stay distinguishable from "nothing routed" — a turn
+    // from an older results file has no marker at all, and reporting that as
+    // an empty routed set would assert something the run never observed.
+    const turn = parseTurnOutput("assistant> hi", 100);
+    expect(turn.routedSkills).toBeUndefined();
   });
 
   test("parses stage2 injected as false, distinct from absent", () => {

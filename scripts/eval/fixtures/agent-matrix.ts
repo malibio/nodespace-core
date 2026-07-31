@@ -38,7 +38,14 @@ export type Expectation =
   // No graph-action tool fired at all (routing tools tolerated).
   | { kind: "noTools" }
   // The named tool fired exactly once (ignoring routing tools).
-  | { kind: "toolOnce"; tool: string }
+  //
+  // `minProperties` additionally requires the call to have persisted at least
+  // that many schema field values. Without it a create_node that recorded none
+  // of the user's particulars — no cost, no date, no status — scores identically
+  // to one that recorded them all, because the tool name is all that is checked.
+  // Set it on any scenario whose prompt supplies particulars a later scenario
+  // depends on, or that chain silently keys on a value nothing ever stored.
+  | { kind: "toolOnce"; tool: string; minProperties?: number }
   // Tools fired in this order as a subsequence (ignoring routing tools) — other
   // tools may appear between/around them, but these must appear in this order.
   | { kind: "toolSequence"; tools: string[] }
@@ -110,6 +117,43 @@ function schemaCallsAreSound(calls: ToolCallRecord[]): Verdict {
 }
 
 /**
+ * Check that a call persisted at least `min` schema field values.
+ *
+ * The instance-side counterpart to `schemaCallsAreSound`, and the same failure
+ * shape one level down: that one catches a schema with no fields to record
+ * against, this catches a record with no field values in it. A create_node
+ * carrying only `content` and `node_type` succeeds, persists a bare shell, and
+ * scores green on tool name alone — while every later scenario that keys on one
+ * of those missing values becomes unwinnable, and looks like a model failure
+ * rather than a fixture that never stored the value.
+ *
+ * `fieldCount` is absent (rather than 0) on results recorded before the tool
+ * reported it, so absence is treated as unknown and passes — for the same
+ * reason `schemaCallsAreSound` does it: a stale baseline must not read as a
+ * fresh failure.
+ */
+function callPersistedProperties(
+  calls: ToolCallRecord[],
+  tool: string,
+  min: number,
+): Verdict {
+  for (const c of calls) {
+    if (c.name !== tool || c.isError) continue;
+    if (c.fieldCount === undefined) continue;
+    if (c.fieldCount < min) {
+      return {
+        passed: false,
+        failure:
+          `${tool} succeeded but persisted ${c.fieldCount} property value(s), ` +
+          `expected at least ${min} — the node was created without the ` +
+          `particulars the prompt supplied, so anything keyed on them cannot resolve`,
+      };
+    }
+  }
+  return { passed: true };
+}
+
+/**
  * Decide whether a turn met its expectation.
  *
  * Pure and daemon-free so it is unit-testable without a model — see
@@ -143,7 +187,16 @@ export function assertExpectation(
       }
       // Scenarios 8a/8b target create_schema through this branch, so the
       // count-only hole this closes for noExtraTypes exists here too.
-      return schemaCallsAreSound(toolCalls);
+      const schemaVerdict = schemaCallsAreSound(toolCalls);
+      if (!schemaVerdict.passed) return schemaVerdict;
+      if (expect.minProperties !== undefined) {
+        return callPersistedProperties(
+          toolCalls,
+          expect.tool,
+          expect.minProperties,
+        );
+      }
+      return { passed: true };
     }
 
     case "toolSequence": {
@@ -221,19 +274,35 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "3",
       scenario: "3. Schema creation",
-      // Mentions checked-out vs returned so the schema plausibly carries a
-      // status field — scenario 6 then tests resolve_query routing on an
-      // indirect reference, not whether the model guessed a status value.
+      // Every field a later scenario keys on must be implied here, or that
+      // scenario is unwinnable by construction and scores a correct refusal as
+      // a failure. Two are load-bearing downstream:
+      //   - checked-out vs returned → the status scenario 6 sets.
+      //   - replacement cost        → the value scenario 4 supplies, and the
+      //     discriminator scenarios 6 ("the 2400 one") and 7 ("worth 90000")
+      //     both resolve against.
+      // The cost clause is deliberate: scenario 6 exists to test resolve_query
+      // on an *indirect* reference. Re-keying it to the item name ("the laser
+      // cutter") would make the referent a direct string match that plain
+      // search_nodes resolves, and the assertion would pass while testing less.
       prompt:
-        "I want to keep a record of the equipment my team checks out and whether it's been returned",
+        "I want to keep a record of the equipment my team checks out, whether it's been returned, and what each item costs to replace",
       expect: { kind: "noExtraTypes" },
     },
     {
       id: "4",
       scenario: "4. Instance creation",
+      // `minProperties` is what makes scenarios 6 and 7 winnable *in principle*:
+      // both discriminate on the replacement cost this turn is supposed to
+      // store. Without it, create_node persisting a bare shell scores green
+      // here and the failure surfaces two scenarios later as an unresolvable
+      // reference — indistinguishable from the model declining a genuinely
+      // ambiguous one. 1, not 2, so this asserts "the particulars reached
+      // storage" rather than pinning which of the date or cost the model chose
+      // to record.
       prompt:
         "Log a laser cutter checked out on the 12th, replacement cost 2400",
-      expect: { kind: "toolOnce", tool: "create_node" },
+      expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
     },
     {
       id: "5",
@@ -309,7 +378,12 @@ const fixture: EvalFixture = {
   extra(scenario, turns: TurnRecord[]) {
     return {
       expect: (scenario as MatrixScenario).expect,
-      toolsOffered: turns[0]?.toolsOffered ?? "",
+      // Per turn, not `turns[0]` alone: a scenario's turns can be offered
+      // different tool surfaces (routing runs per turn and scopes Stage 2's
+      // tools from that turn's candidates), so collapsing to the first turn
+      // reports a surface later turns never saw. Same for the routed skill.
+      toolsOffered: turns.map((t) => t.toolsOffered),
+      routedSkills: turns.map((t) => t.routedSkills ?? ""),
       toolsCalled: turns.flatMap((t) => t.toolsCalled),
       // Recorded so a failure carries its evidence: which call errored, and how
       // many fields it actually persisted. Reading a results file should not

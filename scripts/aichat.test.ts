@@ -79,11 +79,43 @@ describe("formatTurnLogLines", () => {
   test("extracts stage2 injected and routing markers", () => {
     const slice = [
       `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names="create_node, search_nodes" system_prompt_len=1234 stage2_candidates_injected=true`,
-      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=2`,
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=2 routed_skills="equipment_log"`,
     ].join("\n");
     const lines = formatTurnLogLines(slice);
     expect(lines).toContain("[stage2 injected] true");
     expect(lines).toContain("[routing] query");
+    // Asserted here because its absence is what let the dead `scoped tool
+    // list` scrape survive: this test covered the neighbouring markers on the
+    // same log line and never checked that the tool list itself came through,
+    // so `toolsOffered` was empty on every turn of every committed trace.
+    expect(lines).toContain("[tools offered] create_node, search_nodes");
+    expect(lines).toContain("[routed skills] equipment_log");
+  });
+
+  test("emits no routed-skills marker when nothing cleared the score gate", () => {
+    // A turn that routed but matched nothing above the bar. An empty marker
+    // would be indistinguishable from a scrape that failed to parse, so the
+    // marker is omitted entirely and `[stage2 injected] false` carries the
+    // signal instead.
+    const slice = [
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names="create_node" system_prompt_len=1234 stage2_candidates_injected=false`,
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="none" routing_latency_ms=120 candidates=0 routed_skills=""`,
+    ].join("\n");
+    const lines = formatTurnLogLines(slice);
+    expect(lines.filter((l) => l.startsWith("[routed skills]"))).toEqual([]);
+    expect(lines).toContain("[stage2 injected] false");
+  });
+
+  test("takes the routed skills of the last routing line in a multi-turn slice", () => {
+    // Mirrors the existing `[routing]` behaviour: a slice can contain a prior
+    // context turn's routing line, and the marker must describe this turn.
+    const slice = [
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=1 routed_skills="stale_earlier_turn"`,
+      `2026-07-30T22:27:41Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=118 candidates=2 routed_skills="equipment_log, checkout_flow"`,
+    ].join("\n");
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toContain("[routed skills] equipment_log, checkout_flow");
+    expect(lines.filter((l) => l.startsWith("[routed skills]"))).toHaveLength(1);
   });
 
   test("extracts the empty-generation marker only on the documented error text", () => {

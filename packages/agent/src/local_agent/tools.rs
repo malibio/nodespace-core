@@ -1718,6 +1718,15 @@ impl GraphToolExecutor {
         props.extend(flat_extras);
         let properties = Value::Object(props);
 
+        // Number of schema field values this call actually carries, counted
+        // AFTER the flat-extras merge above so a model that passes fields at the
+        // top level rather than nested under "properties" is not miscounted as
+        // having passed none. Reported on the result so an eval can tell a
+        // create_node that recorded the user's particulars apart from one that
+        // persisted a bare shell — indistinguishable by tool name alone, which
+        // is exactly the hole `fields` already closes for create_schema.
+        let property_count = properties.as_object().map(|o| o.len()).unwrap_or(0);
+
         let ns = self.node_service()?;
 
         // node_service.compute_title() handles all title derivation:
@@ -1743,7 +1752,7 @@ impl GraphToolExecutor {
         Ok(ok_result(
             tool_call_id,
             "create_node",
-            json!({ "id": node_uri(&output.node_id) }),
+            json!({ "id": node_uri(&output.node_id), "property_count": property_count }),
         ))
     }
 
