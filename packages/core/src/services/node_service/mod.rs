@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
 // Sub-module declarations
@@ -460,6 +460,30 @@ pub(crate) enum BatchState {
     Batching(HashMap<String, crate::db::events::EventEnvelope>),
 }
 
+/// Whether an event envelope should be forwarded to the origin-filtered push
+/// channel.
+///
+/// Every envelope forwards except those whose source client matches the
+/// configured excluded origin (when one is set). The excluded origin is
+/// injected by the host layer; core assumes no particular id, so until an
+/// origin is configured the push channel mirrors the main channel.
+///
+/// Correctness depends on the excluded writer propagating its client id onto the
+/// event's `source_client_id`. Per-node writes (create/update/delete) do this;
+/// `bulk_create_hierarchy` and `create_node_streaming` deliberately stamp a fixed
+/// source and would NOT carry the excluded origin — a writer that must be excluded
+/// here must not route through those.
+fn push_forward_allowed(
+    excluded: &RwLock<Option<String>>,
+    envelope: &crate::db::events::EventEnvelope,
+) -> bool {
+    let guard = excluded.read().unwrap_or_else(|e| e.into_inner());
+    match guard.as_deref() {
+        Some(ex) => envelope.metadata.source_client_id.as_deref() != Some(ex),
+        None => true,
+    }
+}
+
 /// RAII guard returned by `NodeService::begin_batch_emit`.
 ///
 /// While this guard is live, domain events emitted by the store notifier are
@@ -469,6 +493,10 @@ pub(crate) enum BatchState {
 pub struct BatchEmitGuard {
     state: Arc<Mutex<BatchState>>,
     tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+    /// Origin-filtered mirror of `tx`; see `NodeService::push_event_tx`.
+    push_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+    /// Origin excluded from the push channel; see `NodeService::push_excluded_origin`.
+    push_excluded_origin: Arc<RwLock<Option<String>>>,
 }
 
 impl Drop for BatchEmitGuard {
@@ -477,6 +505,11 @@ impl Drop for BatchEmitGuard {
         let prev = std::mem::replace(&mut *lock, BatchState::Immediate);
         if let BatchState::Batching(buf) = prev {
             for envelope in buf.into_values() {
+                // Mirror to the push channel unless this envelope's origin is
+                // excluded. Clone only when forwarding to avoid an extra copy.
+                if push_forward_allowed(&self.push_excluded_origin, &envelope) {
+                    let _ = self.push_tx.send(envelope.clone());
+                }
                 let _ = self.tx.send(envelope);
             }
         }
@@ -751,6 +784,24 @@ pub struct NodeService {
     /// Changed from DomainEvent to EventEnvelope
     pub(crate) event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
 
+    /// Origin-filtered mirror of `event_tx`.
+    ///
+    /// Carries the same domain events as `event_tx` except those whose
+    /// `source_client_id` matches `push_excluded_origin`. A consumer that must
+    /// not be flooded by a particular origin (e.g. a bulk re-apply that tags
+    /// every event with a single client id) subscribes here via
+    /// `subscribe_for_push()` so that origin's burst never occupies its buffer.
+    /// All other subscribers keep using `event_tx` and see every event.
+    pub(crate) push_event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
+
+    /// Source client id excluded from `push_event_tx`.
+    ///
+    /// Injected by the host layer via `set_push_excluded_origin`; core assumes
+    /// no particular value. While `None`, `push_event_tx` mirrors `event_tx`
+    /// exactly. Held behind `RwLock` so the id can be set after the store
+    /// notifier closure (which reads it on every event) has been constructed.
+    pub(crate) push_excluded_origin: Arc<RwLock<Option<String>>>,
+
     /// Shared batch state for coalescing events during bulk operations.
     ///
     /// When `BatchState::Batching`, the store notifier accumulates events instead
@@ -792,6 +843,8 @@ impl Clone for NodeService {
             behaviors: self.behaviors.clone(),
             migration_registry: self.migration_registry.clone(),
             event_tx: self.event_tx.clone(),
+            push_event_tx: self.push_event_tx.clone(),
+            push_excluded_origin: self.push_excluded_origin.clone(),
             batch_state: self.batch_state.clone(),
             client_id: self.client_id.clone(),
             execution_context: self.execution_context.clone(),
@@ -839,6 +892,12 @@ impl NodeService {
         // Initialize broadcast channel for domain events (EventEnvelope)
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
+        // Origin-filtered mirror of event_tx (same capacity). Mirrors every event
+        // except those tagged with push_excluded_origin (unset until injected by
+        // the host layer, so it mirrors event_tx exactly by default).
+        let (push_event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
+        let push_excluded_origin: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+
         // Shared batch state — Immediate by default; swapped to Batching during bulk ops.
         let batch_state: Arc<Mutex<BatchState>> = Arc::new(Mutex::new(BatchState::Immediate));
 
@@ -851,6 +910,8 @@ impl NodeService {
         // Batch mode coalesces events per node during bulk operations.
         {
             let tx = event_tx.clone();
+            let push_tx = push_event_tx.clone();
+            let push_excluded_origin_ref = Arc::clone(&push_excluded_origin);
             let batch_state_ref = Arc::clone(&batch_state);
             let notifier = Arc::new(move |change: StoreChange| {
                 use crate::db::events::{EventEnvelope, EventMetadata};
@@ -898,9 +959,15 @@ impl NodeService {
                 let mut state = batch_state_ref.lock().unwrap_or_else(|e| e.into_inner());
                 match &mut *state {
                     BatchState::Immediate => {
+                        // Mirror to the push channel unless this envelope's origin
+                        // is excluded. Clone only when forwarding.
+                        if push_forward_allowed(&push_excluded_origin_ref, &envelope) {
+                            let _ = push_tx.send(envelope.clone());
+                        }
                         let _ = tx.send(envelope);
                     }
                     BatchState::Batching(buf) => {
+                        // Batched events flush (and mirror) in BatchEmitGuard::drop.
                         buf.insert(change.node.id.clone(), envelope);
                     }
                 }
@@ -925,6 +992,8 @@ impl NodeService {
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
             migration_registry: Arc::new(migration_registry),
             event_tx,
+            push_event_tx,
+            push_excluded_origin,
             batch_state,
             client_id: None,
             execution_context: None,
@@ -1698,6 +1767,35 @@ impl NodeService {
         self.event_tx.subscribe()
     }
 
+    /// Subscribe to the origin-filtered push channel.
+    ///
+    /// Returns a receiver that observes every domain event except those whose
+    /// `source_client_id` matches the origin configured via
+    /// `set_push_excluded_origin`. When no origin is configured this behaves
+    /// identically to `subscribe_to_events`.
+    ///
+    /// Intended for a consumer that must not have its buffer flooded by a bulk
+    /// re-apply that tags every event with a single origin id (e.g. the sync
+    /// push consumer during a cold pull).
+    pub fn subscribe_for_push(&self) -> broadcast::Receiver<crate::db::events::EventEnvelope> {
+        self.push_event_tx.subscribe()
+    }
+
+    /// Configure the source client id excluded from the push channel.
+    ///
+    /// Events tagged with this `source_client_id` are still delivered to
+    /// `subscribe_to_events` subscribers but are withheld from
+    /// `subscribe_for_push` subscribers. Core assumes no particular value —
+    /// the host layer injects the id of the origin whose bursts must not flood
+    /// the push consumer. Shared across all clones of this service.
+    pub fn set_push_excluded_origin(&mut self, origin: impl Into<String>) {
+        let mut guard = self
+            .push_excluded_origin
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = Some(origin.into());
+    }
+
     /// Begin batched event emission for bulk operations.
     ///
     /// While the returned `BatchEmitGuard` is live, domain events from the store
@@ -1723,6 +1821,8 @@ impl NodeService {
         BatchEmitGuard {
             state: Arc::clone(&self.batch_state),
             tx: self.event_tx.clone(),
+            push_tx: self.push_event_tx.clone(),
+            push_excluded_origin: Arc::clone(&self.push_excluded_origin),
         }
     }
 
@@ -1753,9 +1853,15 @@ impl NodeService {
         let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
         match (&mut *state, node_id) {
             (BatchState::Batching(buf), Some(id)) => {
+                // Batched events flush (and mirror) in BatchEmitGuard::drop.
                 buf.insert(id, envelope);
             }
             _ => {
+                // Mirror to the push channel unless this envelope's origin is
+                // excluded. Clone only when forwarding.
+                if push_forward_allowed(&self.push_excluded_origin, &envelope) {
+                    let _ = self.push_event_tx.send(envelope.clone());
+                }
                 let _ = self.event_tx.send(envelope);
             }
         }
@@ -3778,6 +3884,177 @@ mod tests {
         assert!(
             rx.try_recv().is_ok(),
             "event must be visible after guard drops"
+        );
+    }
+
+    // =========================================================================
+    // Origin-filtered push channel (subscribe_for_push / set_push_excluded_origin)
+    // =========================================================================
+
+    /// Drain a receiver and return the ids of every node-keyed event seen.
+    fn drain_node_ids(
+        rx: &mut broadcast::Receiver<crate::db::events::EventEnvelope>,
+    ) -> Vec<String> {
+        let mut ids = Vec::new();
+        while let Ok(env) = rx.try_recv() {
+            match &env.event {
+                DomainEvent::NodeCreated { node_id, .. } => ids.push(node_id.clone()),
+                DomainEvent::NodeUpdated { node_id, .. } => ids.push(node_id.clone()),
+                DomainEvent::NodeDeleted { id, .. } => ids.push(id.clone()),
+                _ => {}
+            }
+        }
+        ids
+    }
+
+    /// With no excluded origin configured, the push channel mirrors the main
+    /// channel exactly — every event reaches both, regardless of origin tag.
+    #[tokio::test]
+    async fn push_channel_mirrors_main_when_no_origin_excluded() {
+        let (service, _temp) = create_test_service().await;
+        let mut ui_rx = service.subscribe_to_events();
+        let mut push_rx = service.subscribe_for_push();
+
+        let tagged = service.with_client("sync-service");
+        let sync_id = tagged
+            .create_node(Node::new("text".to_string(), "from sync".to_string(), json!({})))
+            .await
+            .unwrap();
+        let local_id = service
+            .create_node(Node::new("text".to_string(), "local".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        let ui_ids = drain_node_ids(&mut ui_rx);
+        let push_ids = drain_node_ids(&mut push_rx);
+
+        assert!(ui_ids.contains(&sync_id) && ui_ids.contains(&local_id));
+        assert!(
+            push_ids.contains(&sync_id) && push_ids.contains(&local_id),
+            "with no excluded origin, push channel must see every event"
+        );
+    }
+
+    /// Node events (store-notifier path): once an origin is excluded, its
+    /// writes reach the UI channel but not the push channel, while normal
+    /// writes reach both.
+    #[tokio::test]
+    async fn push_channel_excludes_configured_origin_for_node_events() {
+        let (mut service, _temp) = create_test_service().await;
+        service.set_push_excluded_origin("sync-service");
+
+        let mut ui_rx = service.subscribe_to_events();
+        let mut push_rx = service.subscribe_for_push();
+
+        let sync_id = service
+            .with_client("sync-service")
+            .create_node(Node::new("text".to_string(), "from sync".to_string(), json!({})))
+            .await
+            .unwrap();
+        let local_id = service
+            .create_node(Node::new("text".to_string(), "local".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        let ui_ids = drain_node_ids(&mut ui_rx);
+        let push_ids = drain_node_ids(&mut push_rx);
+
+        assert!(
+            ui_ids.contains(&sync_id) && ui_ids.contains(&local_id),
+            "UI channel must observe both the excluded-origin and the normal write"
+        );
+        assert!(
+            push_ids.contains(&local_id),
+            "push channel must observe the normal write"
+        );
+        assert!(
+            !push_ids.contains(&sync_id),
+            "push channel must NOT observe the excluded-origin write"
+        );
+    }
+
+    /// Relationship events (emit_event path) tagged with the excluded origin are
+    /// likewise withheld from the push channel but still delivered to the UI.
+    #[tokio::test]
+    async fn push_channel_excludes_configured_origin_for_relationship_events() {
+        let (mut service, _temp) = create_test_service().await;
+        service.set_push_excluded_origin("sync-service");
+
+        let sync = service.with_client("sync-service");
+        let root_id = sync
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = sync
+            .create_node(Node::new("text".to_string(), "child".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        // Subscribe after node creation so only the relationship event is captured.
+        let mut ui_rx = service.subscribe_to_events();
+        let mut push_rx = service.subscribe_for_push();
+
+        // create_parent_edge emits a RelationshipCreated via emit_event, tagged
+        // with the sync-service origin.
+        sync.create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        let count_rel = |rx: &mut broadcast::Receiver<crate::db::events::EventEnvelope>| {
+            let mut n = 0;
+            while let Ok(env) = rx.try_recv() {
+                if matches!(env.event, DomainEvent::RelationshipCreated { .. }) {
+                    n += 1;
+                }
+            }
+            n
+        };
+
+        assert!(
+            count_rel(&mut ui_rx) >= 1,
+            "UI channel must observe the excluded-origin relationship event"
+        );
+        assert_eq!(
+            count_rel(&mut push_rx),
+            0,
+            "push channel must NOT observe the excluded-origin relationship event"
+        );
+    }
+
+    /// Batched flush (BatchEmitGuard::drop) honours the origin filter: an
+    /// excluded-origin bulk flush reaches the UI channel but not the push
+    /// channel.
+    #[tokio::test]
+    async fn push_channel_excludes_configured_origin_for_batched_flush() {
+        let (mut service, _temp) = create_test_service().await;
+        service.set_push_excluded_origin("sync-service");
+
+        let sync = service.with_client("sync-service");
+        let id = sync
+            .create_node(Node::new("text".to_string(), "node".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        let mut ui_rx = service.subscribe_to_events();
+        let mut push_rx = service.subscribe_for_push();
+
+        {
+            let _guard = sync.begin_batch_emit();
+            let update = crate::models::NodeUpdate::new().with_content("batched".to_string());
+            sync.update_node_unchecked(&id, update).await.unwrap();
+            // Nothing flushes until the guard drops here.
+        }
+
+        let ui_ids = drain_node_ids(&mut ui_rx);
+        let push_ids = drain_node_ids(&mut push_rx);
+
+        assert!(
+            ui_ids.contains(&id),
+            "UI channel must observe the batched excluded-origin flush"
+        );
+        assert!(
+            !push_ids.contains(&id),
+            "push channel must NOT observe the batched excluded-origin flush"
         );
     }
 
