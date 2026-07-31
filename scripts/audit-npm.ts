@@ -18,24 +18,6 @@ const ALLOWLIST: Record<string, string> = {
   // SvelteKit upstream bump to advance its cookie dependency past 0.7.
   "GHSA-pxg6-pf52-xh8x":
     "cookie pinned by @sveltejs/kit ^0.6.0 (low sev, upstream fix)",
-  // dompurify — pinned to 3.4.7, the highest version DOMPurify still sanitizes
-  // correctly under Happy-DOM (our unit-test DOM); >3.4.7 fails-open in Happy-DOM
-  // and would silently drop sanitizeSvg's coverage. DOMPurify sanitizes BOTH
-  // mermaid SVG (mermaid-render.ts) AND — primarily — LLM/agent chat markdown
-  // (chat-markdown.svelte), so treat any future dompurify advisory seriously.
-  // 3.4.7 already fixes the cross-realm / IN_PLACE / prototype-pollution issues;
-  // each residual below requires a DOMPurify config option that NEITHER consumer
-  // sets (setConfig / CUSTOM_ELEMENT_HANDLING / SAFE_FOR_TEMPLATES+RETURN_DOM /
-  // RETURN_TRUSTED_TYPE), so none is reachable in this app's usage. Follow-up:
-  // move sanitizeSvg to browser-mode tests, then bump dompurify to latest.
-  "GHSA-cmwh-pvxp-8882":
-    "dompurify 3.4.7 (Happy-DOM ceiling; defense-in-depth, upstream fix)",
-  "GHSA-c2j3-45gr-mqc4":
-    "dompurify 3.4.7 (Happy-DOM ceiling; defense-in-depth, upstream fix)",
-  "GHSA-vxr8-fq34-vvx9":
-    "dompurify 3.4.7 (Happy-DOM ceiling; defense-in-depth, upstream fix)",
-  "GHSA-gvmj-g25r-r7wr":
-    "dompurify 3.4.7 (Happy-DOM ceiling; defense-in-depth, upstream fix)",
 };
 
 const proc = Bun.spawnSync(["bun", "audit", "--json"]);

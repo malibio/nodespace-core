@@ -117,7 +117,7 @@
     "@sveltejs/kit": "2.70.1",
     "brace-expansion": "1.1.17",
     "devalue": "5.8.2",
-    "dompurify": "3.4.7",
+    "dompurify": "3.4.12",
     "form-data": "4.0.6",
     "js-yaml": "4.3.0",
     "lodash-es": "4.18.1",

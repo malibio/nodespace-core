@@ -1,14 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { sanitizeSvg } from '../../lib/services/mermaid-render.js';
 
-// Mock the mermaid module to avoid DOM/browser dependencies in tests
-vi.mock('mermaid', () => ({
-  default: {
-    initialize: vi.fn(),
-    render: vi.fn().mockResolvedValue({ svg: '<svg><text>diagram</text></svg>' })
-  }
-}));
-
+// Runs under real Chromium (see vitest.browser.config.ts), not Happy-DOM. DOMPurify
+// versions past 3.4.7 fail open under Happy-DOM's DOM approximation — sanitizeSvg
+// (and renderMermaid, which calls it unconditionally on every render) are only
+// meaningfully tested against a real browser DOM, which is why this whole suite
+// lives in the browser tier instead of the fast Happy-DOM tier.
 describe('sanitizeSvg', () => {
   it('removes script tags from SVG output', () => {
     const svg = '<svg><script>alert("xss")</script></svg>';
@@ -109,6 +106,15 @@ describe('sanitizeSvg', () => {
     expect(textResult).toContain('Label A');
   });
 });
+
+// Mock the mermaid module only — renderMermaid's own sanitizeSvg call runs for
+// real, which is the whole point of this file living in the browser tier.
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn().mockResolvedValue({ svg: '<svg><text>diagram</text></svg>' })
+  }
+}));
 
 describe('renderMermaid', () => {
   it('returns null on render failure', async () => {
