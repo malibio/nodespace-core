@@ -2177,4 +2177,179 @@ impl SqliteStore {
         }
         Ok(ids)
     }
+
+    /// Find an active node of `node_type` whose namespaced `field` property equals
+    /// `value`, excluding `exclude_id` (used to ignore self on update).
+    ///
+    /// This backs a uniqueness *suggestion*, not a constraint: callers use it to
+    /// surface a likely-duplicate to the user, never to reject a write. Scope is
+    /// per-database (ADR-053) — two offline devices can each validly hold the same
+    /// value, so email and similar fields are treated as claims, not identity keys.
+    ///
+    /// The query is bound to `node_type` so it rides the `idx_node_type` index and
+    /// filters to `lifecycle_status = 'active'`, so an archived or deleted duplicate
+    /// is not reported. Property access matches the namespaced storage shape used
+    /// everywhere else: `properties.$.<node_type>.<field>`. When `case_insensitive`
+    /// is set, both sides are folded with `LOWER`. The caller is responsible for
+    /// skipping empty/whitespace values.
+    pub async fn find_conflicting_unique(
+        &self,
+        node_type: &str,
+        field: &str,
+        value: &str,
+        exclude_id: Option<&str>,
+        case_insensitive: bool,
+    ) -> Result<Option<String>> {
+        let extract = format!("json_extract(properties, '$.{}.{}')", node_type, field);
+        let (lhs, needle) = if case_insensitive {
+            // SQLite LOWER() folds ASCII only, so a value differing solely in the
+            // case of a non-ASCII character would not be matched here. Acceptable:
+            // this backs a suggestion (never a hard block) and the first consumer
+            // (email) is effectively ASCII.
+            (format!("LOWER({})", extract), value.to_lowercase())
+        } else {
+            (extract, value.to_string())
+        };
+
+        // An absent exclude_id compares against the empty string, which no node id
+        // equals, so nothing is excluded.
+        let exclude = exclude_id.unwrap_or("").to_string();
+
+        let sql = format!(
+            "SELECT id FROM node WHERE node_type = ?1 AND {} = ?2 AND id != ?3 \
+             AND lifecycle_status = 'active' LIMIT 1",
+            lhs
+        );
+
+        let mut rows = self
+            .db
+            .query(
+                &sql,
+                libsql::params![node_type.to_string(), needle, exclude],
+            )
+            .await
+            .context("Failed to search for conflicting unique value")?;
+
+        if let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod find_conflicting_unique_tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn bare_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = Arc::new(SqliteStore::new(db_path).await?);
+        Ok((store, temp_dir))
+    }
+
+    /// Create a person with a namespaced email property and the given lifecycle
+    /// status, returning its id.
+    async fn make_person(
+        store: &SqliteStore,
+        email: &str,
+        lifecycle_status: &str,
+    ) -> Result<String> {
+        let mut node = Node::new(
+            "person".to_string(),
+            email.to_string(),
+            json!({ "person": { "email": email } }),
+        );
+        node.lifecycle_status = lifecycle_status.to_string();
+        let id = node.id.clone();
+        store.create_node(node, None, None).await?;
+        Ok(id)
+    }
+
+    #[tokio::test]
+    async fn exact_match_is_a_conflict() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let existing = make_person(&store, "a@x.com", "active").await?;
+
+        let hit = store
+            .find_conflicting_unique("person", "email", "a@x.com", None, false)
+            .await?;
+        assert_eq!(hit, Some(existing));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn case_insensitive_match_is_a_conflict() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let existing = make_person(&store, "a@x.com", "active").await?;
+
+        // Different casing must still collide when case_insensitive is set.
+        let hit = store
+            .find_conflicting_unique("person", "email", "A@x.com", None, true)
+            .await?;
+        assert_eq!(hit, Some(existing));
+
+        // ...and must NOT collide under case-sensitive comparison.
+        let miss = store
+            .find_conflicting_unique("person", "email", "A@x.com", None, false)
+            .await?;
+        assert_eq!(miss, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn no_match_returns_none() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_person(&store, "a@x.com", "active").await?;
+
+        let miss = store
+            .find_conflicting_unique("person", "email", "b@x.com", None, true)
+            .await?;
+        assert_eq!(miss, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn excluding_self_returns_none() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let existing = make_person(&store, "a@x.com", "active").await?;
+
+        // The only node with this value is excluded, so there is no conflict.
+        let miss = store
+            .find_conflicting_unique("person", "email", "a@x.com", Some(&existing), false)
+            .await?;
+        assert_eq!(miss, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn archived_duplicate_is_not_a_conflict() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_person(&store, "a@x.com", "archived").await?;
+
+        // Only active nodes count toward uniqueness suggestions.
+        let miss = store
+            .find_conflicting_unique("person", "email", "a@x.com", None, false)
+            .await?;
+        assert_eq!(miss, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn different_node_type_is_not_matched() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_person(&store, "a@x.com", "active").await?;
+
+        // The predicate is bound to node_type, so a query for a different type
+        // never matches a person's value.
+        let miss = store
+            .find_conflicting_unique("organization", "email", "a@x.com", None, false)
+            .await?;
+        assert_eq!(miss, None);
+        Ok(())
+    }
 }

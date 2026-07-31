@@ -453,6 +453,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         }
     }
 
@@ -509,6 +511,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         };
         let status_field = SchemaField {
             name: "status".to_string(),
@@ -533,6 +537,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         };
         let fields = vec![name_field, status_field];
         let props = serde_json::json!({"name": "Data Migration", "status": "on_hold"});
@@ -585,6 +591,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         };
         let props = serde_json::json!({"status": "shared"});
         assert_eq!(
