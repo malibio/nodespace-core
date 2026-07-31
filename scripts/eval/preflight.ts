@@ -207,11 +207,14 @@ function readServedDatabasePath(env: EvalEnv): string {
 
 /**
  * Seeded node types whose content the local agent's guidance is assembled
- * from. Cross-referenced against `seed_nodes_from_templates`'s callers in
- * packages/core/src/services/node_service/mod.rs — update here if a new
- * seeded type is added.
+ * from. Cross-referenced against `seed_agent_nodes` in
+ * packages/daemon/src/services/assembly.rs, which seeds
+ * `PromptAssembler::seed_prompt_nodes()` (root_node_type "agent-guidance" —
+ * NOT "prompt"; the type was renamed under ADR-064/#1699's markdown-children
+ * refactor) and `seed_skill_nodes()` (root_node_type "skill"). Update here if
+ * a seeded root type changes again.
  */
-const SEEDED_GUIDANCE_TYPES = ["prompt", "skill"];
+const SEEDED_GUIDANCE_TYPES = ["agent-guidance", "skill"];
 
 /**
  * Read back which seeded prompt/skill content the daemon is actually serving.

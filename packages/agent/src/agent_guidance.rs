@@ -182,9 +182,12 @@ mod tests {
         // The seeded prompt nodes ARE the base system prompt. Some interpolate
         // the constants above, but others carry their own literal text that
         // nothing else covers.
-        for t in crate::prompt_assembler::PromptAssembler::seed_prompt_nodes() {
+        for t in crate::prompt_assembler::PromptAssembler::seed_agent_guidance_nodes() {
             if !t.markdown_content.is_empty() {
-                corpus.push(("prompt_assembler::seed_prompt_nodes", t.markdown_content));
+                corpus.push((
+                    "prompt_assembler::seed_agent_guidance_nodes",
+                    t.markdown_content,
+                ));
             }
         }
         corpus
