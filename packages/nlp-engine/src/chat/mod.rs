@@ -509,28 +509,10 @@ impl ChatEngine {
 
         // When tools are offered, `apply_chat_template` (via llama.cpp's
         // `common_chat_templates_apply`) already computed a tool-call grammar
-        // scoped to exactly the active tool set for this turn — the same
-        // grammar llama.cpp's own CLI/server builds via `common_sampler_init`.
-        // A turn with no tools produces `grammar: None` (see the `has_tools`
-        // branches in llama.cpp's `common_chat.cpp`), so plain chat is
-        // unaffected.
-        //
-        // The grammar is applied as REJECTION SAMPLING (`grammar_first=false`
-        // in upstream's terms — see `common_sampler_sample` in
-        // `common/sampling.cpp`, which this mirrors exactly): each token is
-        // first sampled from `sampler` with no grammar involved; the grammar
-        // only gets a say if that pick turns out invalid, in which case a
-        // second pass applies the grammar to the logits before resampling.
-        // This is deliberately NOT "grammar-first" (grammar applied to every
-        // token before the base chain) — that mode was tried and it crashes:
-        // llama.cpp's lazy-grammar trigger-replay path
-        // (`llama_grammar_accept_impl` in `llama-grammar.cpp`) has a
-        // `GGML_ASSERT(!stacks.empty())` (marked `// REVIEW` upstream) that a
-        // live E4B run hit reproducibly once the grammar was engaged on every
-        // token from the start. Rejection sampling is upstream's own default
-        // and exercises the grammar sampler far less aggressively, which is
-        // the safer-by-construction choice given the assert is a hard,
-        // uncatchable process abort on the Rust side.
+        // scoped to exactly the active tool set for this turn. A turn with no
+        // tools produces `grammar: None`, so plain chat is unaffected. Applied
+        // below via `sample_with_grammar_rejection` — see its doc comment for
+        // why this is rejection sampling rather than grammar-first.
         let mut grammar_sampler = build_grammar_sampler(&llama.model, &tmpl_result)?;
 
         // --- Initialize llama.cpp's native streaming tool-call parser ---
@@ -1061,12 +1043,17 @@ fn sample_with_grammar_rejection(
     grammar_sampler: Option<&mut LlamaSampler>,
 ) -> llama_cpp_2::token::LlamaToken {
     let Some(grammar_sampler) = grammar_sampler else {
-        let token = chain.sample(ctx, idx);
-        chain.accept(token);
-        return token;
+        // `chain.sample()` wraps `llama_sampler_sample`, which already calls
+        // `llama_sampler_accept` internally (see `llama-sampler.cpp`) before
+        // returning — an explicit `chain.accept()` here would double-apply
+        // penalties' ring buffer and frequency count for this token.
+        return chain.sample(ctx, idx);
     };
 
-    // First pass: sample without the grammar.
+    // First pass: sample without the grammar. `chain`'s own accept already
+    // happened inside `sample()` (see above) — only the grammar (which did
+    // not see this token yet) needs an explicit accept, and only once the
+    // token is confirmed final below.
     let token = chain.sample(ctx, idx);
 
     // Check validity by applying the grammar to a single-candidate array —
@@ -1083,7 +1070,6 @@ fn sample_with_grammar_rejection(
 
     if is_valid {
         grammar_sampler.accept(token);
-        chain.accept(token);
         return token;
     }
 
