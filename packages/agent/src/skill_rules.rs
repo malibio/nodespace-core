@@ -69,6 +69,21 @@ pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
     prose: "define only type-specific fields — don't add a `name` or `title` field; every node already has a built-in content/title field.",
 };
 
+/// Measured on its own (isolated daemon, live model) to have ZERO effect on
+/// the #1846 contamination this rule targets — the rule was confirmed present
+/// in the seeded prompt, yet the model still copied an unrelated schema's
+/// fields verbatim. The actual fix is `RELEVANT_ENTITY_TYPES_HEADER`'s inline
+/// anti-copy clause (`context_ops.rs`), which measured a real reduction (4/5
+/// clean trials vs. 0/1 for this rule alone). Kept anyway as defense-in-depth
+/// — cheap, doesn't conflict with anything, may matter for other models or
+/// paths the live-daemon trials didn't cover — but it is not a component of
+/// that measured 4/5 result, and should not be credited as one.
+pub const FIELDS_FROM_REQUEST_ONLY: SchemaRule = SchemaRule {
+    id: "fields-from-request-only",
+    imperative: "FIELD SOURCE: derive every field from what the user's OWN request describes wanting to track — never from another schema shown in RELEVANT ENTITY TYPES. That block lists types that already exist so you don't recreate them; it is not a shape to copy fields from for a new, different type. A new type about albums does not inherit fields from an unrelated equipment or invoice schema just because one is listed there.",
+    prose: "**Field source:** derive every field from what the user's own request describes wanting to track — never from another schema shown in the entity-types context. That listing exists so you don't recreate a type that already exists; it is not a shape to copy fields from for a new, unrelated type.",
+};
+
 pub const NAME_PLACEHOLDER_EXCEPTION: SchemaRule = SchemaRule {
     id: "name-placeholder-exception",
     imperative: "EXCEPTION: if you use a 'name' placeholder in title_template (e.g. \"{name} ({status})\"), you MUST define 'name' as a text field so title generation works.",
@@ -105,6 +120,7 @@ pub const SCHEMA_RULES: &[SchemaRule] = &[
     SCHEMA_ALREADY_EXISTS,
     EDIT_DONT_RECREATE,
     NO_NAME_TITLE_FIELD,
+    FIELDS_FROM_REQUEST_ONLY,
     NAME_PLACEHOLDER_EXCEPTION,
     ENUM_FORMAT,
     RELATIONSHIP_VS_FIELD,

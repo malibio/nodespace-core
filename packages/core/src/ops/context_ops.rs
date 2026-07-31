@@ -89,6 +89,35 @@ const MAX_SEMANTIC_SCHEMAS: usize = 5;
 /// context adds candidates rather than displacing the right one.
 const BLENDED_HISTORY_TURNS: usize = 2;
 
+/// Heading for a rendered "existing schemas" listing, shared by every site
+/// that shows the model retrieved/candidate schema metadata.
+///
+/// The anti-copy clause is inline in the heading — the same place the model
+/// reads the fields it must not reuse — rather than only in resident/skill
+/// prose elsewhere in the prompt. A prose-only rule measured no effect: the
+/// model still copied an unrelated schema's fields verbatim onto a new type
+/// even with a rule against it present in the Schema Creation skill
+/// instructions (#1846).
+///
+/// A single constant, not independently-worded copies at each call site: this
+/// heading is rendered at two of them (this module's resident workspace
+/// context, and `local_agent::routing`'s Stage-2 candidate metadata), and an
+/// earlier version of this fix touched only one, leaving the other to
+/// reinforce the exact contamination the first was changed to guard against.
+/// A shared constant makes that class of drift a compile error instead of a
+/// silent one.
+///
+/// Residual: even with the clause present at both sites, contamination is
+/// reduced but not eliminated on the locked 4B model (gemma-4-e4b-q4km) — 4 of
+/// 5 independent measured trials were clean, 1 of 5 was not. A fully
+/// deterministic fix needs context assembly to depend on the routing
+/// decision (e.g. omitting other custom-type schemas' fields when the turn is
+/// routed toward `create_schema`), which is a larger change since today's
+/// context block is assembled before ADR-038's Stage 2 routing runs — tracked
+/// as a follow-up rather than blocking this measured improvement on it.
+pub const RELEVANT_ENTITY_TYPES_HEADER: &str =
+    "RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their fields onto a new type):";
+
 /// Character budget applied to each blended prior turn.
 ///
 /// A prior turn contributes context, not content: all it has to supply is the
@@ -334,9 +363,9 @@ impl WorkspaceContext {
 
         // Relevant schemas section (query-matched via semantic retrieval)
         if !self.relevant_schemas.is_empty() {
-            let header = "\nRELEVANT ENTITY TYPES:\n";
+            let header = format!("\n{RELEVANT_ENTITY_TYPES_HEADER}\n");
             if out.len() + header.len() <= max_chars {
-                out.push_str(header);
+                out.push_str(&header);
                 for schema in &self.relevant_schemas {
                     // Rendered through the shared descriptor so this block and
                     // the skill-routing one cannot drift: a field added to
@@ -493,7 +522,7 @@ mod tests {
         assert!(output.contains("Task completion"));
 
         // No schemas when relevant_schemas is empty
-        assert!(!output.contains("RELEVANT ENTITY TYPES:"));
+        assert!(!output.contains("RELEVANT ENTITY TYPES"));
     }
 
     #[test]
@@ -502,7 +531,7 @@ mod tests {
         ctx.relevant_schemas = vec![sample_schema("customer", "Customer", &["name", "email"])];
         let output = ctx.format_for_prompt(4000);
 
-        assert!(output.contains("RELEVANT ENTITY TYPES:"));
+        assert!(output.contains(RELEVANT_ENTITY_TYPES_HEADER));
         assert!(output.contains("customer: Customer"));
         // Each field carries its type, so the node-creation guidance's
         // instruction to read field names *and* types has a referent.
@@ -612,8 +641,9 @@ mod tests {
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("invoice: Invoice\n"));
-        // No parentheses when there are no fields
-        assert!(!output.contains("("));
+        // No field-descriptor parentheses when there are no fields (the header's
+        // own parenthetical anti-copy clause is unrelated to this).
+        assert!(!output.contains("Invoice ("));
     }
 
     #[test]

@@ -343,8 +343,12 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "8c",
       scenario: "8c. Instance: first type",
+      // minProperties: 1 requires the artist this prompt supplies to actually
+      // reach storage. Without it, create_node persisting a bare shell (no
+      // artist property — unwinnable if album_tracker's schema itself has no
+      // artist field, see #1846) scores identically to one that recorded it.
       prompt: "Put down Kind of Blue, it's by Miles Davis",
-      expect: { kind: "toolOnce", tool: "create_node" },
+      expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
     },
     {
       id: "8d",
