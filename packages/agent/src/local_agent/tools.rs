@@ -1102,6 +1102,49 @@ impl Tool {
     pub fn duplicate_is_destructive(self) -> bool {
         matches!(self.write_semantics(), WriteSemantics::DuplicableWrite)
     }
+
+    /// Whether this tool has a required parameter whose description sends the
+    /// model to the `RELEVANT ENTITY TYPES` block that only Stage-2 routing
+    /// (`routing::render_candidates_for_prompt`) injects.
+    ///
+    /// An exhaustive match, not a list, so a future tool with the same
+    /// dependency cannot silently default to "safe on fail-open": the
+    /// compiler makes the author state whether the tool's required
+    /// parameters stand on their own.
+    ///
+    /// `resolve_query`'s `node_type` is `required` and its description reads
+    /// "copy the id exactly from the RELEVANT ENTITY TYPES block" — on the
+    /// fail-open path (no candidate cleared the Stage-2 score gate) that
+    /// block never renders, so the model is directed to copy from context it
+    /// cannot see. `search_nodes` carries the identical wording but
+    /// `node_type` there is optional, so omitting it is a valid fallback;
+    /// only a *required* dependency makes the tool unusable without routing.
+    pub fn requires_routed_guidance(self) -> bool {
+        match self {
+            Tool::ResolveQuery => true,
+            Tool::SearchNodes
+            | Tool::SearchSemantic
+            | Tool::GetNode
+            | Tool::CreateNode
+            | Tool::UpdateNode
+            | Tool::CreateSchema
+            | Tool::UpdateSchema
+            | Tool::UpdateTaskStatus
+            | Tool::CreateRelationship
+            | Tool::GetRelatedNodes
+            | Tool::SearchSkills
+            | Tool::DeleteNode
+            | Tool::CreateNodesFromMarkdown => false,
+        }
+    }
+}
+
+/// Whether a tool's required parameters depend on Stage-2 routing guidance
+/// that is absent on the fail-open path, by wire name. Computed from the
+/// registry; an unrecognised name is not excluded — `stage2_tools`'s
+/// existing empty-whitelist fallback already handles that case.
+pub fn requires_routed_guidance_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::requires_routed_guidance)
 }
 
 /// What a repeat of a tool call means for graph state.
@@ -2451,6 +2494,32 @@ mod tests {
             embedding_service: Arc::new(RwLock::new(None)),
             inference_engine: None,
         }
+    }
+
+    // -- Tool::requires_routed_guidance --
+
+    #[test]
+    fn only_resolve_query_requires_routed_guidance() {
+        // resolve_query's node_type is a required parameter whose description
+        // depends on the RELEVANT ENTITY TYPES block Stage-2 routing injects
+        // (#1840). Every other registered tool's required parameters must
+        // stand on their own regardless of routing outcome.
+        for t in Tool::ALL {
+            let expected = matches!(t, Tool::ResolveQuery);
+            assert_eq!(
+                t.requires_routed_guidance(),
+                expected,
+                "{:?}.requires_routed_guidance() should be {expected}",
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn requires_routed_guidance_tool_resolves_by_wire_name() {
+        assert!(requires_routed_guidance_tool("resolve_query"));
+        assert!(!requires_routed_guidance_tool("search_nodes"));
+        assert!(!requires_routed_guidance_tool("not_a_real_tool"));
     }
 
     // -- Helper: test truncation --
