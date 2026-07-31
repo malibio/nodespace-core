@@ -259,7 +259,22 @@ impl WorkspaceContext {
                         .fields
                         .iter()
                         .map(|f| {
-                            let mut descriptor = format!("{}: {}", f.name, f.field_type);
+                            // Enum fields carry their legal values: a bare
+                            // `status: enum` tells the model a value is wanted
+                            // but not which ones the schema will accept, so it
+                            // invents one and the write is rejected.
+                            let values: Vec<&str> = f
+                                .core_values
+                                .iter()
+                                .chain(f.user_values.iter())
+                                .flatten()
+                                .map(|v| v.value.as_str())
+                                .collect();
+                            let mut descriptor = if values.is_empty() {
+                                format!("{}: {}", f.name, f.field_type)
+                            } else {
+                                format!("{}: {} ({})", f.name, f.field_type, values.join(", "))
+                            };
                             if f.required.unwrap_or(false) {
                                 descriptor.push_str(", required");
                             }
@@ -425,6 +440,45 @@ mod tests {
         // Fields without the flag are not marked required.
         assert!(output.contains("reference: string;"));
         assert!(!output.contains("reference: string, required"));
+    }
+
+    #[test]
+    fn format_for_prompt_renders_enum_values() {
+        use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
+
+        let mut schema = sample_schema("ticket", "Ticket", &[]);
+        schema.fields.push(SchemaField {
+            name: "status".to_string(),
+            field_type: "enum".to_string(),
+            protection: SchemaProtectionLevel::User,
+            core_values: Some(vec![EnumValue {
+                value: "open".to_string(),
+                label: "Open".to_string(),
+            }]),
+            user_values: Some(vec![EnumValue {
+                value: "blocked".to_string(),
+                label: "Blocked".to_string(),
+            }]),
+            indexed: false,
+            required: Some(true),
+            extensible: None,
+            default: None,
+            description: None,
+            item_type: None,
+            fields: None,
+            item_fields: None,
+        });
+
+        let mut ctx = sample_context();
+        ctx.relevant_schemas = vec![schema];
+        let output = ctx.format_for_prompt(4000);
+
+        // Core and user values both listed, so the model picks a legal one
+        // instead of inventing a value the write path will reject.
+        assert!(
+            output.contains("status: enum (open, blocked), required"),
+            "got: {output}"
+        );
     }
 
     #[test]
