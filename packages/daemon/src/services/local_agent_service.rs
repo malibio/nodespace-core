@@ -86,11 +86,47 @@ type TurnTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 /// stalls cannot hold up the model load that awaits it.
 const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Bound on the routing-reliability probe run during an OpenAI-compat model
+/// load (see `nodespace_agent::local_agent::routing_probe`).
+///
+/// The request itself intentionally carries no `max_tokens` cap — it mirrors
+/// production's real Stage-2 tool-calling request, which is uncapped for the
+/// same reason (a truncated tool-call argument is invalid JSON). A tool call,
+/// when the model makes one, fires within the first handful of tokens, so a
+/// normal probe resolves in seconds; this timeout exists only to bound the
+/// pathological case (a model that answers in prose at length instead of
+/// calling a tool) rather than to change what gets measured. On timeout the
+/// probe is treated as an engine error — unmeasured, not a suppression
+/// verdict — so model loading is never blocked past this bound.
+const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
     model_manager: Arc<GgufModelManager>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
+    /// Whether Stage-2 candidate injection is disabled for the currently
+    /// active model, from a cached routing-probe verdict (see
+    /// `nodespace_agent::local_agent::routing_probe`).
+    ///
+    /// `false` unless an OpenAI-compat model load's probe found suppression.
+    /// The native/GGUF path is never probed here — ADR-056 already measures
+    /// the locked native model clean, so probing it on every load would pay a
+    /// generation for a question already answered.
+    active_model_routing_disabled: Mutex<bool>,
+    /// The `(base_url, served_model)` pair `active_model_routing_disabled`
+    /// was actually measured against, or `None` before any OpenAI-compat load.
+    ///
+    /// `model_id` alone (what `replace_engine_if_changed`'s `active_model_id`
+    /// tracks) is not a reliable cache key here: a single-model server config
+    /// with no `/models` discovery resolves to the bare `openai-compat:<uuid>`
+    /// model id regardless of what the config's `model` field is set to, so
+    /// editing that field in Settings changes the served model without
+    /// changing `model_id` or tripping `replace_engine_if_changed`'s "already
+    /// loaded" short-circuit. Keying on the pair that was actually probed
+    /// (not the opaque id used for engine-swap dedup) means an in-place model
+    /// edit is detected even when the engine-swap path sees no change.
+    active_model_routing_key: Mutex<Option<(String, String)>>,
     /// The loaded model's geometry, captured at engine-swap time.
     ///
     /// Read by `get_status` instead of calling `model_spec()`, which reaches a
@@ -147,6 +183,8 @@ impl LocalAgentServiceImpl {
                 model_manager,
                 node_service,
                 active_model_id: Mutex::new(None),
+                active_model_routing_disabled: Mutex::new(false),
+                active_model_routing_key: Mutex::new(None),
                 loaded_model_spec: Mutex::new(None),
                 model_spec_snapshot_timeout: MODEL_SPEC_SNAPSHOT_TIMEOUT,
                 embedding_service,
@@ -278,6 +316,8 @@ impl LocalAgentServiceImpl {
         ));
         drop(guard);
         *self.inner.active_model_id.lock().await = None;
+        *self.inner.active_model_routing_disabled.lock().await = false;
+        *self.inner.active_model_routing_key.lock().await = None;
         *self.inner.loaded_model_spec.lock().await = None;
         tracing::debug!("LocalAgentServiceImpl: inference engine reset to NoOp");
     }
@@ -445,6 +485,15 @@ impl LocalAgentServiceImpl {
 
         if let Ok(ctx_str) = ctx {
             service.set_session_context(&session_id, ctx_str).await;
+        }
+
+        // Carry the currently active model's cached routing-probe verdict
+        // onto this session (see `load_model_and_collect_events`'s OpenAI-compat
+        // branch, where the probe runs and this flag is set).
+        if *self.inner.active_model_routing_disabled.lock().await {
+            service
+                .set_session_routing_disabled(&session_id, true)
+                .await;
         }
 
         // Seed the deterministic duplicate guard with what earlier turns wrote
@@ -1143,14 +1192,110 @@ impl LocalAgentServiceImpl {
                 // single-model local servers generally ignore it.
                 None => "default".to_string(),
             };
-            let engine = OpenAiCompatInferenceEngine::new(
+            let engine = Arc::new(OpenAiCompatInferenceEngine::new(
                 config.base_url.clone(),
                 config.api_key.clone(),
-                model,
-            );
+                model.clone(),
+            ));
             let swapped = self
-                .replace_engine_if_changed(model_id, Arc::new(engine))
+                .replace_engine_if_changed(model_id, engine.clone())
                 .await;
+
+            // Routing-reliability probe (Option C, issue #1830): the matrix in
+            // `tests/live_openai_compat_routing.rs` found Stage-2 candidate
+            // injection suppresses tool-calling on some served models,
+            // independent of the block's content, and that this is a
+            // per-model property rather than a native-vs-served split. Run
+            // once per (base_url, model) and cache the verdict on the config
+            // rather than paying a generation on every ambiguous turn.
+            //
+            // Keyed on the resolved `(base_url, model)` pair, NOT on `swapped`.
+            // A single-model server config with no `/models` discovery
+            // resolves to the same `model_id` regardless of the config's
+            // `model` field, so editing that field in Settings can change the
+            // served model without `replace_engine_if_changed` seeing a
+            // change — `swapped` would then wrongly read as "still the model
+            // last probed."
+            let this_key = (config.base_url.clone(), model.clone());
+            let cached_key_matches =
+                *self.inner.active_model_routing_key.lock().await == Some(this_key.clone());
+            // `None` here means "the probe did not run / could not complete
+            // this load" — distinct from a `Some(false)` verdict. Only a
+            // `Some` result updates `active_model_routing_key`, so an errored
+            // probe is retried on the very next load rather than being
+            // mistaken later for an already-probed model.
+            let verdict: Option<bool> = if !swapped && cached_key_matches {
+                // Same engine AND the same (base_url, model) already probed
+                // this load — the cached verdict on `self.inner` still
+                // describes this model; no need to touch disk or re-probe.
+                let disabled = *self.inner.active_model_routing_disabled.lock().await;
+                Some(!disabled)
+            } else if let Some(cached) = config.routing_ok.get(&model).copied() {
+                // Keyed by the served model, not the config as a whole — one
+                // config can discover several models (see the field's doc
+                // comment on `OpenAiCompatConfig::routing_ok`), each with its
+                // own independent verdict.
+                Some(cached)
+            } else {
+                let probe_result = match tokio::time::timeout(
+                    ROUTING_PROBE_TIMEOUT,
+                    nodespace_agent::local_agent::routing_probe::probe_routing_ok(engine.as_ref()),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(nodespace_agent::agent_types::InferenceError::Engine(
+                        format!("routing probe exceeded {ROUTING_PROBE_TIMEOUT:?}"),
+                    )),
+                };
+                match probe_result {
+                    Ok(routing_ok) => {
+                        if !routing_ok {
+                            tracing::warn!(
+                                model_id,
+                                base_url = %config.base_url,
+                                served_model = %model,
+                                "Routing probe: Stage-2 candidate injection suppresses \
+                                 tool-calling on this served model. Disabling injection for \
+                                 this model; routing falls back to the full tool surface."
+                            );
+                        }
+                        if let Err(e) =
+                            crate::services::settings_service::record_routing_probe_verdict(
+                                &self.inner.daemon_config_path,
+                                config_id,
+                                &config.base_url,
+                                &model,
+                                routing_ok,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                model_id,
+                                "failed to persist routing probe verdict; will re-probe next load"
+                            );
+                        }
+                        Some(routing_ok)
+                    }
+                    Err(e) => {
+                        // An unmeasured model is not the same as a suppressed
+                        // one — do not cache a guess, and do not disable
+                        // routing on an engine error that says nothing about
+                        // whether injection is safe.
+                        tracing::warn!(
+                            error = %e,
+                            model_id,
+                            "routing probe failed to complete; leaving routing enabled for this \
+                             load"
+                        );
+                        None
+                    }
+                }
+            };
+            let routing_disabled = !verdict.unwrap_or(true);
+            *self.inner.active_model_routing_disabled.lock().await = routing_disabled;
+            *self.inner.active_model_routing_key.lock().await = verdict.map(|_| this_key.clone());
 
             events.push(ModelLoadProgressEvent {
                 event_type: "ready".to_string(),
@@ -1318,6 +1463,11 @@ impl LocalAgentServiceImpl {
 
         self.replace_engine(Arc::new(engine)).await;
         *self.inner.active_model_id.lock().await = Some(model_id.to_string());
+        // Native/GGUF path: never probed here (see the field's doc comment),
+        // and a previous session's OpenAI-compat probe verdict must not leak
+        // onto this model.
+        *self.inner.active_model_routing_disabled.lock().await = false;
+        *self.inner.active_model_routing_key.lock().await = None;
 
         events.push(ModelLoadProgressEvent {
             event_type: "ready".to_string(),
@@ -2591,6 +2741,94 @@ api_key = "sk-test"
             .expect("a ready event should be emitted");
         assert_eq!(ready_event.engine_swapped, Some(true));
         assert!(events.iter().all(|e| e.event_type != "error"));
+    }
+
+    /// Regression for the gap flagged on issue #1830: a single-model server
+    /// config (no `/models` discovery) resolves every load to the same bare
+    /// `openai-compat:<uuid>` model id regardless of the config's `model`
+    /// field, so `replace_engine_if_changed`'s "already loaded" check cannot
+    /// see an in-place edit to that field. The routing-probe cache must not
+    /// piggyback on that check, or an edited config would keep serving a
+    /// verdict measured against the model it used to point at.
+    ///
+    /// This does not exercise real suppression detection (both base_urls
+    /// point at nothing, so the probe always errors — asserted as
+    /// `routing_disabled: None` below, i.e. no ready-event field asserts a
+    /// verdict either way). It exercises only that the second load re-probes
+    /// rather than trusting the first load's cached state, which no assertion
+    /// here could otherwise distinguish from a leaked stale verdict.
+    #[tokio::test]
+    async fn editing_model_on_an_undiscovered_config_forces_a_reprobe() {
+        let (svc, _node_service, tempdir) = test_service().await;
+        let config_path = tempdir.path().join("daemon.toml");
+        let toml = r#"
+[[openai_compat.configs]]
+id = "abc-123"
+name = "My Endpoint"
+base_url = "http://127.0.0.1:9999/v1"
+api_key = ""
+model = "model-a"
+"#;
+        tokio::fs::write(&config_path, toml)
+            .await
+            .expect("write daemon.toml");
+
+        // First load: no discovery segment in the id, so `model` resolves
+        // from the config's pinned field.
+        let first = svc
+            .load_model_and_collect_events("openai-compat:abc-123")
+            .await;
+        assert!(
+            first.iter().any(|e| e.event_type == "ready"),
+            "first load should still reach ready even though the probe cannot reach anything: \
+             {first:?}"
+        );
+        let key_after_first = svc.inner.active_model_routing_key.lock().await.clone();
+        assert_eq!(
+            key_after_first, None,
+            "an errored probe must not record a routing key, or a later load would treat this \
+             unmeasured model as already probed"
+        );
+
+        // Edit `model` in place — same config id, same base_url, different
+        // served model. The Settings GUI writes exactly this shape.
+        let edited_toml = r#"
+[[openai_compat.configs]]
+id = "abc-123"
+name = "My Endpoint"
+base_url = "http://127.0.0.1:9999/v1"
+api_key = ""
+model = "model-b"
+"#;
+        tokio::fs::write(&config_path, edited_toml)
+            .await
+            .expect("rewrite daemon.toml");
+
+        // Second load uses the SAME model_id string ("openai-compat:abc-123")
+        // as the first — this is the crux of the regression. If the routing
+        // cache keyed on `swapped` (which will be `false`: same model_id,
+        // engine already active), it would skip straight to the stale
+        // `self.inner` state instead of consulting `config.routing_ok` or
+        // re-probing.
+        let second = svc
+            .load_model_and_collect_events("openai-compat:abc-123")
+            .await;
+        assert!(
+            second.iter().any(|e| e.event_type == "ready"),
+            "second load should also reach ready: {second:?}"
+        );
+
+        // Both loads failed to reach anything (nothing listens on :9999), so
+        // neither should have recorded a routing key — proving the second
+        // load actually re-evaluated against "model-b" rather than silently
+        // reusing whatever verdict (if any) "model-a" had produced.
+        let key_after_second = svc.inner.active_model_routing_key.lock().await.clone();
+        assert_eq!(
+            key_after_second, None,
+            "an errored re-probe on the edited model must not record a key either — if this were \
+             Some((base_url, \"model-a\")) it would mean the second load reused the first load's \
+             state instead of re-evaluating for model-b"
+        );
     }
 
     // -- Cross-turn duplicate-write guard --------------------------------

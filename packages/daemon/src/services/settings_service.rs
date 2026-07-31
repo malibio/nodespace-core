@@ -4,6 +4,7 @@
 //! Display preferences (theme, render_markdown) are UI-only and live in the
 //! Tauri process — this service does not touch them.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -47,6 +48,25 @@ pub struct OpenAiCompatConfig {
     /// from `name`, which is only a cosmetic UI label.
     #[serde(default)]
     pub model: String,
+    /// Cached verdicts from the routing-reliability probe (see
+    /// `nodespace_agent::local_agent::routing_probe`), keyed by the served
+    /// model each entry was measured against.
+    ///
+    /// A single config can back many served models: `/models` discovery lets
+    /// one Ollama-style endpoint expose several (`openai-compat:<uuid>:<model>`
+    /// — see `parse_openai_compat_id`), each probed and cached independently.
+    /// A single scalar here would let one model's verdict leak onto another's
+    /// load — a config discovering both `mistral:7b` (suppressed) and
+    /// `llama3.1:8b` (clean) must not let the first probe's `false` disable
+    /// injection for the second, which was never measured.
+    ///
+    /// A model absent from this map means "never probed" — e.g. a config
+    /// created before this field existed, or a served model whose load has
+    /// not completed since. Not part of the gRPC `OpenAiCompatConfig`
+    /// message: this is daemon-owned cache state derived from a live probe,
+    /// not something the Settings GUI writes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub routing_ok: BTreeMap<String, bool>,
 }
 
 impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfig {
@@ -57,6 +77,12 @@ impl From<ProtoOpenAiCompatConfig> for OpenAiCompatConfig {
             base_url: c.base_url,
             api_key: c.api_key,
             model: c.model,
+            // The gRPC message carries no probe verdicts — only the Settings
+            // GUI writes through this conversion, and `set_open_ai_compat_configs`
+            // is responsible for carrying still-valid cached verdicts forward
+            // from the config it replaces, rather than this `From` impl
+            // inventing any.
+            routing_ok: BTreeMap::new(),
         }
     }
 }
@@ -175,6 +201,65 @@ pub async fn find_openai_compat_config(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(anyhow::anyhow!("failed to read daemon config: {}", e)),
     }
+}
+
+/// Persist a routing-probe verdict for one OpenAI-compatible config.
+///
+/// Called by `LocalAgentService` after a model load runs the routing probe —
+/// not through `SettingsServiceImpl`'s RPC lock, since the probe runs outside
+/// any RPC. This is a best-effort, unlocked read-modify-write against the
+/// same file `set_open_ai_compat_configs` writes under its own `write_lock`;
+/// the two are not coordinated. The realistic worst case is not merely a lost
+/// probe verdict (cheap — the next model load re-probes) but a lost *user*
+/// edit: if a Settings save and this write interleave, whichever writes last
+/// overwrites the file wholesale, discarding the other's change. The window
+/// is small (both are sub-millisecond file operations, and a Settings save
+/// concurrent with a model load is rare) and nothing here is data the user
+/// can't re-enter, so this is accepted rather than worth a cross-service
+/// lock — but it is a lost edit, not just a lost cache entry, if it happens.
+/// No-ops if the config was deleted or its `base_url` no longer matches what
+/// was probed — the verdict would no longer describe the config it was
+/// measured against.
+pub async fn record_routing_probe_verdict(
+    config_path: &std::path::Path,
+    id: &str,
+    base_url: &str,
+    model: &str,
+    routing_ok: bool,
+) -> anyhow::Result<()> {
+    let contents = match tokio::fs::read_to_string(config_path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(anyhow::anyhow!("failed to read daemon config: {e}")),
+    };
+    let mut config: DaemonConfig = toml::from_str(&contents)
+        .map_err(|e| anyhow::anyhow!("failed to parse daemon config: {e}"))?;
+
+    let Some(entry) = config.openai_compat.configs.iter_mut().find(|c| c.id == id) else {
+        return Ok(());
+    };
+    // Matched on `base_url` only, not `entry.model` — `model` here is the
+    // served model actually probed (possibly one of several `/models`
+    // discovers through this config), which need not equal the config's
+    // pinned `model` field at all. The map entry is keyed by `model`, so
+    // writing under the probed model's own key is what keeps multiple
+    // served models behind one config from colliding.
+    if entry.base_url != base_url {
+        return Ok(());
+    }
+    entry.routing_ok.insert(model.to_string(), routing_ok);
+
+    if let Some(parent) = config_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to create config directory: {e}"))?;
+    }
+    let serialized = toml::to_string_pretty(&config)
+        .map_err(|e| anyhow::anyhow!("failed to serialize daemon config: {e}"))?;
+    tokio::fs::write(config_path, serialized)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to write daemon config: {e}"))?;
+    Ok(())
 }
 
 pub struct SettingsServiceImpl {
@@ -308,10 +393,29 @@ impl GrpcSettingsService for SettingsServiceImpl {
         let _guard = self.write_lock.lock().await;
 
         let mut config = self.read_config().await?;
+        let previous = std::mem::take(&mut config.openai_compat.configs);
         config.openai_compat.configs = req
             .configs
             .into_iter()
-            .map(OpenAiCompatConfig::from)
+            .map(|proto| {
+                let mut c = OpenAiCompatConfig::from(proto);
+                // The Settings GUI round-trips every config through this RPC on
+                // every save (even one editing an unrelated config), which would
+                // otherwise erase every cached probe verdict this id already
+                // earned. Carry the whole map forward when `base_url` is
+                // unchanged — each entry is already keyed by the served model
+                // it was measured against, so entries for models unaffected by
+                // whatever the user edited (e.g. the config's pinned `model`
+                // field, which only matters for a non-discovery load) stay
+                // valid. A `base_url` change means every entry described a
+                // different endpoint and none of them apply anymore.
+                if let Some(prev) = previous.iter().find(|p| p.id == c.id) {
+                    if prev.base_url == c.base_url {
+                        c.routing_ok = prev.routing_ok.clone();
+                    }
+                }
+                c
+            })
             .collect();
 
         self.write_config(&config).await?;
@@ -480,6 +584,230 @@ mod tests {
             mode, 0o600,
             "daemon.toml should be owner-read/write only, got {:o}",
             mode
+        );
+    }
+
+    fn probe_config(id: &str, base_url: &str, model: &str) -> ProtoOpenAiCompatConfig {
+        ProtoOpenAiCompatConfig {
+            id: id.to_string(),
+            name: "Test Endpoint".to_string(),
+            base_url: base_url.to_string(),
+            api_key: String::new(),
+            model: model.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_routing_probe_verdict_persists_and_is_readable() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await
+        .expect("record should succeed");
+
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert_eq!(found.routing_ok.get("mistral:7b"), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn record_routing_probe_verdict_noops_when_config_deleted() {
+        let (_svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        // No config file at all yet.
+        record_routing_probe_verdict(&config_path, "ghost", "http://x", "m", false)
+            .await
+            .expect("noop on missing file must not error");
+    }
+
+    #[tokio::test]
+    async fn record_routing_probe_verdict_noops_when_base_url_changed() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+
+        // Probe result for an endpoint this config id no longer points at —
+        // must not be written, or a later load would trust a verdict about a
+        // server this config no longer names.
+        record_routing_probe_verdict(&config_path, "a", "http://other-host:11434/v1", "x", true)
+            .await
+            .expect("stale-target write should not error, just noop");
+
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert!(
+            found.routing_ok.is_empty(),
+            "a verdict for a different endpoint must not attach to this config"
+        );
+    }
+
+    /// The bug this test guards against (found in code review on #1830): a
+    /// single OpenAI-compat config can discover several served models
+    /// (`openai-compat:<uuid>:<model>` — see `parse_openai_compat_id`), and a
+    /// scalar verdict field would let one model's probe result leak onto
+    /// another's load. `mistral:7b` measuring suppressed must never disable
+    /// injection for `llama3.1:8b`, discovered through the same config and
+    /// never itself probed as failing.
+    #[tokio::test]
+    async fn verdicts_for_different_models_on_the_same_config_do_not_collide() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await
+        .expect("record should succeed");
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "llama3.1:8b",
+            true,
+        )
+        .await
+        .expect("record should succeed");
+
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert_eq!(
+            found.routing_ok.get("mistral:7b"),
+            Some(&false),
+            "mistral:7b's own verdict must be preserved"
+        );
+        assert_eq!(
+            found.routing_ok.get("llama3.1:8b"),
+            Some(&true),
+            "llama3.1:8b must carry its own verdict, not mistral:7b's"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_open_ai_compat_configs_carries_forward_verdicts_when_base_url_unchanged() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await
+        .expect("record should succeed");
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "llama3.1:8b",
+            true,
+        )
+        .await
+        .expect("record should succeed");
+
+        // Settings GUI saves again — e.g. the user renamed the config, or
+        // changed the pinned `model` field (which only matters for a
+        // non-discovery load and does not invalidate verdicts already
+        // measured for OTHER models discovered through the same endpoint).
+        let mut renamed = probe_config("a", "http://localhost:11434/v1", "mistral:7b");
+        renamed.name = "Renamed".to_string();
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![renamed],
+        }))
+        .await
+        .expect("set should succeed");
+
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert_eq!(
+            found.routing_ok.get("mistral:7b"),
+            Some(&false),
+            "an unrelated field edit must not erase a cached probe verdict"
+        );
+        assert_eq!(
+            found.routing_ok.get("llama3.1:8b"),
+            Some(&true),
+            "verdicts for every model behind this base_url carry forward, not just the pinned one"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_open_ai_compat_configs_drops_verdicts_when_base_url_changes() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await
+        .expect("record should succeed");
+
+        // The user points the same config id at a different endpoint
+        // entirely — every verdict measured against the old endpoint is
+        // meaningless for the new one.
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config(
+                "a",
+                "http://other-host:11434/v1",
+                "mistral:7b",
+            )],
+        }))
+        .await
+        .expect("set should succeed");
+
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert!(
+            found.routing_ok.is_empty(),
+            "verdicts measured against the old endpoint must not carry onto the new one"
         );
     }
 }

@@ -597,9 +597,35 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // Stage 2's surface: scoped to what the eligible candidates permit, so
         // the model judges among what retrieval surfaced and can only fire what
         // the matched skills allow. Falls back to the full list when nothing
-        // was retrieved.
+        // was retrieved. Tool-surface scoping is independent of prompt
+        // injection below and stays in effect even when injection is
+        // disabled — the routing-reliability matrix measured the *prompt
+        // block* suppressing tool-calling, not the scoped tool list, so only
+        // the mechanism actually implicated is turned off.
         let tools = routing::stage2_tools(&routed.candidates, &all_tools);
-        let candidate_block = routing::render_candidates_for_prompt(&routed.candidates);
+
+        // `session.routing_disabled` is set once, by the caller, from a cached
+        // routing-probe verdict for this session's model (see
+        // `local_agent::routing_probe`). The matrix in
+        // `tests/live_openai_compat_routing.rs` found injecting this block
+        // suppresses tool-calling outright on some served models, independent
+        // of the block's content — so a model probed unsafe skips injection
+        // entirely rather than receiving a "safer" smaller block; there is no
+        // known-safe non-empty block to fall back to.
+        let candidate_block = if session.routing_disabled {
+            if routing::render_candidates_for_prompt(&routed.candidates).is_some() {
+                tracing::warn!(
+                    session_id = %session.id,
+                    model = %session.model_id.as_deref().unwrap_or("unknown"),
+                    "Stage-2 candidate injection skipped: this model's routing probe found \
+                     candidate injection suppresses tool-calling. Routing falls back to the \
+                     full tool surface for this turn."
+                );
+            }
+            None
+        } else {
+            routing::render_candidates_for_prompt(&routed.candidates)
+        };
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -667,6 +693,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             // lets an eval tell "routed but nothing matched" apart from "never
             // routed."
             stage2_candidates_injected = candidate_block.is_some(),
+            // A third, distinct state from the two above: injection was
+            // available (retrieval matched something) but withheld because
+            // this session's model failed the routing probe. Without this
+            // field, a disabled turn is indistinguishable in the log from
+            // "routing produced nothing" even though the causes — and the
+            // right fix — are different.
+            stage2_routing_disabled = session.routing_disabled,
             "Agent turn: system prompt and tools prepared"
         );
 
@@ -2012,6 +2045,7 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
             dynamic_context: None,
             system_prompt_override: None,
             prior_writes: Vec::new(),
+            routing_disabled: false,
         };
 
         let cancel = CancellationToken::new();
@@ -2051,6 +2085,20 @@ impl<E: ChatInferenceEngine + ?Sized + 'static, T: AgentToolExecutor + ?Sized + 
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.prior_writes = prior_writes;
+        }
+    }
+
+    /// Disable Stage-2 candidate-block injection for this session.
+    ///
+    /// Called once, right after session creation, with the caller's cached
+    /// routing-probe verdict for the model this session will run on (see
+    /// `local_agent::routing_probe`). The loop itself never probes or knows
+    /// why injection is disabled — this is a one-way switch a caller with
+    /// that context sets before the first turn.
+    pub async fn set_session_routing_disabled(&self, session_id: &str, disabled: bool) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.routing_disabled = disabled;
         }
     }
 
@@ -2438,6 +2486,7 @@ mod tests {
             dynamic_context: None,
             system_prompt_override: None,
             prior_writes: Vec::new(),
+            routing_disabled: false,
         }
     }
 
@@ -5694,6 +5743,152 @@ mod tests {
         // the mutating one, so this candidate is never rendered or actioned.
         let cands = vec![skill_candidate("deletion", 0.2, &["delete_node"])];
         assert!(routing::render_candidates_for_prompt(&cands).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // `session.routing_disabled` (issue #1830 / Option C): the
+    // routing-reliability matrix in `tests/live_openai_compat_routing.rs`
+    // found Stage-2 candidate injection suppresses tool-calling outright on
+    // some served models. A cached per-model probe verdict sets this flag;
+    // these tests cover what the loop does with it.
+    // -----------------------------------------------------------------------
+
+    /// Wraps a `ChatInferenceEngine` and records the system-prompt content of
+    /// every `generate` call, so a test can assert on what actually reached
+    /// the model rather than only on the tool calls that came back.
+    struct RecordingEngine<E: ChatInferenceEngine> {
+        inner: E,
+        system_prompts: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl<E: ChatInferenceEngine> RecordingEngine<E> {
+        fn new(inner: E) -> Self {
+            Self {
+                inner,
+                system_prompts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn system_prompts_handle(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
+            Arc::clone(&self.system_prompts)
+        }
+    }
+
+    #[async_trait]
+    impl<E: ChatInferenceEngine> ChatInferenceEngine for RecordingEngine<E> {
+        async fn generate(
+            &self,
+            request: InferenceRequest,
+            on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            if let Some(system) = request.messages.iter().find(|m| m.role == Role::System) {
+                self.system_prompts
+                    .lock()
+                    .unwrap()
+                    .push(system.content.clone());
+            }
+            self.inner.generate(request, on_chunk).await
+        }
+
+        async fn model_info(&self) -> Result<Option<ChatModelSpec>, InferenceError> {
+            self.inner.model_info().await
+        }
+
+        async fn token_count(&self, text: &str) -> Result<u32, InferenceError> {
+            self.inner.token_count(text).await
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_enabled_injects_the_candidate_block() {
+        let engine = RecordingEngine::new(routed_engine(
+            "find notes",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let prompts = engine.system_prompts_handle();
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![skill_candidate("research", 0.9, &["search_nodes"])],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        assert!(!session.routing_disabled, "default session is not disabled");
+
+        loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        let stage2_prompt = &prompts.lock().unwrap()[1];
+        assert!(
+            stage2_prompt.contains("research"),
+            "Stage 2's prompt must carry the matched candidate: {stage2_prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn routing_disabled_skips_injection_but_keeps_tool_scoping() {
+        // Same matched candidate as the enabled case above, but the session
+        // carries a probe verdict that says injection suppresses this model's
+        // tool-calling.
+        let engine = RecordingEngine::new(routed_engine(
+            "find notes",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let prompts = engine.system_prompts_handle();
+        let inner = MockToolExecutor::new().with_tool(
+            "delete_node",
+            json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+            json!({"deleted": true}),
+        );
+        let exec = RoutingToolExecutor::new(
+            inner,
+            vec![skill_candidate(
+                "research",
+                0.9,
+                &["search_nodes", "get_node"],
+            )],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        session.routing_disabled = true;
+
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        let stage2_prompt = &prompts.lock().unwrap()[1];
+        assert!(
+            !stage2_prompt.contains("INSTRUCTIONS FOR research"),
+            "a disabled session must not receive the candidate's instruction subtree: \
+             {stage2_prompt}"
+        );
+        assert!(
+            !stage2_prompt.contains("REFERENCE — procedures relevant"),
+            "a disabled session must not receive the candidate block header at all: \
+             {stage2_prompt}"
+        );
+        // Tool scoping is a separate mechanism (ADR-038's trust boundary) from
+        // prompt injection, and the matrix did not implicate it — it must stay
+        // in effect even though injection is off.
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
     }
 
     #[tokio::test]
