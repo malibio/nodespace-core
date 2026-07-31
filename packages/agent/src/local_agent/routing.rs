@@ -301,68 +301,17 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
 
 /// Render a candidate's `schema_metadata` into the compact form the model
 /// already sees elsewhere, or `None` when there is nothing to show.
+///
+/// Delegates to the shared renderer in `nodespace-core`. This block and the
+/// workspace-context one are concatenated into a single system prompt under the
+/// same heading, so they must describe a type identically; they previously did
+/// not, and the model followed guidance whose referent only one of them
+/// emitted. The `schema_metadata` JSON this decodes is produced from the same
+/// descriptor type, making the encode/decode one reversible mapping rather than
+/// two hand-written projections.
 fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
-    let arr = meta.as_array()?;
-    if arr.is_empty() {
-        return None;
-    }
-    let mut lines = Vec::new();
-    for entry in arr {
-        // Skip a malformed entry rather than propagating out of the loop: `?`
-        // here would discard every remaining type because one lacked an id.
-        let Some(type_id) = entry.get("type_id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let fields: Vec<String> = entry
-            .get("fields")
-            .and_then(|f| f.as_array())
-            .map(|fs| {
-                fs.iter()
-                    .filter_map(|f| {
-                        let name = f.get("name").and_then(|v| v.as_str())?;
-                        let ty = f.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                        // Same `name: type` notation the workspace-context
-                        // block uses. Both are emitted into a single system
-                        // prompt under the same heading, so two spellings of
-                        // one concept would read as two different things.
-                        let mut descriptor = match f.get("enum_values").and_then(|v| v.as_array()) {
-                            Some(vals) if !vals.is_empty() => {
-                                let vs: Vec<&str> =
-                                    vals.iter().filter_map(|v| v.as_str()).collect();
-                                format!("{name}: {ty} ({})", vs.join(", "))
-                            }
-                            _ => format!("{name}: {ty}"),
-                        };
-                        if f.get("required").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            descriptor.push_str(", required");
-                        }
-                        Some(descriptor)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        // A type with no fields renders as a bare name: the trailing ": "
-        // of the populated form would read as a promise of a field list that
-        // never arrives. Core types are filtered out upstream so this is not
-        // reachable today, but a skill scoping itself with `node_types` makes
-        // it so.
-        let mut line = if fields.is_empty() {
-            format!("- {type_id}")
-        } else {
-            format!("- {type_id}: {}", fields.join("; "))
-        };
-        // The create_node tool description tells the model the template is
-        // "shown in ENTITY TYPES" and to include its fields; that promise
-        // needs a referent here.
-        if let Some(tmpl) = entry.get("title_template").and_then(|v| v.as_str()) {
-            line.push_str(&format!(" [title_template: {tmpl}]"));
-        }
-        lines.push(line);
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines.join("\n"))
+    let descriptors = nodespace_core::ops::entity_types_block::descriptors_from_json(meta);
+    nodespace_core::ops::entity_types_block::render_entity_types(&descriptors)
 }
 
 /// The tools Stage 2 may offer, restricted to the union of the eligible
@@ -706,5 +655,101 @@ mod tests {
         }]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(rendered.contains("- task: title: text; status: enum (todo, done)"));
+    }
+
+    /// Quantifies the block duplication AC 3 asks about, so the decision is
+    /// made on a measured number rather than an estimate. Reports how many
+    /// times `RELEVANT ENTITY TYPES` appears in one Stage-2 prompt and what
+    /// the repeated copies cost, under the realistic case: `RETRIEVAL_TOP_K`
+    /// candidates all clearing their bar, each scoped to the same schemas.
+    ///
+    /// Deliberately a measurement, not an assertion on a target value — the
+    /// point is to observe the current shape, since prompt-shape changes here
+    /// have been mis-diagnosed by assumption before.
+    #[test]
+    fn measure_entity_block_duplication_in_one_prompt() {
+        let meta = json!([
+            {
+                "type_id": "invoice",
+                "name": "Invoice",
+                "fields": [
+                    {"name": "reference", "type": "string"},
+                    {"name": "amount", "type": "number", "required": true},
+                    {"name": "status", "type": "enum", "enum_values": ["draft", "sent", "paid"]}
+                ],
+                "title_template": "{reference}"
+            },
+            {
+                "type_id": "customer",
+                "name": "Customer",
+                "fields": [
+                    {"name": "name", "type": "string", "required": true},
+                    {"name": "email", "type": "string"}
+                ]
+            }
+        ]);
+
+        // All RETRIEVAL_TOP_K candidates eligible, each carrying the same
+        // scoped schemas — the shape that produces the most copies.
+        let candidates: Vec<SkillCandidate> = ["Node Creation", "Graph Editing", "Organization"]
+            .iter()
+            .map(|n| {
+                let mut c = candidate(n, 0.9, &["create_node"]);
+                c.schema_metadata = meta.clone();
+                c
+            })
+            .collect();
+        assert_eq!(candidates.len(), RETRIEVAL_TOP_K);
+
+        let block = render_candidates_for_prompt(&candidates).expect("all are eligible");
+        let from_routing = block.matches("RELEVANT ENTITY TYPES").count();
+
+        // The workspace-context path contributes one more copy of the same
+        // heading into the same prompt.
+        let total = from_routing + 1;
+
+        let one_copy = render_schema_metadata(&meta).expect("renders").len();
+        let repeated_chars = one_copy * (total - 1);
+
+        println!(
+            "MEASURE entity-block duplication: {total} copies per prompt \
+             ({from_routing} from routing + 1 from workspace context); \
+             one copy = {one_copy} chars; repeated copies = {repeated_chars} chars \
+             (~{} tokens at 4 chars/token)",
+            repeated_chars / 4
+        );
+
+        assert_eq!(
+            from_routing, RETRIEVAL_TOP_K,
+            "each eligible candidate carries its own copy"
+        );
+    }
+
+    /// Production `schema_metadata` carries a display `name` alongside the id,
+    /// and the block must then read exactly as the workspace-context one does —
+    /// `- id: Name (fields)`. Both are concatenated under a single heading, so
+    /// a type described two ways there reads to the model as two types.
+    ///
+    /// The other fixtures in this module omit `name`, which is why this case
+    /// needs its own test: the format the agent actually ships would otherwise
+    /// go unasserted.
+    #[test]
+    fn a_named_type_renders_in_the_workspace_context_format() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([{
+            "type_id": "invoice",
+            "name": "Invoice",
+            "fields": [
+                {"name": "amount", "type": "number", "required": true}
+            ],
+            "title_template": "{reference}"
+        }]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        assert!(
+            rendered.contains(
+                "- invoice: Invoice (amount: number, required) [title_template: {reference}]"
+            ),
+            "named type must render as `- id: Name (fields)`, got: {rendered}"
+        );
     }
 }

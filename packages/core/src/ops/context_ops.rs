@@ -15,6 +15,11 @@
 //! referent — the model then omitted `properties` entirely and persisted bare
 //! shells.
 //!
+//! The block itself is rendered by [`super::entity_types_block`], which the
+//! skill-routing path shares. The two used to hold independent renderers and
+//! drifted into exactly the failure above; the shared descriptor is what now
+//! prevents that.
+//!
 //! The retrieval query itself is assembled by [`build_retrieval_query`], which
 //! blends the preceding conversation turns with the current message so that
 //! follow-ups referring to their subject by pronoun or ellipsis still retrieve
@@ -333,55 +338,15 @@ impl WorkspaceContext {
             if out.len() + header.len() <= max_chars {
                 out.push_str(header);
                 for schema in &self.relevant_schemas {
-                    // Render each field's type and required-ness, not just its
-                    // name. The node-creation guidance instructs the model to
-                    // read `fields[].name` and to treat `required=true` fields
-                    // as mandatory in the `properties` map; a bare name list
-                    // gives those instructions no referent, and the model
-                    // answers with the two parameters it can ground (content,
-                    // node_type) and omits `properties` entirely.
-                    let field_descriptors: Vec<String> = schema
-                        .fields
-                        .iter()
-                        .map(|f| {
-                            // Enum fields carry their legal values: a bare
-                            // `status: enum` tells the model a value is wanted
-                            // but not which ones the schema will accept, so it
-                            // invents one and the write is rejected.
-                            let values: Vec<&str> = f
-                                .core_values
-                                .iter()
-                                .chain(f.user_values.iter())
-                                .flatten()
-                                .map(|v| v.value.as_str())
-                                .collect();
-                            let mut descriptor = if values.is_empty() {
-                                format!("{}: {}", f.name, f.field_type)
-                            } else {
-                                format!("{}: {} ({})", f.name, f.field_type, values.join(", "))
-                            };
-                            if f.required.unwrap_or(false) {
-                                descriptor.push_str(", required");
-                            }
-                            descriptor
-                        })
-                        .collect();
-                    let fields_str = if field_descriptors.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", field_descriptors.join("; "))
-                    };
-                    // The create_node tool description tells the model the
-                    // template is "shown in ENTITY TYPES" and to include its
-                    // fields; that promise needs a referent here.
-                    let template_str = schema
-                        .title_template
-                        .as_deref()
-                        .map(|t| format!(" [title_template: {t}]"))
-                        .unwrap_or_default();
+                    // Rendered through the shared descriptor so this block and
+                    // the skill-routing one cannot drift: a field added to
+                    // `SchemaField` reaches the prompt only via that choke
+                    // point. The renderer carries the reasoning for what each
+                    // part of the line is for.
                     let line = format!(
-                        "- {}: {}{}{}\n",
-                        schema.id, schema.content, fields_str, template_str
+                        "{}\n",
+                        super::entity_types_block::EntityTypeDescriptor::from_schema(schema)
+                            .render_line()
                     );
                     if out.len() + line.len() > max_chars {
                         break;
