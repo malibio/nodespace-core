@@ -321,19 +321,43 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
                     .filter_map(|f| {
                         let name = f.get("name").and_then(|v| v.as_str())?;
                         let ty = f.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                        match f.get("enum_values").and_then(|v| v.as_array()) {
+                        // Same `name: type` notation the workspace-context
+                        // block uses. Both are emitted into a single system
+                        // prompt under the same heading, so two spellings of
+                        // one concept would read as two different things.
+                        let mut descriptor = match f.get("enum_values").and_then(|v| v.as_array()) {
                             Some(vals) if !vals.is_empty() => {
                                 let vs: Vec<&str> =
                                     vals.iter().filter_map(|v| v.as_str()).collect();
-                                Some(format!("{name} ({ty}: {})", vs.join(", ")))
+                                format!("{name}: {ty} ({})", vs.join(", "))
                             }
-                            _ => Some(format!("{name} ({ty})")),
+                            _ => format!("{name}: {ty}"),
+                        };
+                        if f.get("required").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            descriptor.push_str(", required");
                         }
+                        Some(descriptor)
                     })
                     .collect()
             })
             .unwrap_or_default();
-        lines.push(format!("- {type_id}: {}", fields.join(", ")));
+        // A type with no fields renders as a bare name: the trailing ": "
+        // of the populated form would read as a promise of a field list that
+        // never arrives. Core types are filtered out upstream so this is not
+        // reachable today, but a skill scoping itself with `node_types` makes
+        // it so.
+        let mut line = if fields.is_empty() {
+            format!("- {type_id}")
+        } else {
+            format!("- {type_id}: {}", fields.join("; "))
+        };
+        // The create_node tool description tells the model the template is
+        // "shown in ENTITY TYPES" and to include its fields; that promise
+        // needs a referent here.
+        if let Some(tmpl) = entry.get("title_template").and_then(|v| v.as_str()) {
+            line.push_str(&format!(" [title_template: {tmpl}]"));
+        }
+        lines.push(line);
     }
     if lines.is_empty() {
         return None;
@@ -615,8 +639,50 @@ mod tests {
         ]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(
-            rendered.contains("- task: title (text)"),
+            rendered.contains("- task: title: text"),
             "an entry missing type_id must not take the valid ones with it: {rendered}"
+        );
+    }
+
+    #[test]
+    fn schema_metadata_marks_required_and_renders_title_template() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([{
+            "type_id": "invoice",
+            "title_template": "{reference} - {amount}",
+            "fields": [
+                {"name": "reference", "type": "string"},
+                {"name": "amount", "type": "number", "required": true}
+            ]
+        }]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        // Same notation the workspace-context block uses; both land in one prompt.
+        assert!(
+            rendered.contains("- invoice: reference: string; amount: number, required"),
+            "got: {rendered}"
+        );
+        // create_node's description promises the template is shown here.
+        assert!(
+            rendered.contains("[title_template: {reference} - {amount}]"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_zero_field_type_renders_without_a_dangling_separator() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([
+            {"type_id": "marker", "fields": []},
+            {"type_id": "invoice", "fields": [{"name": "amount", "type": "number"}]}
+        ]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        // No trailing ": " promising a field list that never arrives.
+        assert!(rendered.contains("- marker\n"), "got: {rendered}");
+        assert!(!rendered.contains("- marker:"), "got: {rendered}");
+        // The populated form is unaffected.
+        assert!(
+            rendered.contains("- invoice: amount: number"),
+            "got: {rendered}"
         );
     }
 
@@ -639,6 +705,6 @@ mod tests {
             ]
         }]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
-        assert!(rendered.contains("- task: title (text), status (enum: todo, done)"));
+        assert!(rendered.contains("- task: title: text; status: enum (todo, done)"));
     }
 }
