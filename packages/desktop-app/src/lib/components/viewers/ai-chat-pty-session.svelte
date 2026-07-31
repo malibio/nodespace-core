@@ -144,7 +144,6 @@
   let error = $state<string | null>(null);
 
   let captureEnabled = $state(false);
-  let captureSync = $state(false);
   let captureContent = $state<CaptureContentLevel>('metadata_only');
 
   let availability = $state<Record<string, AgentAvailabilityInfo>>({});
@@ -165,7 +164,6 @@
         ptyCheckAgentAvailability(),
       ]);
       captureEnabled = settings.enabled;
-      captureSync = settings.sync;
       captureContent = settings.content;
       const map: Record<string, AgentAvailabilityInfo> = {};
       for (const agent of availResult.agents) {
@@ -183,7 +181,6 @@
     try {
       await updateCaptureSettings({
         enabled: captureEnabled,
-        sync: captureSync,
         content: captureContent,
       });
     } catch (e) {
@@ -365,15 +362,6 @@
               </select>
             </div>
 
-            <label class="capture-row capture-indent">
-              <input
-                type="checkbox"
-                class="capture-checkbox"
-                bind:checked={captureSync}
-                onchange={saveCaptureSettings}
-              />
-              <span class="capture-label">Include in sync</span>
-            </label>
           {/if}
         </div>
       </details>

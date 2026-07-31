@@ -121,7 +121,6 @@ pub async fn update_display_settings(
 #[serde(rename_all = "camelCase")]
 pub struct CaptureSettingsResult {
     pub enabled: bool,
-    pub sync: bool,
     /// "metadata_only" | "summary" | "full"
     pub content: String,
 }
@@ -140,7 +139,6 @@ pub async fn get_capture_settings(
 
     Ok(CaptureSettingsResult {
         enabled: resp.enabled,
-        sync: resp.sync,
         content: content_level_to_str(resp.content),
     })
 }
@@ -150,7 +148,6 @@ pub async fn get_capture_settings(
 pub async fn update_capture_settings(
     grpc_client: tauri::State<'_, GrpcClient>,
     enabled: Option<bool>,
-    sync: Option<bool>,
     content: Option<String>,
 ) -> Result<CaptureSettingsResult, String> {
     let content_i32 = content.as_deref().map(str_to_content_level).transpose()?;
@@ -159,7 +156,6 @@ pub async fn update_capture_settings(
     let resp = client
         .update_capture_settings(UpdateCaptureSettingsRequest {
             enabled,
-            sync,
             content: content_i32,
         })
         .await
@@ -168,7 +164,6 @@ pub async fn update_capture_settings(
 
     Ok(CaptureSettingsResult {
         enabled: resp.enabled,
-        sync: resp.sync,
         content: content_level_to_str(resp.content),
     })
 }

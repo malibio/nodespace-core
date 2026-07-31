@@ -105,8 +105,6 @@ pub struct CaptureConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub sync: bool,
-    #[serde(default)]
     pub content: CaptureContentSetting,
 }
 
@@ -114,7 +112,6 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            sync: false,
             content: CaptureContentSetting::MetadataOnly,
         }
     }
@@ -329,7 +326,6 @@ impl SettingsServiceImpl {
     fn capture_to_response(capture: &CaptureConfig) -> CaptureSettingsResponse {
         CaptureSettingsResponse {
             enabled: capture.enabled,
-            sync: capture.sync,
             content: CaptureContentLevel::from(capture.content) as i32,
         }
     }
@@ -356,9 +352,6 @@ impl GrpcSettingsService for SettingsServiceImpl {
 
         if let Some(enabled) = req.enabled {
             config.capture.enabled = enabled;
-        }
-        if let Some(sync) = req.sync {
-            config.capture.sync = sync;
         }
         if let Some(content_i32) = req.content {
             let level = CaptureContentLevel::try_from(content_i32)

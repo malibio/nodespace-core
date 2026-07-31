@@ -15,7 +15,6 @@ describe('Capture Settings Commands', () => {
 
       expect(settings).toBeDefined();
       expect(settings.enabled).toBe(false);
-      expect(settings.sync).toBe(false);
       expect(settings.content).toBe('metadata_only');
     });
 
@@ -23,7 +22,6 @@ describe('Capture Settings Commands', () => {
       const settings = await getCaptureSettings();
 
       expect(typeof settings.enabled).toBe('boolean');
-      expect(typeof settings.sync).toBe('boolean');
       expect(['metadata_only', 'summary', 'full']).toContain(settings.content);
     });
   });
@@ -34,19 +32,16 @@ describe('Capture Settings Commands', () => {
 
       expect(result).toBeDefined();
       expect(result.enabled).toBe(true);
-      expect(typeof result.sync).toBe('boolean');
       expect(['metadata_only', 'summary', 'full']).toContain(result.content);
     });
 
     it('accepts full update outside Tauri', async () => {
       const result = await updateCaptureSettings({
         enabled: true,
-        sync: false,
         content: 'full'
       });
 
       expect(result.enabled).toBe(true);
-      expect(result.sync).toBe(false);
       expect(result.content).toBe('full');
     });
 

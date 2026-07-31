@@ -94,6 +94,14 @@ export interface SchemaField {
 
   /** For array fields, the type of items in the array */
   itemType?: string;
+
+  /**
+   * Machine-bound: persisted and read locally like any other property, but never
+   * included in a sync push and ignored if it arrives in a pull. Use when a value
+   * denotes state on a particular machine (a resume handle, an absolute path, a
+   * device id) or is not safe to transport as-is. Enforced by the sync engine.
+   */
+  localOnly?: boolean;
 }
 
 /**

@@ -444,6 +444,7 @@ mod tests {
         let new_field = SchemaField {
             name: "priority".to_string(),
             field_type: "number".to_string(),
+            local_only: false,
             protection: SchemaProtectionLevel::User,
             core_values: None,
             user_values: None,

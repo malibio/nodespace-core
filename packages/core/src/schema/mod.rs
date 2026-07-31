@@ -1010,6 +1010,7 @@ mod tests {
         SchemaField {
             name: name.to_string(),
             field_type: "string".to_string(),
+            local_only: false,
             protection: SchemaProtectionLevel::User,
             core_values: None,
             user_values: None,
