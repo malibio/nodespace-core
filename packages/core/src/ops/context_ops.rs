@@ -271,7 +271,18 @@ impl WorkspaceContext {
                     } else {
                         format!(" ({})", field_descriptors.join("; "))
                     };
-                    let line = format!("- {}: {}{}\n", schema.id, schema.content, fields_str);
+                    // The create_node tool description tells the model the
+                    // template is "shown in ENTITY TYPES" and to include its
+                    // fields; that promise needs a referent here.
+                    let template_str = schema
+                        .title_template
+                        .as_deref()
+                        .map(|t| format!(" [title_template: {t}]"))
+                        .unwrap_or_default();
+                    let line = format!(
+                        "- {}: {}{}{}\n",
+                        schema.id, schema.content, fields_str, template_str
+                    );
                     if out.len() + line.len() > max_chars {
                         break;
                     }
@@ -414,6 +425,19 @@ mod tests {
         // Fields without the flag are not marked required.
         assert!(output.contains("reference: string;"));
         assert!(!output.contains("reference: string, required"));
+    }
+
+    #[test]
+    fn format_for_prompt_renders_title_template() {
+        let mut schema = sample_schema("invoice", "Invoice", &["reference"]);
+        schema.title_template = Some("{reference}".to_string());
+
+        let mut ctx = sample_context();
+        ctx.relevant_schemas = vec![schema];
+        let output = ctx.format_for_prompt(4000);
+
+        // create_node's description promises the template is shown here.
+        assert!(output.contains("[title_template: {reference}]"), "got: {output}");
     }
 
     #[test]

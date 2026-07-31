@@ -188,6 +188,13 @@ pub async fn find_skills(
                             "name": f.name,
                             "type": f.field_type,
                         });
+                        // Required-ness drives whether the node-creation
+                        // guidance treats a field as mandatory in the
+                        // properties map; omitting it here leaves that
+                        // instruction with nothing to key on.
+                        if f.required.unwrap_or(false) {
+                            field["required"] = json!(true);
+                        }
                         // Include enum values so the model can use exact values in tool calls.
                         if f.field_type == "enum" {
                             let mut vals: Vec<String> = Vec::new();
