@@ -657,17 +657,24 @@ mod tests {
         assert!(rendered.contains("- task: title: text; status: enum (todo, done)"));
     }
 
-    /// Quantifies the block duplication AC 3 asks about, so the decision is
-    /// made on a measured number rather than an estimate. Reports how many
-    /// times `RELEVANT ENTITY TYPES` appears in one Stage-2 prompt and what
-    /// the repeated copies cost, under the realistic case: `RETRIEVAL_TOP_K`
-    /// candidates all clearing their bar, each scoped to the same schemas.
+    /// Every eligible candidate carries its own copy of the entity block, so
+    /// one Stage-2 prompt repeats it `RETRIEVAL_TOP_K` times — plus once more
+    /// from the workspace-context path, which `agent_loop` concatenates into
+    /// the same prompt under the same heading.
     ///
-    /// Deliberately a measurement, not an assertion on a target value — the
-    /// point is to observe the current shape, since prompt-shape changes here
-    /// have been mis-diagnosed by assumption before.
+    /// Measured 2026-07-31 for the duplication question in #1848: **4 copies
+    /// per prompt** (3 routing + 1 workspace context), costing ~141 redundant
+    /// tokens on a 2-schema workspace and scaling with schema count. The copies
+    /// are identical rather than differently scoped, because no seeded skill
+    /// declares `node_types` — see `skill_pipeline`'s
+    /// `no_seeded_skill_scopes_its_schema_metadata`, which fails if that
+    /// premise stops holding.
+    ///
+    /// The assertion here is the invariant behind that measurement — one copy
+    /// per eligible candidate — not the token figure, which is a dated finding
+    /// rather than a target to hold constant.
     #[test]
-    fn measure_entity_block_duplication_in_one_prompt() {
+    fn every_eligible_candidate_carries_its_own_entity_block() {
         let meta = json!([
             {
                 "type_id": "invoice",
@@ -702,26 +709,11 @@ mod tests {
         assert_eq!(candidates.len(), RETRIEVAL_TOP_K);
 
         let block = render_candidates_for_prompt(&candidates).expect("all are eligible");
-        let from_routing = block.matches("RELEVANT ENTITY TYPES").count();
-
-        // The workspace-context path contributes one more copy of the same
-        // heading into the same prompt.
-        let total = from_routing + 1;
-
-        let one_copy = render_schema_metadata(&meta).expect("renders").len();
-        let repeated_chars = one_copy * (total - 1);
-
-        println!(
-            "MEASURE entity-block duplication: {total} copies per prompt \
-             ({from_routing} from routing + 1 from workspace context); \
-             one copy = {one_copy} chars; repeated copies = {repeated_chars} chars \
-             (~{} tokens at 4 chars/token)",
-            repeated_chars / 4
-        );
 
         assert_eq!(
-            from_routing, RETRIEVAL_TOP_K,
-            "each eligible candidate carries its own copy"
+            block.matches("RELEVANT ENTITY TYPES").count(),
+            RETRIEVAL_TOP_K,
+            "each eligible candidate carries its own copy of the entity block"
         );
     }
 

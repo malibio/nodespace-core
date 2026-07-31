@@ -118,6 +118,16 @@ impl EntityTypeDescriptor {
     /// This shape is model-facing and pinned by the routing latency suites, so
     /// it is a contract rather than an internal detail. Keeping the encode and
     /// decode adjacent is what stops it from becoming a second renderer.
+    ///
+    /// One intentional difference from the projection this replaced: that code
+    /// emitted `enum_values` only when `field_type == "enum"`, whereas this
+    /// emits them whenever a field carries values. The two agree on every
+    /// seeded core schema (none has a non-enum field with values), but they can
+    /// differ at runtime: validation only enforces enum ⇒ has-values, never the
+    /// converse, so a `create_schema` call may legitimately land `coreValues` on
+    /// a `text` field. Emitting the values there is the better behaviour — the
+    /// model can only use legal values it is shown — but it is a widening of
+    /// this response, not a no-op.
     pub fn to_json(&self) -> Value {
         let fields: Vec<Value> = self
             .fields
@@ -380,19 +390,33 @@ mod tests {
     /// prompt under one heading; describing a type two ways there is what
     /// caused the model to follow guidance with no referent.
     ///
-    /// This asserts the property end to end for every rendered attribute at
-    /// once, so a `SchemaField` addition wired into only one path fails here
-    /// rather than surfacing as nondeterministic model misbehaviour.
+    /// The JSON side is written out by hand rather than produced by
+    /// [`EntityTypeDescriptor::to_json`]. Deriving it from `to_json` would make
+    /// both sides originate from the same `from_schema` call, which asserts
+    /// round-trip fidelity (already covered by
+    /// `json_round_trip_preserves_every_rendered_field`) rather than agreement
+    /// between the paths. Spelling the wire form out independently is what lets
+    /// this fail when an encoder change stops matching what the decoder reads.
+    ///
+    /// Note the structural guarantee is the stronger one and does not depend on
+    /// this test: a single `render_line` means a new `SchemaField` reaches both
+    /// paths or neither. This pins the conversion seams on either side of it.
     #[test]
     fn both_prompt_paths_render_a_schema_identically() {
-        let schema = sample_schema();
+        let via_schema = EntityTypeDescriptor::from_schema(&sample_schema());
 
-        // Workspace-context path: renders the typed value directly.
-        let via_schema = EntityTypeDescriptor::from_schema(&schema);
-
-        // Skill-routing path: the same schema encoded as `schema_metadata` by
-        // `skill_ops`, then decoded back on the agent side.
-        let via_json = descriptors_from_json(&json!([via_schema.to_json()]));
+        // The `schema_metadata` wire form for the same schema, spelled out as
+        // `skill_ops` emits it.
+        let via_json = descriptors_from_json(&json!([{
+            "type_id": "invoice",
+            "name": "Invoice",
+            "fields": [
+                {"name": "reference", "type": "string"},
+                {"name": "amount", "type": "number", "required": true},
+                {"name": "status", "type": "enum", "enum_values": ["draft", "sent"]}
+            ],
+            "title_template": "{reference}"
+        }]));
 
         assert_eq!(
             render_entity_types(std::slice::from_ref(&via_schema)),

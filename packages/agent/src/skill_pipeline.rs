@@ -655,7 +655,15 @@ mod tests {
     fn no_seeded_skill_scopes_its_schema_metadata() {
         let scoped: Vec<String> = seed_skill_nodes()
             .into_iter()
-            .filter(|seed| seed.root_properties.get("node_types").is_some())
+            // Mirrors `find_skills`' predicate: an absent key and an empty
+            // array both fall through to the unscoped branch, so only a
+            // non-empty list actually scopes a candidate's schema_metadata.
+            .filter(|seed| {
+                seed.root_properties
+                    .get("node_types")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|a| !a.is_empty())
+            })
             .map(|seed| seed.title)
             .collect();
 
