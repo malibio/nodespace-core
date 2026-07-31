@@ -228,7 +228,7 @@ impl PromptAssembler {
     /// through Minijinja. Intended for use in unit/integration tests where
     /// no DB is available.
     pub fn assemble_static(workspace_context: &str, current_date: Option<&str>) -> String {
-        let seeds = Self::seed_prompt_nodes();
+        let seeds = Self::seed_agent_guidance_nodes();
 
         let ctx = TemplateContext {
             current_date: current_date.unwrap_or("2025-01-01").to_string(),
@@ -260,7 +260,7 @@ impl PromptAssembler {
     ///
     /// Use [`nodespace_core::markdown::prepare_nodes_from_template`]
     /// to expand into a [`PreparedNode`] for insertion via `NodeService`.
-    pub fn seed_prompt_nodes() -> Vec<NodeTemplate> {
+    pub fn seed_agent_guidance_nodes() -> Vec<NodeTemplate> {
         vec![
             NodeTemplate {
                 title: "Core Identity".to_string(),
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn seed_prompts_have_valid_properties() {
-        let seeds = PromptAssembler::seed_prompt_nodes();
+        let seeds = PromptAssembler::seed_agent_guidance_nodes();
         assert!(seeds.len() >= 5, "Should have at least 5 seed prompts");
 
         for seed in &seeds {
@@ -358,7 +358,7 @@ mod tests {
     /// agent guidance.
     #[test]
     fn seed_prompt_bodies_match_expected_bytes() {
-        let seeds = PromptAssembler::seed_prompt_nodes();
+        let seeds = PromptAssembler::seed_agent_guidance_nodes();
         let by_title: std::collections::HashMap<&str, &str> = seeds
             .iter()
             .map(|s| (s.title.as_str(), s.markdown_content.as_str()))
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn seed_prompt_template_produces_agent_guidance_node() {
         use nodespace_core::markdown::prepare_nodes_from_template;
-        let seeds = PromptAssembler::seed_prompt_nodes();
+        let seeds = PromptAssembler::seed_agent_guidance_nodes();
         for seed in &seeds {
             let nodes = prepare_nodes_from_template(seed)
                 .unwrap_or_else(|e| panic!("Template '{}' failed: {:?}", seed.title, e));
@@ -468,7 +468,7 @@ mod tests {
         let node_service = Arc::new(NodeService::new(&mut store).await.unwrap());
 
         // Seed prompt nodes the same way the daemon does.
-        let groups: Vec<_> = PromptAssembler::seed_prompt_nodes()
+        let groups: Vec<_> = PromptAssembler::seed_agent_guidance_nodes()
             .iter()
             .map(|t| prepare_nodes_from_template(t).expect("template expands"))
             .collect();

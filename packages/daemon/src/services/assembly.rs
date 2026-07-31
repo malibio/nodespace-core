@@ -226,7 +226,7 @@ pub async fn build_database_services(
 
 /// Seed prompt, skill, and tool nodes on first launch. Idempotent — existing nodes are skipped.
 async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
-    let prompt_templates = PromptAssembler::seed_prompt_nodes();
+    let prompt_templates = PromptAssembler::seed_agent_guidance_nodes();
     let skill_templates = seed_skill_nodes();
     let tool_templates = seed_tool_nodes();
 

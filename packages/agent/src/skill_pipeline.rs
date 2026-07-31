@@ -777,7 +777,7 @@ mod full_seed_db_tests {
         let mut store = Arc::new(SqliteStore::new(db).await.unwrap());
         let ns = Arc::new(NodeService::new(&mut store).await.unwrap());
 
-        let prompts = PromptAssembler::seed_prompt_nodes();
+        let prompts = PromptAssembler::seed_agent_guidance_nodes();
         let skills = seed_skill_nodes();
         let tools = seed_tool_nodes();
         let mut groups = Vec::new();

@@ -1,0 +1,102 @@
+/**
+ * Unit tests for aichat.ts's log-scraping logic.
+ *
+ * Runs via `bun run test:scripts` (and so under `bun run test:all`). Deliberate
+ * exception to the project-wide "never use `bun test`" rule: this file touches
+ * no DOM, and cannot run under Vitest anyway (imports `bun:test`, and scripts/
+ * is outside every Vitest project glob).
+ *
+ * These specifically regression-test two bugs a code review caught before
+ * merge: `formatTurnLogLines` splitting the log slice on `\n` before scanning
+ * for the raw-generation marker silently truncated any multiline model
+ * output at its first newline, and (before the JSON-encoding fix on the Rust
+ * side) a lookahead-based parse of that marker broke if the model's own text
+ * happened to contain a literal `[tool]` substring.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { formatTurnLogLines } from "./aichat.ts";
+
+/** Build a daemon-log-shaped raw-generation line the way agent_loop.rs emits it. */
+function rawGenerationLine(iteration: number, text: string): string {
+  return `2026-07-30T22:27:39Z DEBUG nodespace_agent: Agent loop: raw generation iteration=${iteration} raw_response=${JSON.stringify(text)}`;
+}
+
+describe("formatTurnLogLines", () => {
+  test("extracts a single-line raw generation", () => {
+    const slice = rawGenerationLine(0, "Hi there!");
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toEqual([`[raw] iteration=0 ${JSON.stringify("Hi there!")}`]);
+  });
+
+  test("preserves a multiline raw generation intact (regression)", () => {
+    const text = "line one\nline two\nline three";
+    const slice = rawGenerationLine(0, text);
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0].replace(/^\[raw\] iteration=0 /, ""))).toBe(text);
+  });
+
+  test("does not truncate raw text containing a literal [tool] marker (regression)", () => {
+    const text = "I'll use [tool] create_node to do that.";
+    const slice = rawGenerationLine(0, text);
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0].replace(/^\[raw\] iteration=0 /, ""))).toBe(text);
+  });
+
+  test("handles multiple iterations plus a following real log line without cross-contamination", () => {
+    const slice = [
+      rawGenerationLine(0, "first\nmultiline\nresponse"),
+      rawGenerationLine(1, "second response, mentions [tool] search_nodes"),
+      `2026-07-30T22:27:40Z  INFO nodespace_agent: Tool executed tool="create_node" is_error=false result_field_count=3 args_preview="{}" result_preview="{}"`,
+    ].join("\n");
+
+    const lines = formatTurnLogLines(slice);
+    const rawLines = lines.filter((l) => l.startsWith("[raw]"));
+    expect(rawLines).toHaveLength(2);
+    expect(
+      JSON.parse(rawLines[0].replace(/^\[raw\] iteration=0 /, "")),
+    ).toBe("first\nmultiline\nresponse");
+    expect(
+      JSON.parse(rawLines[1].replace(/^\[raw\] iteration=1 /, "")),
+    ).toBe("second response, mentions [tool] search_nodes");
+
+    const toolLines = lines.filter((l) => l.startsWith("[tool]"));
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0]).toContain("create_node");
+    expect(toolLines[0]).toContain("[fields=3]");
+  });
+
+  test("skips a raw-generation line whose payload is not valid JSON rather than emitting garbage", () => {
+    // Simulates an older daemon build that logged the pre-fix verbatim form.
+    const slice =
+      "2026-07-30T22:27:39Z DEBUG nodespace_agent: Agent loop: raw generation iteration=0 raw_response=not json here";
+    const lines = formatTurnLogLines(slice);
+    expect(lines.filter((l) => l.startsWith("[raw]"))).toEqual([]);
+  });
+
+  test("extracts stage2 injected and routing markers", () => {
+    const slice = [
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names="create_node, search_nodes" system_prompt_len=1234 stage2_candidates_injected=true`,
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=2`,
+    ].join("\n");
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toContain("[stage2 injected] true");
+    expect(lines).toContain("[routing] query");
+  });
+
+  test("extracts the empty-generation marker only on the documented error text", () => {
+    const slice =
+      '2026-07-30T22:27:39Z  WARN nodespace_daemon: inference turn failed error="model produced empty response with no tool calls"';
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toContain("[empty-generation]");
+  });
+
+  test("does not emit the empty-generation marker for an unrelated inference failure", () => {
+    const slice =
+      '2026-07-30T22:27:39Z  WARN nodespace_daemon: inference turn failed error="connection reset"';
+    const lines = formatTurnLogLines(slice);
+    expect(lines.filter((l) => l === "[empty-generation]")).toEqual([]);
+  });
+});
