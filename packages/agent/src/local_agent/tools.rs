@@ -1139,10 +1139,17 @@ impl Tool {
     }
 }
 
-/// Whether a tool's required parameters depend on Stage-2 routing guidance
-/// that is absent on the fail-open path, by wire name. Computed from the
-/// registry; an unrecognised name is not excluded — `stage2_tools`'s
-/// existing empty-whitelist fallback already handles that case.
+/// Whether a tool's required parameters depend on Stage-2 routing guidance,
+/// by wire name. Computed from the registry; an unrecognised name is not
+/// excluded — `stage2_tools`'s existing empty-whitelist fallback already
+/// handles that case.
+///
+/// Naming this tool alone doesn't say whether that guidance is actually
+/// *available* on a given turn — it can be absent on more than just the
+/// fail-open path (`stage2_tools`'s own exclusion), also on
+/// `routing_disabled` turns and when a clearing candidate's own
+/// `schema_metadata` renders no entity-types sub-block. See
+/// `routing::tools_with_available_guidance` for the availability check.
 pub fn requires_routed_guidance_tool(tool: &str) -> bool {
     Tool::from_name(tool).is_some_and(Tool::requires_routed_guidance)
 }

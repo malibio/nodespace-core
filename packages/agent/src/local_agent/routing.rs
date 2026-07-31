@@ -299,6 +299,40 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
     Some(out)
 }
 
+/// Wire names of tools that both require routed guidance (see
+/// [`super::tools::Tool::requires_routed_guidance`]) and have that guidance
+/// actually available: an eligible candidate whitelists the tool AND that
+/// candidate's own `schema_metadata` renders a non-empty `RELEVANT ENTITY
+/// TYPES` block.
+///
+/// More precise than "some block was rendered for *some* candidate":
+/// `render_candidates_for_prompt` returns `Some` from its header text alone
+/// whenever any candidate clears the score gate, even if that candidate's
+/// own entity-types sub-block is empty (a skill with no schema-typed
+/// entities, e.g. one that only ever acts on `task`/`text`). A caller
+/// checking only "is the block `Some`" would wrongly conclude `resolve_query`
+/// has guidance in that case. This checks the specific tool's specific
+/// candidate instead.
+///
+/// `render_disabled: true` (mirrors the caller's `session.routing_disabled`)
+/// short-circuits to empty — when injection is suppressed for this model, no
+/// candidate's guidance reaches the prompt regardless of what would
+/// otherwise render, so nothing here counts as "available."
+pub fn tools_with_available_guidance(
+    candidates: &[SkillCandidate],
+    render_disabled: bool,
+) -> std::collections::HashSet<&str> {
+    if render_disabled {
+        return std::collections::HashSet::new();
+    }
+    candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .filter(|c| render_schema_metadata(&c.schema_metadata).is_some())
+        .flat_map(|c| c.tools.iter().map(|t| t.as_str()))
+        .collect()
+}
+
 /// Render a candidate's `schema_metadata` into the compact form the model
 /// already sees elsewhere, or `None` when there is nothing to show.
 fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
@@ -712,6 +746,50 @@ mod tests {
         let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"resolve_query"));
         assert!(names.contains(&"search_nodes"));
+    }
+
+    #[test]
+    fn tools_with_available_guidance_requires_a_rendered_entity_types_block() {
+        // A candidate clearing the gate but with empty schema_metadata (no
+        // typed entities) whitelists resolve_query yet renders no entity-
+        // types sub-block for it — render_candidates_for_prompt's header text
+        // alone would make `candidate_block` `Some`, but that's not the same
+        // as resolve_query having guidance available.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        assert!(tools_with_available_guidance(&cands, false).is_empty());
+    }
+
+    #[test]
+    fn tools_with_available_guidance_includes_a_tool_whose_candidate_renders_real_entity_types() {
+        let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        let available = tools_with_available_guidance(&cands, false);
+        assert!(available.contains("resolve_query"));
+    }
+
+    #[test]
+    fn tools_with_available_guidance_is_empty_when_rendering_is_disabled() {
+        // render_disabled mirrors session.routing_disabled: even a candidate
+        // with real schema_metadata contributes nothing once injection is
+        // suppressed for this turn.
+        let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        assert!(tools_with_available_guidance(&cands, true).is_empty());
+    }
+
+    #[test]
+    fn tools_with_available_guidance_excludes_a_candidate_below_its_score_bar() {
+        // Real schema_metadata doesn't matter if the candidate never clears
+        // the gate in the first place. resolve_query alone is a read tool
+        // (READ_SKILL_SCORE_BAR = 0.15), so the fixture score must sit below
+        // that, not just below the mutating bar.
+        let mut c = candidate("Graph Editing", 0.01, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        assert!(!clears_score_gate(&cands[0]));
+        assert!(tools_with_available_guidance(&cands, false).is_empty());
     }
 
     #[test]

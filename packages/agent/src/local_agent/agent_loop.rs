@@ -628,18 +628,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         };
 
         // `stage2_tools`'s own guidance-dependency exclusion only fires on its
-        // *fail-open* branches (no candidate cleared the score gate). It does
-        // not know about `routing_disabled` forcing `candidate_block` to
-        // `None` above — a candidate can clear the gate, legitimately putting
-        // `resolve_query` in `tools`, while the RELEVANT ENTITY TYPES block
-        // this turn actually sends the model is `None` regardless. Re-derive
-        // the exclusion from what the model is actually about to receive
-        // (`candidate_block`) rather than from why routing produced no
-        // candidates, so this can't reopen the same gap `stage2_tools`
-        // closes through a second door.
-        if candidate_block.is_none() {
-            tools.retain(|t| !requires_routed_guidance_tool(&t.name));
-        }
+        // *fail-open* branches (no candidate cleared the score gate). Two
+        // narrower cases it cannot see from inside `stage2_tools` alone:
+        // `routing_disabled` forcing `candidate_block` to `None` regardless of
+        // whether a candidate cleared the gate, and a candidate that clears
+        // the gate but whose own `schema_metadata` renders no entity-types
+        // sub-block (so the *header* of `candidate_block` is `Some`, but the
+        // specific guidance a tool like `resolve_query` needs never appears
+        // in it). `tools_with_available_guidance` checks per-tool, per-
+        // candidate availability directly rather than inferring it from
+        // whether `candidate_block` as a whole is present, so both cases are
+        // covered by the same call precisely instead of an approximation.
+        let available_guidance =
+            routing::tools_with_available_guidance(&routed.candidates, session.routing_disabled);
+        tools.retain(|t| {
+            !requires_routed_guidance_tool(&t.name) || available_guidance.contains(t.name.as_str())
+        });
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -5974,6 +5978,125 @@ mod tests {
             !stage2_tools.contains(&"resolve_query".to_string()),
             "resolve_query must not be offered when its guidance block was not sent: \
              {stage2_tools:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn routing_enabled_offers_resolve_query_when_its_entity_types_render() {
+        // The genuine happy path: routing is enabled, a Graph Editing
+        // candidate clears the gate, and its schema_metadata renders a real
+        // RELEVANT ENTITY TYPES sub-block — so resolve_query must still be
+        // reachable. Guards against the precise per-candidate guidance check
+        // (`routing::tools_with_available_guidance`) over-excluding the tool
+        // once it stopped trusting `candidate_block.is_some()` as a whole.
+        let engine = RecordingEngine::new(routed_engine(
+            "mark invoice paid",
+            "resolve_query",
+            r#"{"request":"mark the $500 invoice as paid","node_type":"invoice"}"#,
+            "Done.",
+        ));
+        let tool_calls = engine.tool_names_handle();
+        let inner = MockToolExecutor::new().with_tool(
+            "resolve_query",
+            json!({"type": "object", "properties": {
+                "request": {"type": "string"}, "node_type": {"type": "string"}
+            }}),
+            json!({"resolved": false, "reason": "no_match"}),
+        );
+        let mut candidate =
+            skill_candidate("Graph Editing", 0.9, &["search_nodes", "resolve_query"]);
+        candidate.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let exec = RoutingToolExecutor::new(inner, vec![candidate]);
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        assert!(!session.routing_disabled);
+
+        loop_
+            .run_turn(
+                &mut session,
+                "mark the $500 invoice as paid",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        let stage2_tools = &tool_calls.lock().unwrap()[1];
+        assert!(
+            stage2_tools.contains(&"resolve_query".to_string()),
+            "resolve_query must be offered once its candidate's entity-types block \
+             actually rendered: {stage2_tools:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_candidate_with_no_schema_metadata_still_excludes_resolve_query_though_the_block_header_renders(
+    ) {
+        // The edge case the re-reviewer flagged: render_candidates_for_prompt
+        // returns Some(..) from its header text alone once ANY candidate
+        // clears the gate, even if that candidate's own schema_metadata is
+        // empty and so its RELEVANT ENTITY TYPES sub-block never appears.
+        // candidate_block.is_some() would have wrongly treated resolve_query
+        // as having guidance here; the per-candidate check must not.
+        let engine = RecordingEngine::new(routed_engine(
+            "find notes",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let tool_calls = engine.tool_names_handle();
+        let prompts = engine.system_prompts_handle();
+        let inner = MockToolExecutor::new().with_tool(
+            "resolve_query",
+            json!({"type": "object", "properties": {
+                "request": {"type": "string"}, "node_type": {"type": "string"}
+            }}),
+            json!({"resolved": false, "reason": "no_match"}),
+        );
+        // Empty schema_metadata (skill_candidate's default) — no typed
+        // entities, so no RELEVANT ENTITY TYPES sub-block for this candidate.
+        let exec = RoutingToolExecutor::new(
+            inner,
+            vec![skill_candidate(
+                "Graph Editing",
+                0.9,
+                &["search_nodes", "resolve_query"],
+            )],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        assert!(!session.routing_disabled);
+
+        loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        // Sanity check the premise: the block header IS present (this is
+        // exactly the case a coarser `candidate_block.is_some()` check would
+        // have gotten wrong).
+        let stage2_prompt = &prompts.lock().unwrap()[1];
+        assert!(
+            stage2_prompt.contains("REFERENCE — procedures relevant"),
+            "premise of this test requires a rendered block header: {stage2_prompt}"
+        );
+        assert!(
+            !stage2_prompt.contains("RELEVANT ENTITY TYPES"),
+            "premise of this test requires no entity-types sub-block: {stage2_prompt}"
+        );
+
+        let stage2_tools = &tool_calls.lock().unwrap()[1];
+        assert!(
+            !stage2_tools.contains(&"resolve_query".to_string()),
+            "resolve_query must not be offered when its OWN candidate's entity-types \
+             block didn't render, even though the block header did: {stage2_tools:?}"
         );
     }
 
