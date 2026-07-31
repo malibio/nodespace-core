@@ -55,7 +55,7 @@
     "review:full": "bun run scripts/review-manager.ts --mode full",
     "review:delta": "bun run scripts/review-manager.ts --mode delta",
     "review:help": "bun run scripts/review-manager.ts --help",
-    "rust:test": "cargo test --lib --bins --workspace --exclude nodespace-app --exclude nodespace-app-test-support -- --test-threads=2",
+    "rust:test": "cargo test --lib --bins --tests --workspace --exclude nodespace-app --exclude nodespace-app-test-support -- --test-threads=2",
     "rust:test:lib": "cargo test --lib -p nodespace-core -- --test-threads=2",
     "rust:test:long": "RUN_LONG_TESTS=1 cargo test --lib -p nodespace-core -- --test-threads=2",
     "rust:test:doc": "cargo test --doc",

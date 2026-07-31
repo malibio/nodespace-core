@@ -19,6 +19,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_service_initialization() {
         if !model_exists() {
             eprintln!(
@@ -38,6 +39,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_single_embedding_generation() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -70,6 +72,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_asymmetric_embeddings() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -100,6 +103,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_batch_embedding_generation() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -129,6 +133,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_cache_functionality() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -168,6 +173,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_semantic_similarity() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -208,6 +214,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_blob_roundtrip() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -242,6 +249,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_empty_text_handling() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -259,6 +267,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_long_text_handling() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -281,6 +290,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_device_info() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
@@ -303,6 +313,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore = "requires the nomic-embed-vision GGUF model to be downloaded; run explicitly with --ignored"]
     async fn test_concurrent_requests() {
         if !model_exists() {
             eprintln!("Skipping test: model not found");
