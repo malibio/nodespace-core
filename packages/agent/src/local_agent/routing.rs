@@ -341,7 +341,16 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
                     .collect()
             })
             .unwrap_or_default();
-        let mut line = format!("- {type_id}: {}", fields.join("; "));
+        // A type with no fields renders as a bare name: the trailing ": "
+        // of the populated form would read as a promise of a field list that
+        // never arrives. Core types are filtered out upstream so this is not
+        // reachable today, but a skill scoping itself with `node_types` makes
+        // it so.
+        let mut line = if fields.is_empty() {
+            format!("- {type_id}")
+        } else {
+            format!("- {type_id}: {}", fields.join("; "))
+        };
         // The create_node tool description tells the model the template is
         // "shown in ENTITY TYPES" and to include its fields; that promise
         // needs a referent here.
@@ -655,6 +664,24 @@ mod tests {
         // create_node's description promises the template is shown here.
         assert!(
             rendered.contains("[title_template: {reference} - {amount}]"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_zero_field_type_renders_without_a_dangling_separator() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([
+            {"type_id": "marker", "fields": []},
+            {"type_id": "invoice", "fields": [{"name": "amount", "type": "number"}]}
+        ]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        // No trailing ": " promising a field list that never arrives.
+        assert!(rendered.contains("- marker\n"), "got: {rendered}");
+        assert!(!rendered.contains("- marker:"), "got: {rendered}");
+        // The populated form is unaffected.
+        assert!(
+            rendered.contains("- invoice: amount: number"),
             "got: {rendered}"
         );
     }
