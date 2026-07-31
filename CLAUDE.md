@@ -31,10 +31,11 @@ NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 fr
 1. **Check git status on the primary checkout**: `git status` — commit any pending changes first
 2. **Pull latest `main`**: `git fetch origin && git pull origin main`
 3. **Enter an isolated worktree**: `EnterWorktree({name: "issue-<number>-brief-desc"})`
-   - Creates `~/.worktrees/issue-<number>-brief-desc/` on a new branch branched from `origin/main`
+   - The tool owns the location and branch name — do not try to place it elsewhere. It creates the worktree under `.claude/worktrees/` on a branch named `worktree-<name>`, branched from `origin/main`. `EnterWorktree` only accepts paths inside that directory; a path anywhere else is rejected.
    - All subsequent commands run **inside the worktree**; primary `main` stays untouched
-   - Naming: terse, no `feature/` prefix — branch name doubles as directory name, e.g. `issue-1122-agent-tools`
-   - Continuing parent-issue work on a shared branch: `EnterWorktree({path: "~/.worktrees/<existing>"})`. If no worktree exists yet: `git worktree add ~/.worktrees/<name> <branch>` first
+   - Naming: terse, no `feature/` prefix, e.g. `issue-1122-agent-tools`
+   - Because the local branch carries a `worktree-` prefix and the remote branch should not, push with an explicit refspec: `git push origin HEAD:issue-<number>-brief-desc`
+   - Continuing parent-issue work on a shared branch: `EnterWorktree({path: "<repo>/.claude/worktrees/<existing>"})`
 4. **Install dependencies**: `bun install`
 5. **Run test baseline**: `bun run test` — frontend only (Rust tests require warm cache)
    - If you hit `Cannot find base config file "./.svelte-kit/tsconfig.json"`, run `bunx svelte-kit sync` from `packages/desktop-app/` once, then re-run
@@ -49,8 +50,9 @@ NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 fr
 
 ## Mandatory Startup Sequence — CONTINUING FROM WIP
 
-1. **Enter the existing worktree**: `EnterWorktree({path: "~/.worktrees/issue-<N>-brief-desc"})`
-   - If removed: `git worktree add ~/.worktrees/issue-<N>-brief-desc <branch>` first
+1. **Enter the existing worktree**: `EnterWorktree({path: "<repo>/.claude/worktrees/issue-<N>-brief-desc"})`
+   - Find it with `git worktree list` rather than assuming the path
+   - If removed: `EnterWorktree({name: "issue-<N>-brief-desc"})` to recreate, then `git checkout <branch>` inside it
 2. **Check git status**: confirm you're on the right branch
 3. **Pull latest**: `git fetch origin && git pull origin <branch-name>`
 4. **Sync dependencies if needed**: `bun install` — only if WIP commit mentions new packages
@@ -69,6 +71,8 @@ If you start implementation without completing the startup sequence: STOP, compl
 - Running `bun run gh:*` from a subdirectory — fails with "Script not found"
 - Reading/editing files before EnterWorktree — edits land in wrong checkout
 - Skipping EnterWorktree entirely and working on `main` — blocks parallel work
+- Fighting `EnterWorktree` over where it puts the worktree or what it names the branch — it owns both; "correcting" them wastes calls and fixes nothing
+- `cd`-ing into a package directory — the Bash working directory persists across calls, so a later `bun run gh:*` fails with "Script not found". Use `bun run --cwd <pkg>` / `cargo -p <pkg>` instead
 - Using TodoWrite without startup sequence as the first item
 
 ## Finding Tasks
@@ -196,9 +200,16 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    bun run test:all          # MANDATORY — no new failures vs baseline
    bun run quality:fix       # MANDATORY — fix all lint/format issues
    git add . && git commit -m "Fix linting and formatting"
-   git push -u origin issue-<number>-brief-desc
+   git push origin HEAD:issue-<number>-brief-desc
    bun run gh:pr <number>    # Creates PR, updates status to "Ready for Review"
    ```
+
+   > ⚠️ **`bun run gh:pr` infers the head branch from the LOCAL branch name**, which `EnterWorktree` prefixes with `worktree-`. It therefore fails with `Validation Failed: {"field":"head","code":"invalid"}` against a remote branch pushed without that prefix. Create the PR directly instead, then set status:
+   > ```bash
+   > gh pr create --repo NodeSpaceAI/nodespace-core --base main \
+   >   --head issue-<number>-brief-desc --title "..." --body "..."
+   > bun run gh:status <number> "Ready for Review"
+   > ```
 
    > ⚠️ **`git push` runs a pre-push gate (`scripts/test-gate.ts`, ADR-047)** that re-runs `test:all`, then `cargo build --bin nodespaced`, then the full `test:e2e` suite — every push, not just the first. On a fresh worktree with no Rust build cache this can take **several minutes** (cold `cargo build` alone can exceed 5 minutes). Give the push command a long timeout (10+ minutes) or run it in the background and wait for completion — a command that times out before the hook finishes looks identical to a real failure but isn't one; check the tail of the actual output for a real test failure vs. an incomplete cold build before concluding the push failed. Do not reach for `--no-verify` to work around slowness — it's reserved for WIP Handoff Commits.
 
@@ -232,10 +243,10 @@ The context window clears between planning and implementation. The implementatio
 Every plan MUST include:
 
 1. **Step 0 — Startup sequence:**
-   > `git status` and `git pull origin main` on primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})` (creates `~/.worktrees/issue-<N>-brief-desc/`), then inside the worktree: `bun install`, `bun run test` (baseline), `bun run gh:comment <N> "..."`, `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
+   > `git status` and `git pull origin main` on primary checkout, `EnterWorktree({name: "issue-<N>-brief-desc"})` (the tool owns the location and branch name — accept them), then inside the worktree: `bun install`, `bun run test` (baseline), `bun run gh:comment <N> "..."`, `bun run gh:assign <N> "@me"`, `bun run gh:status <N> "In Progress"`
 
 2. **Final steps:**
-   > `bun run test:all` (no new failures), `bun run quality:fix` + commit, `bun run gh:pr <N>`. After approval: `gh pr view <PR#>`, `ExitWorktree({action: "remove", discard_changes: true})`, `gh pr merge <PR#> --squash --delete-branch`.
+   > `bun run test:all` (no new failures), `bun run quality:fix` + commit, `git push origin HEAD:issue-<N>-brief-desc`, then `gh pr create --head issue-<N>-brief-desc` (not `bun run gh:pr` — it fails on the `worktree-` branch prefix). After approval: `gh pr view <PR#>`, `ExitWorktree({action: "remove", discard_changes: true})`, `gh pr merge <PR#> --squash --delete-branch`.
 
 3. **Inline standards** the implementation agent needs: e.g. "use `createLogger` not `console.log`", "mock Tauri with `vi.mock('@tauri-apps/api/core')`", "use `bun run test` not `bun test`".
 
