@@ -26,8 +26,10 @@
 //! Each scenario is run N=10 times for variance. Results are written to
 //! `nodespace-docs/development/benchmarks/search-skills-latency.md`.
 //!
-//! Run with:
-//!   cargo test -p nodespace-agent --test search_skills_latency -- --nocapture
+//! Ignored by default — these are latency benchmarks, not correctness checks,
+//! and would otherwise run for real (slowly) on any machine with a reachable
+//! inference backend. Run explicitly with:
+//!   cargo test -p nodespace-agent --test search_skills_latency -- --ignored --nocapture
 //!
 //! Gracefully skips if no inference backend is available (no OpenAI-compatible
 //! endpoint reachable and no local GGUF model downloaded).
@@ -554,6 +556,7 @@ fn build_report(model_name: &str, scenarios: &[ScenarioStats], n: usize, date: &
 const N_RUNS: usize = 10;
 
 #[tokio::test]
+#[ignore = "latency benchmark; requires a local inference backend, run explicitly for a number"]
 async fn bench_search_skills_e2e_latency() {
     let Some((engine, model_name)) = resolve_backend().await else {
         eprintln!(
@@ -841,6 +844,7 @@ async fn search_skills_response_includes_schema_metadata() {
 // Streaming overhead check — ensures streaming chunks don't add measurement noise
 // ---------------------------------------------------------------------------
 #[tokio::test]
+#[ignore = "latency benchmark; requires a local inference backend, run explicitly for a number"]
 async fn bench_streaming_chunks_are_buffered() {
     let Some((engine, model_name)) = resolve_backend().await else {
         eprintln!("SKIP bench_streaming_chunks_are_buffered: no backend available");
