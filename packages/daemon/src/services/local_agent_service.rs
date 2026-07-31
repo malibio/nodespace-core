@@ -86,6 +86,20 @@ type TurnTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 /// stalls cannot hold up the model load that awaits it.
 const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Bound on the routing-reliability probe run during an OpenAI-compat model
+/// load (see `nodespace_agent::local_agent::routing_probe`).
+///
+/// The request itself intentionally carries no `max_tokens` cap — it mirrors
+/// production's real Stage-2 tool-calling request, which is uncapped for the
+/// same reason (a truncated tool-call argument is invalid JSON). A tool call,
+/// when the model makes one, fires within the first handful of tokens, so a
+/// normal probe resolves in seconds; this timeout exists only to bound the
+/// pathological case (a model that answers in prose at length instead of
+/// calling a tool) rather than to change what gets measured. On timeout the
+/// probe is treated as an engine error — unmeasured, not a suppression
+/// verdict — so model loading is never blocked past this bound.
+const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
     model_manager: Arc<GgufModelManager>,
@@ -1216,12 +1230,25 @@ impl LocalAgentServiceImpl {
                 // describes this model; no need to touch disk or re-probe.
                 let disabled = *self.inner.active_model_routing_disabled.lock().await;
                 Some(!disabled)
-            } else if let Some(cached) = config.routing_ok {
+            } else if let Some(cached) = config.routing_ok.get(&model).copied() {
+                // Keyed by the served model, not the config as a whole — one
+                // config can discover several models (see the field's doc
+                // comment on `OpenAiCompatConfig::routing_ok`), each with its
+                // own independent verdict.
                 Some(cached)
             } else {
-                match nodespace_agent::local_agent::routing_probe::probe_routing_ok(engine.as_ref())
-                    .await
+                let probe_result = match tokio::time::timeout(
+                    ROUTING_PROBE_TIMEOUT,
+                    nodespace_agent::local_agent::routing_probe::probe_routing_ok(engine.as_ref()),
+                )
+                .await
                 {
+                    Ok(result) => result,
+                    Err(_) => Err(nodespace_agent::agent_types::InferenceError::Engine(
+                        format!("routing probe exceeded {ROUTING_PROBE_TIMEOUT:?}"),
+                    )),
+                };
+                match probe_result {
                     Ok(routing_ok) => {
                         if !routing_ok {
                             tracing::warn!(

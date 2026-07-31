@@ -110,7 +110,13 @@ pub async fn probe_routing_ok(
         temperature: Some(0.1),
         max_tokens: Some(STAGE1_MAX_TOKENS),
     };
-    let _ = engine.generate(stage1, Box::new(|_| {})).await;
+    // Not aborted on failure (see the doc comment above), but not silent
+    // either: if Stage 1 is failing consistently, the verdict below is being
+    // formed on a request sequence that diverges from what it means to
+    // measure, and that should be diagnosable rather than invisible.
+    if let Err(e) = engine.generate(stage1, Box::new(|_| {})).await {
+        tracing::debug!(error = %e, "routing probe: Stage 1 pre-generation failed; continuing as production does");
+    }
 
     let block = routing::render_candidates_for_prompt(&[probe_candidate()])
         .expect("the probe candidate's fixed score clears both score bars");
