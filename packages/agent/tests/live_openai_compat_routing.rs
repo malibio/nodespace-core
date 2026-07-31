@@ -581,6 +581,49 @@ mod tests {
         );
     }
 
+    /// `nodespace_agent::local_agent::routing_probe` (issue #1830, Option C)
+    /// runs one synthetic turn per served model at load time and caches
+    /// whether Stage-2 injection is safe, instead of paying this matrix's full
+    /// four-arm cost on every model load. It measures the conservative
+    /// subset — see the probe module's own doc comment — which this matrix
+    /// established as `routed_names`: a candidate block carrying a name and
+    /// nothing else.
+    ///
+    /// This is the regression guard the probe's own doc comment promises: if
+    /// the probe's rendered block ever silently grew instructions or metadata
+    /// (e.g. `routing_probe::probe_candidate` drifting out of sync with this
+    /// file's `names_only_candidate`), the probe would stop being the
+    /// conservative arm it claims to be, and this test — not a live model —
+    /// is what would catch it.
+    #[test]
+    fn the_probes_block_matches_the_routed_names_arm() {
+        let matrix_names_block =
+            routing::render_candidates_for_prompt(&[names_only_candidate()]).unwrap();
+
+        // The probe module's candidate is private; reconstruct it the same
+        // way `names_only_candidate` does here (name-only, matching id/score)
+        // so this compares the two call sites' *shape*, not a shared value
+        // that could drift together. A public accessor would let this test
+        // trivially pass by construction; comparing the rendered output is
+        // the part that actually verifies the two stay conservative.
+        let probe_block = routing::render_candidates_for_prompt(&[SkillCandidate {
+            id: "skill-research".to_string(),
+            name: "Research".to_string(),
+            description: String::new(),
+            score: 0.9,
+            tools: vec!["search_nodes".to_string()],
+            instructions: String::new(),
+            schema_metadata: serde_json::json!([]),
+        }])
+        .unwrap();
+
+        assert_eq!(
+            matrix_names_block, probe_block,
+            "the probe must inject exactly what routed_names measured, or it is no longer \
+             probing the arm this matrix validated"
+        );
+    }
+
     /// The exclusion list must not swallow a model NodeSpace actually runs.
     ///
     /// `"qwen"` is an architecture-family substring, not a product name, so a

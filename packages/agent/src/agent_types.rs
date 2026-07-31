@@ -456,6 +456,21 @@ pub struct AgentSession {
     /// persist history.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prior_writes: Vec<PriorWrite>,
+
+    /// Whether Stage-2 candidate-block injection is disabled for this
+    /// session's model.
+    ///
+    /// Set by the caller (`LocalAgentService`) from a cached routing-probe
+    /// verdict (see `local_agent::routing_probe`) when the session's model is
+    /// loaded — the loop itself never probes. The routing-reliability matrix
+    /// (`tests/live_openai_compat_routing.rs`) found this a per-model
+    /// property: injecting the candidate block suppresses tool-calling
+    /// outright on some served models, independent of the block's content.
+    /// `false` for every session whose model was never probed (the native
+    /// path, and any served model before its first load completes), which
+    /// preserves today's behavior for everything this was not measured on.
+    #[serde(default)]
+    pub routing_disabled: bool,
 }
 
 /// A write completed in an earlier turn, as the duplicate guard sees it.
