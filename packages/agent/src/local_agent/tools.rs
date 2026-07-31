@@ -1439,8 +1439,14 @@ impl GraphToolExecutor {
         // nothing, which is indistinguishable from a genuinely empty result.
         // This is the same no-referent failure that made guidance instruct the
         // model to populate `properties` from field metadata the prompt never
-        // carried. Reusing the descriptor also means this notation matches the
-        // entity block the model sees elsewhere in the same conversation.
+        // carried.
+        //
+        // `render_shape`, not `render`: this sub-call is a lone user message
+        // with no system prompt and no tools, so ", required" would arrive with
+        // no definition attached. Its only definition elsewhere ("MUST be
+        // included in the properties map") is a write obligation, and a model
+        // applying it here would filter on a field the request never mentioned
+        // — reintroducing, from the other side, the very defect this fixes.
         let field_lines: String = match &schema {
             Some(s) if !s.fields.is_empty() => s
                 .fields
@@ -1449,7 +1455,7 @@ impl GraphToolExecutor {
                     format!(
                         "- {}",
                         nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f)
-                            .render()
+                            .render_shape()
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3149,7 +3155,7 @@ mod tests {
                 json!({
                     "name": "Equipment",
                     "fields": [
-                        {"name": "replacement_cost", "type": "number"},
+                        {"name": "replacement_cost", "type": "number", "required": true},
                         {
                             "name": "condition",
                             "type": "enum",
@@ -3193,6 +3199,16 @@ mod tests {
             );
             // Non-enum fields keep rendering, and carry their type.
             assert!(prompt.contains("replacement_cost: number"));
+            // ...but NOT their required-ness. `replacement_cost` is required in
+            // this fixture, and this is a filter prompt: "required" is defined
+            // to the model as "MUST be included in the properties map", a write
+            // obligation. A model applying it here filters on a field the
+            // request never mentioned, matching nothing — the same silent
+            // failure, arrived at from the other direction.
+            assert!(
+                !prompt.contains("required"),
+                "write-time obligations must not leak into a read/filter prompt; got:\n{prompt}"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread")]

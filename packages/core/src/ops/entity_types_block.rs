@@ -61,8 +61,30 @@ impl EntityFieldDescriptor {
     /// This is the notation both call sites emit under a shared heading, so
     /// two spellings of one concept would read to the model as two different
     /// things.
+    ///
+    /// Only for prompts about *writing* a node. `required` is defined to the
+    /// model as "MUST be included in the properties map" (the node-creation
+    /// guidance), which is an obligation on a write and meaningless anywhere
+    /// else — see [`Self::render_shape`] for read/filter contexts.
     pub fn render(&self) -> String {
-        let mut descriptor = if self.enum_values.is_empty() {
+        let mut descriptor = self.render_shape();
+        if self.required {
+            descriptor.push_str(", required");
+        }
+        descriptor
+    }
+
+    /// Render the field's shape alone — `name: type`, plus enum values — with
+    /// no write-time obligations attached.
+    ///
+    /// For prompts that ask the model to *read* or filter rather than create.
+    /// Carrying ", required" into such a prompt is not merely noise: its only
+    /// definition tells the model the field must appear, so a model acting on
+    /// it emits a filter for a field the request never mentioned, which matches
+    /// nothing — indistinguishable from a genuinely empty result, which is the
+    /// failure this whole area keeps reproducing.
+    pub fn render_shape(&self) -> String {
+        if self.enum_values.is_empty() {
             format!("{}: {}", self.name, self.field_type)
         } else {
             format!(
@@ -71,11 +93,7 @@ impl EntityFieldDescriptor {
                 self.field_type,
                 self.enum_values.join(", ")
             )
-        };
-        if self.required {
-            descriptor.push_str(", required");
         }
-        descriptor
     }
 
     /// Build from a schema field. Public so callers that render a field list
