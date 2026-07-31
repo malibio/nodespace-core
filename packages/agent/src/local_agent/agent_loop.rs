@@ -23,7 +23,7 @@ use crate::local_agent::otlp_tracer::TRACER_NAME;
 use crate::local_agent::prompt_templates;
 use crate::local_agent::response_processing::{normalize_response, normalize_response_traced};
 use crate::local_agent::routing::{self, RouteDecision};
-use crate::local_agent::tools::is_cross_turn_guarded_tool;
+use crate::local_agent::tools::{is_cross_turn_guarded_tool, requires_routed_guidance_tool};
 use crate::prompt_assembler::{PromptAssembler, TemplateContext, EMERGENCY_FALLBACK_PROMPT};
 
 // ---------------------------------------------------------------------------
@@ -602,7 +602,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // disabled — the routing-reliability matrix measured the *prompt
         // block* suppressing tool-calling, not the scoped tool list, so only
         // the mechanism actually implicated is turned off.
-        let tools = routing::stage2_tools(&routed.candidates, &all_tools);
+        let mut tools = routing::stage2_tools(&routed.candidates, &all_tools);
 
         // `session.routing_disabled` is set once, by the caller, from a cached
         // routing-probe verdict for this session's model (see
@@ -626,6 +626,20 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         } else {
             routing::render_candidates_for_prompt(&routed.candidates)
         };
+
+        // `stage2_tools`'s own guidance-dependency exclusion only fires on its
+        // *fail-open* branches (no candidate cleared the score gate). It does
+        // not know about `routing_disabled` forcing `candidate_block` to
+        // `None` above — a candidate can clear the gate, legitimately putting
+        // `resolve_query` in `tools`, while the RELEVANT ENTITY TYPES block
+        // this turn actually sends the model is `None` regardless. Re-derive
+        // the exclusion from what the model is actually about to receive
+        // (`candidate_block`) rather than from why routing produced no
+        // candidates, so this can't reopen the same gap `stage2_tools`
+        // closes through a second door.
+        if candidate_block.is_none() {
+            tools.retain(|t| !requires_routed_guidance_tool(&t.name));
+        }
 
         let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
@@ -5759,6 +5773,7 @@ mod tests {
     struct RecordingEngine<E: ChatInferenceEngine> {
         inner: E,
         system_prompts: Arc<std::sync::Mutex<Vec<String>>>,
+        tool_names: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
     }
 
     impl<E: ChatInferenceEngine> RecordingEngine<E> {
@@ -5766,11 +5781,19 @@ mod tests {
             Self {
                 inner,
                 system_prompts: Arc::new(std::sync::Mutex::new(Vec::new())),
+                tool_names: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
 
         fn system_prompts_handle(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
             Arc::clone(&self.system_prompts)
+        }
+
+        /// Tool names offered on each `generate` call, in call order — so a
+        /// test can assert on Stage 2's actual offered surface rather than
+        /// just the prompt text.
+        fn tool_names_handle(&self) -> Arc<std::sync::Mutex<Vec<Vec<String>>>> {
+            Arc::clone(&self.tool_names)
         }
     }
 
@@ -5787,6 +5810,15 @@ mod tests {
                     .unwrap()
                     .push(system.content.clone());
             }
+            self.tool_names.lock().unwrap().push(
+                request
+                    .tools
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|t| t.name.clone())
+                    .collect(),
+            );
             self.inner.generate(request, on_chunk).await
         }
 
@@ -5889,6 +5921,60 @@ mod tests {
         // prompt injection, and the matrix did not implicate it — it must stay
         // in effect even though injection is off.
         assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+    }
+
+    #[tokio::test]
+    async fn routing_disabled_still_excludes_resolve_query_when_its_guidance_is_unsent() {
+        // A candidate whose whitelist includes resolve_query clears the score
+        // gate on its own terms, so stage2_tools's fail-open exclusion never
+        // fires — resolve_query is legitimately in `permitted`. But this
+        // session's routing is disabled, so `candidate_block` (the RELEVANT
+        // ENTITY TYPES block resolve_query's required node_type parameter
+        // depends on) is forced to `None` regardless. Offering resolve_query
+        // here reproduces #1840's defect through a second door.
+        let engine = RecordingEngine::new(routed_engine(
+            "find notes",
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let tool_calls = engine.tool_names_handle();
+        let inner = MockToolExecutor::new().with_tool(
+            "resolve_query",
+            json!({"type": "object", "properties": {
+                "request": {"type": "string"}, "node_type": {"type": "string"}
+            }}),
+            json!({"resolved": false, "reason": "no_match"}),
+        );
+        let exec = RoutingToolExecutor::new(
+            inner,
+            vec![skill_candidate(
+                "Graph Editing",
+                0.9,
+                &["search_nodes", "resolve_query"],
+            )],
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        session.routing_disabled = true;
+
+        loop_
+            .run_turn(
+                &mut session,
+                "find my billing notes",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        let stage2_tools = &tool_calls.lock().unwrap()[1];
+        assert!(
+            !stage2_tools.contains(&"resolve_query".to_string()),
+            "resolve_query must not be offered when its guidance block was not sent: \
+             {stage2_tools:?}"
+        );
     }
 
     #[tokio::test]
