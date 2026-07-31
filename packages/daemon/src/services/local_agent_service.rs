@@ -110,6 +110,17 @@ const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// `ollama pull`) shows up without restarting the app. A user who wants it
 /// sooner has the explicit "Refresh remote models" button, which sets
 /// `ListModelsRequest::force_refresh` to bypass this TTL entirely.
+///
+/// No event-driven invalidation (contrast `InboundRelationshipCache`'s
+/// `schema_change_flag`, a similar cache-vs-config-write problem solved with
+/// a single `AtomicBool`): `SettingsServiceImpl` (process-global) and
+/// `LocalAgentServiceImpl` (built per-database, potentially many instances
+/// under ADR-053) share no state today, and this cache's only writer —
+/// Settings' config add/edit/delete — already calls `refreshRemoteModels`
+/// with `force_refresh: true` on the frontend right after saving, which gets
+/// the same "list reflects a config change immediately" behavior with none
+/// of the cross-service wiring. Deferred as YAGNI, not ruled out — revisit if
+/// a second config writer appears that can't reach for the same frontend hook.
 const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 struct LocalAgentServiceInner {
@@ -1117,6 +1128,15 @@ impl LocalAgentServiceImpl {
     /// An endpoint that is unreachable or misconfigured contributes nothing
     /// rather than failing the catalog — a user with one dead provider must
     /// still see the models from every other one.
+    ///
+    /// No single-flight de-duplication on a concurrent cache miss: the lock is
+    /// released before the network round trip (so a slow discovery round never
+    /// blocks a concurrent cache *hit*), which means two callers racing a cold
+    /// cache each run their own discovery round rather than one waiting on the
+    /// other's in-flight result. Accepted, not overlooked — same gap exists in
+    /// `InboundRelationshipCache::refresh_cache`, and it only costs an extra
+    /// fan-out on the very first mount; every call after either round
+    /// completes is a cache hit.
     async fn discover_openai_compat_models(
         &self,
         force_refresh: bool,
@@ -3278,11 +3298,35 @@ model = "model-b"
         let first = svc.discover_openai_compat_models(false).await;
         assert!(first.is_empty());
 
-        let cache = svc.inner.openai_compat_discovery_cache.lock().await;
-        assert!(
-            cache.is_some(),
-            "a completed discovery round must populate the cache even when \
-             the result is empty, otherwise ListModels never benefits from it"
+        let first_fetched_at = svc
+            .inner
+            .openai_compat_discovery_cache
+            .lock()
+            .await
+            .as_ref()
+            .expect(
+                "a completed discovery round must populate the cache even when \
+                 the result is empty, otherwise ListModels never benefits from it",
+            )
+            .0;
+
+        // The distinguishing assertion: a second call must be served from the
+        // cache, not re-discovered — if it re-ran discovery, this would
+        // repopulate the cache with a new `Instant`, changing the timestamp.
+        let _ = svc.discover_openai_compat_models(false).await;
+        let second_fetched_at = svc
+            .inner
+            .openai_compat_discovery_cache
+            .lock()
+            .await
+            .as_ref()
+            .expect("cache must remain populated")
+            .0;
+
+        assert_eq!(
+            first_fetched_at, second_fetched_at,
+            "a second call within the TTL must be served from the cache, not \
+             re-discovered — the fetch timestamp must not change"
         );
     }
 }

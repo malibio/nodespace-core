@@ -39,13 +39,10 @@
   let remoteModels = $state<{ id: string; name: string }[]>([]);
   let remoteChecking = $state(true);
 
-  async function refreshRemoteModels() {
+  async function refreshRemoteModels(forceRefresh = false) {
     remoteChecking = true;
     try {
-      // Explicit user-triggered refresh bypasses the daemon's discovery cache
-      // so a newly available model (e.g. after `ollama pull`) shows up
-      // immediately instead of waiting out the TTL.
-      const list = await chatModelList(true);
+      const list = await chatModelList(forceRefresh);
       remoteModels = list
         .filter((m) => m.backend === 'openai-compat')
         .map((m) => ({ id: m.id, name: m.name }));
@@ -121,6 +118,10 @@
     await refreshRemoteModels();
   });
 
+  // config write helpers below force a refresh, since they're the one
+  // place a stale discovery cache is user-visible as a bug: the endpoint
+  // set just changed underneath it.
+
   function buildDefaultOptions() {
     const opts: { label: string; value: string }[] = [];
     // Local models
@@ -191,6 +192,7 @@
     await saveOpenAiConfigs(openAiConfigs);
     editingConfig = null;
     buildDefaultOptions();
+    await refreshRemoteModels(true);
   }
 
   async function deleteConfig(id: string) {
@@ -201,6 +203,7 @@
       saveDefaultModelSelection(null);
     }
     buildDefaultOptions();
+    await refreshRemoteModels(true);
   }
 
   function cancelEdit() {
@@ -320,7 +323,7 @@
       <h3>Available remote models</h3>
       <button
         class="refresh-btn"
-        onclick={refreshRemoteModels}
+        onclick={() => refreshRemoteModels(true)}
         disabled={remoteChecking}
         aria-label="Refresh remote models"
       >
