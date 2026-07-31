@@ -34,7 +34,9 @@ pub struct WorkspaceContext {
     pub relevant_schemas: Vec<SchemaNode>,
     /// Schemas one relationship hop from `relevant_schemas`, never matched by
     /// the query itself (may be empty). Rendered name-only — see
-    /// `related_one_hop_schemas` for the traversal.
+    /// `related_one_hop_schemas` for the traversal. Only ever populated when
+    /// `relevant_schemas` is non-empty — there is nothing to traverse from
+    /// otherwise.
     pub related_schemas: Vec<SchemaNode>,
 }
 
@@ -154,6 +156,11 @@ fn related_one_hop_schemas(
         }
     }
 
+    // filter_map, not map: an outgoing relationship's target_type can name a
+    // schema id that no longer exists in the corpus (e.g. deleted without
+    // cleaning up the relationship that pointed at it). There is nothing to
+    // render for a schema we don't have, so a dangling reference is silently
+    // dropped here rather than surfaced as an error.
     related_ids
         .into_iter()
         .filter_map(|id| all_schemas.iter().find(|s| s.id == id).cloned())
@@ -636,6 +643,71 @@ mod tests {
 
         let related_ids: Vec<&str> = related.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(related_ids, vec!["customer"]);
+    }
+
+    #[test]
+    fn related_schemas_both_directions_fire_in_one_call() {
+        // Two retrieved schemas, each reaching a DIFFERENT related schema via
+        // a DIFFERENT direction in the same traversal call: invoice reaches
+        // customer via its own outgoing relationship, while venue is a hub
+        // with no outgoing relationships of its own and is reached only via
+        // event's incoming relationship. Both must surface from one call —
+        // this is the literal "bidirectional" acceptance criterion, not two
+        // isolated single-direction fixtures.
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let venue = sample_schema("venue", "Venue", &["capacity"]);
+        let event = sample_schema_with_relationships(
+            "event",
+            "Event",
+            &[],
+            vec![outgoing_relationship("held_at", "venue")],
+        );
+
+        let retrieved = vec![invoice.clone(), venue.clone()];
+        let all = vec![invoice, customer, venue, event];
+        let related = related_one_hop_schemas(&retrieved, &all);
+
+        let related_ids: std::collections::HashSet<&str> =
+            related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, ["customer", "event"].into());
+    }
+
+    #[test]
+    fn related_schemas_convergent_paths_dedupe_to_one() {
+        // customer is reachable via TWO different paths in the same call:
+        // outgoing from invoice, AND incoming from freelance_gig (which
+        // targets customer directly). It must appear exactly once.
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let freelance_gig = sample_schema_with_relationships(
+            "freelance_gig",
+            "Freelance Gig",
+            &[],
+            vec![outgoing_relationship("client", "customer")],
+        );
+
+        let retrieved = vec![invoice.clone(), customer.clone()];
+        let all = vec![invoice, customer, freelance_gig];
+        let related = related_one_hop_schemas(&retrieved, &all);
+
+        // customer is directly retrieved, so it must not appear in `related`
+        // at all (never-duplicate-already-retrieved) — freelance_gig is the
+        // only schema that should surface, exactly once, despite invoice's
+        // outgoing edge and freelance_gig's incoming edge both terminating
+        // on customer.
+        let related_ids: Vec<&str> = related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, vec!["freelance_gig"]);
     }
 
     #[test]
