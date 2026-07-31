@@ -437,7 +437,10 @@ mod tests {
         let output = ctx.format_for_prompt(4000);
 
         // create_node's description promises the template is shown here.
-        assert!(output.contains("[title_template: {reference}]"), "got: {output}");
+        assert!(
+            output.contains("[title_template: {reference}]"),
+            "got: {output}"
+        );
     }
 
     #[test]

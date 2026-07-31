@@ -325,8 +325,7 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
                         // block uses. Both are emitted into a single system
                         // prompt under the same heading, so two spellings of
                         // one concept would read as two different things.
-                        let mut descriptor = match f.get("enum_values").and_then(|v| v.as_array())
-                        {
+                        let mut descriptor = match f.get("enum_values").and_then(|v| v.as_array()) {
                             Some(vals) if !vals.is_empty() => {
                                 let vs: Vec<&str> =
                                     vals.iter().filter_map(|v| v.as_str()).collect();
