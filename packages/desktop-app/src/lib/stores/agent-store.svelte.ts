@@ -69,7 +69,12 @@ const MOCK_AGENTS: AcpAgentInfo[] = [
   },
 ];
 
-/** Convert a chat-model catalog entry to an AcpAgentInfo for unified display. */
+/**
+ * Convert a chat-model catalog entry to an AcpAgentInfo for unified display.
+ * Callers must pre-filter to `backend === 'gguf'` — remotely-served models
+ * (e.g. OpenAI-compat) are not local agents. Mirrors the filter in model-store's
+ * `refreshModels`; keep both in sync if the catalog gains another backend.
+ */
 function modelToAgent(model: ChatModelEntry): AcpAgentInfo {
   return {
     id: `${LOCAL_AGENT_PREFIX}${model.id}`,
@@ -145,8 +150,9 @@ class AgentStore {
           tauriCommands.chatModelList(),
         ]);
 
-        // Local models first, then PTY agents
-        const localAgents = models.map(modelToAgent);
+        // Local models first, then PTY agents. Only GGUF rows are local agents —
+        // remotely-served (openai-compat) rows belong to a different backend.
+        const localAgents = models.filter((m) => m.backend === 'gguf').map(modelToAgent);
         const ptyAgents = availability.agents.map(availabilityToAgent);
         this.agents = [...localAgents, ...ptyAgents];
       } else {
