@@ -650,9 +650,10 @@ async function handleRequest(req: Request): Promise<Response> {
   // GET /api/agent/models
   if (method === 'GET' && pathname === '/api/agent/models') {
     try {
-      const res = await agentCall<Record<string, never>, { models: Array<Record<string, unknown>> }>(
+      const forceRefresh = url.searchParams.get('force_refresh') === 'true';
+      const res = await agentCall<{ forceRefresh: boolean }, { models: Array<Record<string, unknown>> }>(
         (agentClient as unknown as Record<string, Function>).listModels,
-        {}
+        { forceRefresh }
       );
       const models = (res.models ?? []).map((m) => ({
         id: m.id,

@@ -86,9 +86,19 @@ export interface ChatModelEntry {
   minMemoryGb: number;
 }
 
-export async function chatModelList(): Promise<ChatModelEntry[]> {
-  if (isTauri()) return invoke<ChatModelEntry[]>('chat_model_list');
-  return proxyGet<ChatModelEntry[]>('/api/agent/models');
+/**
+ * List catalog + discovered models.
+ *
+ * The daemon caches OpenAI-compat endpoint discovery for a short TTL so the
+ * model selector's several mount-time callers don't each re-query every
+ * endpoint (see `OPENAI_COMPAT_DISCOVERY_CACHE_TTL` in the daemon's
+ * `local_agent_service.rs`). Pass `forceRefresh: true` to bypass a fresh
+ * cache hit — used by the explicit "Refresh remote models" action in
+ * Settings; every other call site should omit it and accept a cache hit.
+ */
+export async function chatModelList(forceRefresh = false): Promise<ChatModelEntry[]> {
+  if (isTauri()) return invoke<ChatModelEntry[]>('chat_model_list', { forceRefresh });
+  return proxyGet<ChatModelEntry[]>(`/api/agent/models?force_refresh=${forceRefresh}`);
 }
 
 export async function chatModelRecommended(): Promise<string> {

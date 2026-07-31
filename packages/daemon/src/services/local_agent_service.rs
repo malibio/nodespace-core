@@ -100,6 +100,18 @@ const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// verdict — so model loading is never blocked past this bound.
 const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// TTL for the OpenAI-compat discovery cache (see
+/// `LocalAgentServiceInner::openai_compat_discovery_cache`).
+///
+/// Short by design: long enough that the model selector's three call sites
+/// (`model-store`, `agent-store`, `ai-chat-model-selector`) mounting in quick
+/// succession share one discovery round instead of each paying
+/// `DISCOVERY_TIMEOUT`, short enough that a model becoming available (e.g.
+/// `ollama pull`) shows up without restarting the app. A user who wants it
+/// sooner has the explicit "Refresh remote models" button, which sets
+/// `ListModelsRequest::force_refresh` to bypass this TTL entirely.
+const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
     model_manager: Arc<GgufModelManager>,
@@ -153,6 +165,12 @@ struct LocalAgentServiceInner {
     /// Path to `~/.nodespace/daemon.toml`, read to resolve OpenAI-compatible
     /// provider configs by UUID when loading an `openai-compat:<uuid>` model.
     daemon_config_path: std::path::PathBuf,
+    /// Short-TTL cache over `discover_openai_compat_models`'s result (see
+    /// `OPENAI_COMPAT_DISCOVERY_CACHE_TTL`). `None` until the first discovery
+    /// round completes. Bypassed (but still refreshed) when a `ListModels`
+    /// call sets `force_refresh`.
+    openai_compat_discovery_cache:
+        Mutex<Option<(std::time::Instant, Vec<nodespace_agent::agent_types::ModelInfo>)>>,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -192,6 +210,7 @@ impl LocalAgentServiceImpl {
                 turn_tokens: Arc::new(Mutex::new(HashMap::new())),
                 shutdown_token: CancellationToken::new(),
                 daemon_config_path,
+                openai_compat_discovery_cache: Mutex::new(None),
             }),
         }
     }
@@ -905,8 +924,10 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 
     async fn list_models(
         &self,
-        _request: Request<ListModelsRequest>,
+        request: Request<ListModelsRequest>,
     ) -> Result<Response<ListModelsResponse>, Status> {
+        let force_refresh = request.into_inner().force_refresh;
+
         let mut models = self
             .inner
             .model_manager
@@ -914,7 +935,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("Failed to list models: {e}")))?;
 
-        models.extend(self.discover_openai_compat_models().await);
+        models.extend(self.discover_openai_compat_models(force_refresh).await);
 
         let entries = models
             .into_iter()
@@ -1078,14 +1099,44 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 
 impl LocalAgentServiceImpl {
     /// Query every configured OpenAI-compatible endpoint for the models it
-    /// serves, as catalog rows.
+    /// serves, as catalog rows — through a short-TTL cache
+    /// (`OPENAI_COMPAT_DISCOVERY_CACHE_TTL`) so repeated `ListModels` calls
+    /// (three frontend call sites hit it on mount) don't each re-pay the
+    /// endpoint round trip.
+    ///
+    /// `force_refresh` bypasses a fresh cache hit — set by the explicit
+    /// "Refresh remote models" action in Settings — but a stale or absent
+    /// cache is always queried live regardless of this flag.
     ///
     /// Endpoints are queried concurrently: they are independent network calls,
     /// and the model selector awaits this whole listing before it can render.
     /// An endpoint that is unreachable or misconfigured contributes nothing
     /// rather than failing the catalog — a user with one dead provider must
     /// still see the models from every other one.
-    async fn discover_openai_compat_models(&self) -> Vec<nodespace_agent::agent_types::ModelInfo> {
+    async fn discover_openai_compat_models(
+        &self,
+        force_refresh: bool,
+    ) -> Vec<nodespace_agent::agent_types::ModelInfo> {
+        {
+            let cache = self.inner.openai_compat_discovery_cache.lock().await;
+            if let Some((fetched_at, models)) = cache.as_ref() {
+                if !force_refresh && fetched_at.elapsed() < OPENAI_COMPAT_DISCOVERY_CACHE_TTL {
+                    return models.clone();
+                }
+            }
+        }
+
+        let discovered = self.discover_openai_compat_models_uncached().await;
+
+        let mut cache = self.inner.openai_compat_discovery_cache.lock().await;
+        *cache = Some((std::time::Instant::now(), discovered.clone()));
+        discovered
+    }
+
+    /// The actual discovery round `discover_openai_compat_models` caches.
+    async fn discover_openai_compat_models_uncached(
+        &self,
+    ) -> Vec<nodespace_agent::agent_types::ModelInfo> {
         use nodespace_agent::local_agent::openai_compat_discovery::{
             discover_models_or_empty, discovered_model_info,
         };
@@ -3127,5 +3178,112 @@ model = "model-b"
                  refusal could not name the existing node"
             );
         }
+    }
+
+    // -- OpenAI-compat discovery cache (issue #1807) ---------------------
+
+    fn fake_discovered_model(label: &str) -> nodespace_agent::agent_types::ModelInfo {
+        use nodespace_agent::local_agent::openai_compat_discovery::discovered_model_info;
+        discovered_model_info("test-config", "Test Provider", label)
+    }
+
+    /// Seed the discovery cache directly (test-only access via `Arc::get_mut`,
+    /// same pattern `engine_swap_completes_when_model_info_hangs` uses for
+    /// `model_spec_snapshot_timeout`), bypassing the network round trip that
+    /// would otherwise back it.
+    async fn seed_discovery_cache(
+        svc: &LocalAgentServiceImpl,
+        fetched_at: std::time::Instant,
+        models: Vec<nodespace_agent::agent_types::ModelInfo>,
+    ) {
+        let mut cache = svc.inner.openai_compat_discovery_cache.lock().await;
+        *cache = Some((fetched_at, models));
+    }
+
+    /// A fresh cache entry is served as-is — no endpoint is queried, so an
+    /// empty `daemon.toml` (zero configured endpoints, which would otherwise
+    /// make discovery trivially return the same empty result) cannot mask a
+    /// bug here: the cached entry contains one fake model, which only comes
+    /// back if the cache path is actually taken.
+    #[tokio::test]
+    async fn fresh_cache_entry_is_returned_without_requerying() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+        let cached = vec![fake_discovered_model("cached-model")];
+        seed_discovery_cache(&svc, std::time::Instant::now(), cached.clone()).await;
+
+        let result = svc.discover_openai_compat_models(false).await;
+
+        assert_eq!(
+            result.iter().map(|m| &m.id).collect::<Vec<_>>(),
+            cached.iter().map(|m| &m.id).collect::<Vec<_>>(),
+            "a fresh cache entry must be served as-is, not re-queried"
+        );
+    }
+
+    /// A cache entry older than the TTL is not returned — the discovery round
+    /// re-runs (against zero configured endpoints here, so it resolves to
+    /// empty), proving staleness is actually checked rather than the cache
+    /// being treated as permanent.
+    #[tokio::test]
+    async fn stale_cache_entry_triggers_a_fresh_discovery_round() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+        let stale_at = std::time::Instant::now()
+            .checked_sub(OPENAI_COMPAT_DISCOVERY_CACHE_TTL + std::time::Duration::from_secs(1))
+            .expect("test clock has enough headroom to go this far back");
+        seed_discovery_cache(
+            &svc,
+            stale_at,
+            vec![fake_discovered_model("stale-model")],
+        )
+        .await;
+
+        let result = svc.discover_openai_compat_models(false).await;
+
+        assert!(
+            result.is_empty(),
+            "a stale cache entry must not be served; expected a fresh (empty, \
+             no endpoints configured) discovery round, got {result:?}"
+        );
+    }
+
+    /// `force_refresh` bypasses even a fresh cache entry — the explicit
+    /// "Refresh remote models" action must always re-query.
+    #[tokio::test]
+    async fn force_refresh_bypasses_a_fresh_cache_entry() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+        seed_discovery_cache(
+            &svc,
+            std::time::Instant::now(),
+            vec![fake_discovered_model("cached-model")],
+        )
+        .await;
+
+        let result = svc.discover_openai_compat_models(true).await;
+
+        assert!(
+            result.is_empty(),
+            "force_refresh must bypass the cache and re-query (no endpoints \
+             configured here, so the fresh round is empty), got {result:?}"
+        );
+    }
+
+    /// A successful discovery round populates the cache, so a second call
+    /// within the TTL is served from it rather than querying again.
+    #[tokio::test]
+    async fn discovery_result_is_cached_for_subsequent_calls() {
+        let (svc, _node_service, _tempdir) = test_service().await;
+
+        // No endpoints configured, so the first (uncached) round is empty —
+        // but it must still populate the cache with that empty result rather
+        // than leaving it `None`, otherwise every call would re-run discovery.
+        let first = svc.discover_openai_compat_models(false).await;
+        assert!(first.is_empty());
+
+        let cache = svc.inner.openai_compat_discovery_cache.lock().await;
+        assert!(
+            cache.is_some(),
+            "a completed discovery round must populate the cache even when \
+             the result is empty, otherwise ListModels never benefits from it"
+        );
     }
 }

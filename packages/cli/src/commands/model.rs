@@ -44,7 +44,9 @@ pub async fn run(client: &mut LocalAgentClient, action: ModelAction, json: bool)
 
 async fn list(client: &mut LocalAgentClient, json: bool) -> Result<()> {
     let response = client
-        .list_models(ListModelsRequest {})
+        .list_models(ListModelsRequest {
+            force_refresh: false,
+        })
         .await
         .context("ListModels RPC failed")?
         .into_inner();

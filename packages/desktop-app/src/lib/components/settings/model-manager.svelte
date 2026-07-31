@@ -42,7 +42,10 @@
   async function refreshRemoteModels() {
     remoteChecking = true;
     try {
-      const list = await chatModelList();
+      // Explicit user-triggered refresh bypasses the daemon's discovery cache
+      // so a newly available model (e.g. after `ollama pull`) shows up
+      // immediately instead of waiting out the TTL.
+      const list = await chatModelList(true);
       remoteModels = list
         .filter((m) => m.backend === 'openai-compat')
         .map((m) => ({ id: m.id, name: m.name }));
