@@ -8,24 +8,14 @@
 # Directly-fixable vulnerabilities are resolved in Cargo.lock, not ignored:
 #   - crossbeam-epoch  RUSTSEC-2026-0204  -> 0.9.20
 #   - quinn-proto      RUSTSEC-2026-0185  -> 0.11.16
+#   - rustls-webpki    RUSTSEC-2026-0104/0098/0099/0049 -> dropped by scoping libsql
+#     to its `core` feature (default-features = false). libsql only pulls in
+#     hyper-rustls (and therefore rustls 0.22 / rustls-webpki 0.102.8) via its
+#     `tls`/`remote`/`sync`/`replication` features; we only ever use the local
+#     embedded engine (`Builder::new_local`), so those features were dead weight.
+#   - quick-xml        RUSTSEC-2026-0194/0195 -> 0.41.0, via `cargo update -p plist`
+#     (plist ^1 already allows 1.10.0, which requires quick-xml ^0.41.0; tauri
+#     2.11.2's `^1` requirement on plist didn't need a version bump at all).
 
 [advisories]
-ignore = [
-    # quick-xml 0.39.4 — memory-exhaustion + quadratic-runtime DoS. Fix is >=0.41.0,
-    # but quick-xml is transitively pinned to ^0.39 by `plist` <- `tauri 2.11.2`; it
-    # is only used to parse our own bundled Info.plist at build/package time (not a
-    # hostile-input path). Resolves when tauri's plist dep advances. Tracked upstream.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-
-    # rustls-webpki 0.102.8 — certificate name-constraint / CRL validation issues and a
-    # reachable CRL-parse panic. Fixed in 0.103.x, which the tree ALREADY carries
-    # (0.103.13) on the rustls 0.23 line. The vulnerable 0.102.8 line is pinned solely
-    # by `libsql 0.6.0` (rustls 0.22), whose only TLS peer is the pinned Supabase
-    # endpoint. The fix requires a major `libsql` bump (rustls 0.23) — a breaking change
-    # tracked separately. Accepted-with-tracking until then.
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0049",
-]
+ignore = []
