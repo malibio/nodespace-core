@@ -7,9 +7,13 @@
 //!      without schema_metadata from search_skills response)
 //!   3. Multi-skill turn — cross-type request spanning search and creation
 //!
-//! Architecture note: entity types are no longer injected into the
-//! system prompt. The model discovers type metadata on-demand via `search_skills`,
-//! which returns `schema_metadata` (type IDs, field names, enum values) per match.
+//! Architecture note: entity types reach the model by two routes, and both are
+//! live. `context_ops::format_for_prompt` injects a `RELEVANT ENTITY TYPES`
+//! block for query-matched schemas, and each routed skill candidate carries its
+//! own copy built from the `schema_metadata` (type IDs, field names, enum
+//! values) that `search_skills` returns per match. On-demand discovery via
+//! `search_skills` therefore supplements the prompt block rather than replacing
+//! it.
 //!
 //! Scenarios 2 and 3 use user-defined type prompts (invoices, campaigns) that
 //! ideally route through `search_skills` for schema discovery. Whether a specific
@@ -635,14 +639,16 @@ async fn bench_search_skills_e2e_latency() {
     // calls it for well-known concepts (invoice, campaign) depends on training data.
     // The hard structural invariant — that search_skills RETURNS schema_metadata —
     // is verified in `search_skills_response_includes_schema_metadata` below.
-    // A model-level regression (entity types back in the prompt) would cause
-    // search_skills_calls to stay at 0 consistently — use this counter to monitor.
+    // Monitoring counter: a model that never calls search_skills is relying on
+    // something other than on-demand discovery. That may be training-data
+    // knowledge, or it may be the prompt-injected entity block already
+    // answering the question.
     if scenario2_skills_called == 0 {
         eprintln!(
             "NOTE: search_skills was never called in scenario 2 — \
-             the model relied on training-data knowledge rather than on-demand discovery. \
-             This is acceptable for well-known types. Verify entity types are NOT in the \
-             system prompt by checking context_ops::format_for_prompt (#1283)."
+             the model resolved the type without on-demand discovery. This is \
+             acceptable for well-known types, and the prompt-injected entity block \
+             may also have supplied the answer."
         );
     }
 
@@ -689,9 +695,9 @@ async fn bench_search_skills_e2e_latency() {
     if scenario3_skills_called == 0 {
         eprintln!(
             "NOTE: search_skills was never called in scenario 3 — \
-             the model relied on training-data knowledge rather than on-demand discovery. \
-             This is acceptable for well-known types. Verify entity types are NOT in the \
-             system prompt by checking context_ops::format_for_prompt (#1283)."
+             the model resolved the types without on-demand discovery. This is \
+             acceptable for well-known types, and the prompt-injected entity block \
+             may also have supplied the answer."
         );
     }
 

@@ -641,6 +641,40 @@ mod tests {
         }
     }
 
+    /// No seeded skill declares `node_types`, so every candidate takes
+    /// `find_skills`' unscoped branch — all non-core schemas, capped at
+    /// `MAX_UNSCOPED_SCHEMA_METADATA`. Every candidate therefore carries an
+    /// *identical* schema list, which is what makes the repeated
+    /// `RELEVANT ENTITY TYPES` copies in one Stage-2 prompt genuinely
+    /// redundant rather than differently-scoped.
+    ///
+    /// This pins the premise of that finding: a seed gaining `node_types`
+    /// would scope its copy to a subset, and the de-duplication argument would
+    /// need re-measuring rather than silently ceasing to hold.
+    #[test]
+    fn no_seeded_skill_scopes_its_schema_metadata() {
+        let scoped: Vec<String> = seed_skill_nodes()
+            .into_iter()
+            // Mirrors `find_skills`' predicate: an absent key and an empty
+            // array both fall through to the unscoped branch, so only a
+            // non-empty list actually scopes a candidate's schema_metadata.
+            .filter(|seed| {
+                seed.root_properties
+                    .get("node_types")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|a| !a.is_empty())
+            })
+            .map(|seed| seed.title)
+            .collect();
+
+        assert!(
+            scoped.is_empty(),
+            "these seeds now scope schema_metadata via node_types: {scoped:?} — the entity-block \
+             duplication measurement assumed every candidate carries the same unscoped schema \
+             list, so re-measure before relying on that finding"
+        );
+    }
+
     #[test]
     fn update_schema_is_reachable_via_search_skills() {
         let seeds = seed_skill_nodes();

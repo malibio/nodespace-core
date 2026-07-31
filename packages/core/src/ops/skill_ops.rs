@@ -180,47 +180,13 @@ pub async fn find_skills(
                 scoped_type_ids.len()
             })
             .map(|s| {
-                let fields: Vec<Value> = s
-                    .fields
-                    .iter()
-                    .map(|f| {
-                        let mut field = json!({
-                            "name": f.name,
-                            "type": f.field_type,
-                        });
-                        // Required-ness drives whether the node-creation
-                        // guidance treats a field as mandatory in the
-                        // properties map; omitting it here leaves that
-                        // instruction with nothing to key on.
-                        if f.required.unwrap_or(false) {
-                            field["required"] = json!(true);
-                        }
-                        // Include enum values so the model can use exact values in tool calls.
-                        if f.field_type == "enum" {
-                            let mut vals: Vec<String> = Vec::new();
-                            if let Some(core_vals) = &f.core_values {
-                                vals.extend(core_vals.iter().map(|v| v.value.clone()));
-                            }
-                            if let Some(user_vals) = &f.user_values {
-                                vals.extend(user_vals.iter().map(|v| v.value.clone()));
-                            }
-                            if !vals.is_empty() {
-                                field["enum_values"] = json!(vals);
-                            }
-                        }
-                        field
-                    })
-                    .collect();
-
-                let mut entry = json!({
-                    "type_id": s.id,
-                    "name": s.content,
-                    "fields": fields,
-                });
-                if let Some(tmpl) = &s.title_template {
-                    entry["title_template"] = json!(tmpl);
-                }
-                entry
+                // Encoded from the same descriptor the prompt block renders
+                // from, so this JSON cannot describe a schema differently than
+                // the model is told about it. The shape stays what it was —
+                // it is the model-facing `search_skills` response body, not an
+                // internal detail — but it is no longer an independently
+                // hand-written projection that can drift.
+                super::entity_types_block::EntityTypeDescriptor::from_schema(s).to_json()
             })
             .collect();
 
