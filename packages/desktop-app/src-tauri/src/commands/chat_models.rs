@@ -52,14 +52,23 @@ const EXPOSED_GGUF_MODEL_IDS: &[&str] = &["gemma-4-e4b-q4km"];
 /// model discovered at a configured OpenAI-compatible endpoint. Other GGUF
 /// models remain in the Rust catalog for internal use but are not exposed to
 /// the frontend.
+///
+/// OpenAI-compat discovery is cached daemon-side for a short TTL (see
+/// `OPENAI_COMPAT_DISCOVERY_CACHE_TTL` in `local_agent_service.rs`) so the
+/// three call sites that list models on mount don't each re-query every
+/// endpoint. Pass `force_refresh: true` to bypass a fresh cache hit — used by
+/// the explicit "Refresh remote models" action in Settings.
 #[tauri::command]
 pub async fn chat_model_list(
     grpc: State<'_, GrpcClient>,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<serde_json::Value>, CommandError> {
     let mut client = grpc.local_agent_client().await;
 
     let resp = client
-        .list_models(ListModelsRequest {})
+        .list_models(ListModelsRequest {
+            force_refresh: force_refresh.unwrap_or(false),
+        })
         .await
         .map_err(|e| grpc_err(e.message()))?;
 

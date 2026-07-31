@@ -139,7 +139,13 @@ message ModelLoadProgressEvent {
 // ListModels
 // ---------------------------------------------------------------------------
 
-message ListModelsRequest {}
+message ListModelsRequest {
+  // Bypass the daemon's short-TTL discovery cache and re-query every
+  // configured OpenAI-compatible endpoint immediately. Set by the
+  // explicit "Refresh remote models" action in Settings; every other
+  // call site leaves this false and accepts a cache hit.
+  bool force_refresh = 1;
+}
 
 message ModelEntry {
   string id = 1;

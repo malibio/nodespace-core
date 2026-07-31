@@ -318,7 +318,9 @@ pub async fn list_local_models(
 ) -> Result<Vec<serde_json::Value>, CommandError> {
     let mut client = grpc.local_agent_client().await;
     let resp = client
-        .list_models(ListModelsRequest {})
+        .list_models(ListModelsRequest {
+            force_refresh: false,
+        })
         .await
         .map_err(|e| grpc_err(e.message()))?
         .into_inner();

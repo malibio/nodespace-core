@@ -115,7 +115,7 @@ async fn chat_model_list_still_succeeds_after_a_download() {
     // list, so it won't itself appear here — that filter is a UI curation
     // concern independent of download/load capability. This only asserts the
     // command layer isn't broken by having downloaded an unexposed model.
-    let models = chat_model_list(state)
+    let models = chat_model_list(state, None)
         .await
         .expect("chat_model_list failed");
     assert!(
@@ -138,7 +138,7 @@ async fn cancel_of_a_download_with_no_stray_downloading_state_left_behind() {
         .await
         .expect("cancel of a non-in-progress download must be a clean no-op, not an error");
 
-    let models = chat_model_list(state)
+    let models = chat_model_list(state, None)
         .await
         .expect("chat_model_list failed after cancel");
     for m in &models {
