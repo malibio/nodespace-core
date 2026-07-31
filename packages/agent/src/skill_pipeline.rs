@@ -19,10 +19,10 @@
 
 use crate::skill_rules::{
     AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, EDIT_DONT_RECREATE, ENUM_FORMAT,
-    FIND_THEN_ACT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST,
-    ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS,
-    SINGLE_ITEM_PER_CALL, SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
-    TITLE_TEMPLATE_PLACEHOLDERS,
+    FIELDS_FROM_REQUEST_ONLY, FIND_THEN_ACT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD,
+    ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
+    SCHEMA_ALREADY_EXISTS, SINGLE_ITEM_PER_CALL, SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST,
+    TASK_STATUS_DEDICATED_VERB, TITLE_TEMPLATE_PLACEHOLDERS,
 };
 use nodespace_core::markdown::{NodeTemplate, SeedTier};
 
@@ -47,6 +47,8 @@ EDITING A SCHEMA — call update_schema:
 {edit_dont_recreate}
 
 FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholder_exception} A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
+
+{fields_from_request_only}
 
 {enum_format}
 
@@ -105,6 +107,7 @@ EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH
         schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
         edit_dont_recreate = EDIT_DONT_RECREATE.imperative,
         no_name_title_field = NO_NAME_TITLE_FIELD.imperative,
+        fields_from_request_only = FIELDS_FROM_REQUEST_ONLY.imperative,
         name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.imperative,
         enum_format = ENUM_FORMAT.imperative,
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,

@@ -13,9 +13,9 @@
 //!   cargo run -p nodespace-agent --bin gen_skill_md -- --write   # regenerate and overwrite SKILL.md
 
 use nodespace_agent::skill_rules::{
-    EDIT_DONT_RECREATE, ENUM_FORMAT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD,
-    ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS, TARGET_TYPE_MUST_EXIST,
-    TITLE_TEMPLATE_PLACEHOLDERS,
+    EDIT_DONT_RECREATE, ENUM_FORMAT, FIELDS_FROM_REQUEST_ONLY, NAME_PLACEHOLDER_EXCEPTION,
+    NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS,
+    TARGET_TYPE_MUST_EXIST, TITLE_TEMPLATE_PLACEHOLDERS,
 };
 use std::env;
 use std::fs;
@@ -37,6 +37,7 @@ fn render_schema_rules_block() -> String {
         "{one_schema_per_request}\n\n{schema_already_exists}\n\n\
          {edit_dont_recreate}\n\n\
          **Schema fields:** {no_name_title_field} {name_placeholder_exception}\n\n\
+         {fields_from_request_only}\n\n\
          {enum_format}\n\n\
          {relationship_vs_field} {target_type_must_exist}\n\n\
          {title_template_placeholders}",
@@ -45,6 +46,7 @@ fn render_schema_rules_block() -> String {
         edit_dont_recreate = EDIT_DONT_RECREATE.prose,
         no_name_title_field = NO_NAME_TITLE_FIELD.prose,
         name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.prose,
+        fields_from_request_only = FIELDS_FROM_REQUEST_ONLY.prose,
         enum_format = ENUM_FORMAT.prose,
         relationship_vs_field = RELATIONSHIP_VS_FIELD.prose,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.prose,

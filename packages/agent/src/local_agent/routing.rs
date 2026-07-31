@@ -20,6 +20,7 @@
 //! system's ability to bound K and enforce the trust boundary.
 
 use crate::agent_types::{SkillCandidate, ToolDefinition};
+use nodespace_core::ops::context_ops::RELEVANT_ENTITY_TYPES_HEADER;
 use serde::Deserialize;
 
 use super::tools::Tool;
@@ -293,7 +294,14 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
             out.push_str(&format!("\n{}\n", c.instructions));
         }
         if let Some(meta) = render_schema_metadata(&c.schema_metadata) {
-            out.push_str(&format!("\nRELEVANT ENTITY TYPES:\n{meta}\n"));
+            // Shared heading with context_ops.rs's resident workspace-context
+            // block — see RELEVANT_ENTITY_TYPES_HEADER's doc comment. This
+            // per-candidate rendering is a second, independent site that
+            // shows the same schema metadata; a fix applied only to the
+            // resident copy left this one to reinforce the exact
+            // contamination the resident copy was changed to guard against
+            // (#1846).
+            out.push_str(&format!("\n{RELEVANT_ENTITY_TYPES_HEADER}\n{meta}\n"));
         }
     }
     Some(out)
@@ -692,6 +700,22 @@ mod tests {
         c.schema_metadata = json!([{"fields": []}]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(!rendered.contains("RELEVANT ENTITY TYPES"));
+    }
+
+    /// This site's heading must be the exact shared constant, not an
+    /// independently-worded copy — see RELEVANT_ENTITY_TYPES_HEADER's doc
+    /// comment (#1846: two independently-maintained copies of this heading,
+    /// one carrying an anti-copy clause and the other not, let contamination
+    /// persist after the first was fixed).
+    #[test]
+    fn schema_metadata_section_uses_the_shared_header() {
+        let mut c = candidate("Node Creation", 0.9, &["create_node"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let rendered = render_candidates_for_prompt(&[c]).unwrap();
+        assert!(
+            rendered.contains(RELEVANT_ENTITY_TYPES_HEADER),
+            "got: {rendered}"
+        );
     }
 
     #[test]
