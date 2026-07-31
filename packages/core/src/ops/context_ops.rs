@@ -563,6 +563,9 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
+            local_only: false,
         });
 
         let mut ctx = sample_context();
@@ -601,6 +604,9 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
+            local_only: false,
         });
 
         let mut ctx = sample_context();
