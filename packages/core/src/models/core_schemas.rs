@@ -49,6 +49,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "status".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -83,6 +84,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "priority".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: Some(vec![
                         EnumValue {
@@ -113,6 +115,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "due_date".to_string(),
                     field_type: "date".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -130,6 +133,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "started_at".to_string(),
                     field_type: "date".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -147,6 +151,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "completed_at".to_string(),
                     field_type: "date".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -164,6 +169,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "assignee".to_string(),
                     field_type: "text".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -198,6 +204,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "status".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -236,6 +243,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "priority".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: Some(vec![
                         EnumValue {
@@ -266,6 +274,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "start_date".to_string(),
                     field_type: "date".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -283,6 +292,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "end_date".to_string(),
                     field_type: "date".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::User,
                     core_values: None,
                     user_values: None,
@@ -431,6 +441,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![SchemaField {
                 name: "restrictedToMembers".to_string(),
                 field_type: "boolean".to_string(),
+                local_only: false,
                 protection: SchemaProtectionLevel::Core,
                 core_values: None,
                 user_values: None,
@@ -480,6 +491,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "provider".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -514,6 +526,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "model".to_string(),
                     field_type: "text".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -531,6 +544,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "status".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -557,6 +571,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "last_active".to_string(),
                     field_type: "datetime".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -574,6 +589,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "context_tokens".to_string(),
                     field_type: "number".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -593,6 +609,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "created_nodes".to_string(),
                     field_type: "array".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -612,6 +629,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "messages".to_string(),
                     field_type: "array".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -626,6 +644,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "role".to_string(),
                             field_type: "enum".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: Some(vec![
                                 EnumValue {
@@ -660,6 +679,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "content".to_string(),
                             field_type: "text".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -677,6 +697,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "reasoning".to_string(),
                             field_type: "text".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -696,6 +717,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "timestamp".to_string(),
                             field_type: "datetime".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::System,
                             core_values: None,
                             user_values: None,
@@ -713,6 +735,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "referenced_nodes".to_string(),
                             field_type: "array".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -730,6 +753,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "tool".to_string(),
                             field_type: "text".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -749,6 +773,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "args".to_string(),
                             field_type: "object".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -768,6 +793,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "status".to_string(),
                             field_type: "enum".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: Some(vec![
                                 EnumValue {
@@ -796,6 +822,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "result_summary".to_string(),
                             field_type: "text".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::Core,
                             core_values: None,
                             user_values: None,
@@ -816,6 +843,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         SchemaField {
                             name: "duration_ms".to_string(),
                             field_type: "number".to_string(),
+                            local_only: false,
                             protection: SchemaProtectionLevel::System,
                             core_values: None,
                             user_values: None,
@@ -833,6 +861,78 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             unique_case_insensitive: None,
                         },
                     ]),
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                // PTY-capture (mode 2d) properties. session_id + transcript are
+                // localOnly (machine-bound resume handle / content-risk raw
+                // scrollback) — never pushed, ignored on pull. The derived summary
+                // is the intended cross-device artifact and syncs like any field.
+                SchemaField {
+                    name: "capture:session_id".to_string(),
+                    field_type: "text".to_string(),
+                    local_only: true,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some(
+                        "Agent session id — a resume handle that names state on this \
+                         machine (e.g. under ~/.claude/); local-only, never synced."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                SchemaField {
+                    name: "capture:transcript".to_string(),
+                    field_type: "text".to_string(),
+                    local_only: true,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some(
+                        "Raw PTY terminal scrollback — local-only on content-risk \
+                         grounds (may contain secrets, tokens, absolute paths); \
+                         never synced. The derived summary carries the cross-device \
+                         value instead."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                SchemaField {
+                    name: "capture:summary".to_string(),
+                    field_type: "text".to_string(),
+                    local_only: false,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some(
+                        "Derived conversation summary — locally-generated prose, the \
+                         intended cross-device artifact; syncs."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
                     unique: None,
                     unique_case_insensitive: None,
                 },
@@ -854,6 +954,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "target_type".to_string(),
                     field_type: "text".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -871,6 +972,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "filters".to_string(),
                     field_type: "array".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -888,6 +990,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "sorting".to_string(),
                     field_type: "array".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -905,6 +1008,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "limit".to_string(),
                     field_type: "number".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -922,6 +1026,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "generated_by".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -948,6 +1053,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "generator_context".to_string(),
                     field_type: "text".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -965,6 +1071,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "execution_count".to_string(),
                     field_type: "number".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -982,6 +1089,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "last_executed".to_string(),
                     field_type: "datetime".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::System,
                     core_values: None,
                     user_values: None,
@@ -1014,6 +1122,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "name".to_string(),
                     field_type: "string".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1031,6 +1140,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "email".to_string(),
                     field_type: "string".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1088,6 +1198,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "description".to_string(),
                     field_type: "string".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1107,6 +1218,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "tool_whitelist".to_string(),
                     field_type: "array".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1124,6 +1236,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "max_iterations".to_string(),
                     field_type: "number".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1160,6 +1273,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "sync_enabled".to_string(),
                     field_type: "boolean".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1181,6 +1295,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "auth_status".to_string(),
                     field_type: "enum".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: Some(vec![
                         EnumValue {
@@ -1211,6 +1326,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "bound_tenant_schema".to_string(),
                     field_type: "string".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1233,6 +1349,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 SchemaField {
                     name: "bound_tenant_collection".to_string(),
                     field_type: "string".to_string(),
+                    local_only: false,
                     protection: SchemaProtectionLevel::Core,
                     core_values: None,
                     user_values: None,
@@ -1344,7 +1461,7 @@ mod tests {
         let schemas = get_core_schemas();
         let ai_chat = schemas.iter().find(|s| s.id == "ai-chat").unwrap();
 
-        assert_eq!(ai_chat.fields.len(), 7);
+        assert_eq!(ai_chat.fields.len(), 10);
         assert!(ai_chat.get_field("provider").is_some());
         assert!(ai_chat.get_field("model").is_some());
         assert!(ai_chat.get_field("status").is_some());
@@ -1352,6 +1469,16 @@ mod tests {
         assert!(ai_chat.get_field("context_tokens").is_some());
         assert!(ai_chat.get_field("created_nodes").is_some());
         assert!(ai_chat.get_field("messages").is_some());
+
+        // PTY-capture (mode 2d) fields + their localOnly classification: the
+        // machine-bound session id and the content-risk raw transcript are
+        // localOnly (never synced); the derived summary syncs.
+        assert!(ai_chat.get_field("capture:session_id").unwrap().local_only);
+        assert!(ai_chat.get_field("capture:transcript").unwrap().local_only);
+        assert!(!ai_chat.get_field("capture:summary").unwrap().local_only);
+        // Every non-capture field syncs (not localOnly) — parity with prior behavior.
+        assert!(!ai_chat.get_field("provider").unwrap().local_only);
+        assert!(!ai_chat.get_field("messages").unwrap().local_only);
 
         // Verify messages has item_fields (nested schema for message objects)
         let messages_field = ai_chat.get_field("messages").unwrap();

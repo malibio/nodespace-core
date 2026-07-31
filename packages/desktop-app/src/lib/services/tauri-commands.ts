@@ -235,13 +235,12 @@ export type CaptureContentLevel = 'metadata_only' | 'summary' | 'full';
 
 export interface CaptureSettings {
   enabled: boolean;
-  sync: boolean;
   content: CaptureContentLevel;
 }
 
 export async function getCaptureSettings(): Promise<CaptureSettings> {
   if (!isTauri()) {
-    return { enabled: false, sync: false, content: 'metadata_only' };
+    return { enabled: false, content: 'metadata_only' };
   }
   return invoke<CaptureSettings>('get_capture_settings');
 }
@@ -252,14 +251,12 @@ export async function updateCaptureSettings(
   if (!isTauri()) {
     return {
       enabled: false,
-      sync: false,
       content: 'metadata_only',
       ...settings,
     } as CaptureSettings;
   }
   return invoke<CaptureSettings>('update_capture_settings', {
     enabled: settings.enabled ?? null,
-    sync: settings.sync ?? null,
     content: settings.content ?? null,
   });
 }

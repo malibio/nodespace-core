@@ -420,6 +420,7 @@ mod tests {
         SchemaField {
             name: "status".to_string(),
             field_type: "enum".to_string(),
+            local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,
             core_values: if core.is_empty() {
                 None
@@ -500,6 +501,7 @@ mod tests {
         let name_field = SchemaField {
             name: "name".to_string(),
             field_type: "string".to_string(),
+            local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::User,
             core_values: None,
             user_values: None,
@@ -517,6 +519,7 @@ mod tests {
         let status_field = SchemaField {
             name: "status".to_string(),
             field_type: "enum".to_string(),
+            local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,
             core_values: Some(vec![
                 EnumValue {
@@ -574,6 +577,7 @@ mod tests {
         let field = SchemaField {
             name: "status".to_string(),
             field_type: "enum".to_string(),
+            local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,
             core_values: Some(vec![EnumValue {
                 value: "shared".to_string(),

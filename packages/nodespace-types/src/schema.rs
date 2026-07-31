@@ -66,6 +66,24 @@ pub struct SchemaField {
     /// two otherwise-identical claims).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unique_case_insensitive: Option<bool>,
+    /// Marks this property as machine-bound. A `localOnly` property is persisted
+    /// and read locally like any other — normal for local reads, writes, and the
+    /// UI — but is never included in a sync push, and is ignored if it arrives in
+    /// a pull. It survives its own device's restarts and is simply absent on other
+    /// devices (never a stale value from elsewhere). Use it when a value denotes
+    /// state on a particular machine, such that transporting it means nothing or
+    /// something false elsewhere (a resume handle, an absolute path, a device id,
+    /// a local port), or when the content is not safe to transport as-is. Enforced
+    /// by the sync engine, which consults this classification when building the
+    /// push payload and when applying a pull.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_only: bool,
+}
+
+/// Serde `skip_serializing_if` helper: omit a `bool` field when it is `false`,
+/// so the flag only appears in serialized schemas where it is actually set.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -240,6 +258,7 @@ mod tests {
             name: "status".to_string(),
             field_type: "enum".to_string(),
             protection: SchemaProtectionLevel::Core,
+            local_only: false,
             core_values: Some(vec![
                 EnumValue {
                     value: "open".to_string(),
@@ -350,6 +369,7 @@ mod tests {
             name: "address".to_string(),
             field_type: "object".to_string(),
             protection: SchemaProtectionLevel::User,
+            local_only: false,
             core_values: None,
             user_values: None,
             indexed: false,
@@ -363,6 +383,7 @@ mod tests {
                     name: "street".to_string(),
                     field_type: "string".to_string(),
                     protection: SchemaProtectionLevel::User,
+                    local_only: false,
                     core_values: None,
                     user_values: None,
                     indexed: false,
@@ -380,6 +401,7 @@ mod tests {
                     name: "city".to_string(),
                     field_type: "string".to_string(),
                     protection: SchemaProtectionLevel::User,
+                    local_only: false,
                     core_values: None,
                     user_values: None,
                     indexed: true,
@@ -440,6 +462,7 @@ mod tests {
             name: "contacts".to_string(),
             field_type: "array".to_string(),
             protection: SchemaProtectionLevel::User,
+            local_only: false,
             core_values: None,
             user_values: None,
             indexed: false,
@@ -453,6 +476,7 @@ mod tests {
                 name: "email".to_string(),
                 field_type: "string".to_string(),
                 protection: SchemaProtectionLevel::User,
+                local_only: false,
                 core_values: None,
                 user_values: None,
                 indexed: true,

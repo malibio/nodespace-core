@@ -80,7 +80,6 @@ describe('Tauri System Commands - API Surface', () => {
     it('getCaptureSettings returns defaults outside Tauri', async () => {
       const result = await tauriCommands.getCaptureSettings();
       expect(result).toHaveProperty('enabled');
-      expect(result).toHaveProperty('sync');
       expect(result).toHaveProperty('content');
     });
   });

@@ -240,7 +240,6 @@ mod tests {
     async fn finalize_returns_none_when_disabled() {
         let config = CaptureConfig {
             enabled: false,
-            sync: false,
             content: CaptureContentSetting::MetadataOnly,
         };
         let session = make_session();
