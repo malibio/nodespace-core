@@ -37,6 +37,12 @@ pub struct WorkspaceContext {
     pub active_playbooks: Vec<PlaybookInfo>,
     /// Schemas semantically relevant to the current query (may be empty).
     pub relevant_schemas: Vec<SchemaNode>,
+    /// Schemas one relationship hop from `relevant_schemas`, never matched by
+    /// the query itself (may be empty). Rendered name-only — see
+    /// `related_one_hop_schemas` for the traversal. Only ever populated when
+    /// `relevant_schemas` is non-empty — there is nothing to traverse from
+    /// otherwise.
+    pub related_schemas: Vec<SchemaNode>,
 }
 
 /// An active playbook.
@@ -102,6 +108,68 @@ fn trailing_chars(text: &str, max_chars: usize) -> &str {
         Some((start, _)) => &text[start..],
         None => text,
     }
+}
+
+/// Find schemas one relationship hop from `retrieved`, searching `all_schemas`.
+///
+/// Traversal is bidirectional: a schema in `retrieved` reaches a target via its
+/// own `relationships[].target_type` (outgoing), and is also reached by any
+/// other schema in `all_schemas` whose `relationships[].target_type` names it
+/// (incoming). Incoming reachability is required — a hub schema like
+/// `customer` typically declares no outgoing relationships of its own, only
+/// incoming ones from `invoice`, `freelance_gig`, etc. A one-directional
+/// (outgoing-only) traversal would miss that case entirely.
+///
+/// No recursive expansion: only schemas directly one hop from the retrieved
+/// set are returned, regardless of what those schemas relate to in turn.
+/// Schemas already present in `retrieved` are never duplicated into the
+/// result.
+fn related_one_hop_schemas(
+    retrieved: &[SchemaNode],
+    all_schemas: &[SchemaNode],
+) -> Vec<SchemaNode> {
+    let retrieved_ids: std::collections::HashSet<&str> =
+        retrieved.iter().map(|s| s.id.as_str()).collect();
+
+    let mut related_ids: Vec<&str> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for schema in retrieved {
+        // Outgoing: this schema declares a relationship to another type.
+        for rel in &schema.relationships {
+            if let Some(target) = rel.target_type.as_deref() {
+                if !retrieved_ids.contains(target) && seen.insert(target) {
+                    related_ids.push(target);
+                }
+            }
+        }
+    }
+
+    // Incoming: some other schema in the corpus declares a relationship
+    // targeting this schema.
+    for candidate in all_schemas {
+        if retrieved_ids.contains(candidate.id.as_str()) {
+            continue;
+        }
+        let points_at_retrieved = candidate.relationships.iter().any(|rel| {
+            rel.target_type
+                .as_deref()
+                .is_some_and(|t| retrieved_ids.contains(t))
+        });
+        if points_at_retrieved && seen.insert(candidate.id.as_str()) {
+            related_ids.push(candidate.id.as_str());
+        }
+    }
+
+    // filter_map, not map: an outgoing relationship's target_type can name a
+    // schema id that no longer exists in the corpus (e.g. deleted without
+    // cleaning up the relationship that pointed at it). There is nothing to
+    // render for a schema we don't have, so a dangling reference is silently
+    // dropped here rather than surfaced as an error.
+    related_ids
+        .into_iter()
+        .filter_map(|id| all_schemas.iter().find(|s| s.id == id).cloned())
+        .collect()
 }
 
 /// Build the embedding query for schema retrieval from conversation context.
@@ -211,10 +279,27 @@ pub async fn build_workspace_context(
         _ => vec![],
     };
 
+    // One-hop related schemas: reachable via a relationship from a
+    // directly-retrieved schema, even though they never matched the query
+    // themselves. Requires the full schema corpus since incoming
+    // reachability depends on schemas outside `relevant_schemas`.
+    let related_schemas = if relevant_schemas.is_empty() {
+        vec![]
+    } else {
+        match node_service.get_all_schemas().await {
+            Ok(all_schemas) => related_one_hop_schemas(&relevant_schemas, &all_schemas),
+            Err(e) => {
+                tracing::warn!(error = %e, "workspace_context: fetching all schemas for related-schema traversal failed, omitting related schemas");
+                vec![]
+            }
+        }
+    };
+
     Ok(WorkspaceContext {
         collections,
         active_playbooks,
         relevant_schemas,
+        related_schemas,
     })
 }
 
@@ -306,6 +391,21 @@ impl WorkspaceContext {
             }
         }
 
+        // Related schemas section (one hop via relationship, name-only)
+        if !self.related_schemas.is_empty() {
+            let header = "\nRELATED (via relationship, not directly matched):\n";
+            if out.len() + header.len() <= max_chars {
+                out.push_str(header);
+                for schema in &self.related_schemas {
+                    let line = format!("- {}: {}\n", schema.id, schema.content);
+                    if out.len() + line.len() > max_chars {
+                        break;
+                    }
+                    out.push_str(&line);
+                }
+            }
+        }
+
         // Playbooks section
         if !self.active_playbooks.is_empty() {
             let header = "\nACTIVE PLAYBOOKS:\n";
@@ -345,10 +445,20 @@ mod tests {
                 description: "When task.status -> Done, evaluate project progress".into(),
             }],
             relevant_schemas: vec![],
+            related_schemas: vec![],
         }
     }
 
     fn sample_schema(id: &str, display_name: &str, fields: &[&str]) -> crate::models::SchemaNode {
+        sample_schema_with_relationships(id, display_name, fields, vec![])
+    }
+
+    fn sample_schema_with_relationships(
+        id: &str,
+        display_name: &str,
+        fields: &[&str],
+        relationships: Vec<crate::models::schema::SchemaRelationship>,
+    ) -> crate::models::SchemaNode {
         use crate::models::schema::SchemaField;
         crate::models::SchemaNode {
             id: id.to_string(),
@@ -379,9 +489,30 @@ mod tests {
                     unique_case_insensitive: None,
                 })
                 .collect(),
-            relationships: vec![],
+            relationships,
             title_template: None,
             properties_header_summary_template: None,
+        }
+    }
+
+    fn outgoing_relationship(
+        name: &str,
+        target_type: &str,
+    ) -> crate::models::schema::SchemaRelationship {
+        use crate::models::schema::{
+            RelationshipCardinality, RelationshipDirection, SchemaRelationship,
+        };
+        SchemaRelationship {
+            name: name.to_string(),
+            target_type: Some(target_type.to_string()),
+            direction: RelationshipDirection::Out,
+            cardinality: RelationshipCardinality::Many,
+            required: None,
+            reverse_name: None,
+            reverse_cardinality: None,
+            edge_table: None,
+            edge_fields: None,
+            description: None,
         }
     }
 
@@ -506,6 +637,7 @@ mod tests {
             collections: vec![],
             active_playbooks: vec![],
             relevant_schemas: vec![sample_schema("invoice", "Invoice", &[])],
+            related_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("invoice: Invoice\n"));
@@ -527,6 +659,7 @@ mod tests {
             collections: vec![],
             active_playbooks: vec![],
             relevant_schemas: vec![],
+            related_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.is_empty());
@@ -538,12 +671,203 @@ mod tests {
             collections: vec!["Projects".into(), "Clients".into()],
             active_playbooks: vec![],
             relevant_schemas: vec![],
+            related_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("COLLECTIONS:"));
         assert!(output.contains("Projects"));
         assert!(output.contains("Clients"));
         assert!(!output.contains("ACTIVE PLAYBOOKS:"));
+    }
+
+    // -----------------------------------------------------------------------
+    // One-hop related-schema traversal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn related_schemas_reachable_via_outgoing_relationship() {
+        // invoice -> customer (outgoing from the retrieved schema).
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &["amount"],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+
+        let related =
+            related_one_hop_schemas(std::slice::from_ref(&invoice), &[invoice.clone(), customer]);
+
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].id, "customer");
+    }
+
+    #[test]
+    fn related_schemas_reachable_via_incoming_relationship() {
+        // customer is retrieved alone; it declares no outgoing relationships
+        // of its own. invoice and freelance_gig each point AT customer, so
+        // bidirectional traversal must still surface them.
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &["amount"],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let freelance_gig = sample_schema_with_relationships(
+            "freelance_gig",
+            "Freelance Gig",
+            &[],
+            vec![outgoing_relationship("client", "customer")],
+        );
+
+        let all = vec![customer.clone(), invoice, freelance_gig];
+        let related = related_one_hop_schemas(&[customer], &all);
+
+        let related_ids: std::collections::HashSet<&str> =
+            related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, ["invoice", "freelance_gig"].into());
+    }
+
+    #[test]
+    fn related_schemas_no_relationships_is_a_no_op() {
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let other = sample_schema("venue", "Venue", &["capacity"]);
+
+        let related =
+            related_one_hop_schemas(std::slice::from_ref(&customer), &[customer.clone(), other]);
+
+        assert!(related.is_empty());
+    }
+
+    #[test]
+    fn related_schemas_never_duplicate_already_retrieved() {
+        // invoice -> customer, and customer is ALSO directly retrieved.
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+
+        let related =
+            related_one_hop_schemas(&[invoice.clone(), customer.clone()], &[invoice, customer]);
+
+        assert!(related.is_empty());
+    }
+
+    #[test]
+    fn related_schemas_no_recursive_expansion() {
+        // invoice -> customer -> region. Retrieving invoice alone must
+        // surface customer (one hop) but NOT region (two hops).
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema_with_relationships(
+            "customer",
+            "Customer",
+            &[],
+            vec![outgoing_relationship("located_in", "region")],
+        );
+        let region = sample_schema("region", "Region", &[]);
+
+        let related = related_one_hop_schemas(
+            std::slice::from_ref(&invoice),
+            &[invoice.clone(), customer, region],
+        );
+
+        let related_ids: Vec<&str> = related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, vec!["customer"]);
+    }
+
+    #[test]
+    fn related_schemas_both_directions_fire_in_one_call() {
+        // Two retrieved schemas, each reaching a DIFFERENT related schema via
+        // a DIFFERENT direction in the same traversal call: invoice reaches
+        // customer via its own outgoing relationship, while venue is a hub
+        // with no outgoing relationships of its own and is reached only via
+        // event's incoming relationship. Both must surface from one call —
+        // this is the literal "bidirectional" acceptance criterion, not two
+        // isolated single-direction fixtures.
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let venue = sample_schema("venue", "Venue", &["capacity"]);
+        let event = sample_schema_with_relationships(
+            "event",
+            "Event",
+            &[],
+            vec![outgoing_relationship("held_at", "venue")],
+        );
+
+        let retrieved = vec![invoice.clone(), venue.clone()];
+        let all = vec![invoice, customer, venue, event];
+        let related = related_one_hop_schemas(&retrieved, &all);
+
+        let related_ids: std::collections::HashSet<&str> =
+            related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, ["customer", "event"].into());
+    }
+
+    #[test]
+    fn related_schemas_convergent_paths_dedupe_to_one() {
+        // customer is reachable via TWO different paths in the same call:
+        // outgoing from invoice, AND incoming from freelance_gig (which
+        // targets customer directly). It must appear exactly once.
+        let invoice = sample_schema_with_relationships(
+            "invoice",
+            "Invoice",
+            &[],
+            vec![outgoing_relationship("billed_to", "customer")],
+        );
+        let customer = sample_schema("customer", "Customer", &["name"]);
+        let freelance_gig = sample_schema_with_relationships(
+            "freelance_gig",
+            "Freelance Gig",
+            &[],
+            vec![outgoing_relationship("client", "customer")],
+        );
+
+        let retrieved = vec![invoice.clone(), customer.clone()];
+        let all = vec![invoice, customer, freelance_gig];
+        let related = related_one_hop_schemas(&retrieved, &all);
+
+        // customer is directly retrieved, so it must not appear in `related`
+        // at all (never-duplicate-already-retrieved) — freelance_gig is the
+        // only schema that should surface, exactly once, despite invoice's
+        // outgoing edge and freelance_gig's incoming edge both terminating
+        // on customer.
+        let related_ids: Vec<&str> = related.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(related_ids, vec!["freelance_gig"]);
+    }
+
+    #[test]
+    fn format_for_prompt_renders_related_section_name_only() {
+        let mut ctx = sample_context();
+        ctx.relevant_schemas = vec![sample_schema("invoice", "Invoice", &["amount"])];
+        ctx.related_schemas = vec![sample_schema("customer", "Customer", &["name", "email"])];
+
+        let output = ctx.format_for_prompt(4000);
+
+        assert!(output.contains("RELATED (via relationship, not directly matched):"));
+        assert!(output.contains("- customer: Customer"));
+        // Name-only: no field names in the related section.
+        assert!(!output.contains("customer: Customer (name, email)"));
+    }
+
+    #[test]
+    fn format_for_prompt_no_related_section_when_empty() {
+        let ctx = sample_context();
+        let output = ctx.format_for_prompt(4000);
+        assert!(!output.contains("RELATED (via relationship"));
     }
 
     // -----------------------------------------------------------------------
