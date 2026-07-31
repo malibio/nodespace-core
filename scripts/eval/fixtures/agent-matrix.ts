@@ -382,6 +382,11 @@ const fixture: EvalFixture = {
       // different tool surfaces (routing runs per turn and scopes Stage 2's
       // tools from that turn's candidates), so collapsing to the first turn
       // reports a surface later turns never saw. Same for the routed skill.
+      //
+      // Anticipatory today — every caller currently passes a single scored
+      // turn, so these arrays hold one element. Kept per-turn because the
+      // collapsing is what would be silently wrong the moment a scenario scores
+      // more than one turn, and that is invisible in the results file.
       toolsOffered: turns.map((t) => t.toolsOffered),
       routedSkills: turns.map((t) => t.routedSkills ?? ""),
       toolsCalled: turns.flatMap((t) => t.toolsCalled),

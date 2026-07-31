@@ -1739,13 +1739,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             routing_decision = routing_decision_tag,
             routing_latency_ms = elapsed_ms,
             candidates = outcome.candidates.len(),
-            routed_skills = %outcome
-                .candidates
-                .iter()
-                .filter(|c| routing::clears_score_gate(c))
-                .map(|c| c.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            routed_skills = %routing::routed_skill_names(&outcome.candidates),
             "two-stage routing overhead"
         );
         outcome
