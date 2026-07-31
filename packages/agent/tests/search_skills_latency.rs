@@ -695,9 +695,9 @@ async fn bench_search_skills_e2e_latency() {
     if scenario3_skills_called == 0 {
         eprintln!(
             "NOTE: search_skills was never called in scenario 3 — \
-             the model relied on training-data knowledge rather than on-demand discovery. \
-             This is acceptable for well-known types. Verify entity types are NOT in the \
-             system prompt by checking context_ops::format_for_prompt (#1283)."
+             the model resolved the types without on-demand discovery. This is \
+             acceptable for well-known types, and the prompt-injected entity block \
+             may also have supplied the answer."
         );
     }
 
