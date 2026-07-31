@@ -14,21 +14,6 @@
 
 // GHSA id -> justification. Keep this list minimal; prefer fixing via overrides.
 const ALLOWLIST: Record<string, string> = {
-  // vite (transitive via vitest 2.x) — our top-level vite is already bumped
-  // to 6.4.3 (past these advisories). vitest 2.x's own peer resolution
-  // (@vitest/mocker, vite-node) drags in a SECOND, SEPARATE vite@6.4.1 and a
-  // THIRD vite@5.4.21 that we don't control until the vitest 3.x bump.
-  "GHSA-4w7w-66w2-5vf9": "vite (transitive via vitest 2.x internals, not shipped)",
-  "GHSA-fx2h-pf6j-xcff": "vite (transitive via vitest 2.x internals, not shipped)",
-  "GHSA-p9ff-h696-f583": "vite (transitive via vitest 2.x internals, not shipped)",
-  "GHSA-v6wh-96g9-6wx3":
-    "launch-editor bundled in vite (transitive via vitest 2.x internals, not shipped)",
-  // vitest / @vitest/browser — the test runner. Not shipped.
-  "GHSA-5xrq-8626-4rwp": "vitest UI (dev test runner, not shipped)",
-  "GHSA-p63j-vcc4-9vmv": "@vitest/browser (dev test runner, not shipped)",
-  // esbuild — build tool. Not part of the shipped runtime. Reached only via
-  // vitest 2.x's vendored vite@5 (vite-node) — see vite note above.
-  "GHSA-67mh-4wv8-2f99": "esbuild (build tool, not shipped)",
   // cookie — pinned to ^0.6.0 by @sveltejs/kit itself; low severity, needs a
   // SvelteKit upstream bump to advance its cookie dependency past 0.7.
   "GHSA-pxg6-pf52-xh8x":
