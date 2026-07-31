@@ -495,7 +495,7 @@ fn def_get_node() -> ToolDefinition {
 fn def_create_node() -> ToolDefinition {
     ToolDefinition {
         name: "create_node".into(),
-        description: "Create a new node. Always pass 'content' as the node name or text. Optionally pass 'properties' if the schema type has fields. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'properties' — the service composes the displayed title from them automatically.".into(),
+        description: "Create a new node. Always pass 'content' as the node name or text. Always pass 'properties' with every schema field value the user supplied — it is the only way those values are stored, and a call without them creates an empty record. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'properties' — the service composes the displayed title from them automatically.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -509,7 +509,7 @@ fn def_create_node() -> ToolDefinition {
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Schema field values (e.g. {\"status\": \"active\"}). For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
+                    "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
                 },
                 "parent_id": {
                     "type": "string",

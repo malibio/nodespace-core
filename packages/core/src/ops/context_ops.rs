@@ -4,11 +4,16 @@
 //! the database. The output is formatted as a token-efficient string suitable
 //! for injection into a small-model system prompt.
 //!
-//! Entity types are no longer included here by default — the model discovers
-//! type metadata on-demand via `search_skills` which returns `schema_metadata`
-//! per match. When a query + embedding service are provided, schemas
-//! semantically relevant to the query are injected to cover implicit references
-//! (e.g. "track my clients" → `customer` schema).
+//! When a query + embedding service are provided, schemas semantically relevant
+//! to the query are injected as a RELEVANT ENTITY TYPES block, covering implicit
+//! references (e.g. "track my clients" → `customer` schema).
+//!
+//! That block is the *only* per-type field metadata the model receives on a
+//! creation turn, so it renders each field's name, type, and required-ness. The
+//! node-creation guidance conditions its `properties` population on exactly
+//! those three, and a name-only rendering left those instructions with no
+//! referent — the model then omitted `properties` entirely and persisted bare
+//! shells.
 //!
 //! The retrieval query itself is assembled by [`build_retrieval_query`], which
 //! blends the preceding conversation turns with the current message so that
@@ -243,12 +248,28 @@ impl WorkspaceContext {
             if out.len() + header.len() <= max_chars {
                 out.push_str(header);
                 for schema in &self.relevant_schemas {
-                    let field_names: Vec<&str> =
-                        schema.fields.iter().map(|f| f.name.as_str()).collect();
-                    let fields_str = if field_names.is_empty() {
+                    // Render each field's type and required-ness, not just its
+                    // name. The node-creation guidance instructs the model to
+                    // read `fields[].name` and to treat `required=true` fields
+                    // as mandatory in the `properties` map; a bare name list
+                    // gives those instructions no referent, and the model
+                    // answers with the two parameters it can ground (content,
+                    // node_type) and omits `properties` entirely.
+                    let field_descriptors: Vec<String> = schema
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            let mut descriptor = format!("{}: {}", f.name, f.field_type);
+                            if f.required.unwrap_or(false) {
+                                descriptor.push_str(", required");
+                            }
+                            descriptor
+                        })
+                        .collect();
+                    let fields_str = if field_descriptors.is_empty() {
                         String::new()
                     } else {
-                        format!(" ({})", field_names.join(", "))
+                        format!(" ({})", field_descriptors.join("; "))
                     };
                     let line = format!("- {}: {}{}\n", schema.id, schema.content, fields_str);
                     if out.len() + line.len() > max_chars {
@@ -358,7 +379,41 @@ mod tests {
 
         assert!(output.contains("RELEVANT ENTITY TYPES:"));
         assert!(output.contains("customer: Customer"));
-        assert!(output.contains("name, email"));
+        // Each field carries its type, so the node-creation guidance's
+        // instruction to read field names *and* types has a referent.
+        assert!(output.contains("name: string; email: string"));
+    }
+
+    #[test]
+    fn format_for_prompt_marks_required_fields() {
+        use crate::models::schema::{SchemaField, SchemaProtectionLevel};
+
+        let mut schema = sample_schema("invoice", "Invoice", &["reference"]);
+        schema.fields.push(SchemaField {
+            name: "amount".to_string(),
+            field_type: "number".to_string(),
+            protection: SchemaProtectionLevel::User,
+            core_values: None,
+            user_values: None,
+            indexed: false,
+            required: Some(true),
+            extensible: None,
+            default: None,
+            description: None,
+            item_type: None,
+            fields: None,
+            item_fields: None,
+        });
+
+        let mut ctx = sample_context();
+        ctx.relevant_schemas = vec![schema];
+        let output = ctx.format_for_prompt(4000);
+
+        // Required-ness is rendered; the guidance conditions inclusion on it.
+        assert!(output.contains("amount: number, required"));
+        // Fields without the flag are not marked required.
+        assert!(output.contains("reference: string;"));
+        assert!(!output.contains("reference: string, required"));
     }
 
     #[test]

@@ -303,13 +303,13 @@ CALL create_node NOW: You received this instruction because this skill was match
 
 TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
 
-REQUIRED FIELDS: Read the fields array from schema_metadata. Required fields (required=true) MUST be included in the properties map. Optional fields should be included if the user provided a value for them.
+FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields as (name: type) — fields marked `required` MUST be included in the properties map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `properties` is the ONLY way any field value is stored.
 
-TITLE: The node title is the content field. If schema_metadata has a title_template, the title is auto-generated from properties — set content to a brief descriptive label (e.g. the most identifying property value). If there is no title_template, set content to the best human-readable name the user provided.
+TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from properties — set content to a brief descriptive label (e.g. the most identifying property value). If there is no title_template, set content to the best human-readable name the user provided.
 
-PROPERTY KEYS: Use the field name exactly as it appears in schema_metadata fields[].name. Do NOT add namespace prefixes for schema-defined fields.
+PROPERTY KEYS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block. Do NOT add namespace prefixes for schema-defined fields.
 
-EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from schema_metadata and the user's message. Suppose schema_metadata has type_id="widget" and fields named label, quantity, received_on, condition:
+EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget: Widget (label: string; quantity: number; received_on: date; condition: string)`:
 {
   "node_type": "widget",
   "content": "Shipment 24",
@@ -320,7 +320,7 @@ EXAMPLE — the shape of the call, NOT the values. Copy the structure; take ever
     "condition": "sealed"
   }
 }
-Never reuse "widget" or these field names — they are placeholders. Your node_type is the type_id from schema_metadata, and your property keys are that metadata's field names.
+Never reuse "widget" or these field names — they are placeholders. Your node_type and property keys both come from the RELEVANT ENTITY TYPES block.
 
 SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete."#.to_string(),
         },
