@@ -40,6 +40,8 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::ChatTemplateResult;
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::model::{AddBos, LlamaModel};
+#[cfg(any(feature = "chat-service", test))]
+use llama_cpp_2::model::{GrammarTrigger, GrammarTriggerType};
 #[cfg(feature = "chat-service")]
 use llama_cpp_2::openai::OpenAIChatTemplateParams;
 #[cfg(feature = "chat-service")]
@@ -505,6 +507,14 @@ impl ChatEngine {
             LlamaSampler::dist(0), // seed=0 for deterministic given temperature
         ]);
 
+        // When tools are offered, `apply_chat_template` (via llama.cpp's
+        // `common_chat_templates_apply`) already computed a tool-call grammar
+        // scoped to exactly the active tool set for this turn. A turn with no
+        // tools produces `grammar: None`, so plain chat is unaffected. Applied
+        // below via `sample_with_grammar_rejection` — see its doc comment for
+        // why this is rejection sampling rather than grammar-first.
+        let mut grammar_sampler = build_grammar_sampler(&llama.model, &tmpl_result)?;
+
         // --- Initialize llama.cpp's native streaming tool-call parser ---
         // ChatParseStateOaicompat handles all model families (Mistral, Gemma 4,
         // etc.) natively at the C++ level — no custom sentinel detection needed.
@@ -552,8 +562,12 @@ impl ChatEngine {
             // `prefill_chunk_positions`), so the logits it carries are the ones
             // to sample from. A change to the chunking that broke that invariant
             // would silently sample the wrong position.
-            let new_token = sampler.sample(ctx, batch.n_tokens() - 1);
-            sampler.accept(new_token);
+            let new_token = sample_with_grammar_rejection(
+                ctx,
+                batch.n_tokens() - 1,
+                &mut sampler,
+                grammar_sampler.as_mut(),
+            );
 
             // Use is_eog_token() rather than a bare EOS comparison: models like Gemma 4
             // have multiple EOG tokens (EOS, <end_of_turn>, <turn|>) and is_eog_token
@@ -1001,6 +1015,181 @@ fn emit_oai_delta(
             }
         }
     }
+}
+
+/// Sample the next token using rejection sampling against an optional grammar.
+///
+/// Mirrors `common_sampler_sample` (`common/sampling.cpp`) with
+/// `grammar_first=false`, upstream's own default: sample once from `chain`
+/// with no grammar involved; if a grammar is present and that pick is
+/// grammar-invalid, discard it and resample with the grammar applied to the
+/// logits ahead of `chain`. When no grammar applies (plain chat, or a tool
+/// turn before its lazy trigger fires) this reduces to a single
+/// `chain.sample()` call — a turn with `grammar_sampler: None` is completely
+/// unaffected.
+///
+/// Deliberately not "grammar-first" (grammar applied to every token
+/// unconditionally): that mode drives llama.cpp's lazy-grammar trigger-replay
+/// path (`llama_grammar_accept_impl`) far harder and was observed to hit its
+/// `GGML_ASSERT(!stacks.empty())` — a hard, uncatchable process abort — on a
+/// live model. Rejection sampling only invokes the grammar when the
+/// unconstrained pick already violated it, exactly matching the shape
+/// upstream's own CLI/server ships as the default.
+#[cfg(feature = "chat-service")]
+fn sample_with_grammar_rejection(
+    ctx: &LlamaContext,
+    idx: i32,
+    chain: &mut LlamaSampler,
+    grammar_sampler: Option<&mut LlamaSampler>,
+) -> llama_cpp_2::token::LlamaToken {
+    let Some(grammar_sampler) = grammar_sampler else {
+        // `chain.sample()` wraps `llama_sampler_sample`, which already calls
+        // `llama_sampler_accept` internally (see `llama-sampler.cpp`) before
+        // returning — an explicit `chain.accept()` here would double-apply
+        // penalties' ring buffer and frequency count for this token.
+        return chain.sample(ctx, idx);
+    };
+
+    // First pass: sample without the grammar. `chain`'s own accept already
+    // happened inside `sample()` (see above) — only the grammar (which did
+    // not see this token yet) needs an explicit accept, and only once the
+    // token is confirmed final below.
+    let token = chain.sample(ctx, idx);
+
+    // Check validity by applying the grammar to a single-candidate array —
+    // mirrors upstream's own check (`common_sampler_sample`): a token the
+    // grammar rejects comes back with its logit set to -infinity.
+    let mut single = llama_cpp_2::token::data_array::LlamaTokenDataArray::new(
+        vec![llama_cpp_2::token::data::LlamaTokenData::new(
+            token, 1.0, 0.0,
+        )],
+        false,
+    );
+    grammar_sampler.apply(&mut single);
+    let is_valid = single.data[0].logit() != f32::NEG_INFINITY;
+
+    if is_valid {
+        grammar_sampler.accept(token);
+        return token;
+    }
+
+    // Resampling: apply the grammar to the full distribution first, then run
+    // the base chain on what remains.
+    let mut data_array = ctx.token_data_array_ith(idx);
+    grammar_sampler.apply(&mut data_array);
+    chain.apply(&mut data_array);
+    let resampled = data_array
+        .selected_token()
+        .expect("chain ends in dist/greedy, which always selects a token");
+
+    grammar_sampler.accept(resampled);
+    chain.accept(resampled);
+    resampled
+}
+
+/// Build the grammar-constrained sampler for this turn from the chat template
+/// result, if one applies.
+///
+/// `tmpl_result.grammar` is `None` whenever no tools were offered (llama.cpp's
+/// `common_chat.cpp` only populates it inside each format's `has_tools`
+/// branch), so a plain-chat turn returns `Ok(None)` and the sampler chain is
+/// unchanged.
+///
+/// When a grammar is present, mirrors llama.cpp's own `common_sampler_init`
+/// (`common/sampling.cpp`): `grammar_lazy` selects between an always-on
+/// grammar (`LlamaSampler::grammar`) and a lazily-triggered one
+/// (`LlamaSampler::grammar_lazy_patterns`) that only engages once one of the
+/// template's trigger words/patterns/tokens is seen in the stream — e.g.
+/// Mistral only wraps tool calls in `[TOOL_CALLS]`, so unconstrained prose
+/// must remain possible until that marker appears.
+#[cfg(feature = "chat-service")]
+fn build_grammar_sampler(
+    model: &LlamaModel,
+    tmpl_result: &ChatTemplateResult,
+) -> Result<Option<LlamaSampler>> {
+    let Some(grammar_str) = tmpl_result.grammar.as_deref().filter(|g| !g.is_empty()) else {
+        return Ok(None);
+    };
+
+    let sampler = if tmpl_result.grammar_lazy {
+        let (trigger_patterns, trigger_tokens) =
+            convert_grammar_triggers(&tmpl_result.grammar_triggers);
+        LlamaSampler::grammar_lazy_patterns(
+            model,
+            grammar_str,
+            "root",
+            &trigger_patterns,
+            &trigger_tokens,
+        )
+    } else {
+        LlamaSampler::grammar(model, grammar_str, "root")
+    }
+    .map_err(|e| ChatError::InferenceError(format!("Grammar sampler init failed: {}", e)))?;
+
+    Ok(Some(sampler))
+}
+
+/// Convert llama.cpp's per-template `GrammarTrigger`s into the
+/// `(trigger_patterns, trigger_tokens)` shape `LlamaSampler::grammar_lazy_patterns`
+/// expects.
+///
+/// Mirrors `common_sampler_init`'s trigger conversion exactly (see
+/// `common/sampling.cpp`): a `Word` trigger is regex-escaped into a plain
+/// substring-match pattern (matching llama.cpp's own `regex_escape`), a
+/// `Pattern` passes through unanchored, and a `PatternFull` is anchored with
+/// `^`/`$` so it must match the whole generated span rather than a substring.
+/// `Token` triggers are collected separately — the underlying sampler matches
+/// those against sampled token ids rather than the text stream.
+#[cfg(any(feature = "chat-service", test))]
+fn convert_grammar_triggers(
+    triggers: &[GrammarTrigger],
+) -> (Vec<String>, Vec<llama_cpp_2::token::LlamaToken>) {
+    let mut patterns = Vec::new();
+    let mut tokens = Vec::new();
+
+    for trigger in triggers {
+        match trigger.trigger_type {
+            GrammarTriggerType::Word => patterns.push(regex_escape(&trigger.value)),
+            GrammarTriggerType::Pattern => patterns.push(trigger.value.clone()),
+            GrammarTriggerType::PatternFull => {
+                let pattern = &trigger.value;
+                let mut anchored = String::new();
+                if !pattern.starts_with('^') {
+                    anchored.push('^');
+                }
+                anchored.push_str(pattern);
+                if !pattern.ends_with('$') {
+                    anchored.push('$');
+                }
+                patterns.push(anchored);
+            }
+            GrammarTriggerType::Token => {
+                if let Some(token) = trigger.token {
+                    tokens.push(token);
+                }
+            }
+        }
+    }
+
+    (patterns, tokens)
+}
+
+/// Escape regex metacharacters in `s`, matching llama.cpp's `regex_escape`
+/// (`common/common.cpp`): every character in `.^$|()*+?[]{}\` is prefixed with
+/// a backslash so a `Word` trigger matches only as a literal substring.
+#[cfg(any(feature = "chat-service", test))]
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '.' | '^' | '$' | '|' | '(' | ')' | '*' | '+' | '?' | '[' | ']' | '{' | '}' | '\\'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl ChatEngine {
@@ -2312,5 +2501,87 @@ mod tests {
                 "minimum must be 256-aligned"
             );
         }
+    }
+
+    // --- Grammar trigger conversion: mirrors llama.cpp's common_sampler_init ---
+
+    #[test]
+    fn regex_escape_escapes_all_metacharacters() {
+        // Every character regex_escape (common/common.cpp) treats as special
+        // must come back backslash-prefixed so a Word trigger only ever
+        // matches its literal text.
+        assert_eq!(regex_escape("[TOOL_CALLS]"), r"\[TOOL_CALLS\]");
+        // `<` and `>` are not in llama.cpp's special-char set — only `|` is escaped.
+        assert_eq!(regex_escape("<|tool_call>"), r"<\|tool_call>");
+        assert_eq!(regex_escape("plain_word"), "plain_word");
+        assert_eq!(regex_escape("a.b*c?"), r"a\.b\*c\?");
+    }
+
+    fn trigger(trigger_type: GrammarTriggerType, value: &str) -> GrammarTrigger {
+        GrammarTrigger {
+            trigger_type,
+            value: value.to_string(),
+            token: None,
+        }
+    }
+
+    #[test]
+    fn word_trigger_becomes_escaped_pattern() {
+        // Mistral's tool-call marker is a Word trigger; it must survive as an
+        // escaped literal-match pattern, not a raw (and here, invalid-looking)
+        // regex fragment.
+        let (patterns, tokens) =
+            convert_grammar_triggers(&[trigger(GrammarTriggerType::Word, "[TOOL_CALLS]")]);
+        assert_eq!(patterns, vec![r"\[TOOL_CALLS\]".to_string()]);
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn pattern_trigger_passes_through_unanchored() {
+        let (patterns, _tokens) =
+            convert_grammar_triggers(&[trigger(GrammarTriggerType::Pattern, "^\\s+to$")]);
+        assert_eq!(patterns, vec!["^\\s+to$".to_string()]);
+    }
+
+    #[test]
+    fn pattern_full_trigger_is_anchored_both_ends() {
+        let (patterns, _tokens) =
+            convert_grammar_triggers(&[trigger(GrammarTriggerType::PatternFull, "abc")]);
+        assert_eq!(patterns, vec!["^abc$".to_string()]);
+    }
+
+    #[test]
+    fn pattern_full_trigger_does_not_double_anchor() {
+        // A PatternFull value that already carries an anchor must not gain a
+        // second one (matching common_sampler_init's own guard).
+        let (patterns, _tokens) =
+            convert_grammar_triggers(&[trigger(GrammarTriggerType::PatternFull, "^already$")]);
+        assert_eq!(patterns, vec!["^already$".to_string()]);
+    }
+
+    #[test]
+    fn token_trigger_is_collected_separately_from_patterns() {
+        let mut t = trigger(GrammarTriggerType::Token, "");
+        t.token = Some(llama_cpp_2::token::LlamaToken(42));
+        let (patterns, tokens) = convert_grammar_triggers(&[t]);
+        assert!(patterns.is_empty());
+        assert_eq!(tokens, vec![llama_cpp_2::token::LlamaToken(42)]);
+    }
+
+    #[test]
+    fn mixed_triggers_split_correctly() {
+        let mut token_trigger = trigger(GrammarTriggerType::Token, "");
+        token_trigger.token = Some(llama_cpp_2::token::LlamaToken(7));
+
+        let (patterns, tokens) = convert_grammar_triggers(&[
+            trigger(GrammarTriggerType::Word, "<|tool_call>"),
+            trigger(GrammarTriggerType::Pattern, ">>>(?!all)"),
+            token_trigger,
+        ]);
+        assert_eq!(
+            patterns,
+            vec![r"<\|tool_call>".to_string(), ">>>(?!all)".to_string()]
+        );
+        assert_eq!(tokens, vec![llama_cpp_2::token::LlamaToken(7)]);
     }
 }
