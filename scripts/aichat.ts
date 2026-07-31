@@ -186,7 +186,16 @@ export function formatTurnLogLines(slice: string): string[] {
     // matched nothing above the bar is already reported by `[stage2
     // injected] false`, and a marker with an empty value would be
     // indistinguishable from one this scrape failed to parse.
-    const skills = routingLine.match(/routed_skills="([^"]*)"/)?.[1];
+    //
+    // Matched to END OF LINE rather than to a closing quote. tracing quotes a
+    // string field only when it needs to, and it does not here, so the value
+    // arrives bare: `routed_skills=Organization, Research & Search, Node
+    // Creation`. Skill names contain both spaces and commas, so no delimiter
+    // short of the line end is safe — and agent_loop.rs emits this field last
+    // on the line for exactly that reason. A quoted-only pattern silently
+    // matched nothing and put this marker right back in the state the dead
+    // `scoped tool list` scrape was in.
+    const skills = routingLine.match(/routed_skills="?(.*?)"?$/)?.[1]?.trim();
     if (skills) out.push(`[routed skills] ${skills}`);
   }
   // Raw generation per ReAct iteration — only present when the daemon was
