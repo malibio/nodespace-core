@@ -299,6 +299,40 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
     Some(out)
 }
 
+/// Wire names of tools that both require routed guidance (see
+/// [`super::tools::Tool::requires_routed_guidance`]) and have that guidance
+/// actually available: an eligible candidate whitelists the tool AND that
+/// candidate's own `schema_metadata` renders a non-empty `RELEVANT ENTITY
+/// TYPES` block.
+///
+/// More precise than "some block was rendered for *some* candidate":
+/// `render_candidates_for_prompt` returns `Some` from its header text alone
+/// whenever any candidate clears the score gate, even if that candidate's
+/// own entity-types sub-block is empty (a skill with no schema-typed
+/// entities, e.g. one that only ever acts on `task`/`text`). A caller
+/// checking only "is the block `Some`" would wrongly conclude `resolve_query`
+/// has guidance in that case. This checks the specific tool's specific
+/// candidate instead.
+///
+/// `render_disabled: true` (mirrors the caller's `session.routing_disabled`)
+/// short-circuits to empty — when injection is suppressed for this model, no
+/// candidate's guidance reaches the prompt regardless of what would
+/// otherwise render, so nothing here counts as "available."
+pub fn tools_with_available_guidance(
+    candidates: &[SkillCandidate],
+    render_disabled: bool,
+) -> std::collections::HashSet<&str> {
+    if render_disabled {
+        return std::collections::HashSet::new();
+    }
+    candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .filter(|c| render_schema_metadata(&c.schema_metadata).is_some())
+        .flat_map(|c| c.tools.iter().map(|t| t.as_str()))
+        .collect()
+}
+
 /// Render a candidate's `schema_metadata` into the compact form the model
 /// already sees elsewhere, or `None` when there is nothing to show.
 fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
@@ -375,7 +409,15 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
 ///
 /// Falls back to the full surface when nothing was retrieved, so an
 /// unavailable embedding service degrades to today's behaviour rather than
-/// leaving the model with no tools at all.
+/// leaving the model with no tools at all — minus any tool whose required
+/// parameters depend on the routing-only `RELEVANT ENTITY TYPES` block (see
+/// [`super::tools::Tool::requires_routed_guidance`]). That block is injected
+/// by `render_candidates_for_prompt` only alongside a scoped whitelist; on
+/// the full-surface fallback it never renders, so handing over a tool whose
+/// required parameter description points at it would strand the model with
+/// instructions it cannot follow. Offering the tool without its guidance is
+/// worse than not offering it: the model still has every other tool to
+/// answer the request with.
 pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Vec<ToolDefinition> {
     let permitted: std::collections::HashSet<&str> = candidates
         .iter()
@@ -384,7 +426,7 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
         .collect();
 
     if permitted.is_empty() {
-        return all.to_vec();
+        return fail_open_surface(all);
     }
     let scoped: Vec<ToolDefinition> = all
         .iter()
@@ -395,9 +437,19 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
     // A whitelist naming only tools this build does not register would strand
     // the model with nothing to call. Fail open to the full surface.
     if scoped.is_empty() {
-        return all.to_vec();
+        return fail_open_surface(all);
     }
     scoped
+}
+
+/// The full tool surface, minus tools whose required parameters depend on
+/// guidance that only routing (not fail-open) injects. Shared by both
+/// fail-open branches of [`stage2_tools`] so they can't drift apart.
+fn fail_open_surface(all: &[ToolDefinition]) -> Vec<ToolDefinition> {
+    all.iter()
+        .filter(|t| !super::tools::requires_routed_guidance_tool(&t.name))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -628,6 +680,140 @@ mod tests {
             1,
             "stranding the model with zero tools is worse than a wide surface"
         );
+    }
+
+    #[test]
+    fn fail_open_on_empty_retrieval_excludes_resolve_query() {
+        // No candidates at all — the emptiest fail-open case. resolve_query's
+        // required node_type parameter depends on the RELEVANT ENTITY TYPES
+        // block, which only renders alongside a scoped whitelist; handing the
+        // tool over here would strand the model with an instruction ("copy
+        // the id from the RELEVANT ENTITY TYPES block") pointing at nothing.
+        let all = vec![
+            tool("search_nodes"),
+            tool("resolve_query"),
+            tool("get_node"),
+        ];
+        let scoped = stage2_tools(&[], &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"resolve_query"));
+        assert!(names.contains(&"search_nodes"));
+        assert!(names.contains(&"get_node"));
+    }
+
+    #[test]
+    fn a_graph_editing_candidate_below_its_mutating_bar_fails_open_without_resolve_query() {
+        // The regression case #1840 calls out explicitly: a Graph Editing
+        // candidate scoring in [READ_SKILL_SCORE_BAR, MUTATING_SKILL_SCORE_BAR)
+        // — below the bar its own blast radius requires, but above the
+        // read-only bar. It must not clear the gate, and the fail-open
+        // surface it falls through to must still exclude resolve_query.
+        let all = vec![
+            tool("search_nodes"),
+            tool("resolve_query"),
+            tool("update_node"),
+        ];
+        let cands = vec![candidate(
+            "Graph Editing",
+            0.2,
+            &["update_node", "search_nodes", "resolve_query"],
+        )];
+        assert!(
+            (READ_SKILL_SCORE_BAR..MUTATING_SKILL_SCORE_BAR).contains(&0.2),
+            "fixture score must sit in the gap this test targets"
+        );
+        assert!(!clears_score_gate(&cands[0]));
+
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"resolve_query"));
+        // And the prompt block that would justify offering it is absent too.
+        assert!(render_candidates_for_prompt(&cands).is_none());
+    }
+
+    #[test]
+    fn a_graph_editing_candidate_that_clears_its_bar_offers_resolve_query_with_its_guidance() {
+        // The positive case: when Graph Editing genuinely clears the mutating
+        // bar, resolve_query is offered — and the same eligibility filter
+        // that scopes stage2_tools also renders the RELEVANT ENTITY TYPES
+        // block resolve_query's description depends on, so the tool never
+        // reaches the model without its guidance.
+        let all = vec![
+            tool("search_nodes"),
+            tool("resolve_query"),
+            tool("update_node"),
+        ];
+        let mut c = candidate(
+            "Graph Editing",
+            0.9,
+            &["update_node", "search_nodes", "resolve_query"],
+        );
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+
+        let scoped = stage2_tools(&[c.clone()], &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"resolve_query"));
+
+        let rendered =
+            render_candidates_for_prompt(&[c]).expect("cleared candidate renders a block");
+        assert!(rendered.contains("RELEVANT ENTITY TYPES"));
+    }
+
+    #[test]
+    fn whitelist_naming_only_unregistered_tools_still_excludes_resolve_query_on_fail_open() {
+        // The other fail-open branch: a whitelist that resolves to nothing
+        // registered. Falls through to the same guidance-free surface, so the
+        // exclusion must hold here too, not just on empty retrieval.
+        let all = vec![tool("search_nodes"), tool("resolve_query")];
+        let cands = vec![candidate("ghost", 0.9, &["tool_that_does_not_exist"])];
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"resolve_query"));
+        assert!(names.contains(&"search_nodes"));
+    }
+
+    #[test]
+    fn tools_with_available_guidance_requires_a_rendered_entity_types_block() {
+        // A candidate clearing the gate but with empty schema_metadata (no
+        // typed entities) whitelists resolve_query yet renders no entity-
+        // types sub-block for it — render_candidates_for_prompt's header text
+        // alone would make `candidate_block` `Some`, but that's not the same
+        // as resolve_query having guidance available.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        assert!(tools_with_available_guidance(&cands, false).is_empty());
+    }
+
+    #[test]
+    fn tools_with_available_guidance_includes_a_tool_whose_candidate_renders_real_entity_types() {
+        let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        let available = tools_with_available_guidance(&cands, false);
+        assert!(available.contains("resolve_query"));
+    }
+
+    #[test]
+    fn tools_with_available_guidance_is_empty_when_rendering_is_disabled() {
+        // render_disabled mirrors session.routing_disabled: even a candidate
+        // with real schema_metadata contributes nothing once injection is
+        // suppressed for this turn.
+        let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        assert!(tools_with_available_guidance(&cands, true).is_empty());
+    }
+
+    #[test]
+    fn tools_with_available_guidance_excludes_a_candidate_below_its_score_bar() {
+        // Real schema_metadata doesn't matter if the candidate never clears
+        // the gate in the first place. resolve_query alone is a read tool
+        // (READ_SKILL_SCORE_BAR = 0.15), so the fixture score must sit below
+        // that, not just below the mutating bar.
+        let mut c = candidate("Graph Editing", 0.01, &["resolve_query"]);
+        c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
+        let cands = vec![c];
+        assert!(!clears_score_gate(&cands[0]));
+        assert!(tools_with_available_guidance(&cands, false).is_empty());
     }
 
     #[test]
