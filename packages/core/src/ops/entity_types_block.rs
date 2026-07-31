@@ -78,7 +78,11 @@ impl EntityFieldDescriptor {
         descriptor
     }
 
-    fn from_schema_field(f: &crate::models::schema::SchemaField) -> Self {
+    /// Build from a schema field. Public so callers that render a field list
+    /// into some *other* prompt — `resolve_query`'s sub-prompt, for one — can
+    /// reuse this notation rather than hand-rolling a fourth renderer that
+    /// drops whatever it forgets to spell out.
+    pub fn from_schema_field(f: &crate::models::schema::SchemaField) -> Self {
         // Core and user values both carry legal enum members; the model needs
         // the union, since either kind is accepted on a write.
         let enum_values: Vec<String> = f

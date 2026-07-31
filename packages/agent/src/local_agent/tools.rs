@@ -1432,11 +1432,26 @@ impl GraphToolExecutor {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("resolve_query failed: {}", e)))?;
 
+        // Rendered with the shared descriptor rather than a local `name (type)`
+        // spelling. The prompt below tells the model to map "a status word to an
+        // enum/status field", which it cannot do from `status (enum)` alone — it
+        // has to guess a value, and a guessed value yields a filter matching
+        // nothing, which is indistinguishable from a genuinely empty result.
+        // This is the same no-referent failure that made guidance instruct the
+        // model to populate `properties` from field metadata the prompt never
+        // carried. Reusing the descriptor also means this notation matches the
+        // entity block the model sees elsewhere in the same conversation.
         let field_lines: String = match &schema {
             Some(s) if !s.fields.is_empty() => s
                 .fields
                 .iter()
-                .map(|f| format!("- {} ({})", f.name, f.field_type))
+                .map(|f| {
+                    format!(
+                        "- {}",
+                        nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f)
+                            .render()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             _ => "(no typed fields on this schema — resolve to a title/content keyword only)"
@@ -3045,6 +3060,49 @@ mod tests {
             }
         }
 
+        /// Records the prompt it was handed, so a test can assert on what the
+        /// model actually sees rather than on the tool's return value. The
+        /// defect this guards is entirely in the prompt text: the tool still
+        /// returns a well-formed result when the model guesses a wrong enum
+        /// value — the filter just matches nothing.
+        struct CapturingEngine {
+            response: String,
+            seen_prompt: Arc<std::sync::Mutex<String>>,
+        }
+
+        #[async_trait]
+        impl ChatInferenceEngine for CapturingEngine {
+            async fn generate(
+                &self,
+                request: InferenceRequest,
+                on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+            ) -> Result<InferenceUsage, crate::agent_types::InferenceError> {
+                if let Some(m) = request.messages.first() {
+                    *self.seen_prompt.lock().unwrap() = m.content.clone();
+                }
+                on_chunk(StreamingChunk::Token {
+                    text: self.response.clone(),
+                });
+                Ok(InferenceUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 10,
+                })
+            }
+
+            async fn model_info(
+                &self,
+            ) -> Result<Option<ChatModelSpec>, crate::agent_types::InferenceError> {
+                Ok(None)
+            }
+
+            async fn token_count(
+                &self,
+                text: &str,
+            ) -> Result<u32, crate::agent_types::InferenceError> {
+                Ok((text.len() as f32 / 4.0).ceil() as u32)
+            }
+        }
+
         fn executor_with(ns: Arc<NodeService>, engine_response: &str) -> GraphToolExecutor {
             let engine: Arc<dyn ChatInferenceEngine> = Arc::new(FixedJsonEngine {
                 response: engine_response.to_string(),
@@ -3072,6 +3130,69 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!result.is_error, "fixture node creation failed: {result:?}");
+        }
+
+        /// The sub-prompt tells the model to map "a status word to an
+        /// enum/status field". It can only do that if the legal values are in
+        /// front of it: from a bare `status (enum)` it has to invent one, and an
+        /// invented value produces a filter that matches nothing — which reads
+        /// exactly like a request that legitimately had no match.
+        ///
+        /// Asserts on the prompt text rather than the tool's return value,
+        /// because the return value is well-formed either way. That is what made
+        /// this class of defect expensive to find the last time it appeared.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_prompt_carries_enum_values_for_status_fields() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Equipment",
+                    "fields": [
+                        {"name": "replacement_cost", "type": "number"},
+                        {
+                            "name": "condition",
+                            "type": "enum",
+                            "coreValues": [
+                                {"value": "checked_out", "label": "Checked out"},
+                                {"value": "returned", "label": "Returned"}
+                            ]
+                        }
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let seen_prompt = Arc::new(std::sync::Mutex::new(String::new()));
+            let engine: Arc<dyn ChatInferenceEngine> = Arc::new(CapturingEngine {
+                response: r#"{"query": "", "filters": []}"#.to_string(),
+                seen_prompt: Arc::clone(&seen_prompt),
+            });
+            let executor = GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: Some(engine),
+            };
+
+            let _ = executor
+                .execute(
+                    "resolve_query",
+                    json!({
+                        "request": "the 2400 one came back",
+                        "node_type": "equipment"
+                    }),
+                )
+                .await;
+
+            let prompt = seen_prompt.lock().unwrap().clone();
+            assert!(
+                prompt.contains("condition: enum (checked_out, returned)"),
+                "the enum's legal values must reach the prompt the model resolves against, \
+                 so \"came back\" can map to `returned` instead of being guessed; got:\n{prompt}"
+            );
+            // Non-enum fields keep rendering, and carry their type.
+            assert!(prompt.contains("replacement_cost: number"));
         }
 
         #[tokio::test(flavor = "multi_thread")]
