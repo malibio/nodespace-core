@@ -4,7 +4,8 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { agentStore, availabilityToAgent } from '$lib/stores/agent-store.svelte';
-import type { AgentAvailabilityInfo } from '$lib/services/tauri-commands';
+import * as tauriCommands from '$lib/services/tauri-commands';
+import type { AgentAvailabilityInfo, ChatModelEntry } from '$lib/services/tauri-commands';
 
 // Mock the logger
 vi.mock('$lib/utils/logger', () => ({
@@ -16,14 +17,32 @@ vi.mock('$lib/utils/logger', () => ({
   }),
 }));
 
+function mockTauriEnvironment(isTauri: boolean) {
+  interface WindowWithTauri extends Window {
+    __TAURI__?: Record<string, unknown>;
+    __TAURI_INTERNALS__?: Record<string, unknown>;
+  }
+  if (isTauri) {
+    (window as WindowWithTauri).__TAURI_INTERNALS__ = {};
+  } else {
+    // Clear BOTH markers `isTauri()` checks — see model-store.test.ts for why
+    // this matters under vitest's shared-window `forks` pool.
+    delete (window as WindowWithTauri).__TAURI__;
+    delete (window as WindowWithTauri).__TAURI_INTERNALS__;
+  }
+}
+
 describe('AgentStore', () => {
   beforeEach(() => {
     agentStore.reset();
+    mockTauriEnvironment(false);
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    mockTauriEnvironment(false);
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   describe('Initial State', () => {
@@ -94,6 +113,51 @@ describe('AgentStore', () => {
 
       // Selection should be preserved
       expect(agentStore.selectedAgentId).toBe(agentId);
+    });
+  });
+
+  describe('refreshAgents (Tauri, catalog filtering)', () => {
+    beforeEach(() => {
+      mockTauriEnvironment(true);
+      vi.spyOn(tauriCommands, 'ptyCheckAgentAvailability').mockResolvedValue({ agents: [] });
+    });
+
+    afterEach(() => {
+      mockTauriEnvironment(false);
+    });
+
+    it('surfaces only GGUF catalog rows as local agents', async () => {
+      const catalog: ChatModelEntry[] = [
+        {
+          id: 'gemma-4-e4b-q4km',
+          name: 'Gemma 4 E4B Instruct Q4_K_M',
+          backend: 'gguf',
+          sizeBytes: 1,
+          quantization: 'Q4_K_M',
+          minMemoryGb: 8,
+          status: { status: 'not_downloaded' },
+        },
+        {
+          id: 'remote-gpt-4o',
+          name: 'GPT-4o (remote)',
+          backend: 'openai-compat',
+          sizeBytes: 0,
+          quantization: '',
+          minMemoryGb: 0,
+          status: { status: 'not_downloaded' },
+        },
+      ];
+      vi.spyOn(tauriCommands, 'chatModelList').mockResolvedValue(catalog);
+
+      const promise = agentStore.refreshAgents();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const localAgentNames = agentStore.agents
+        .filter((a) => a.binary === 'local')
+        .map((a) => a.name);
+      expect(localAgentNames).toEqual(['Gemma 4 E4B Instruct Q4_K_M']);
+      expect(localAgentNames).not.toContain('GPT-4o (remote)');
     });
   });
 
