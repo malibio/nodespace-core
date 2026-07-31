@@ -33,7 +33,24 @@ export interface ToolCallRecord {
 
 /** One turn's observable outcome, scraped from an aichat.ts run. */
 export interface TurnRecord {
+  /**
+   * The tools the model was actually offered this turn, comma-separated.
+   *
+   * Post-scoping: this is `routing::stage2_tools`'s output, so a turn routed to
+   * a skill reports the narrowed surface rather than the full registry. An
+   * assertion that a scenario failed *because a tool was unavailable* is
+   * checkable from a results file only via this field.
+   */
   toolsOffered: string;
+  /**
+   * Skills routed to this turn, comma-separated; empty when none cleared the
+   * score gate or the turn never reached retrieval.
+   *
+   * Optional because results files recorded before this field existed do not
+   * carry it — absence means "not recorded", not "nothing routed". A caller
+   * distinguishing the two wants `stage2CandidatesInjected`.
+   */
+  routedSkills?: string;
   /**
    * Tool names in call order.
    *

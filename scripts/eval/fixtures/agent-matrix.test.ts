@@ -68,6 +68,62 @@ describe("assertExpectation", () => {
     });
   });
 
+  describe("toolOnce minProperties", () => {
+    const expect_: Expectation = {
+      kind: "toolOnce",
+      tool: "create_node",
+      minProperties: 1,
+    };
+
+    test("fails when the call persisted no property values", () => {
+      // The observed production case: create_node called with only `content`
+      // and `node_type`, persisting a bare shell that later scenarios then key
+      // on and cannot resolve.
+      const result = assertExpectation(expect_, ["create_node"], [
+        { name: "create_node", isError: false, fieldCount: 0 },
+      ]);
+      expect(result.passed).toBe(false);
+      expect(result.failure).toContain("persisted 0 property value(s)");
+    });
+
+    test("passes when the call persisted at least the minimum", () => {
+      expect(
+        assertExpectation(expect_, ["create_node"], [
+          { name: "create_node", isError: false, fieldCount: 2 },
+        ]).passed,
+      ).toBe(true);
+    });
+
+    test("treats an absent field count as unknown, not as zero", () => {
+      // A results file recorded before create_node reported its property count
+      // must not read as a fresh failure.
+      expect(
+        assertExpectation(expect_, ["create_node"], [
+          { name: "create_node", isError: false },
+        ]).passed,
+      ).toBe(true);
+    });
+
+    test("does not apply the minimum to an unrelated tool's calls", () => {
+      expect(
+        assertExpectation(expect_, ["create_node"], [
+          { name: "create_node", isError: false, fieldCount: 3 },
+          { name: "search_nodes", isError: false, fieldCount: 0 },
+        ]).passed,
+      ).toBe(true);
+    });
+
+    test("still enforces the count when no minimum is set", () => {
+      // Without minProperties the assertion is unchanged: a zero-property call
+      // passes, which is the behaviour every other scenario relies on.
+      expect(
+        assertExpectation({ kind: "toolOnce", tool: "create_node" }, [
+          "create_node",
+        ], [{ name: "create_node", isError: false, fieldCount: 0 }]).passed,
+      ).toBe(true);
+    });
+  });
+
   describe("toolSequence", () => {
     const expect_: Expectation = {
       kind: "toolSequence",

@@ -1740,10 +1740,32 @@ impl GraphToolExecutor {
             .await
             .map_err(|e| ops_error_to_tool(e, "create_node"))?;
 
+        // Number of schema field values that actually PERSISTED, read back off
+        // the created node rather than counted from the arguments above.
+        // Creation is not pass-through — schema defaults are applied, keys are
+        // normalized into the type's namespace — so the request map answers
+        // "what did the model ask for", which is a different question and can
+        // disagree in both directions. `node_data` is `create_node`'s re-fetch
+        // of the stored node, already flattened out of the namespace with
+        // underscore-prefixed internals (`_schema_version`) filtered, so this
+        // counts exactly the user-meaningful values a later turn could resolve
+        // against.
+        //
+        // Reported on the result so an eval can tell a create_node that
+        // recorded the user's particulars apart from one that persisted a bare
+        // shell — indistinguishable by tool name alone, which is the hole
+        // `fields` already closes for create_schema.
+        let property_count = output
+            .node_data
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0);
+
         Ok(ok_result(
             tool_call_id,
             "create_node",
-            json!({ "id": node_uri(&output.node_id) }),
+            json!({ "id": node_uri(&output.node_id), "property_count": property_count }),
         ))
     }
 

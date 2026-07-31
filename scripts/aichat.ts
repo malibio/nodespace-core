@@ -135,17 +135,23 @@ function stripAnsi(s: string): string {
 export function formatTurnLogLines(slice: string): string[] {
   const out: string[] = [];
   const lines = slice.split("\n");
-  const offered = lines.filter((l) => l.includes("scoped tool list")).pop();
-  if (offered) {
-    const m = offered.match(/selected_tools="?([^"]*)"?/);
-    if (m) out.push(`[tools offered] ${m[1]}`);
-  }
+  // The offered tool list, scraped from agent_loop.rs's "Agent turn: system
+  // prompt and tools prepared" line. `tool_names` there is the output of
+  // routing::stage2_tools — i.e. already scoped to what the routed candidates
+  // permit, which is precisely the surface the model saw.
+  //
+  // An earlier version of this scrape looked for a `scoped tool list` line
+  // carrying `selected_tools=`. No such line has ever existed in the daemon,
+  // so `[tools offered]` was never emitted and every scored turn in the trace
+  // recorded an empty tool list — an availability claim about any scenario
+  // could not be checked from results at all. The real line was already being
+  // scraped two lines below under a second marker name; the two are now one.
   const prepared = lines
     .filter((l) => l.includes("system prompt and tools prepared"))
     .pop();
   if (prepared) {
     const m = prepared.match(/tool_names="?([^"]*?)"? system_prompt_len/);
-    if (m) out.push(`[tools available] ${m[1]}`);
+    if (m) out.push(`[tools offered] ${m[1]}`);
     // Whether Stage 2's prompt actually carried a candidate block — distinct
     // from whether routing ran at all. A turn that routed but matched nothing
     // looks identical to one that never routed unless this is captured
@@ -172,6 +178,25 @@ export function formatTurnLogLines(slice: string): string[] {
   if (routingLine) {
     const m = routingLine.match(/routing_decision="?([a-z_]+)"?/);
     if (m) out.push(`[routing] ${m[1]}`);
+    // Which skills were routed to, not just how many candidates retrieval
+    // returned. Only the "two-stage routing overhead" line carries this (the
+    // other three routing paths never reach retrieval), and it names the
+    // candidates clearing the score gate — the ones actually rendered into
+    // Stage 2's prompt. Emitted only when non-empty: a turn that routed but
+    // matched nothing above the bar is already reported by `[stage2
+    // injected] false`, and a marker with an empty value would be
+    // indistinguishable from one this scrape failed to parse.
+    //
+    // Matched to END OF LINE rather than to a closing quote. tracing quotes a
+    // string field only when it needs to, and it does not here, so the value
+    // arrives bare: `routed_skills=Organization, Research & Search, Node
+    // Creation`. Skill names contain both spaces and commas, so no delimiter
+    // short of the line end is safe — and agent_loop.rs emits this field last
+    // on the line for exactly that reason. A quoted-only pattern silently
+    // matched nothing and put this marker right back in the state the dead
+    // `scoped tool list` scrape was in.
+    const skills = routingLine.match(/routed_skills="?(.*?)"?$/)?.[1]?.trim();
+    if (skills) out.push(`[routed skills] ${skills}`);
   }
   // Raw generation per ReAct iteration — only present when the daemon was
   // launched with RUST_LOG=debug (or a filter including this target at

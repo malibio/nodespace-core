@@ -151,6 +151,7 @@ export function parseTurnOutput(out: string, latencyMs: number): TurnRecord {
   // it (a real assistant reply can itself be multiline).
   return {
     toolsOffered: out.match(/^\[tools offered\] (.*)/m)?.[1]?.trim() ?? "",
+    routedSkills: out.match(/^\[routed skills\] (.*)/m)?.[1]?.trim(),
     toolsCalled: toolCalls.map((t) => t.name),
     toolCalls,
     reply:

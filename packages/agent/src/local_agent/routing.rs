@@ -231,6 +231,29 @@ pub fn clears_score_gate(candidate: &SkillCandidate) -> bool {
     candidate.score >= score_bar_for(candidate)
 }
 
+/// Names of the candidates that clear the score gate, comma-separated, for the
+/// `routed_skills` log field.
+///
+/// The same set `render_candidates_for_prompt` writes into Stage 2's prompt and
+/// `stage2_tools` scopes the tool surface from, so a log reader can tell which
+/// skill a turn was actually routed to rather than only how many candidates
+/// retrieval returned.
+///
+/// A function rather than an inline expression at the log site specifically so
+/// the rendered text is testable. The scraper consuming this field parses to
+/// end of line — skill names contain spaces and commas, and `tracing` emits the
+/// value unquoted — so its exact shape is a contract, and the first version of
+/// that scraper silently matched nothing because the shape was assumed rather
+/// than asserted.
+pub fn routed_skill_names(candidates: &[SkillCandidate]) -> String {
+    candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .map(|c| c.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Render retrieved candidates for injection into the Stage-2 prompt.
 ///
 /// Delivered **in the prompt** rather than as a tool result. ADR-064 rule 4
@@ -479,6 +502,46 @@ mod tests {
         let rendered = render_candidates_for_prompt(&cands).expect("one candidate is eligible");
         assert!(rendered.contains("strong"));
         assert!(!rendered.contains("weak instructions"));
+    }
+
+    #[test]
+    fn routed_skill_names_lists_only_gate_clearing_candidates() {
+        let cands = vec![
+            candidate("Research & Search", 0.9, &["search_nodes"]),
+            candidate("Below The Bar", 0.01, &["search_nodes"]),
+            candidate("Node Creation", 0.9, &["search_nodes"]),
+        ];
+        assert_eq!(
+            routed_skill_names(&cands),
+            "Research & Search, Node Creation"
+        );
+    }
+
+    #[test]
+    fn routed_skill_names_is_empty_when_nothing_clears_the_gate() {
+        // Distinct from "retrieval returned nothing" only in the candidate
+        // count logged alongside it; the scraper omits the marker either way.
+        let cands = vec![candidate("weak", 0.001, &["create_schema"])];
+        assert_eq!(routed_skill_names(&cands), "");
+    }
+
+    #[test]
+    fn routed_skill_names_matches_what_is_rendered_into_the_prompt() {
+        // The field exists to answer "which skill was this turn routed to", so
+        // it has to name the same set the model actually sees. Asserting the
+        // two agree keeps the log honest if either filter later changes.
+        let cands = vec![
+            candidate("Graph Editing", 0.9, &["search_nodes"]),
+            candidate("Excluded", 0.001, &["search_nodes"]),
+        ];
+        let rendered = render_candidates_for_prompt(&cands).expect("one is eligible");
+        for name in routed_skill_names(&cands).split(", ") {
+            assert!(
+                rendered.contains(name),
+                "{name} logged as routed but absent from the prompt block"
+            );
+        }
+        assert!(!rendered.contains("Excluded"));
     }
 
     #[test]

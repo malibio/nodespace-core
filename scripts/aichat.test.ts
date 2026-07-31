@@ -12,6 +12,14 @@
  * output at its first newline, and (before the JSON-encoding fix on the Rust
  * side) a lookahead-based parse of that marker broke if the model's own text
  * happened to contain a literal `[tool]` substring.
+ *
+ * FIXTURES MUST BE VERBATIM DAEMON OUTPUT. `tracing` quotes a field value only
+ * when it needs to, so `%`-formatted fields arrive bare —
+ * `tool_names=create_node, search_nodes`, not `tool_names="..."`. Fixtures here
+ * once used the quoted form throughout, which meant they asserted a shape the
+ * daemon never emits: the tests passed while the real scrape matched nothing,
+ * and an always-empty `toolsOffered` reached every committed trace. When adding
+ * a marker, copy its line from a real log rather than writing it by hand.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -49,7 +57,7 @@ describe("formatTurnLogLines", () => {
     const slice = [
       rawGenerationLine(0, "first\nmultiline\nresponse"),
       rawGenerationLine(1, "second response, mentions [tool] search_nodes"),
-      `2026-07-30T22:27:40Z  INFO nodespace_agent: Tool executed tool="create_node" is_error=false result_field_count=3 args_preview="{}" result_preview="{}"`,
+      `2026-07-30T22:27:40Z  INFO nodespace_agent: Tool executed tool=create_node is_error=false result_field_count=3 args_preview={} result_preview={}`,
     ].join("\n");
 
     const lines = formatTurnLogLines(slice);
@@ -78,12 +86,57 @@ describe("formatTurnLogLines", () => {
 
   test("extracts stage2 injected and routing markers", () => {
     const slice = [
-      `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names="create_node, search_nodes" system_prompt_len=1234 stage2_candidates_injected=true`,
-      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=2`,
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names=create_node, search_nodes system_prompt_len=1234 stage2_candidates_injected=true`,
+      // routed_skills is UNQUOTED here, as tracing actually emits it — a
+      // quoted fixture passed while the real scrape matched nothing.
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=2 routed_skills=Node Creation`,
     ].join("\n");
     const lines = formatTurnLogLines(slice);
     expect(lines).toContain("[stage2 injected] true");
     expect(lines).toContain("[routing] query");
+    // Asserted here because its absence is what let the dead `scoped tool
+    // list` scrape survive: this test covered the neighbouring markers on the
+    // same log line and never checked that the tool list itself came through,
+    // so `toolsOffered` was empty on every turn of every committed trace.
+    expect(lines).toContain("[tools offered] create_node, search_nodes");
+    expect(lines).toContain("[routed skills] Node Creation");
+  });
+
+  test("captures routed skill names containing spaces and commas", () => {
+    // The real-world shape: tracing leaves the value bare and skill names carry
+    // both separators, so the scrape must run to end of line. Verbatim from a
+    // live daemon log.
+    const slice = `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=3 routed_skills=Organization, Research & Search, Node Creation`;
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toContain(
+      "[routed skills] Organization, Research & Search, Node Creation",
+    );
+  });
+
+  test("emits no routed-skills marker when nothing cleared the score gate", () => {
+    // A turn that routed but matched nothing above the bar. An empty marker
+    // would be indistinguishable from a scrape that failed to parse, so the
+    // marker is omitted entirely and `[stage2 injected] false` carries the
+    // signal instead.
+    const slice = [
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: Agent turn: system prompt and tools prepared tools_count=5 tool_names=create_node system_prompt_len=1234 stage2_candidates_injected=false`,
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="none" routing_latency_ms=120 candidates=0 routed_skills=""`,
+    ].join("\n");
+    const lines = formatTurnLogLines(slice);
+    expect(lines.filter((l) => l.startsWith("[routed skills]"))).toEqual([]);
+    expect(lines).toContain("[stage2 injected] false");
+  });
+
+  test("takes the routed skills of the last routing line in a multi-turn slice", () => {
+    // Mirrors the existing `[routing]` behaviour: a slice can contain a prior
+    // context turn's routing line, and the marker must describe this turn.
+    const slice = [
+      `2026-07-30T22:27:39Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=120 candidates=1 routed_skills=Stale Earlier Turn`,
+      `2026-07-30T22:27:41Z  INFO nodespace_agent: two-stage routing overhead routing_decision="query" routing_latency_ms=118 candidates=2 routed_skills=Node Creation, Graph Editing`,
+    ].join("\n");
+    const lines = formatTurnLogLines(slice);
+    expect(lines).toContain("[routed skills] Node Creation, Graph Editing");
+    expect(lines.filter((l) => l.startsWith("[routed skills]"))).toHaveLength(1);
   });
 
   test("extracts the empty-generation marker only on the documented error text", () => {
