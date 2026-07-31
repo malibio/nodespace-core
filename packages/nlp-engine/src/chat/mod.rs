@@ -501,36 +501,37 @@ impl ChatEngine {
         // <end_of_turn> stop token). penalty_last_n=256 covers the recent
         // window; repeat=1.3 is firm enough to escape a loop without distorting
         // normal prose. Frequency/presence penalties stay disabled (0.0).
-        //
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(256, 1.3, 0.0, 0.0),
+            LlamaSampler::temp(temperature),
+            LlamaSampler::dist(0), // seed=0 for deterministic given temperature
+        ]);
+
         // When tools are offered, `apply_chat_template` (via llama.cpp's
         // `common_chat_templates_apply`) already computed a tool-call grammar
         // scoped to exactly the active tool set for this turn — the same
         // grammar llama.cpp's own CLI/server builds via `common_sampler_init`.
-        // Plumbing it into the chain constrains generation so a premature EOG
-        // token mid-tool-call becomes structurally invalid, rather than merely
-        // unlikely. A turn with no tools produces `grammar: None` (see the
-        // `has_tools` branches in llama.cpp's `common_chat.cpp`), so plain
-        // chat is unaffected.
+        // A turn with no tools produces `grammar: None` (see the `has_tools`
+        // branches in llama.cpp's `common_chat.cpp`), so plain chat is
+        // unaffected.
         //
-        // The grammar sampler runs first in the chain — equivalent to
-        // upstream's `grammar_first=true` mode (`common_sampler_sample` in
-        // `common/sampling.cpp`): grammar-invalid tokens are masked out before
-        // the repetition penalty and temperature see the distribution, rather
-        // than upstream's default rejection-sampling shortcut (sample once,
-        // only re-apply the grammar if the pick turns out invalid). Both are
-        // semantically equivalent — the grammar always determines which
-        // tokens are legal — this project's single `sampler.sample()` call
-        // per token has no cheap place to hook a resample-on-rejection path.
-        let grammar_sampler = build_grammar_sampler(&llama.model, &tmpl_result)?;
-
-        let mut chain_samplers = Vec::with_capacity(4);
-        if let Some(grammar_sampler) = grammar_sampler {
-            chain_samplers.push(grammar_sampler);
-        }
-        chain_samplers.push(LlamaSampler::penalties(256, 1.3, 0.0, 0.0));
-        chain_samplers.push(LlamaSampler::temp(temperature));
-        chain_samplers.push(LlamaSampler::dist(0)); // seed=0 for deterministic given temperature
-        let mut sampler = LlamaSampler::chain_simple(chain_samplers);
+        // The grammar is applied as REJECTION SAMPLING (`grammar_first=false`
+        // in upstream's terms — see `common_sampler_sample` in
+        // `common/sampling.cpp`, which this mirrors exactly): each token is
+        // first sampled from `sampler` with no grammar involved; the grammar
+        // only gets a say if that pick turns out invalid, in which case a
+        // second pass applies the grammar to the logits before resampling.
+        // This is deliberately NOT "grammar-first" (grammar applied to every
+        // token before the base chain) — that mode was tried and it crashes:
+        // llama.cpp's lazy-grammar trigger-replay path
+        // (`llama_grammar_accept_impl` in `llama-grammar.cpp`) has a
+        // `GGML_ASSERT(!stacks.empty())` (marked `// REVIEW` upstream) that a
+        // live E4B run hit reproducibly once the grammar was engaged on every
+        // token from the start. Rejection sampling is upstream's own default
+        // and exercises the grammar sampler far less aggressively, which is
+        // the safer-by-construction choice given the assert is a hard,
+        // uncatchable process abort on the Rust side.
+        let mut grammar_sampler = build_grammar_sampler(&llama.model, &tmpl_result)?;
 
         // --- Initialize llama.cpp's native streaming tool-call parser ---
         // ChatParseStateOaicompat handles all model families (Mistral, Gemma 4,
@@ -579,8 +580,12 @@ impl ChatEngine {
             // `prefill_chunk_positions`), so the logits it carries are the ones
             // to sample from. A change to the chunking that broke that invariant
             // would silently sample the wrong position.
-            let new_token = sampler.sample(ctx, batch.n_tokens() - 1);
-            sampler.accept(new_token);
+            let new_token = sample_with_grammar_rejection(
+                ctx,
+                batch.n_tokens() - 1,
+                &mut sampler,
+                grammar_sampler.as_mut(),
+            );
 
             // Use is_eog_token() rather than a bare EOS comparison: models like Gemma 4
             // have multiple EOG tokens (EOS, <end_of_turn>, <turn|>) and is_eog_token
@@ -1028,6 +1033,72 @@ fn emit_oai_delta(
             }
         }
     }
+}
+
+/// Sample the next token using rejection sampling against an optional grammar.
+///
+/// Mirrors `common_sampler_sample` (`common/sampling.cpp`) with
+/// `grammar_first=false`, upstream's own default: sample once from `chain`
+/// with no grammar involved; if a grammar is present and that pick is
+/// grammar-invalid, discard it and resample with the grammar applied to the
+/// logits ahead of `chain`. When no grammar applies (plain chat, or a tool
+/// turn before its lazy trigger fires) this reduces to a single
+/// `chain.sample()` call — a turn with `grammar_sampler: None` is completely
+/// unaffected.
+///
+/// Deliberately not "grammar-first" (grammar applied to every token
+/// unconditionally): that mode drives llama.cpp's lazy-grammar trigger-replay
+/// path (`llama_grammar_accept_impl`) far harder and was observed to hit its
+/// `GGML_ASSERT(!stacks.empty())` — a hard, uncatchable process abort — on a
+/// live model. Rejection sampling only invokes the grammar when the
+/// unconstrained pick already violated it, exactly matching the shape
+/// upstream's own CLI/server ships as the default.
+#[cfg(feature = "chat-service")]
+fn sample_with_grammar_rejection(
+    ctx: &LlamaContext,
+    idx: i32,
+    chain: &mut LlamaSampler,
+    grammar_sampler: Option<&mut LlamaSampler>,
+) -> llama_cpp_2::token::LlamaToken {
+    let Some(grammar_sampler) = grammar_sampler else {
+        let token = chain.sample(ctx, idx);
+        chain.accept(token);
+        return token;
+    };
+
+    // First pass: sample without the grammar.
+    let token = chain.sample(ctx, idx);
+
+    // Check validity by applying the grammar to a single-candidate array —
+    // mirrors upstream's own check (`common_sampler_sample`): a token the
+    // grammar rejects comes back with its logit set to -infinity.
+    let mut single = llama_cpp_2::token::data_array::LlamaTokenDataArray::new(
+        vec![llama_cpp_2::token::data::LlamaTokenData::new(
+            token, 1.0, 0.0,
+        )],
+        false,
+    );
+    grammar_sampler.apply(&mut single);
+    let is_valid = single.data[0].logit() != f32::NEG_INFINITY;
+
+    if is_valid {
+        grammar_sampler.accept(token);
+        chain.accept(token);
+        return token;
+    }
+
+    // Resampling: apply the grammar to the full distribution first, then run
+    // the base chain on what remains.
+    let mut data_array = ctx.token_data_array_ith(idx);
+    grammar_sampler.apply(&mut data_array);
+    chain.apply(&mut data_array);
+    let resampled = data_array
+        .selected_token()
+        .expect("chain ends in dist/greedy, which always selects a token");
+
+    grammar_sampler.accept(resampled);
+    chain.accept(resampled);
+    resampled
 }
 
 /// Build the grammar-constrained sampler for this turn from the chat template
