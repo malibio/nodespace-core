@@ -169,8 +169,12 @@ struct LocalAgentServiceInner {
     /// `OPENAI_COMPAT_DISCOVERY_CACHE_TTL`). `None` until the first discovery
     /// round completes. Bypassed (but still refreshed) when a `ListModels`
     /// call sets `force_refresh`.
-    openai_compat_discovery_cache:
-        Mutex<Option<(std::time::Instant, Vec<nodespace_agent::agent_types::ModelInfo>)>>,
+    openai_compat_discovery_cache: Mutex<
+        Option<(
+            std::time::Instant,
+            Vec<nodespace_agent::agent_types::ModelInfo>,
+        )>,
+    >,
 }
 
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
@@ -3230,12 +3234,7 @@ model = "model-b"
         let stale_at = std::time::Instant::now()
             .checked_sub(OPENAI_COMPAT_DISCOVERY_CACHE_TTL + std::time::Duration::from_secs(1))
             .expect("test clock has enough headroom to go this far back");
-        seed_discovery_cache(
-            &svc,
-            stale_at,
-            vec![fake_discovered_model("stale-model")],
-        )
-        .await;
+        seed_discovery_cache(&svc, stale_at, vec![fake_discovered_model("stale-model")]).await;
 
         let result = svc.discover_openai_compat_models(false).await;
 
