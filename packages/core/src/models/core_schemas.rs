@@ -77,6 +77,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "priority".to_string(),
@@ -105,6 +107,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "due_date".to_string(),
@@ -120,6 +124,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "started_at".to_string(),
@@ -135,6 +141,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "completed_at".to_string(),
@@ -150,6 +158,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "assignee".to_string(),
@@ -165,6 +175,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
@@ -218,6 +230,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "priority".to_string(),
@@ -246,6 +260,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "start_date".to_string(),
@@ -261,6 +277,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "end_date".to_string(),
@@ -276,6 +294,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
@@ -426,6 +446,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 item_type: None,
                 fields: None,
                 item_fields: None,
+                unique: None,
+                unique_case_insensitive: None,
             }],
             relationships: vec![], // member_of is a native edge, not schema-defined
             title_template: None,
@@ -486,6 +508,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "model".to_string(),
@@ -501,6 +525,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "status".to_string(),
@@ -525,6 +551,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "last_active".to_string(),
@@ -540,6 +568,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "context_tokens".to_string(),
@@ -557,6 +587,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "created_nodes".to_string(),
@@ -574,6 +606,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: Some("text".to_string()),
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "messages".to_string(),
@@ -620,6 +654,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "content".to_string(),
@@ -635,6 +671,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "reasoning".to_string(),
@@ -652,6 +690,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "timestamp".to_string(),
@@ -667,6 +707,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "referenced_nodes".to_string(),
@@ -682,6 +724,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: Some("text".to_string()),
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "tool".to_string(),
@@ -699,6 +743,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "args".to_string(),
@@ -716,6 +762,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "status".to_string(),
@@ -742,6 +790,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "result_summary".to_string(),
@@ -760,6 +810,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                         SchemaField {
                             name: "duration_ms".to_string(),
@@ -777,8 +829,12 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             item_type: None,
                             fields: None,
                             item_fields: None,
+                            unique: None,
+                            unique_case_insensitive: None,
                         },
                     ]),
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
@@ -809,6 +865,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "filters".to_string(),
@@ -824,6 +882,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: Some("object".to_string()),
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "sorting".to_string(),
@@ -839,6 +899,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: Some("object".to_string()),
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "limit".to_string(),
@@ -854,6 +916,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "generated_by".to_string(),
@@ -878,6 +942,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "generator_context".to_string(),
@@ -893,6 +959,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "execution_count".to_string(),
@@ -908,6 +976,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "last_executed".to_string(),
@@ -923,6 +993,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
@@ -953,6 +1025,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "email".to_string(),
@@ -968,6 +1042,12 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    // Email is a claim, not an identity key: flagged unique so the
+                    // UI can suggest an existing match pre-commit, never to reject
+                    // a write. Case-insensitive because casing does not distinguish
+                    // two otherwise-identical claims.
+                    unique: Some(true),
+                    unique_case_insensitive: Some(true),
                 },
             ],
             relationships: vec![],
@@ -1021,6 +1101,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "tool_whitelist".to_string(),
@@ -1036,6 +1118,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: Some("string".to_string()),
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "max_iterations".to_string(),
@@ -1051,6 +1135,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
@@ -1089,6 +1175,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "auth_status".to_string(),
@@ -1117,6 +1205,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "bound_tenant_schema".to_string(),
@@ -1137,6 +1227,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "bound_tenant_collection".to_string(),
@@ -1156,6 +1248,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],

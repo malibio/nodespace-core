@@ -54,6 +54,18 @@ pub struct SchemaField {
     pub fields: Option<Vec<SchemaField>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_fields: Option<Vec<SchemaField>>,
+    /// Marks this field as a uniqueness hint: values are expected to be unique
+    /// among active nodes of the same type. This is a suggest-don't-block rule,
+    /// not an enforced constraint — writes are never rejected on a collision
+    /// (two offline devices can each validly create the same value). Uniqueness
+    /// is scoped per-database (ADR-053) and surfaced via a read-only lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unique: Option<bool>,
+    /// When paired with `unique`, compares values case-insensitively (e.g. an
+    /// email is a claim, not an identity key, and casing should not distinguish
+    /// two otherwise-identical claims).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unique_case_insensitive: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -250,6 +262,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         }
     }
 
@@ -359,6 +373,8 @@ mod tests {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
                 SchemaField {
                     name: "city".to_string(),
@@ -374,9 +390,13 @@ mod tests {
                     item_type: None,
                     fields: None,
                     item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ]),
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         };
 
         let json = serde_json::to_value(&address_field).unwrap();
@@ -443,7 +463,11 @@ mod tests {
                 item_type: None,
                 fields: None,
                 item_fields: None,
+                unique: None,
+                unique_case_insensitive: None,
             }]),
+            unique: None,
+            unique_case_insensitive: None,
         };
 
         let json = serde_json::to_value(&contacts_field).unwrap();

@@ -38,6 +38,73 @@ impl NodeService {
         Ok(filtered)
     }
 
+    /// Find an existing node whose value on a uniqueness-flagged field matches
+    /// `value` for the given `node_type`.
+    ///
+    /// This is the single read-only entry point behind the `unique` schema rule.
+    /// It resolves the `unique` / `uniqueCaseInsensitive` flags from the type's
+    /// schema fields, and only if the field is flagged does it look for a
+    /// conflicting active node. A match is a normal result, not an error: this
+    /// method never mutates and never fails on a hit. Callers use it to *suggest*
+    /// a likely duplicate (so the UI can show the existing node's name) — writes
+    /// are never rejected on a collision. Uniqueness is scoped per-database
+    /// (ADR-053); email in particular is a claim, not an identity key.
+    ///
+    /// Returns `Ok(None)` when the field is not flagged unique, when `value` is
+    /// empty/whitespace, or when no conflicting node exists.
+    pub async fn find_duplicate_for(
+        &self,
+        node_type: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Option<Node>, NodeServiceError> {
+        // Empty/whitespace values are never treated as a duplicate.
+        if value.trim().is_empty() {
+            return Ok(None);
+        }
+
+        // Resolve the uniqueness flags from the type's schema fields.
+        let schema = self
+            .store
+            .get_schema_node(node_type)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        let flags = schema
+            .as_ref()
+            .and_then(|s| s.fields.iter().find(|f| f.name == field))
+            .map(|f| {
+                (
+                    f.unique.unwrap_or(false),
+                    f.unique_case_insensitive.unwrap_or(false),
+                )
+            });
+
+        let (is_unique, case_insensitive) = match flags {
+            Some(flags) => flags,
+            None => return Ok(None),
+        };
+
+        if !is_unique {
+            return Ok(None);
+        }
+
+        let conflicting_id = self
+            .store
+            .find_conflicting_unique(node_type, field, value, None, case_insensitive)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        match conflicting_id {
+            Some(id) => self
+                .store
+                .get_node(&id)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
     /// Get schema definition for a given node type
     pub async fn get_schema_for_type(
         &self,

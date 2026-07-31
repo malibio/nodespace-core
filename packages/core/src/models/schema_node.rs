@@ -455,6 +455,8 @@ mod tests {
             item_type: None,
             fields: None,
             item_fields: None,
+            unique: None,
+            unique_case_insensitive: None,
         };
 
         schema.fields.push(new_field);
