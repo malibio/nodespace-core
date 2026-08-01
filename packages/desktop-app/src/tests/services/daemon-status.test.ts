@@ -17,7 +17,12 @@ const mockIsTauri = vi.fn(() => true);
 // Defaults to a promise that never resolves, so the initial pull in
 // startDaemonStatusListener() doesn't race the push-driven assertions below
 // (tests that care about the pull path set this explicitly).
-const mockInvoke = vi.fn((_cmd: string) => new Promise<string>(() => {}));
+// Typed as string | boolean because it stands in for two different commands:
+// the status commands answer with a status string, while
+// `probe_and_recover_channel` answers with a boolean. Inferring the type from
+// this default alone would narrow it to `string` and reject the boolean the
+// probe tests legitimately return.
+const mockInvoke = vi.fn((_cmd: string): Promise<string | boolean> => new Promise(() => {}));
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => mockIsTauri(),
   invoke: (cmd: string) => mockInvoke(cmd)
