@@ -15,7 +15,7 @@
 use nodespace_agent::skill_rules::{
     EDIT_DONT_RECREATE, ENUM_FORMAT, FIELDS_FROM_REQUEST_ONLY, NAME_PLACEHOLDER_EXCEPTION,
     NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS,
-    TARGET_TYPE_MUST_EXIST, TITLE_TEMPLATE_PLACEHOLDERS,
+    SCHEMA_VALIDATION_ERROR_RETRY, TARGET_TYPE_MUST_EXIST, TITLE_TEMPLATE_PLACEHOLDERS,
 };
 use std::env;
 use std::fs;
@@ -29,12 +29,13 @@ const END_MARKER: &str = "<!-- END GENERATED: schema-rules -->";
 /// Renders the schema-rules block content (the text between the markers,
 /// exclusive), joining rules that share a single SKILL.md paragraph.
 fn render_schema_rules_block() -> String {
-    // ONE_SCHEMA_PER_REQUEST and SCHEMA_ALREADY_EXISTS render as two
-    // paragraphs (SKILL.md separates them with a blank line), everything
-    // else is one rule per paragraph. NO_NAME_TITLE_FIELD and
-    // NAME_PLACEHOLDER_EXCEPTION share the "**Schema fields:**" paragraph.
+    // ONE_SCHEMA_PER_REQUEST, SCHEMA_ALREADY_EXISTS, and
+    // SCHEMA_VALIDATION_ERROR_RETRY render as three paragraphs (SKILL.md
+    // separates them with a blank line), everything else is one rule per
+    // paragraph. NO_NAME_TITLE_FIELD and NAME_PLACEHOLDER_EXCEPTION share the
+    // "**Schema fields:**" paragraph.
     format!(
-        "{one_schema_per_request}\n\n{schema_already_exists}\n\n\
+        "{one_schema_per_request}\n\n{schema_already_exists}\n\n{schema_validation_error_retry}\n\n\
          {edit_dont_recreate}\n\n\
          **Schema fields:** {no_name_title_field} {name_placeholder_exception}\n\n\
          {fields_from_request_only}\n\n\
@@ -43,6 +44,7 @@ fn render_schema_rules_block() -> String {
          {title_template_placeholders}",
         one_schema_per_request = ONE_SCHEMA_PER_REQUEST.prose,
         schema_already_exists = SCHEMA_ALREADY_EXISTS.prose,
+        schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.prose,
         edit_dont_recreate = EDIT_DONT_RECREATE.prose,
         no_name_title_field = NO_NAME_TITLE_FIELD.prose,
         name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.prose,

@@ -57,6 +57,12 @@ pub const SCHEMA_ALREADY_EXISTS: SchemaRule = SchemaRule {
     prose: "If `create` reports the schema already exists, stop and tell the user — they can create instances with `node create` against the existing type.",
 };
 
+pub const SCHEMA_VALIDATION_ERROR_RETRY: SchemaRule = SchemaRule {
+    id: "schema-validation-error-retry",
+    imperative: "VALIDATION ERROR: If create_schema returns an error other than \"already exists\" (e.g. a title_template placeholder missing from fields, an invalid field type), the error names the specific problem — fix exactly that and call create_schema again in this same turn with the corrected payload. Do NOT ask the user to clarify and do NOT give up after one rejection; a validation error is fixable from the error message alone.",
+    prose: "If `create` rejects the schema with a validation error (not \"already exists\") — for example a `title_template` placeholder missing from `fields`, or an invalid field type — the error names the specific problem. Fix exactly that and retry immediately with the corrected payload; don't ask the user to clarify and don't give up after one rejection.",
+};
+
 pub const EDIT_DONT_RECREATE: SchemaRule = SchemaRule {
     id: "edit-dont-recreate",
     imperative: "EDITING A SCHEMA — call update_schema: When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.",
@@ -118,6 +124,7 @@ pub const TITLE_TEMPLATE_PLACEHOLDERS: SchemaRule = SchemaRule {
 pub const SCHEMA_RULES: &[SchemaRule] = &[
     ONE_SCHEMA_PER_REQUEST,
     SCHEMA_ALREADY_EXISTS,
+    SCHEMA_VALIDATION_ERROR_RETRY,
     EDIT_DONT_RECREATE,
     NO_NAME_TITLE_FIELD,
     FIELDS_FROM_REQUEST_ONLY,
