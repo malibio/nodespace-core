@@ -55,10 +55,12 @@ describe('UI-extension registry', () => {
     mockInvoke.mockReset();
     SharedNodeStore.resetInstance();
     proSync.tier = 'unknown';
+    proSync.userEmail = '';
   });
 
   afterEach(() => {
     proSync.tier = 'unknown';
+    proSync.userEmail = '';
     SharedNodeStore.resetInstance();
     vi.restoreAllMocks();
   });
@@ -103,6 +105,30 @@ describe('UI-extension registry', () => {
       expect(resolveProSyncVariant()).toBe('consent');
       // Not active yet — consent gates the sync_enabled flip.
       expect(isProSyncActive()).toBe(false);
+    });
+
+    it('pro + live sign-in (userEmail) but settings node not hydrated → consent, not sign-in (#1685)', () => {
+      // A fresh Pro sign-in where the DatabaseSettingsNode has not hydrated its
+      // auth_status yet: the live WatchSyncStatus signal (userEmail) must still
+      // resolve `consent` so the enable-sync affordance appears — otherwise a new
+      // Pro user has no way to turn sync on.
+      proSync.tier = 'pro';
+      proSync.userEmail = 'new-user@example.com';
+      // no seedSettings → settings node absent (unhydrated)
+      expect(resolveProSyncVariant()).toBe('consent');
+    });
+
+    it('pro + live sign-in (userEmail) overrides a stale auth_status:local → consent (#1685)', () => {
+      proSync.tier = 'pro';
+      proSync.userEmail = 'new-user@example.com';
+      seedSettings({ sync_enabled: false, auth_status: 'local' });
+      expect(resolveProSyncVariant()).toBe('consent');
+    });
+
+    it('pro + signed out (no userEmail) + unhydrated settings → sign-in (fallback does not false-positive)', () => {
+      proSync.tier = 'pro';
+      proSync.userEmail = '';
+      expect(resolveProSyncVariant()).toBe('sign-in');
     });
 
     it("pro + sync_enabled + auth_status 'local' → relogin (enabled but session lapsed)", () => {
