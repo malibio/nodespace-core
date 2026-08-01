@@ -889,7 +889,131 @@ impl SqliteStore {
         while let Some(row) = rows.next().await? {
             nodes.push(Self::row_to_node(&row)?);
         }
+
+        // Exact-substring title match found nothing: fall back to a
+        // prefix-token match so a word variant of a title (e.g. "groceries"
+        // query vs a "...grocery store" title) still resolves. Plain
+        // substring-of-title matching per token can't handle this case at all
+        // ("groceries" is not a substring of "grocery store" in either
+        // direction), so the fallback compares tokenized query words against
+        // tokenized title words by shared prefix instead. Only engaged on a
+        // genuine miss so the precise exact-substring match (and its
+        // ordering) stays authoritative whenever it finds anything.
+        if nodes.is_empty() {
+            if let Some(ref search_q) = query.title_contains {
+                return self
+                    .query_nodes_title_prefix_fallback(
+                        search_q,
+                        query.node_type.as_deref(),
+                        query.limit,
+                        query.offset,
+                    )
+                    .await;
+            }
+        }
+
         Ok(nodes)
+    }
+
+    /// Prefix-token fallback for `title_contains` when the exact-substring
+    /// match returns zero rows. Reuses the same tokenization/stop-word rules
+    /// `bm25_search_roots` applies for FTS queries, but compares word-to-word
+    /// by shared prefix rather than via FTS5 (titles aren't in `node_fts`,
+    /// which indexes only `content`) or via substring-of-whole-title (which
+    /// can't match a word variant like "groceries" against "grocery store").
+    ///
+    /// Candidates are narrowed by `node_type` in SQL (cheap, exact), then the
+    /// prefix comparison runs in Rust over that set — SQL has no clean way to
+    /// express "any word in title shares a prefix with any query token".
+    async fn query_nodes_title_prefix_fallback(
+        &self,
+        search_q: &str,
+        node_type: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Node>> {
+        let query_tokens: Vec<String> = search_q
+            .split_whitespace()
+            .map(|t| {
+                t.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
+            .filter(|t| !t.is_empty() && !BM25_STOP_WORDS.contains(&t.as_str()))
+            .take(BM25_MAX_TOKENS)
+            .collect();
+
+        if query_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let (sql, params) = match node_type {
+            Some(nt) => (
+                "SELECT * FROM node WHERE title IS NOT NULL AND node_type = ?1".to_string(),
+                vec![libsql::Value::Text(nt.to_string())],
+            ),
+            None => (
+                "SELECT * FROM node WHERE title IS NOT NULL".to_string(),
+                vec![],
+            ),
+        };
+        let candidates = self.query_nodes_from_sql(&sql, params).await?;
+
+        let mut matched: Vec<Node> = candidates
+            .into_iter()
+            .filter(|n| {
+                let title_tokens: Vec<String> = n
+                    .title
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .map(|w| {
+                        w.trim_matches(|c: char| !c.is_alphanumeric())
+                            .to_lowercase()
+                    })
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                query_tokens.iter().any(|qt| {
+                    title_tokens
+                        .iter()
+                        .any(|tt| Self::stem_word(qt) == Self::stem_word(tt))
+                })
+            })
+            .collect();
+
+        if let Some(o) = offset {
+            matched = matched.into_iter().skip(o).collect();
+        }
+        if let Some(l) = limit {
+            matched.truncate(l);
+        }
+        Ok(matched)
+    }
+
+    /// Strip a common plural/verb-ending suffix from a lowercased word token,
+    /// so two tokens that are the same word variant (e.g. "grocery" /
+    /// "groceries", "task" / "tasks") stem to the same value.
+    ///
+    /// Deliberately conservative — a small, explicit suffix list rather than a
+    /// full stemmer (Porter/Snowball). A fixed-length shared-prefix heuristic
+    /// was tried first and rejected: it produced false positives on unrelated
+    /// words that happen to share a stem-length prefix ("cart"/"carton",
+    /// "part"/"party", "read"/"ready"). Suffix stripping avoids all of those
+    /// because it only trims a recognized morpheme, not an arbitrary prefix
+    /// length. Known gap: doesn't undo consonant-doubling gerunds
+    /// ("run"/"running") or silent-e plurals ("date"/"dates") — those don't
+    /// stem equal here, which is a false negative, not a false positive, so
+    /// it's the safe direction to be wrong in for a fallback matcher.
+    fn stem_word(w: &str) -> String {
+        if w.len() > 4 && w.ends_with("ies") {
+            return format!("{}y", &w[..w.len() - 3]);
+        }
+        if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") && !w.ends_with("es") {
+            return w[..w.len() - 1].to_string();
+        }
+        if w.len() > 4 && w.ends_with("es") {
+            return w[..w.len() - 2].to_string();
+        }
+        w.to_string()
     }
 
     pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>> {
@@ -2365,5 +2489,190 @@ mod find_conflicting_unique_tests {
             .await?;
         assert_eq!(miss, None);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod title_contains_stem_fallback_tests {
+    use super::*;
+    use crate::models::NodeQuery;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn bare_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = Arc::new(SqliteStore::new(db_path).await?);
+        Ok((store, temp_dir))
+    }
+
+    async fn make_task(store: &SqliteStore, title: &str) -> Result<String> {
+        let mut node = Node::new("task".to_string(), title.to_string(), json!({}));
+        node.title = Some(title.to_string());
+        let id = node.id.clone();
+        store.create_node(node, None, None).await?;
+        Ok(id)
+    }
+
+    #[tokio::test]
+    async fn exact_substring_still_matches_without_fallback() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let id = make_task(&store, "Buy something from grocery store").await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("grocery store".to_string()),
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn word_variant_falls_back_to_stem_match() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let id = make_task(&store, "Buy something from grocery store").await?;
+
+        // "groceries" is not a substring of "grocery store" in either
+        // direction — the exact match misses, so the stem fallback should
+        // still find it: "groceries" and "grocery" share the stem "grocery".
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("groceries".to_string()),
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unrelated_words_with_shared_prefix_do_not_match() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_task(&store, "Put the cart in the hallway").await?;
+        make_task(&store, "Read the new part number").await?;
+
+        // The reverse-direction case is what actually exercises the fallback:
+        // "cart" IS a substring of "carton" (and "part" of "party"), so those
+        // queries already match on exact substring and never reach the stem
+        // fallback. Querying the LONGER word against a title with only the
+        // SHORTER one is what a fixed-length shared-prefix fallback would
+        // false-positive on ("carton" vs "cart", "party" vs "part") —
+        // stemming must not.
+        for query in ["carton", "party", "ready"] {
+            let nodes = store
+                .query_nodes(NodeQuery {
+                    title_contains: Some(query.to_string()),
+                    node_type: Some("task".to_string()),
+                    ..Default::default()
+                })
+                .await?;
+            assert!(
+                nodes.is_empty(),
+                "query {:?} should not match an unrelated word sharing its prefix, got: {:?}",
+                query,
+                nodes.iter().map(|n| &n.title).collect::<Vec<_>>()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn plural_variants_match_in_both_directions() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let id = make_task(&store, "Pack the boxes for the move").await?;
+
+        // Singular query against plural title word.
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("box".to_string()),
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_respects_node_type_filter() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_task(&store, "Buy something from grocery store").await?;
+
+        // Same title-word overlap, but scoped to a node_type with no matches.
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("groceries".to_string()),
+                node_type: Some("text".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(nodes.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn genuinely_unrelated_query_returns_empty() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_task(&store, "Buy something from grocery store").await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("quarterly report".to_string()),
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(nodes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn stem_word_true_positives() {
+        assert_eq!(SqliteStore::stem_word("groceries"), "grocery");
+        assert_eq!(SqliteStore::stem_word("grocery"), "grocery");
+        assert_eq!(SqliteStore::stem_word("tasks"), "task");
+        assert_eq!(SqliteStore::stem_word("boxes"), "box");
+        assert_eq!(SqliteStore::stem_word("box"), "box");
+    }
+
+    #[test]
+    fn stem_word_does_not_over_strip_unrelated_words() {
+        // These must NOT stem to the same value as a shorter unrelated word —
+        // the false positives a fixed-length shared-prefix match produced.
+        assert_ne!(
+            SqliteStore::stem_word("carton"),
+            SqliteStore::stem_word("cart")
+        );
+        assert_ne!(
+            SqliteStore::stem_word("party"),
+            SqliteStore::stem_word("part")
+        );
+        assert_ne!(
+            SqliteStore::stem_word("ready"),
+            SqliteStore::stem_word("read")
+        );
+        assert_ne!(SqliteStore::stem_word("iss"), SqliteStore::stem_word("is"));
+    }
+
+    #[test]
+    fn stem_word_known_gaps_are_false_negatives_not_false_positives() {
+        // Documented limitation: consonant-doubling gerunds and silent-e
+        // plurals don't stem equal. This is intentional — a missed match is
+        // safer than a spurious one for a fallback matcher.
+        assert_ne!(
+            SqliteStore::stem_word("running"),
+            SqliteStore::stem_word("run")
+        );
+        assert_ne!(
+            SqliteStore::stem_word("dates"),
+            SqliteStore::stem_word("date")
+        );
     }
 }

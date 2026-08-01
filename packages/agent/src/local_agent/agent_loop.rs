@@ -1014,10 +1014,25 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // doesn't acknowledge the error, replace the response with an honest
                 // error message. Appending to a success claim would produce contradictory
                 // output ("The node was updated. ⚠️ Note: ... encountered an error.").
+                //
+                // A failure is excluded when a LATER execution of the same tool name
+                // (by chronological position in `all_tool_executions`, which is pushed
+                // in iteration order) succeeded — the model demonstrably reacted to the
+                // failure by retrying, and the final response is grounded in that
+                // successful retry rather than the earlier error. Mirrors the
+                // `any_real_tool_calls` narrowing already applied to the neighboring
+                // anti-fabrication guard above: scope to what actually grounds the
+                // final answer, not everything that happened anywhere in the turn.
                 let failed_tools: Vec<&str> = all_tool_executions
                     .iter()
-                    .filter(|r| r.is_error)
-                    .map(|r| r.name.as_str())
+                    .enumerate()
+                    .filter(|(i, r)| {
+                        r.is_error
+                            && !all_tool_executions[i + 1..]
+                                .iter()
+                                .any(|later| later.name == r.name && !later.is_error)
+                    })
+                    .map(|(_, r)| r.name.as_str())
                     .collect();
                 let normalized = if !failed_tools.is_empty() && !normalized.is_empty() {
                     let lower = normalized.to_ascii_lowercase();
@@ -4606,6 +4621,193 @@ mod tests {
         assert!(
             result.response.contains("⚠️") || result.response.to_lowercase().contains("error"),
             "error note should be present: {:?}",
+            result.response
+        );
+    }
+
+    /// A same-turn retry that succeeds must clear the failure: the model
+    /// called `search_nodes` with malformed args (error), self-corrected with
+    /// valid args in the next iteration (success), and the final answer is
+    /// grounded in the successful retry. The guard must NOT replace this with
+    /// the generic error message — the earlier failure is superseded.
+    #[tokio::test]
+    async fn tool_failure_superseded_by_later_success_does_not_trip_guard() {
+        struct FailThenSucceedExecutor {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl AgentToolExecutor for FailThenSucceedExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "search_nodes".into(),
+                    description: "Search nodes".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                let call_idx = self.calls.fetch_add(1, Ordering::SeqCst);
+                if call_idx == 0 {
+                    Ok(ToolResult {
+                        tool_call_id: "tc_0".into(),
+                        name: name.into(),
+                        result: json!({"error": "missing field 'type'"}),
+                        is_error: true,
+                    })
+                } else {
+                    Ok(ToolResult {
+                        tool_call_id: "tc_1".into(),
+                        name: name.into(),
+                        result: json!({"count": 1, "nodes": [
+                            {"id": "abc123", "title": "Buy something from grocery store", "type": "task"},
+                        ]}),
+                        is_error: false,
+                    })
+                }
+            }
+        }
+
+        let rounds = vec![
+            // Iteration 0: malformed filter — fails.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_0".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_0".to_string(),
+                    args_json: r#"{"filters":[{"field":"title"}]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Iteration 1: self-corrected, valid call — succeeds.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"node_type":"task","query":"grocery store"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Iteration 2: final answer, grounded in the successful retry.
+            vec![
+                StreamingChunk::Token {
+                    text: "Yes, there is a task titled \"Buy something from grocery store\"."
+                        .to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+        ];
+
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(FailThenSucceedExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+        });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Was any of the task called \"Buy something from grocery store\"?",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 2);
+        assert!(result.tool_calls_made[0].is_error);
+        assert!(!result.tool_calls_made[1].is_error);
+        assert_eq!(
+            result.response, "Yes, there is a task titled \"Buy something from grocery store\".",
+            "the correct, self-corrected answer must pass through unchanged, not be \
+             replaced with the generic tool-error message"
+        );
+    }
+
+    /// A tool failure with NO successful retry — the model's final response
+    /// ignores the failure — must still trip the guard. This is the case the
+    /// superseded-failure narrowing above must not reintroduce: a genuinely
+    /// unaddressed failure has no later success to supersede it.
+    #[tokio::test]
+    async fn tool_failure_without_retry_still_trips_guard() {
+        struct AlwaysFailExecutor;
+
+        #[async_trait]
+        impl AgentToolExecutor for AlwaysFailExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "search_nodes".into(),
+                    description: "Search nodes".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_0".into(),
+                    name: name.into(),
+                    result: json!({"error": "missing field 'type'"}),
+                    is_error: true,
+                })
+            }
+        }
+
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "search_nodes",
+            r#"{"node_type":"task","query":"groceries"}"#,
+            // Model ignores the failure and claims success anyway.
+            "Yes, I found that task.",
+        ));
+        let executor = Arc::new(AlwaysFailExecutor);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Was any of the task called groceries?",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert!(result.tool_calls_made[0].is_error);
+        assert!(
+            result.response.contains("⚠️") || result.response.to_lowercase().contains("error"),
+            "an unretried failure must still surface the error, got: {:?}",
             result.response
         );
     }
