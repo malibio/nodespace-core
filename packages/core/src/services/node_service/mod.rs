@@ -2070,6 +2070,108 @@ mod tests {
         (service, temp_dir)
     }
 
+    /// ADR-059 §6/§7: embedding aggregation never spans an access boundary — the
+    /// boundary is made UNREACHABLE BY CONSTRUCTION (the root-only `member_of`
+    /// constraint of §2 + the embeddable-type list), NOT filtered at aggregation
+    /// time. This pins both load-bearing invariants so a regression (or the
+    /// rejected "filter at runtime" alternative) can't silently reopen the leak:
+    ///   1. `get_aggregated_content` walks `has_child` only, so content filed into a
+    ///      restricted collection via `member_of` never enters an unrelated open
+    ///      root's vector.
+    ///   2. §2 forbids an embeddable `has_child` descendant from carrying its own
+    ///      restriction (a `member_of` edge), so a boundary cannot appear inside an
+    ///      embeddable root's aggregate.
+    #[tokio::test]
+    async fn embedding_aggregation_never_spans_an_access_boundary_adr059() {
+        use crate::behaviors::{NodeBehavior, TextNodeBehavior};
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (svc, _tmp) = create_test_service().await;
+
+        // A RESTRICTED collection with a member ROOT holding secret content
+        // (filed via member_of — the only legal way, per §2).
+        svc.create_node_with_parent(CreateNodeParams {
+            id: Some("11111111-1111-1111-1111-1111111111c1".into()),
+            node_type: "collection".into(),
+            content: "Secret Collection".into(),
+            parent_id: None,
+            position: InsertPositionOwned::End,
+            properties: serde_json::json!({ "collection": { "restrictedToMembers": true } }),
+        })
+        .await
+        .unwrap();
+        svc.create_node_with_parent(CreateNodeParams {
+            id: Some("11111111-1111-1111-1111-1111111111c2".into()),
+            node_type: "text".into(),
+            content: "SECRET_RESTRICTED_TEXT".into(),
+            parent_id: None,
+            position: InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+        svc.store()
+            .add_to_collection("11111111-1111-1111-1111-1111111111c2", "11111111-1111-1111-1111-1111111111c1")
+            .await
+            .expect("a ROOT node may be filed into a restricted collection");
+
+        // A separate OPEN embeddable root with a has_child child.
+        svc.create_node_with_parent(CreateNodeParams {
+            id: Some("11111111-1111-1111-1111-1111111111c3".into()),
+            node_type: "text".into(),
+            content: "OPEN_ROOT_TEXT".into(),
+            parent_id: None,
+            position: InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+        svc.create_node_with_parent(CreateNodeParams {
+            id: Some("11111111-1111-1111-1111-1111111111c4".into()),
+            node_type: "text".into(),
+            content: "OPEN_CHILD_TEXT".into(),
+            parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
+            position: InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+        // (1) The open root's aggregate includes its own has_child subtree, and
+        // NEVER the restricted collection's member_of content.
+        let root = svc.get_node("11111111-1111-1111-1111-1111111111c3").await.unwrap().unwrap();
+        let aggregated = TextNodeBehavior
+            .get_aggregated_content(&root, &svc)
+            .await
+            .unwrap_or_default();
+        assert!(
+            aggregated.contains("OPEN_CHILD_TEXT"),
+            "aggregate must include the open has_child subtree"
+        );
+        assert!(
+            !aggregated.contains("SECRET_RESTRICTED_TEXT"),
+            "aggregate must NOT include content behind a restricted-collection access boundary (ADR-059 §7)"
+        );
+
+        // (2) §2: an embeddable has_child descendant cannot carry its own
+        // restriction, so a boundary can never form inside an aggregate.
+        svc.create_node_with_parent(CreateNodeParams {
+            id: Some("11111111-1111-1111-1111-1111111111c5".into()),
+            node_type: "text".into(),
+            content: "child2".into(),
+            parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
+            position: InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+        let err = svc.store().add_to_collection("11111111-1111-1111-1111-1111111111c5", "11111111-1111-1111-1111-1111111111c1").await;
+        assert!(
+            err.is_err(),
+            "ADR-059 §2: a has_child descendant must be rejected from direct collection membership (member_of is root-only)"
+        );
+    }
+
     /// A schema added to `get_core_schemas()` after a database's first run
     /// must still reach that database on the next start — the same
     /// per-node-not-per-type reconciliation guarantee `06a94eee` established
