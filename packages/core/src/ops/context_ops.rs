@@ -25,7 +25,7 @@
 //! follow-ups referring to their subject by pronoun or ellipsis still retrieve
 //! the right schema.
 
-use crate::models::SchemaNode;
+use crate::models::{Node, SchemaNode};
 use crate::services::{CollectionService, NodeEmbeddingService, NodeService};
 use std::sync::Arc;
 
@@ -200,9 +200,39 @@ fn related_one_hop_schemas(
     // cleaning up the relationship that pointed at it). There is nothing to
     // render for a schema we don't have, so a dangling reference is silently
     // dropped here rather than surfaced as an error.
+    //
+    // is_core is excluded here too: a user-defined schema can perfectly
+    // ordinarily declare a relationship to a core type (task, text, date),
+    // which would otherwise place that core type in `related_schemas`. It
+    // renders under the RELATED heading rather than RELEVANT ENTITY TYPES, so
+    // this isn't the same ADR-063 hazard `parse_and_filter_non_core_schemas`
+    // guards against — but there's no reason for a core type to appear in
+    // either block, so the two stay consistent.
     related_ids
         .into_iter()
         .filter_map(|id| all_schemas.iter().find(|s| s.id == id).cloned())
+        .filter(|s| !s.is_core)
+        .collect()
+}
+
+/// Parse semantic search results into [`SchemaNode`]s, excluding core types.
+///
+/// Retrieval is scoped only by `node_type == "schema"`, and `text`/`task`/
+/// `date` are stored schema nodes with embeddable content, so an unfiltered
+/// pass-through can surface them. Excluding `is_core` here mirrors the guard
+/// `local_agent_service.rs`'s recently-created-schema injection already
+/// applies before writing into this same `relevant_schemas` vector.
+///
+/// The `create_node` guidance treats presence in RELEVANT ENTITY TYPES as
+/// proof a type is user-defined (bare property keys) versus built-in
+/// (`custom:`-prefixed) — a core type reaching this block would make the
+/// model write a bare key onto a core type, the exact ADR-063 violation that
+/// guidance exists to prevent.
+fn parse_and_filter_non_core_schemas(results: Vec<(Node, f64)>) -> Vec<SchemaNode> {
+    results
+        .into_iter()
+        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
+        .filter(|s| !s.is_core)
         .collect()
 }
 
@@ -293,10 +323,7 @@ pub async fn build_workspace_context(
                 .await
             {
                 Ok(results) => {
-                    let schemas: Vec<SchemaNode> = results
-                        .into_iter()
-                        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
-                        .collect();
+                    let schemas = parse_and_filter_non_core_schemas(results);
                     tracing::debug!(
                         count = schemas.len(),
                         query = q,
@@ -445,6 +472,36 @@ mod tests {
 
     fn sample_schema(id: &str, display_name: &str, fields: &[&str]) -> crate::models::SchemaNode {
         sample_schema_with_relationships(id, display_name, fields, vec![])
+    }
+
+    fn schema_search_result(id: &str, is_core: bool) -> (Node, f64) {
+        let node = Node::new_with_id(
+            id.to_string(),
+            "schema".to_string(),
+            id.to_string(),
+            serde_json::json!({ "isCore": is_core, "fields": [] }),
+        );
+        (node, 0.5)
+    }
+
+    /// A core type (`text`/`task`/`date`) is a stored schema node with
+    /// embeddable content, so unfiltered retrieval would otherwise return it.
+    /// Its presence in RELEVANT ENTITY TYPES is what the `create_node`
+    /// guidance reads as proof a type is user-defined, so an unfiltered core
+    /// hit would make the model write a bare property key onto a core type —
+    /// the ADR-063 violation that guidance exists to prevent.
+    #[test]
+    fn parse_and_filter_non_core_schemas_excludes_core_types() {
+        let results = vec![
+            schema_search_result("text", true),
+            schema_search_result("customer", false),
+            schema_search_result("task", true),
+        ];
+
+        let schemas = parse_and_filter_non_core_schemas(results);
+        let ids: Vec<&str> = schemas.iter().map(|s| s.id.as_str()).collect();
+
+        assert_eq!(ids, vec!["customer"]);
     }
 
     fn sample_schema_with_relationships(
@@ -701,6 +758,32 @@ mod tests {
 
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].id, "customer");
+    }
+
+    /// A user-defined schema relating to a core type (e.g. a project schema
+    /// with a `has_task` relationship to `task`) is an ordinary thing to
+    /// model, so the outgoing traversal can reach a core schema in the
+    /// corpus. It must not surface into `related_schemas` even though it
+    /// renders under a different heading than RELEVANT ENTITY TYPES — there's
+    /// no reason for a core type to appear in either block.
+    #[test]
+    fn related_schemas_excludes_core_types_reached_via_outgoing_relationship() {
+        let project = sample_schema_with_relationships(
+            "project",
+            "Project",
+            &["name"],
+            vec![outgoing_relationship("has_task", "task")],
+        );
+        let mut task = sample_schema("task", "Task", &[]);
+        task.is_core = true;
+
+        let related =
+            related_one_hop_schemas(std::slice::from_ref(&project), &[project.clone(), task]);
+
+        assert!(
+            related.is_empty(),
+            "core type must not appear in related_schemas: {related:?}"
+        );
     }
 
     #[test]
