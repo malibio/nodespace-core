@@ -27,6 +27,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 thiserror = "1.0"
 async-trait = "0.1"
+# default-features = false is load-bearing for the audit gate — see .cargo/audit.toml
+# for why (remote/sync/replication/tls pull in a vulnerable rustls-webpki line).
 libsql = { version = "0.6", default-features = false, features = ["core"] }
 sqlite-vec = "0.1"
 tracing = "0.1"
