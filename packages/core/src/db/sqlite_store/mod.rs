@@ -694,6 +694,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bulk_add_skips_collection_hierarchy_cycle() -> Result<()> {
+        // The bulk path is the sync-apply cold-sweep's direct entry point, and a
+        // cyclic collection pair (concurrently written by two devices) can land
+        // there. It must skip the cycle-forming edge — never write a collection as a
+        // descendant of itself — while still applying the batch's valid edges.
+        let (store, _t) = create_test_store().await?;
+
+        let mk_coll = |name: &str| Node::new("collection".to_string(), name.to_string(), json!({}));
+
+        // Cross-batch: A is already a member of B (so A is a descendant of B).
+        let a = mk_coll("A");
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+        let b = mk_coll("B");
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+        let first = store
+            .bulk_add_to_collections(&[(a_id.clone(), b_id.clone())])
+            .await?;
+        assert_eq!(first.len(), 1, "A member_of B is a valid first edge");
+
+        // A later batch carries the cycle-closing B member_of A plus a valid edge.
+        let root = Node::new("text".to_string(), "root".to_string(), json!({}));
+        let root_id = root.id.clone();
+        store.create_node(root, None, None).await?;
+        let created = store
+            .bulk_add_to_collections(&[
+                (b_id.clone(), a_id.clone()), // cycle: B would become a descendant of itself
+                (root_id.clone(), a_id.clone()),
+            ])
+            .await?;
+        assert_eq!(
+            created.len(),
+            1,
+            "only the valid root membership lands; the cyclic edge is skipped"
+        );
+        assert!(
+            created.iter().all(|(_, member, _, _)| member != &b_id),
+            "the cyclic B member_of A edge must not be created"
+        );
+
+        // Intra-batch: both opposing edges arrive in ONE batch. The cycle check runs
+        // against the transaction, so the second edge sees the first and is skipped.
+        let c = mk_coll("C");
+        let c_id = c.id.clone();
+        store.create_node(c, None, None).await?;
+        let d = mk_coll("D");
+        let d_id = d.id.clone();
+        store.create_node(d, None, None).await?;
+        let both = store
+            .bulk_add_to_collections(&[
+                (c_id.clone(), d_id.clone()),
+                (d_id.clone(), c_id.clone()),
+            ])
+            .await?;
+        assert_eq!(
+            both.len(),
+            1,
+            "one direction lands; the same-batch reverse edge is skipped as a cycle"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_reparent_guard_rejects_moving_a_member_under_a_parent() -> Result<()> {
         // ADR-059 §2 (reparent side): the store's `move_node` chokepoint rejects
         // giving a `has_child` parent to a node that holds a `member_of` edge, so
