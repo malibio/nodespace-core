@@ -28,6 +28,9 @@ pub mod daemon_setup;
 // First-launch skill installer
 pub mod skill_setup;
 
+// App update check (detect newer releases)
+pub mod update_check;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -250,6 +253,25 @@ pub fn run() {
             #[cfg(any(unix, windows))]
             app.manage(crate::services::GrpcClient::connect_lazy());
 
+            // Best-effort update check: on a background task so it never delays
+            // startup, and it only emits when a strictly-newer release exists — no
+            // event on "up to date" or any failure, so the frontend banner appears
+            // solely on a real update. Independent of the daemon path below.
+            {
+                use tauri::{Emitter, Manager};
+
+                let update_app_handle = app.handle().clone();
+                let current_version = app.package_info().version.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let status = update_check::check_for_update(&current_version).await;
+                    if status.update_available {
+                        if let Some(window) = update_app_handle.get_webview_window("main") {
+                            let _ = window.emit(update_check::UPDATE_AVAILABLE_EVENT, &status);
+                        }
+                    }
+                });
+            }
+
             // Spawn async task to start the daemon (if needed) and wire up the
             // watcher, token stream, and Pro probe on the (already-managed) client.
             // setup() is synchronous so we can't block_on here — spawn a task instead.
@@ -436,6 +458,7 @@ pub fn run() {
             frontend_log_enabled,
             frontend_log,
             check_daemon_status,
+            update_check::check_for_update_command,
             commands::pro_sync::pro_tier,
             commands::pro_sync::pro_current_status,
             commands::pro_sync::pro_subscribe_sync_status,
