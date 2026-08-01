@@ -119,6 +119,11 @@ pub fn canonical_args(args_json: &str) -> String {
     serde_json::from_str::<serde_json::Value>(args_json)
         .map(|mut v| {
             normalize_param_aliases(&mut v);
+            // Repaired before the identity is taken so a malformed call and its
+            // repaired retry share one identity. Otherwise the duplicate guards
+            // would read them as two different calls and the loop this fix
+            // exists to break would still run, just one round longer.
+            repair_over_quoted_keys(&mut v);
             v.to_string()
         })
         .unwrap_or_else(|_| args_json.to_owned())
@@ -147,6 +152,66 @@ fn normalize_param_aliases(args: &mut serde_json::Value) {
         if let Some(v) = obj.remove("node_id") {
             obj.insert("id".to_string(), v);
         }
+    }
+}
+
+/// Strip literal quote characters that the model wrapped around its own JSON
+/// keys, e.g. the key `"\"name\""` (six characters, quotes included) where
+/// `name` was meant.
+///
+/// This is repair, not interpretation. The malformation is purely mechanical —
+/// the intended key is the same string with a leading and trailing `"` removed —
+/// so the repair is unambiguous, and it is applied only when the trimmed name
+/// does not itself contain a quote and the object has no genuine key by that
+/// name to collide with. Anything outside that shape is left exactly as sent.
+///
+/// Applied to every tool's arguments, at every nesting depth, rather than to the
+/// one tool where it was first observed. The cause is not tool-specific: a
+/// rejected call stays in the conversation as an assistant turn, and the model
+/// reproduces the malformed shape it reads there on every subsequent retry. That
+/// was measured against `gemma-4-e4b-q4km` — a well-formed prior call yields a
+/// well-formed retry in 8 of 8 trials, and a malformed one yields a malformed
+/// retry in 8 of 8 — so the shape, not the tool, is what propagates. Any tool
+/// taking an array of objects is reachable the same way.
+///
+/// Repairing here rather than in each tool's validator matters for the same
+/// reason: the loop's duplicate guards and the tool executor both read the
+/// arguments this produces, so a call repaired once is repaired for every
+/// consumer, and the poisoned shape never re-enters the history to be copied
+/// again.
+fn repair_over_quoted_keys(args: &mut serde_json::Value) {
+    match args {
+        serde_json::Value::Object(obj) => {
+            let over_quoted: Vec<String> = obj
+                .keys()
+                .filter(|k| {
+                    let Some(inner) = k.strip_prefix('"').and_then(|rest| rest.strip_suffix('"'))
+                    else {
+                        return false;
+                    };
+                    // An empty or still-quoted inner name is not a shape this can
+                    // claim to understand, and a collision with a real key would
+                    // silently discard one of the two values.
+                    !inner.is_empty() && !inner.contains('"') && !obj.contains_key(inner)
+                })
+                .cloned()
+                .collect();
+            for key in over_quoted {
+                if let Some(value) = obj.remove(&key) {
+                    let inner = key[1..key.len() - 1].to_string();
+                    obj.insert(inner, value);
+                }
+            }
+            for value in obj.values_mut() {
+                repair_over_quoted_keys(value);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                repair_over_quoted_keys(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1207,8 +1272,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 let (args, tool_result) = match parsed_args {
-                    Ok(args) => {
+                    Ok(mut args) => {
                         consecutive_parse_failures = 0;
+                        // Repair the model's own over-quoted JSON keys before the
+                        // tool sees them. The arguments parse as valid JSON — the
+                        // keys are simply wrong — so no parse-failure guard fires,
+                        // and the rejection would otherwise persist the malformed
+                        // shape into history for the next retry to copy verbatim.
+                        repair_over_quoted_keys(&mut args);
                         // Cross-turn duplicate guard. The per-turn `seen_calls`
                         // set above cannot see this: the session is rebuilt from
                         // persisted messages every turn, so a repeat of a write
@@ -5031,6 +5102,84 @@ mod tests {
         );
     }
 
+    /// End-to-end: a tool call whose keys the model over-quoted must reach the
+    /// tool with those keys repaired, and the turn must complete normally.
+    ///
+    /// Without the repair this call is valid JSON carrying unusable keys, so it
+    /// reaches the tool intact, is rejected on its merits, and the rejected
+    /// shape stays in the conversation for the model to copy on every retry —
+    /// the reported retry loop, which no parse-failure or duplicate guard can
+    /// break because the arguments always parse and the model can vary the tool.
+    #[tokio::test]
+    async fn over_quoted_argument_keys_reach_the_tool_repaired() {
+        use std::sync::Mutex;
+
+        struct CapturingExecutor {
+            seen: Arc<Mutex<Vec<serde_json::Value>>>,
+        }
+
+        #[async_trait]
+        impl AgentToolExecutor for CapturingExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_schema".into(),
+                    description: "Create a schema".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.seen.lock().unwrap().push(args);
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"schemaId": "venue"}),
+                    is_error: false,
+                })
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_schema",
+            // Exactly the wire shape measured from gemma-4-e4b on a retry after
+            // a rejected call (see nlp-engine/tests/toolcall_json_shape.rs).
+            r#"{"name":"Venue","fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#,
+            "Created the Venue type.",
+        ));
+        let executor = Arc::new(CapturingExecutor { seen: seen.clone() });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "create a Venue type with a capacity number field",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let captured = seen.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "the tool must run exactly once");
+        assert_eq!(
+            captured[0],
+            json!({"name":"Venue","fields":[{"name":"capacity","type":"number"}]}),
+            "the tool must receive the repaired keys, not the model's over-quoted ones"
+        );
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert!(
+            !result.tool_calls_made[0].is_error,
+            "a repaired call must succeed rather than be rejected"
+        );
+    }
+
     /// A model emitting *differently*-malformed arguments each round must not be
     /// able to burn every iteration.
     ///
@@ -5889,6 +6038,80 @@ mod tests {
             .expect("turn should succeed");
 
         assert!(calls.lock().unwrap().iter().any(|c| c == "create_node"));
+    }
+
+    /// The reported malformation: keys the model wrapped in literal quote
+    /// characters. Repairing them is what lets a rejected call's retry succeed —
+    /// without it the model reads its own malformed call back out of the
+    /// conversation and reproduces it verbatim on every attempt.
+    #[test]
+    fn over_quoted_keys_are_repaired_at_every_depth() {
+        let mut v = serde_json::json!({
+            "name": "Venue",
+            "fields": [
+                {"\"name\"": "capacity", "\"type\"": "number"},
+                {"\"name\"": "address", "type": "text"}
+            ]
+        });
+        repair_over_quoted_keys(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "name": "Venue",
+                "fields": [
+                    {"name": "capacity", "type": "number"},
+                    {"name": "address", "type": "text"}
+                ]
+            })
+        );
+    }
+
+    /// A key that merely *contains* quotes, or whose repair would collide with a
+    /// real key already present, is not the mechanical malformation this repairs
+    /// — rewriting either would destroy caller data rather than restore it.
+    #[test]
+    fn repair_leaves_ambiguous_and_colliding_keys_untouched() {
+        let mut colliding = serde_json::json!({"\"name\"": "quoted", "name": "real"});
+        repair_over_quoted_keys(&mut colliding);
+        assert_eq!(
+            colliding,
+            serde_json::json!({"\"name\"": "quoted", "name": "real"}),
+            "a repair that collides with an existing key must discard neither value"
+        );
+
+        let mut inner_quote = serde_json::json!({"\"a\"b\"": 1, "\"\"": 2, "plain": 3});
+        repair_over_quoted_keys(&mut inner_quote);
+        assert_eq!(
+            inner_quote,
+            serde_json::json!({"\"a\"b\"": 1, "\"\"": 2, "plain": 3}),
+            "only a cleanly quote-wrapped key is an unambiguous repair"
+        );
+    }
+
+    /// User data lives in these payloads. A string *value* that happens to carry
+    /// quote characters means whatever the user wrote and must survive untouched
+    /// — only keys are ever rewritten.
+    #[test]
+    fn repair_never_rewrites_values() {
+        let mut v = serde_json::json!({
+            "properties": {"quote": "she said \"hello\"", "\"title\"": "Report"}
+        });
+        repair_over_quoted_keys(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "properties": {"quote": "she said \"hello\"", "title": "Report"}
+            })
+        );
+    }
+
+    /// The repaired form is what the duplicate guards compare on, so a malformed
+    /// call and its repaired retry resolve to one identity rather than two.
+    #[test]
+    fn canonical_args_repairs_over_quoted_keys() {
+        let malformed = r#"{"fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#;
+        let clean = r#"{"fields":[{"name":"capacity","type":"number"}]}"#;
+        assert_eq!(canonical_args(malformed), canonical_args(clean));
     }
 
     /// The guard's identity must derive from the *parsed* arguments on both
