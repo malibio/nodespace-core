@@ -154,6 +154,14 @@ impl SqliteStore {
             .context("Failed to connect to libsql database")?;
 
         Self::apply_connection_pragmas(&conn).await?;
+        // Data-safety for app updates: snapshot the existing database before any
+        // pending migration runs, so a new release's migration can never lose the
+        // user's prior data irrecoverably. Best-effort — a backup failure is logged
+        // and must not block startup.
+        if let Err(e) = crate::db::migrations::backup_before_pending_migrations(&conn, &db_path).await
+        {
+            tracing::warn!(error = %e, "pre-migration database backup failed; proceeding");
+        }
         Self::initialize_schema(&conn).await?;
 
         let valid_node_types = Self::build_schema_caches(&conn).await?;
@@ -406,6 +414,47 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("Failed to initialize NodeService: {}", e))?;
 
         Ok((store_arc, temp_dir))
+    }
+
+    /// End-to-end data-safety wiring: opening an existing (pre-migration) database
+    /// through `SqliteStore::new` snapshots it BEFORE the pending migration runs,
+    /// then migrates the live database forward. Guards the app-update guarantee that
+    /// a new release never loses the user's prior data.
+    #[tokio::test]
+    async fn new_backs_up_an_existing_db_before_migrating_then_upgrades() -> Result<()> {
+        use crate::db::migrations::LATEST_VERSION;
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("existing.db");
+
+        // Simulate a database left by a prior release: migrated to LATEST-1 with data.
+        {
+            crate::db::ensure_sqlite_vec_registered().await;
+            let conn = libsql::Builder::new_local(&db_path)
+                .build()
+                .await?
+                .connect()?;
+            crate::db::migrations::run_up_to(&conn, LATEST_VERSION - 1).await?;
+            conn.execute(
+                "INSERT INTO node (id, node_type, content, created_at, modified_at) \
+                 VALUES ('m', 'text', 'keep', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                (),
+            )
+            .await?;
+        }
+
+        // Opening through the store must snapshot then upgrade.
+        let store = SqliteStore::new(db_path.clone()).await?;
+
+        let backups = temp_dir.path().join("backups");
+        let has_backup = std::fs::read_dir(&backups)
+            .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().ends_with(".bak")))
+            .unwrap_or(false);
+        assert!(has_backup, "opening a pre-migration db must leave a backup snapshot");
+
+        let mut rows = store.db.query("PRAGMA user_version", ()).await?;
+        let version: i64 = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(version, LATEST_VERSION, "the live db must be migrated to LATEST");
+        Ok(())
     }
 
     #[tokio::test]

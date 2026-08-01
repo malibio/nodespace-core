@@ -30,6 +30,8 @@
   import { getActiveChromeContributions } from '$lib/plugins/ui-extensions.svelte';
   import ExtensionOutlet from '$lib/plugins/extension-outlet.svelte';
   import ConflictToast from '$lib/components/conflict-toast.svelte';
+  import UpdateBanner from '$lib/components/update-banner.svelte';
+  import { updateStatus } from '$lib/stores/update-status.svelte';
   import { recoveredItems } from '$lib/stores/recovered-items.svelte';
   import { conflictNotifications } from '$lib/stores/conflict-notifications.svelte';
   import {
@@ -181,6 +183,10 @@
   // Initialize theme system and menu event listeners
   onMount(() => {
     const cleanup = initializeTheme();
+
+    // Subscribe to the app-update check (startup event + on-demand). Best-effort;
+    // surfaces the non-blocking <UpdateBanner /> only when a newer release exists.
+    void updateStatus.init();
 
     // Load persisted tab state from storage
     const stateLoaded = loadPersistedState();
@@ -531,6 +537,7 @@
       TabPersistenceService.flush();
 
       cleanup?.();
+      updateStatus.stop();
       if (unlistenMenu) {
         (await unlistenMenu)();
       }
@@ -645,6 +652,9 @@
 
     <!-- Conflict resolution notifications -->
     <ConflictToast />
+
+    <!-- Non-blocking "a newer NodeSpace release is available" banner. -->
+    <UpdateBanner />
 
     <!-- Pro chrome modal slot (re-login prompt when the daemon's session can't be
          refreshed, T18) — registry-driven. -->
