@@ -80,6 +80,7 @@ async fn render_skill_instructions(node_service: &NodeService, skill_id: &str) -
 
 /// A skill node's discovery-relevant properties, decoded from whichever shape
 /// `node.properties` is actually in.
+#[derive(Debug, PartialEq)]
 struct SkillProperties {
     description: String,
     tool_whitelist: Value,
@@ -90,18 +91,18 @@ impl SkillProperties {
     /// Decode from a skill node's `properties`.
     ///
     /// `skill` has a registered core schema (ADR-030), so `NodeService` hoists
-    /// its schema-defined fields under `properties.skill.*` on write — the
-    /// same namespacing every schema-typed node gets (e.g. `task` under
-    /// `properties.task.*`; see `behaviors/mod.rs`'s task-property
-    /// validation, which reads the same way for the same reason). Reading
-    /// `node.properties` flat here found nothing on any seeded skill node:
-    /// `description`, `tool_whitelist`, and `node_types` all live one level
-    /// down, so every skill's tools and entity-type guidance silently
-    /// vanished at the routing gate regardless of score. Falling back to the
-    /// flat top level keeps this correct for a node that predates hoisting or
-    /// was constructed directly, as every test in this module does.
+    /// its schema-defined fields under `properties.skill.*` on write (same as
+    /// `task` under `properties.task.*` — see `behaviors/mod.rs`'s
+    /// task-property validation). Reading `node.properties` flat found
+    /// nothing on any seeded skill node, so every skill's tools and
+    /// entity-type guidance silently vanished at the routing gate. Fall back
+    /// to the flat top level for a node that predates hoisting or was
+    /// constructed directly, as every test in this module does.
     fn from_node_properties(properties: &Value) -> Self {
-        let skill_props = properties.get("skill").unwrap_or(properties);
+        let skill_props = properties
+            .get("skill")
+            .filter(|v| v.is_object())
+            .unwrap_or(properties);
 
         let description = skill_props
             .get("description")
@@ -291,14 +292,14 @@ mod tests {
             }
         });
 
-        let props = SkillProperties::from_node_properties(&properties);
-
-        assert_eq!(props.description, "Modify existing nodes");
         assert_eq!(
-            props.tool_whitelist,
-            json!(["update_node", "resolve_query"])
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node", "resolve_query"]),
+                scoped_type_ids: vec!["invoice".to_string()],
+            }
         );
-        assert_eq!(props.scoped_type_ids, vec!["invoice".to_string()]);
     }
 
     #[test]
@@ -311,20 +312,51 @@ mod tests {
             "tool_whitelist": ["update_node"],
         });
 
-        let props = SkillProperties::from_node_properties(&properties);
+        assert_eq!(
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node"]),
+                scoped_type_ids: vec![],
+            }
+        );
+    }
 
-        assert_eq!(props.description, "Modify existing nodes");
-        assert_eq!(props.tool_whitelist, json!(["update_node"]));
-        assert!(props.scoped_type_ids.is_empty());
+    #[test]
+    fn skill_properties_falls_back_to_flat_shape_when_skill_key_is_null() {
+        // `properties.get("skill")` returning `Some(&Value::Null)` must not
+        // be treated as "the namespace is present" — a bare `.unwrap_or`
+        // would substitute `Null` instead of falling back, silently
+        // discarding any flat data sitting alongside it. Not reachable
+        // through NodeService's real write path (hoisting always leaves an
+        // object, never `null`), but a node built by hand or through a raw
+        // store write could have this shape.
+        let properties = json!({
+            "skill": null,
+            "description": "Modify existing nodes",
+            "tool_whitelist": ["update_node"],
+        });
+
+        assert_eq!(
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node"]),
+                scoped_type_ids: vec![],
+            }
+        );
     }
 
     #[test]
     fn skill_properties_missing_entirely_defaults_safely() {
-        let props = SkillProperties::from_node_properties(&json!({}));
-
-        assert_eq!(props.description, "");
-        assert_eq!(props.tool_whitelist, json!([]));
-        assert!(props.scoped_type_ids.is_empty());
+        assert_eq!(
+            SkillProperties::from_node_properties(&json!({})),
+            SkillProperties {
+                description: String::new(),
+                tool_whitelist: json!([]),
+                scoped_type_ids: vec![],
+            }
+        );
     }
 
     #[test]
