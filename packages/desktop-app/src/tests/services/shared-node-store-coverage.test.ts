@@ -524,9 +524,11 @@ describe('SharedNodeStore - Coverage Completion', () => {
       store.setNode(mockNode, databaseSource);
       store.updateNode(mockNode.id, { content: 'Long operation' }, viewerSource);
 
-      // Should timeout gracefully
+      // flushAllPending races the pending op against its own internal 5s
+      // timeout, so give this test enough headroom above that to avoid
+      // racing vitest's default testTimeout against the same 5s window.
       await expect(store.flushAllPending()).resolves.not.toThrow();
-    });
+    }, 10000);
 
     it('does not double-execute an already in-flight operation on flush (#1435)', async () => {
       // A controllable in-flight persist: the backend call hangs until we
