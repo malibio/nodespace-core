@@ -99,13 +99,6 @@ pub enum NodeServiceError {
         parent_id: String,
         node_type: String,
     },
-
-    /// Cascade delete refused: the subtree contains nodes the actor cannot read (ADR-041).
-    ///
-    /// No node was deleted. `inaccessible_count` is the minimum disclosure needed to explain
-    /// the refusal — never the ids, names, or types of the inaccessible nodes.
-    #[error("This contains {inaccessible_count} items you don't have access to")]
-    InaccessibleDescendants { inaccessible_count: u64 },
 }
 
 impl NodeServiceError {
@@ -216,11 +209,6 @@ impl NodeServiceError {
             parent_id: parent_id.into(),
             node_type: node_type.into(),
         }
-    }
-
-    /// Create an inaccessible-descendants error (cascade delete refusal)
-    pub fn inaccessible_descendants(inaccessible_count: u64) -> Self {
-        Self::InaccessibleDescendants { inaccessible_count }
     }
 
     /// Create a playbook validation failed error from a list of validation errors
@@ -404,21 +392,6 @@ mod tests {
         assert!(msg.contains("Playbook validation failed"));
         assert!(msg.contains("bogus"));
         assert!(msg.contains("missing required param"));
-    }
-
-    #[test]
-    fn test_inaccessible_descendants_error() {
-        let err = NodeServiceError::inaccessible_descendants(3);
-        let msg = err.to_string();
-        assert!(matches!(
-            err,
-            NodeServiceError::InaccessibleDescendants {
-                inaccessible_count: 3
-            }
-        ));
-        assert!(msg.contains("3 items you don't have access to"));
-        // Disclosure rule: message never carries node ids, names, or types.
-        assert!(!msg.contains("id:"));
     }
 
     #[test]

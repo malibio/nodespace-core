@@ -1222,12 +1222,12 @@ impl NodeService {
     ///
     /// **Access gate (ADR-041):** before anything is deleted, the subtree (target + all
     /// descendants) is checked against `subtree_access_gate()`. If any node is unreadable by
-    /// the actor, the delete is refused in full — no node is removed — and
-    /// `NodeServiceError::InaccessibleDescendants` is returned with the inaccessible count only.
-    /// Community installs never see a refusal here: `AlwaysAllowGate` is the default and only a
-    /// synced Pro daemon injects a gate that can deny. This check runs before the transaction
-    /// opens, not inside it — the count is needed for the refusal message on the common path,
-    /// and a rollback-based check would do wasted work every time.
+    /// the actor, the delete is refused in full — no node is removed — and a hierarchy
+    /// violation error is returned. Community installs never see a refusal here:
+    /// `AlwaysAllowGate` is the default and only a synced Pro daemon injects a gate that can
+    /// deny. This check runs before the transaction opens, not inside it — a rollback-based
+    /// check would do wasted work every time. A typed refusal error, wire status, and UI
+    /// treatment for this case land with the real Pro gate wire-up.
     ///
     /// Returns `DeleteResult` with `existed=true` and `deleted_count` (target + all descendants)
     /// on success, or `existed=false` when the target node was already gone.
@@ -1270,9 +1270,10 @@ impl NodeService {
                 "a Denied decision must report at least one inaccessible node — \
                  a gate reporting 0 would surface a confusing refusal message"
             );
-            return Err(NodeServiceError::inaccessible_descendants(
-                inaccessible_count,
-            ));
+            return Err(NodeServiceError::hierarchy_violation(format!(
+                "subtree contains {} node(s) not accessible to the current actor",
+                inaccessible_count
+            )));
         }
 
         let (existed, deleted_nodes) = self

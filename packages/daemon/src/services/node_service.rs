@@ -1687,24 +1687,6 @@ fn ops_error_to_status(err: OpsError) -> Status {
         }
         OpsError::InvalidParams(msg) => Status::invalid_argument(msg),
         OpsError::Internal(msg) => Status::internal(msg),
-        OpsError::InaccessibleDescendants { inaccessible_count } => {
-            let message = format!(
-                "This contains {} items you don't have access to",
-                inaccessible_count
-            );
-            let mut status = Status::new(tonic::Code::FailedPrecondition, message);
-            let payload = serde_json::json!({ "inaccessible_count": inaccessible_count });
-            if let Ok(json) = serde_json::to_string(&payload) {
-                if let Ok(val) =
-                    json.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
-                {
-                    status
-                        .metadata_mut()
-                        .insert("x-inaccessible-descendants", val);
-                }
-            }
-            status
-        }
     }
 }
 

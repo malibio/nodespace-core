@@ -28,8 +28,7 @@ import { createDefaultUIState } from '$lib/types';
 import type { UpdateSource } from '$lib/types/update-protocol';
 import { DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
 import { waitForPendingMoveOperations, trackMoveOperation } from './pending-operations';
-import { confirmNodeDeletion, showInaccessibleDescendantsRefusal } from './delete-confirmation.svelte';
-import { isInaccessibleDescendants } from '$lib/types/errors';
+import { confirmNodeDeletion } from './delete-confirmation.svelte';
 
 const log = createLogger('ReactiveNodeService');
 // Schema defaults extraction removed in a simplification
@@ -1270,18 +1269,10 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
   /**
    * Deletes a node and its entire subtree (cascade).
    *
-   * Shows a confirmation dialog when the node has (visibly) descendants. If confirmed (or
-   * the node has no visible descendants), the deletion is dispatched to the backend.
-   *
-   * **Access gate (ADR-041):** the backend call is always awaited *before* touching local
-   * state, regardless of the locally-visible descendant count. On a synced Pro tenant, RLS
-   * silently filters `getDescendants` to what the actor can already see — a node whose
-   * entire child set is restricted-and-invisible reports `descendantCount === 0` even though
-   * the backend's access gate will refuse the delete. Conditioning the non-optimistic path
-   * on that count would let exactly the case this feature protects against slip through:
-   * the node would vanish from the deleting actor's own UI before the refusal is known.
-   * Awaiting unconditionally costs nothing extra on community/local installs, where the gate
-   * is `AlwaysAllowGate` and always resolves immediately.
+   * Shows a confirmation dialog when the node has descendants. If confirmed (or the node
+   * has no descendants), the deletion is dispatched to the backend atomically. Descendant
+   * cleanup happens automatically via `NodeDeleted` domain events arriving through the
+   * sync listener — no manual tree pruning is needed here.
    *
    * **For Backspace/empty-node deletion** use `combineNodes()`, which promotes children
    * first and does not cascade.
@@ -1302,25 +1293,9 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
       return;
     }
 
-    // Non-optimistic: wait for the backend's access-gate decision before removing anything
-    // from local state. A refusal must leave the UI untouched.
-    try {
-      await backendAdapter.deleteNode(nodeId, node.version ?? 1);
-    } catch (err) {
-      if (isInaccessibleDescendants(err)) {
-        await showInaccessibleDescendantsRefusal(err.conflictData.inaccessible_count);
-        log.debug(`Delete refused for node ${nodeId}: subtree contains inaccessible items`);
-        return;
-      }
-      log.error(`Delete failed for node ${nodeId}:`, err);
-      return;
-    }
-
     cleanupDebouncedOperations(nodeId);
 
-    // skipPersistence=true: the backend delete above already happened, so
-    // sharedNodeStore.deleteNode only needs to update local state, not re-issue the write.
-    sharedNodeStore.deleteNode(nodeId, viewerSource, true);
+    sharedNodeStore.deleteNode(nodeId, viewerSource);
     delete _uiState[nodeId];
 
     // CRITICAL: Must reassign (not mutate) for Svelte 5 reactivity
