@@ -174,6 +174,20 @@ fn normalize_param_aliases(args: &mut serde_json::Value) {
 /// retry in 8 of 8 — so the shape, not the tool, is what propagates. Any tool
 /// taking an array of objects is reachable the same way.
 ///
+/// Deliberately recurses where [`normalize_param_aliases`] deliberately does
+/// not. That function stays top-level because a nested `properties` blob is the
+/// user's own data, where a key means whatever the user's schema says; this one
+/// must reach exactly that data, because the malformation only ever appears
+/// nested — inside `fields`, `add_fields`, or any other array of objects — and a
+/// top-level-only rule would decline every case it exists for. The divergence is
+/// accepted rather than overlooked: the two functions answer different
+/// questions. An alias rewrite guesses at intent and could rename a key the user
+/// meant, so it stays narrow; this one acts only on a key that is not
+/// expressible as a deliberate choice, since a JSON key carrying its own quote
+/// marks cannot be written by the schema path that produced it. The residual
+/// risk is a renamed key, never a dropped value — the collision guard below
+/// declines rather than overwrite.
+///
 /// Repairing here rather than in each tool's validator matters for the same
 /// reason: the loop's duplicate guards and the tool executor both read the
 /// arguments this produces, so a call repaired once is repaired for every

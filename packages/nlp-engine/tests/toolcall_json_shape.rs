@@ -219,9 +219,17 @@ async fn flat_arguments_control() {
 /// retry. This replays a prior assistant tool-call turn through
 /// `chat_message_to_oai_value` — the one place a well-formed argument string is
 /// re-serialized into the template — which the single-turn test never exercises.
+///
+/// Runs both arms in one pass. Holding everything but the prior turn's shape
+/// fixed is the whole experiment: it is what separates "the model cannot encode
+/// nested arguments" (refuted — the control arm retries cleanly) from "the model
+/// copies whatever shape it reads back out of its own history" (what the
+/// malformed arm shows, and what the repair exists to neutralise). Asserting
+/// both here means neither arm can rot unnoticed, and reading the control no
+/// longer requires making the test fail on purpose.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires the Gemma 4 E4B GGUF; run explicitly with --ignored --nocapture"]
-async fn retry_after_rejection_reencodes_arguments_cleanly() {
+async fn retry_copies_the_shape_of_the_prior_call() {
     let path = model_path();
     if !path.exists() {
         eprintln!("SKIP: model not found at {}", path.display());
@@ -240,13 +248,23 @@ async fn retry_after_rejection_reencodes_arguments_cleanly() {
         .load_model(path.to_str().expect("model path is utf-8"), None)
         .expect("model load");
 
+    let malformed_prior =
+        r#"{"name":"Venue","fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#;
+    let clean_prior = r#"{"name":"Venue","fields":[{"name":"capacity","type":"number"}]}"#;
+
     let trials = 8;
-    let mut malformed = 0;
-    for i in 0..trials {
-        let prior_args = std::env::var("PRIOR_ARGS").unwrap_or_else(|_| {
-            r#"{"name":"Venue","fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#.to_string()
-        });
-        let messages = vec![
+    for (arm, prior_args, expect_malformed_trials) in [
+        ("malformed-prior", malformed_prior, trials),
+        ("clean-prior", clean_prior, 0),
+    ] {
+        // Counted per trial, not per malformed field. Fusing the two would tie the
+        // assertion to how many fields the model happens to emit, so a run with the
+        // same behaviour but a different field count would fail while naming the
+        // wrong conclusion — and could prompt removing a repair that is still needed.
+        let mut malformed_trials = 0;
+        let mut malformed_fields = 0;
+        for i in 0..trials {
+            let messages = vec![
             ChatMessage::text(
                 Role::User,
                 "Create a Venue node type with fields: capacity (number) and address (text).",
@@ -257,7 +275,7 @@ async fn retry_after_rejection_reencodes_arguments_cleanly() {
                 tool_calls: vec![nodespace_nlp_engine::ToolCallRaw {
                     id: "call_1".to_string(),
                     function_name: "create_schema".to_string(),
-                    arguments_json: prior_args.clone(),
+                    arguments_json: prior_args.to_string(),
                 }],
                 tool_call_id: None,
                 name: None,
@@ -274,71 +292,83 @@ async fn retry_after_rejection_reencodes_arguments_cleanly() {
             },
         ];
 
-        let raw = Arc::new(Mutex::new(String::new()));
-        let names = Arc::new(Mutex::new(Vec::<String>::new()));
-        let args = Arc::new(Mutex::new(String::new()));
-        let (r, n, a) = (Arc::clone(&raw), Arc::clone(&names), Arc::clone(&args));
-        service
-            .generate_streaming(
-                messages,
-                Some(vec![create_schema_tool()]),
-                0.0,
-                512,
-                move |chunk| match chunk {
-                    ChatChunk::Token(t) => r.lock().unwrap().push_str(&t),
-                    ChatChunk::ToolCallStart { name, .. } => n.lock().unwrap().push(name),
-                    ChatChunk::ToolCallArgs { json, .. } => a.lock().unwrap().push_str(&json),
-                    _ => {}
-                },
-            )
-            .await
-            .expect("generation must succeed");
+            let raw = Arc::new(Mutex::new(String::new()));
+            let names = Arc::new(Mutex::new(Vec::<String>::new()));
+            let args = Arc::new(Mutex::new(String::new()));
+            let (r, n, a) = (Arc::clone(&raw), Arc::clone(&names), Arc::clone(&args));
+            service
+                .generate_streaming(
+                    messages,
+                    Some(vec![create_schema_tool()]),
+                    0.0,
+                    512,
+                    move |chunk| match chunk {
+                        ChatChunk::Token(t) => r.lock().unwrap().push_str(&t),
+                        ChatChunk::ToolCallStart { name, .. } => n.lock().unwrap().push(name),
+                        ChatChunk::ToolCallArgs { json, .. } => a.lock().unwrap().push_str(&json),
+                        _ => {}
+                    },
+                )
+                .await
+                .expect("generation must succeed");
 
-        let joined = args.lock().unwrap().clone();
-        let text = raw.lock().unwrap().clone();
-        let tools_called = names.lock().unwrap().clone();
-        println!("--- retry trial {i} ---");
-        println!("tools: {tools_called:?}");
-        println!("args:  {joined}");
-        println!("text:  {text:?}");
+            let joined = args.lock().unwrap().clone();
+            let text = raw.lock().unwrap().clone();
+            let tools_called = names.lock().unwrap().clone();
+            println!("--- retry trial {i} ---");
+            println!("tools: {tools_called:?}");
+            println!("args:  {joined}");
+            println!("text:  {text:?}");
 
-        if joined.is_empty() {
-            println!("  -> NO TOOL CALL (turn produced text only)");
-            continue;
-        }
-        match serde_json::from_str::<serde_json::Value>(&joined) {
-            Ok(parsed) => {
-                if let Some(fields) = parsed.get("fields").and_then(|f| f.as_array()) {
-                    for f in fields {
-                        if let Some(obj) = f.as_object() {
-                            if obj.keys().any(|k| k.contains('"')) {
-                                println!(
-                                    "  -> MALFORMED KEYS: {:?}",
-                                    obj.keys().collect::<Vec<_>>()
-                                );
-                                malformed += 1;
+            if joined.is_empty() {
+                println!("  -> NO TOOL CALL (turn produced text only)");
+                continue;
+            }
+            let trial_malformed_fields = match serde_json::from_str::<serde_json::Value>(&joined) {
+                Ok(parsed) => {
+                    let mut count = 0;
+                    if let Some(fields) = parsed.get("fields").and_then(|f| f.as_array()) {
+                        for f in fields {
+                            if let Some(obj) = f.as_object() {
+                                if obj.keys().any(|k| k.contains('"')) {
+                                    println!(
+                                        "  -> MALFORMED KEYS: {:?}",
+                                        obj.keys().collect::<Vec<_>>()
+                                    );
+                                    count += 1;
+                                }
                             }
                         }
                     }
+                    count
                 }
-            }
-            Err(e) => {
-                println!("  -> args are not valid JSON: {e}");
-                malformed += 1;
+                Err(e) => {
+                    // Unparseable arguments are a different failure than over-quoted
+                    // keys, but they are equally not a clean retry, so the trial counts.
+                    println!("  -> args are not valid JSON: {e}");
+                    1
+                }
+            };
+            if trial_malformed_fields > 0 {
+                malformed_trials += 1;
+                malformed_fields += trial_malformed_fields;
             }
         }
+        println!(
+            "[{arm}] malformed trials: {malformed_trials}/{trials} \
+         ({malformed_fields} malformed fields total)"
+        );
+        // Asserted as the *measured* behaviour, not as desirable behaviour. The
+        // malformed arm records that the model copies the bad shape out of its own
+        // history every time — the premise `repair_over_quoted_keys` neutralises —
+        // and the clean arm records that the very same prompt retries cleanly when
+        // only that shape differs. If either stops holding, the diagnosis behind the
+        // repair needs re-examining before the repair itself is touched.
+        assert_eq!(
+            malformed_trials, expect_malformed_trials,
+            "[{arm}] retry shape must follow the prior call's shape; if this no longer \
+         holds, re-check whether agent_loop::repair_over_quoted_keys is still \
+         load-bearing"
+        );
     }
-    println!("retry malformed trials: {malformed}/{trials}");
-    // Asserted as the *measured* behaviour, not as desirable behaviour: the
-    // model copies the malformed shape out of its own history every time. This
-    // is the premise `repair_over_quoted_keys` exists to neutralise, and if a
-    // model or template change ever makes the retry self-correct, this test
-    // failing is the signal to re-examine whether the repair is still needed.
-    assert_eq!(
-        malformed,
-        trials * 2,
-        "a malformed prior call must reproduce malformed on every retry \
-         (2 malformed fields per trial); if this no longer holds, re-check \
-         whether agent_loop::repair_over_quoted_keys is still load-bearing"
-    );
 }
