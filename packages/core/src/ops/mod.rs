@@ -43,11 +43,6 @@ pub enum OpsError {
 
     #[error("Internal error: {0}")]
     Internal(String),
-
-    /// Cascade delete refused: the subtree contains nodes the actor cannot read (ADR-041).
-    /// No node was deleted. Carries a count only — never ids, names, or types.
-    #[error("This contains {inaccessible_count} items you don't have access to")]
-    InaccessibleDescendants { inaccessible_count: u64 },
 }
 
 impl From<NodeServiceError> for OpsError {
@@ -105,9 +100,6 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::QueryFailed(msg) => OpsError::Internal(msg),
             NodeServiceError::BulkOperationFailed { context } => OpsError::Internal(context),
             NodeServiceError::InitializationError(msg) => OpsError::Internal(msg),
-            NodeServiceError::InaccessibleDescendants { inaccessible_count } => {
-                OpsError::InaccessibleDescendants { inaccessible_count }
-            }
         }
     }
 }

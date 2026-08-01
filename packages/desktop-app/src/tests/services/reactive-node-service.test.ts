@@ -55,11 +55,8 @@ vi.mock('$lib/services/backend-adapter', () => ({
 
 // Mock delete-confirmation service — default: auto-confirm (no dialog)
 const mockConfirmNodeDeletion = vi.fn().mockResolvedValue(true);
-const mockShowInaccessibleDescendantsRefusal = vi.fn().mockResolvedValue(undefined);
 vi.mock('$lib/services/delete-confirmation.svelte', () => ({
   confirmNodeDeletion: (...args: unknown[]) => mockConfirmNodeDeletion(...args),
-  showInaccessibleDescendantsRefusal: (...args: unknown[]) =>
-    mockShowInaccessibleDescendantsRefusal(...args),
 }));
 
 // Mock reactive-structure-tree to avoid complex dependency setup
@@ -809,10 +806,6 @@ describe('ReactiveNodeService - Delete Node', () => {
     // Reset getDescendants to return no descendants by default
     const { backendAdapter } = await import('$lib/services/backend-adapter');
     vi.mocked(backendAdapter.getDescendants).mockResolvedValue([]);
-    vi.mocked(backendAdapter.deleteNode)
-      .mockReset()
-      .mockResolvedValue({ existed: true, deletedCount: 1 });
-    mockShowInaccessibleDescendantsRefusal.mockClear();
 
     events = {
       focusRequested: vi.fn(),
@@ -928,35 +921,6 @@ describe('ReactiveNodeService - Delete Node', () => {
     // confirmNodeDeletion called with 0 → skips dialog internally
     expect(mockConfirmNodeDeletion).toHaveBeenCalledWith(0);
     expect(events.nodeDeleted).toHaveBeenCalledWith('delete-test');
-  });
-
-  it('calls backendAdapter.deleteNode exactly once for a leaf-node delete', async () => {
-    const { backendAdapter } = await import('$lib/services/backend-adapter');
-
-    await service.deleteNode('delete-test');
-
-    expect(backendAdapter.deleteNode).toHaveBeenCalledTimes(1);
-    expect(backendAdapter.deleteNode).toHaveBeenCalledWith('delete-test', 1);
-  });
-
-  it('leaves the node in the store and does not fire nodeDeleted when the backend refuses on access grounds (ADR-041)', async () => {
-    // Regression guard: getDescendants can report 0 (leaf-looking) even when the backend
-    // refuses the delete, because on a synced Pro tenant getDescendants is RLS-filtered to
-    // what the actor can already see. deleteNode must always await the backend result
-    // before mutating local state — never assume "0 visible descendants" means "safe to
-    // delete optimistically".
-    const { backendAdapter } = await import('$lib/services/backend-adapter');
-    vi.mocked(backendAdapter.deleteNode).mockRejectedValueOnce({
-      message: "This contains 1 items you don't have access to",
-      code: 'INACCESSIBLE_DESCENDANTS',
-      conflictData: { inaccessible_count: 1 }
-    });
-
-    await service.deleteNode('delete-test');
-
-    expect(mockShowInaccessibleDescendantsRefusal).toHaveBeenCalledWith(1);
-    expect(service.findNode('delete-test')).not.toBeNull();
-    expect(events.nodeDeleted).not.toHaveBeenCalled();
   });
 });
 

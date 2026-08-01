@@ -3807,13 +3807,8 @@ mod tests {
         let result = service.delete_node(&project_id, project.version).await;
 
         assert!(
-            matches!(
-                result,
-                Err(NodeServiceError::InaccessibleDescendants {
-                    inaccessible_count: 1
-                })
-            ),
-            "expected InaccessibleDescendants{{1}}, got {:?}",
+            matches!(result, Err(NodeServiceError::HierarchyViolation(_))),
+            "expected HierarchyViolation, got {:?}",
             result
         );
 

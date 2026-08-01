@@ -37,35 +37,6 @@
       </div>
     </div>
   </div>
-{:else if confirmation.pendingRefusal}
-  <div
-    class="overlay"
-    role="none"
-    onclick={confirmation.acknowledge}
-    tabindex="-1"
-  >
-    <div
-      class="modal"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="refusal-modal-title"
-      aria-describedby="refusal-modal-desc"
-      use:focusTrap={{ onEscape: confirmation.acknowledge }}
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-      tabindex="0"
-    >
-      <h2 id="refusal-modal-title">Can't delete this node</h2>
-      <p id="refusal-modal-desc">
-        This contains {confirmation.pendingRefusal.inaccessibleCount}
-        {confirmation.pendingRefusal.inaccessibleCount === 1 ? 'item' : 'items'} you don't have access to.
-        Nothing was deleted.
-      </p>
-      <div class="actions">
-        <button class="btn-cancel" onclick={confirmation.acknowledge}>OK</button>
-      </div>
-    </div>
-  </div>
 {/if}
 
 <style>
