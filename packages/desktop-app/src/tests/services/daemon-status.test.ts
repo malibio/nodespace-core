@@ -296,7 +296,13 @@ describe('daemon-status service (#1470)', () => {
   it('re-fires onDaemonReconnect when a steady-state poll observes a healthy → not_running → healthy restart', async () => {
     vi.useFakeTimers();
     try {
-      mockInvoke.mockResolvedValue('healthy');
+      let status = 'healthy';
+      // The steady-state poll probes the gRPC channel after a healthy status,
+      // so model both commands: the probe returns a boolean and must never be
+      // mistaken for a status string. No wedge here → the channel is live.
+      mockInvoke.mockImplementation((cmd: string) =>
+        Promise.resolve(cmd === 'probe_and_recover_channel' ? false : status)
+      );
       const { startDaemonStatusListener, onDaemonReconnect } = await import(
         '$lib/services/daemon-status'
       );
@@ -309,13 +315,56 @@ describe('daemon-status service (#1470)', () => {
       expect(callback).toHaveBeenCalledTimes(1);
 
       // Daemon dies. Nothing is pushed mid-session; only the poll observes it.
-      mockInvoke.mockResolvedValue('not_running');
+      status = 'not_running';
       await vi.advanceTimersByTimeAsync(15000);
       expect(callback).toHaveBeenCalledTimes(1);
 
       // Daemon is relaunched. The poll observes healthy again and re-fires the
       // reconnect signal — the wedged-until-restart gap this fix closes.
-      mockInvoke.mockResolvedValue('healthy');
+      status = 'healthy';
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(callback).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-fires onDaemonReconnect when a steady-state poll finds a wedged channel and rebuilds it', async () => {
+    vi.useFakeTimers();
+    try {
+      // The daemon stays healthy the whole time — the socket never drops. The
+      // long-lived gRPC channel wedges instead, which the socket-based status
+      // can't see. The probe reports it rebuilt the channel (true), and that
+      // must re-fire reconnect even with no status transition for applyStatus
+      // to observe.
+      let wedged = false;
+      mockInvoke.mockImplementation((cmd: string) =>
+        Promise.resolve(cmd === 'probe_and_recover_channel' ? wedged : 'healthy')
+      );
+      const { startDaemonStatusListener, onDaemonReconnect } = await import(
+        '$lib/services/daemon-status'
+      );
+      const callback = vi.fn();
+      onDaemonReconnect(callback);
+
+      startDaemonStatusListener();
+      // Initial pull observes healthy → first reconnect fires (the initial
+      // pull path never probes).
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // A poll with a live channel probes false → no extra reconnect.
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // The channel wedges; the next poll's probe rebuilds it (true) and
+      // re-fires reconnect so panes re-fetch on the fresh channel.
+      wedged = true;
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(callback).toHaveBeenCalledTimes(2);
+
+      // Once rebuilt the probe reports live again → no repeated firing.
+      wedged = false;
       await vi.advanceTimersByTimeAsync(15000);
       expect(callback).toHaveBeenCalledTimes(2);
     } finally {

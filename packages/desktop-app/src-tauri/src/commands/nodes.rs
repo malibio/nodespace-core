@@ -18,7 +18,7 @@ use nodespace_proto::nodespace::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use tonic::Request;
 
 use crate::services::GrpcClient;
@@ -371,6 +371,64 @@ pub async fn get_node(
         Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
         Err(s) => Err(status_to_command_error(s)),
     }
+}
+
+/// Probe the shared gRPC channel for a wedge and recover it in place.
+///
+/// The desktop app rides every service client and the `WatchNodes` stream on a
+/// single h2 channel (see [`GrpcClient`]). A stream churn during a heavy sync
+/// can wedge that connection: reads and writes then hang forever (the lazy
+/// channel carries no client-side timeout) even though the daemon socket is
+/// healthy — a freshly-dialed client answers fine. The socket-based
+/// `check_daemon_status` therefore keeps reporting "healthy" and
+/// `onDaemonReconnect` never fires, so the journal stays stuck on "Loading…".
+///
+/// This runs one real, lightweight RPC bounded by a short timeout. A `NotFound`
+/// (the sentinel id never exists) — or any other completion — proves the
+/// channel is live and returns `false`. A timeout means the channel is wedged:
+/// rebuild it with [`GrpcClient::reconnect`] and re-probe once, returning `true`
+/// only if the rebuilt channel answers (the frontend then re-fires its
+/// reconnect listeners so panes re-fetch on the fresh channel).
+///
+/// The Pro cloud-sync client caches its own clone of the shared channel, so
+/// after a rebuild it is rebound to the fresh channel too — otherwise every
+/// subsequent cloud-sync call would keep riding the dead connection.
+#[tauri::command]
+pub async fn probe_and_recover_channel(
+    app: AppHandle,
+    client: State<'_, GrpcClient>,
+) -> Result<bool, ()> {
+    use std::time::Duration;
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+    const PROBE_ID: &str = "__ns_channel_probe__";
+
+    // A completed RPC (any status, including NotFound) means the channel is
+    // alive; only a timeout indicates a wedge.
+    async fn probe(client: &GrpcClient) -> Result<(), tokio::time::error::Elapsed> {
+        let mut c = client.client().await;
+        tokio::time::timeout(PROBE_TIMEOUT, async move {
+            let _ = c
+                .get_node(Request::new(GetNodeRequest {
+                    node_id: PROBE_ID.to_string(),
+                }))
+                .await;
+        })
+        .await
+    }
+
+    if probe(client.inner()).await.is_ok() {
+        return Ok(false);
+    }
+
+    tracing::warn!("gRPC channel probe timed out — rebuilding wedged channel");
+    client.reconnect().await;
+    // The Pro client holds its own clone of the shared channel; point it at the
+    // freshly-rebuilt one so cloud-sync calls stop riding the dead connection.
+    // Absent in community mode — skip cleanly if it was never registered.
+    if let Some(pro) = app.try_state::<crate::services::ProClient>() {
+        pro.rebind(client.channel().await).await;
+    }
+    Ok(probe(client.inner()).await.is_ok())
 }
 
 /// Update an existing node

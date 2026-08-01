@@ -342,6 +342,61 @@ impl GrpcClient {
     pub async fn channel(&self) -> Channel {
         self.inner.read().await.channel.clone()
     }
+
+    /// Rebuild the underlying lazy channel and every service client from
+    /// scratch, preserving the active-database routing — what a full app
+    /// restart does, but in place.
+    ///
+    /// Recovers a **wedged** h2 connection: the daemon can be healthy (it
+    /// answers a freshly-dialed client) while this long-lived channel is stuck,
+    /// so `get_node`/writes and the WatchNodes stream hang indefinitely (the
+    /// lazy channel has no client-side timeout). A stream churn during a heavy
+    /// sync can put the single shared connection into that state. Replacing the
+    /// channel gives every surface a clean connection on its next call; bumping
+    /// `db_generation` makes the node-event watcher re-open its stream on it.
+    #[cfg(unix)]
+    pub async fn reconnect(&self) {
+        let sock = resolve_socket_path();
+        let channel = uds_channel_lazy(&sock);
+        self.swap_channel(channel).await;
+        tracing::info!(socket = %sock.display(), "gRPC client: channel rebuilt (reconnect)");
+    }
+
+    /// Named-pipe variant of [`reconnect`].
+    #[cfg(windows)]
+    pub async fn reconnect(&self) {
+        let pipe = resolve_pipe_name();
+        let channel = pipe_channel_lazy(&pipe);
+        self.swap_channel(channel).await;
+        tracing::info!(pipe = %pipe, "gRPC client: channel rebuilt (reconnect)");
+    }
+
+    /// Replace the channel behind every service client, keeping the current
+    /// `x-ns-database-id` routing, then signal the watcher to re-subscribe.
+    async fn swap_channel(&self, channel: Channel) {
+        {
+            let mut inner = self.inner.write().await;
+            // Preserve this window's client id across the rebuild — the daemon
+            // scopes echo suppression by it, so a fresh id would make our own
+            // writes re-appear as remote changes on the new WatchNodes stream.
+            let interceptor = DatabaseIdInterceptor::for_id(
+                inner.active_database_id.as_deref(),
+                inner.client_id.clone(),
+            );
+            inner.node = NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.import =
+                ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.embeddings =
+                EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.agent_session =
+                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor);
+            inner.settings = SettingsServiceClient::new(channel.clone());
+            inner.local_agent = LocalAgentServiceClient::new(channel.clone());
+            inner.database_service = DatabaseServiceClient::new(channel.clone());
+            inner.channel = channel;
+        }
+        self.db_generation.send_modify(|g| *g = g.wrapping_add(1));
+    }
 }
 
 /// Resolve the daemon socket path.
