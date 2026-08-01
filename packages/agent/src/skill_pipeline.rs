@@ -824,6 +824,44 @@ mod tests {
         );
     }
 
+    /// Schema Creation's description must lead with the natural phrasing users
+    /// actually use for wanting a new kind of thing tracked, not only technical
+    /// schema vocabulary.
+    ///
+    /// Agent-matrix scenario 3 traced "I want to keep a record of the equipment
+    /// my team checks out..." to semantic retrieval never surfacing this skill
+    /// in the top-3 candidates — the description was a keyword list ("new
+    /// type", "create schema") that this kind of request doesn't lexically
+    /// match, so `create_schema` was unreachable and the model fell back to a
+    /// bare `create_node` or split the request across two schemas trying to
+    /// recover. This test can't validate retrieval outcome (that needs the
+    /// real embedding model — see `bun run eval:agent`), but it pins the
+    /// wording itself against an accidental future trim or revert, which
+    /// would silently regress scenario 3 with no other signal in `cargo test`
+    /// or `bun run test:all`.
+    #[test]
+    fn schema_creation_description_covers_natural_tracking_phrasing() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        let description = schema_skill
+            .root_properties
+            .get("description")
+            .and_then(|v| v.as_str())
+            .expect("Schema Creation must have a description");
+
+        let natural_phrases = ["keep track of", "log", "maintain records for"];
+        assert!(
+            natural_phrases.iter().any(|p| description.contains(p)),
+            "Schema Creation description must contain at least one natural-language \
+             tracking phrase ({natural_phrases:?}) alongside the technical keyword list, \
+             or semantic retrieval will miss requests phrased like \
+             'I want to keep a record of X' (agent-matrix scenario 3). Got: {description:?}"
+        );
+    }
+
     // -- Tool node seeding tests --------------------------------
 
     #[test]
