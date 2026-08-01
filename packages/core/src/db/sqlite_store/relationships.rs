@@ -727,6 +727,71 @@ impl SqliteStore {
     /// [`crate::services::NodeService::bulk_add_to_collections_notify`], which
     /// emits a `RelationshipCreated` event per returned edge — this raw store
     /// method emits nothing, so on its own the edges never push to cloud.
+    /// The subset of `ids` whose node is a `collection`, chunked under SQLite's
+    /// bound-parameter ceiling. Used to limit the cycle check in
+    /// `bulk_add_to_collections` to members that can actually form a hierarchy.
+    async fn collection_typed_ids(&self, ids: &[&str]) -> Result<HashSet<String>> {
+        let mut set = HashSet::new();
+        if ids.is_empty() {
+            return Ok(set);
+        }
+        let mut unique: Vec<&str> = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        const ID_CHUNK: usize = 900;
+        for chunk in unique.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT id FROM node WHERE node_type = 'collection' AND id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.to_string()))
+                .collect();
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to fetch collection-typed members")?;
+            while let Some(row) = rows.next().await? {
+                set.insert(row.get::<String>(0)?);
+            }
+        }
+        Ok(set)
+    }
+
+    /// Whether adding `member member_of collection` would make a collection a
+    /// descendant of itself, evaluated against `tx` so it sees edges inserted
+    /// earlier in the same transaction. Mirrors the store's
+    /// `validate_no_member_of_cycle` walk but returns a bool for the bulk
+    /// skip-and-continue path instead of raising.
+    async fn bulk_edge_would_cycle(
+        tx: &libsql::Transaction,
+        member: &str,
+        collection: &str,
+    ) -> Result<bool> {
+        if member == collection {
+            return Ok(true);
+        }
+        let mut rows = tx
+            .query(
+                r#"WITH RECURSIVE descendants(node_id, depth) AS (
+                SELECT in_node, 1 FROM relationship
+                  WHERE out_node = ?1 AND relationship_type = 'member_of'
+                UNION ALL
+                SELECT r.in_node, d.depth + 1 FROM relationship r
+                JOIN descendants d ON r.out_node = d.node_id
+                WHERE r.relationship_type = 'member_of' AND d.depth < 100
+            )
+            SELECT node_id FROM descendants WHERE node_id = ?2 LIMIT 1"#,
+                libsql::params![member.to_string(), collection.to_string()],
+            )
+            .await
+            .context("Failed to check for member_of cycle in bulk add")?;
+        Ok(rows.next().await?.is_some())
+    }
+
     pub async fn bulk_add_to_collections(
         &self,
         memberships: &[(String, String)],
@@ -740,6 +805,14 @@ impl SqliteStore {
             .map(|(node_id, _)| node_id.as_str())
             .collect();
         self.assert_root_only_membership(&member_ids).await?;
+
+        // Which members are themselves collections. Only a collection can be filed
+        // such that it becomes a descendant of itself (a collection-hierarchy
+        // cycle) — an ordinary content member has no `member_of` descendants — so
+        // the per-edge cycle check below is paid only for these. The per-row path
+        // (`create_relationship`) runs this guard; this bulk path historically did
+        // not, letting a cyclic collection pair be written straight through.
+        let collection_members = self.collection_typed_ids(&member_ids).await?;
 
         let start = std::time::Instant::now();
 
@@ -773,6 +846,23 @@ impl SqliteStore {
 
         let mut created: Vec<(String, String, String, f64)> = Vec::new();
         for (node_id, collection_id, order) in &ordered {
+            // Skip a collection-membership edge that would make a collection a
+            // descendant of itself. Checked against the transaction so it also
+            // catches a cycle closed by an edge inserted earlier in this same
+            // batch, not only one already committed. Skipping (rather than failing
+            // the batch) is the correct resolution: the cyclic edge must never
+            // land, while the batch's valid edges still persist.
+            if collection_members.contains(node_id.as_str())
+                && Self::bulk_edge_would_cycle(&tx, node_id, collection_id).await?
+            {
+                tracing::warn!(
+                    member = %node_id,
+                    collection = %collection_id,
+                    "bulk_add_to_collections: skipping member_of edge that would create a collection-hierarchy cycle"
+                );
+                continue;
+            }
+
             let mut rows = tx.query(
                 "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of' LIMIT 1",
                 libsql::params![node_id.clone(), collection_id.clone()],
