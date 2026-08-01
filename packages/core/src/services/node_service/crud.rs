@@ -272,7 +272,7 @@ impl NodeService {
             self.ensure_date_exists(parent_id).await?;
         }
 
-        // Step 1.5: Reject a node_type that is neither a registered core type
+        // Step 2: Reject a node_type that is neither a registered core type
         // nor an existing schema id. Without this, an invented id (a display
         // name, a paraphrase) falls through to CustomNodeBehavior and the node
         // is stored as a bare shell: no schema means nothing to validate
@@ -290,7 +290,7 @@ impl NodeService {
             }
         }
 
-        // Step 2: Validate parent exists and is a container (if provided)
+        // Step 3: Validate parent exists and is a container (if provided)
         if let Some(ref parent_id) = params.parent_id {
             let parent_node = self
                 .get_node(parent_id)
@@ -308,7 +308,7 @@ impl NodeService {
             }
         }
 
-        // Step 3: Validate sibling (if After) - treat as best-effort hint.
+        // Step 4: Validate sibling (if After) - treat as best-effort hint.
         // If the sibling doesn't exist or has moved to a different parent, fall
         // back to End so new nodes land at the bottom rather than the top.
         // SQLite is synchronous/ACID: a node written by a prior awaited call is
@@ -336,7 +336,7 @@ impl NodeService {
             }
         }
 
-        // Step 4: Generate or validate node ID
+        // Step 5: Generate or validate node ID
         let node_id = if let Some(provided_id) = params.id {
             // Validate ID format based on node type
             if params.node_type == "date"
@@ -370,7 +370,7 @@ impl NodeService {
             uuid::Uuid::new_v4().to_string()
         };
 
-        // Step 5: Create the node
+        // Step 6: Create the node
         // Save node_type before moving into Node (needed for embedding check)
         let node_type = params.node_type.clone();
 
@@ -431,18 +431,18 @@ impl NodeService {
             start.elapsed().as_millis()
         );
 
-        // Step 6: Create parent relationship if parent specified
+        // Step 7: Create parent relationship if parent specified
         if let Some(parent_id) = params.parent_id {
             self.create_parent_edge(&created_id, &parent_id, params.position.as_ref())
                 .await?;
 
-            // Step 7a: Child node created - queue root for embedding regeneration
+            // Step 8a: Child node created - queue root for embedding regeneration
             // The new child's content should be included in the root's aggregate embedding
             // (root-aggregate model)
             #[cfg(feature = "nlp")]
             self.queue_root_for_embedding(&created_id).await;
         } else {
-            // Step 7b: Root node created - queue for embedding if embeddable type
+            // Step 8b: Root node created - queue for embedding if embeddable type
             // (root-aggregate model)
             // Stale markers are written unconditionally (even without the `nlp` feature) so
             // that a build re-enabled with NLP picks up existing roots without a manual resync.

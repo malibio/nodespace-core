@@ -82,11 +82,8 @@ impl From<NodeServiceError> for OpsError {
                 "Node '{}' (type '{}') cannot have children",
                 parent_id, node_type
             )),
-            NodeServiceError::UnknownNodeType { node_type } => {
-                OpsError::InvalidParams(format!(
-                    "Unknown node_type '{}': no such core type or schema. Create the schema first with create_schema, or use an existing type id.",
-                    node_type
-                ))
+            err @ NodeServiceError::UnknownNodeType { .. } => {
+                OpsError::InvalidParams(err.to_string())
             }
             NodeServiceError::PlaybookValidationFailed { errors } => {
                 OpsError::InvalidParams(errors)
