@@ -63,6 +63,19 @@ async fn fresh_database_ends_up_at_latest_version_with_full_schema() {
         sql.contains("origin"),
         "idx_emb_modified should be rebuilt with origin leading: {sql}"
     );
+
+    // Migration 3's partial expression indexes exist on a fresh DB too.
+    let mut idx_rows = conn
+        .query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_task_status_due_date'",
+            (),
+        )
+        .await
+        .unwrap();
+    assert!(
+        idx_rows.next().await.unwrap().is_some(),
+        "idx_task_status_due_date should exist on a fresh database"
+    );
 }
 
 #[tokio::test]
@@ -201,9 +214,17 @@ async fn task_status_filter_uses_partial_expression_index() {
         plan.push('\n');
     }
 
+    // `contains("idx_task_status")` would also match `idx_task_status_due_date`
+    // (its name is a prefix match), so this checks for the exact index name as
+    // a standalone word — the way EXPLAIN QUERY PLAN's `detail` column quotes it
+    // (e.g. `USING INDEX idx_task_status (...)`, never followed by another
+    // identifier character).
+    let names_exact_index = plan
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|word| word == "idx_task_status");
     assert!(
-        plan.contains("idx_task_status"),
-        "planner should use idx_task_status for this filter shape, got plan: {plan}"
+        names_exact_index,
+        "planner should use idx_task_status (not just any status-covering index) for this filter shape, got plan: {plan}"
     );
 }
 

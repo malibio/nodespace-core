@@ -8,8 +8,15 @@
 //!
 //! `idx_task_status_due_date` is a composite index serving "open tasks ordered
 //! by due date" (`status = ?` equality + `due_date` range/sort) without a
-//! filesort; the single-column `idx_task_status` and `idx_task_due_date`
-//! indexes remain for filters that use only one of the two.
+//! filesort; `idx_task_due_date` remains for filters that sort/range on
+//! `due_date` without also filtering on `status`.
+//!
+//! `idx_task_status` is redundant with `idx_task_status_due_date` for reads —
+//! SQLite's leftmost-prefix rule means the composite index already serves a
+//! `status`-only filter. It's kept anyway: a single-column index is cheaper to
+//! maintain (smaller B-tree, no `due_date` payload) for the common
+//! status-only-filter case, and dropping it would require confirming no query
+//! path relies on it being chosen over the composite for cost reasons.
 
 use anyhow::{Context, Result};
 
