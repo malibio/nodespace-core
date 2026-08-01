@@ -4812,6 +4812,149 @@ mod tests {
         );
     }
 
+    /// The supersession filter is per-tool, not turn-wide: a failed
+    /// `search_nodes` call superseded by a later successful `search_nodes`
+    /// call must NOT mask an unrelated, never-retried `update_node` failure
+    /// earlier in the same turn. Guards against an implementation that clears
+    /// ALL failures once ANY later success appears anywhere in the turn,
+    /// rather than scoping supersession to same-named tool executions.
+    #[tokio::test]
+    async fn superseded_failure_of_one_tool_does_not_mask_unretried_failure_of_another() {
+        struct TwoToolExecutor;
+
+        #[async_trait]
+        impl AgentToolExecutor for TwoToolExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![
+                    ToolDefinition {
+                        name: "update_node".into(),
+                        description: "Update a node".into(),
+                        parameters_schema: json!({"type": "object"}),
+                    },
+                    ToolDefinition {
+                        name: "search_nodes".into(),
+                        description: "Search nodes".into(),
+                        parameters_schema: json!({"type": "object"}),
+                    },
+                ])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                match name {
+                    // update_node always fails and is never retried.
+                    "update_node" => Ok(ToolResult {
+                        tool_call_id: "tc_update".into(),
+                        name: name.into(),
+                        result: json!({"error": "node not found"}),
+                        is_error: true,
+                    }),
+                    // search_nodes fails once, then succeeds on retry.
+                    "search_nodes" => Ok(ToolResult {
+                        tool_call_id: "tc_search".into(),
+                        name: name.into(),
+                        result: json!({"count": 1, "nodes": [{"id": "abc123"}]}),
+                        is_error: false,
+                    }),
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        let rounds = vec![
+            // Iteration 0: update_node fails, never retried.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_update".to_string(),
+                    name: "update_node".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_update".to_string(),
+                    args_json: r#"{"id":"missing-id"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Iteration 1: search_nodes fails with malformed filter.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_search_0".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_search_0".to_string(),
+                    args_json: r#"{"filters":[{"field":"title"}]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Iteration 2: search_nodes retried and succeeds.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_search_1".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_search_1".to_string(),
+                    args_json: r#"{"node_type":"task","query":"grocery store"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Iteration 3: final answer ignores the still-failed update.
+            vec![
+                StreamingChunk::Token {
+                    text: "I found the task you were looking for.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+        ];
+
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(TwoToolExecutor);
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Update the node and find the grocery task",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.tool_calls_made.len(), 3);
+        assert!(
+            result.response.contains("⚠️") || result.response.to_lowercase().contains("error"),
+            "update_node's unretried failure must still surface even though \
+             search_nodes's failure was superseded by its own later success, got: {:?}",
+            result.response
+        );
+    }
+
     /// Unparseable tool arguments must be reported as unparseable — never
     /// silently replaced with `{}` and executed.
     ///

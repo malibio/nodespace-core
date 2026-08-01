@@ -891,18 +891,18 @@ impl SqliteStore {
         }
 
         // Exact-substring title match found nothing: fall back to a
-        // prefix-token match so a word variant of a title (e.g. "groceries"
+        // stem-token match so a word variant of a title (e.g. "groceries"
         // query vs a "...grocery store" title) still resolves. Plain
         // substring-of-title matching per token can't handle this case at all
         // ("groceries" is not a substring of "grocery store" in either
         // direction), so the fallback compares tokenized query words against
-        // tokenized title words by shared prefix instead. Only engaged on a
+        // tokenized title words by shared stem instead. Only engaged on a
         // genuine miss so the precise exact-substring match (and its
         // ordering) stays authoritative whenever it finds anything.
         if nodes.is_empty() {
             if let Some(ref search_q) = query.title_contains {
                 return self
-                    .query_nodes_title_prefix_fallback(
+                    .query_nodes_title_stem_fallback(
                         search_q,
                         query.node_type.as_deref(),
                         query.limit,
@@ -911,21 +911,26 @@ impl SqliteStore {
                     .await;
             }
         }
-
         Ok(nodes)
     }
 
-    /// Prefix-token fallback for `title_contains` when the exact-substring
+    /// Stem-token fallback for `title_contains` when the exact-substring
     /// match returns zero rows. Reuses the same tokenization/stop-word rules
     /// `bm25_search_roots` applies for FTS queries, but compares word-to-word
-    /// by shared prefix rather than via FTS5 (titles aren't in `node_fts`,
+    /// by shared stem rather than via FTS5 (titles aren't in `node_fts`,
     /// which indexes only `content`) or via substring-of-whole-title (which
     /// can't match a word variant like "groceries" against "grocery store").
     ///
     /// Candidates are narrowed by `node_type` in SQL (cheap, exact), then the
-    /// prefix comparison runs in Rust over that set — SQL has no clean way to
-    /// express "any word in title shares a prefix with any query token".
-    async fn query_nodes_title_prefix_fallback(
+    /// stem comparison runs in Rust over that set — SQL has no clean way to
+    /// express "any word in title shares a stem with any query token".
+    ///
+    /// Matches are OR'd across query tokens (any shared stem qualifies), so a
+    /// multi-word query is a broader net than the exact-substring path's
+    /// implicit AND. Results are ranked by how many distinct query tokens
+    /// matched before `limit`/`offset` apply, so a `limit`-truncated result
+    /// keeps the closest matches rather than an arbitrary OR-qualifying set.
+    async fn query_nodes_title_stem_fallback(
         &self,
         search_q: &str,
         node_type: Option<&str>,
@@ -945,6 +950,7 @@ impl SqliteStore {
         if query_tokens.is_empty() {
             return Ok(Vec::new());
         }
+        let query_stems: Vec<String> = query_tokens.iter().map(|t| Self::stem_word(t)).collect();
 
         let (sql, params) = match node_type {
             Some(nt) => (
@@ -958,27 +964,33 @@ impl SqliteStore {
         };
         let candidates = self.query_nodes_from_sql(&sql, params).await?;
 
-        let mut matched: Vec<Node> = candidates
+        // (node, number of distinct query stems it matched) — the match count
+        // is the ranking key so a truncated result keeps the closest matches.
+        let mut matched: Vec<(Node, usize)> = candidates
             .into_iter()
-            .filter(|n| {
-                let title_tokens: Vec<String> = n
+            .filter_map(|n| {
+                let title_stems: std::collections::HashSet<String> = n
                     .title
                     .as_deref()
                     .unwrap_or("")
                     .split_whitespace()
                     .map(|w| {
-                        w.trim_matches(|c: char| !c.is_alphanumeric())
-                            .to_lowercase()
+                        Self::stem_word(
+                            &w.trim_matches(|c: char| !c.is_alphanumeric())
+                                .to_lowercase(),
+                        )
                     })
-                    .filter(|w| !w.is_empty())
                     .collect();
-                query_tokens.iter().any(|qt| {
-                    title_tokens
-                        .iter()
-                        .any(|tt| Self::stem_word(qt) == Self::stem_word(tt))
-                })
+                let match_count = query_stems
+                    .iter()
+                    .filter(|qs| title_stems.contains(*qs))
+                    .count();
+                (match_count > 0).then_some((n, match_count))
             })
             .collect();
+
+        matched.sort_by(|(_, a), (_, b)| b.cmp(a));
+        let mut matched: Vec<Node> = matched.into_iter().map(|(n, _)| n).collect();
 
         if let Some(o) = offset {
             matched = matched.into_iter().skip(o).collect();
@@ -989,9 +1001,9 @@ impl SqliteStore {
         Ok(matched)
     }
 
-    /// Strip a common plural/verb-ending suffix from a lowercased word token,
-    /// so two tokens that are the same word variant (e.g. "grocery" /
-    /// "groceries", "task" / "tasks") stem to the same value.
+    /// Strip a common plural suffix from a lowercased word token, so two
+    /// tokens that are the same word variant (e.g. "grocery" / "groceries",
+    /// "task" / "tasks") stem to the same value.
     ///
     /// Deliberately conservative — a small, explicit suffix list rather than a
     /// full stemmer (Porter/Snowball). A fixed-length shared-prefix heuristic
@@ -2630,6 +2642,36 @@ mod title_contains_stem_fallback_tests {
             })
             .await?;
         assert!(nodes.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multi_token_matches_are_ranked_by_match_count_before_limit() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        // Matches only the low-signal "buy" token.
+        make_task(&store, "Buy new running shoes").await?;
+        // Matches both "buy" and a stem of "tickets".
+        let best_id = make_task(&store, "Buy tickets for the concert").await?;
+        // Matches only "buy" too.
+        make_task(&store, "Buy a book for the trip").await?;
+
+        // With limit=1, the OR-matching fallback would (pre-ranking) return an
+        // arbitrary one of three "buy"-matching tasks in table order. Ranking
+        // by distinct-query-token match count must put the task matching BOTH
+        // query words first, so a `limit`-truncated result still surfaces it.
+        let nodes = store
+            .query_nodes(NodeQuery {
+                title_contains: Some("buy tickets".to_string()),
+                node_type: Some("task".to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].id, best_id,
+            "the task matching both query tokens must rank first, not be truncated out"
+        );
         Ok(())
     }
 
