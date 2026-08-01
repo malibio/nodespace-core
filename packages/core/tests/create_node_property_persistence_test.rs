@@ -34,9 +34,14 @@ async fn test_service() -> Result<Arc<NodeService>, Box<dyn std::error::Error>> 
     Ok(Arc::new(NodeService::new(&mut store).await?))
 }
 
-/// Count the property values a caller could later resolve against, matching how
-/// `exec_create_node` derives the `property_count` the eval harness scrapes:
-/// off the stored node, with underscore-prefixed internals excluded.
+/// Count the property values a caller could later resolve against — the same
+/// question `exec_create_node`'s `property_count` answers, read off the stored
+/// node rather than the request.
+///
+/// Production uses a plain `o.len()`: by that point `flatten_properties_for_api`
+/// has already stripped underscore-prefixed internals (`_schema_version`), so no
+/// filter is needed there. The filter here is belt-and-braces against that
+/// flattening changing, not a mirror of production logic.
 fn persisted_count(node_data: &serde_json::Value) -> usize {
     node_data
         .get("properties")
@@ -88,8 +93,13 @@ async fn persists_values_for_declared_schema_fields() -> Result<(), Box<dyn std:
     )
     .await?;
 
-    assert!(
-        persisted_count(&output.node_data) >= 2,
+    // Exact, not `>=`: `equipment` is user-defined with no defaulted fields, so
+    // creation adds nothing of its own and the count is deterministic. A looser
+    // bound would also pass if storage started injecting extra keys, which is
+    // precisely the kind of drift these tests exist to catch.
+    assert_eq!(
+        persisted_count(&output.node_data),
+        2,
         "declared field values must persist, got: {}",
         serde_json::to_string_pretty(&output.node_data)?
     );
@@ -121,8 +131,9 @@ async fn persists_values_for_fields_the_schema_never_declared(
     )
     .await?;
 
-    assert!(
-        persisted_count(&output.node_data) >= 1,
+    assert_eq!(
+        persisted_count(&output.node_data),
+        1,
         "a value for an undeclared field must still persist, got: {}",
         serde_json::to_string_pretty(&output.node_data)?
     );

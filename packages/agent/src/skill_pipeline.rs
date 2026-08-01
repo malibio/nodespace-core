@@ -308,11 +308,15 @@ TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this 
 
 FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields as (name: type) — fields marked `required` MUST be included in the properties map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `properties` is the ONLY way any field value is stored.
 
-VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `properties` under a short descriptive snake_case key of your own (e.g. "weighs 40kg" with no weight field listed → "weight": "40kg"). `properties` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `properties` under a key of your own. `properties` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
+
+KEY FORMAT FOR A VALUE WITH NO MATCHING FIELD: Name the key after the user's own noun for it — lowercase, singular, snake_case (they said "weighs 40kg" → `weight`). Reusing their wording keeps the same fact under the same key next time instead of inventing a new one. Then prefix it based on the type:
+- node_type is a type from RELEVANT ENTITY TYPES (one the user defined): use the bare key — `"weight": "40kg"`.
+- node_type is a built-in type (text, task, date): prefix with `custom:` — `"custom:weight": "40kg"`. Unprefixed names are reserved for built-in fields on these types, so a bare key there can collide with a real one (status, priority, due_date).
 
 TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from properties — set content to a brief descriptive label (e.g. the most identifying property value). If there is no title_template, set content to the best human-readable name the user provided.
 
-PROPERTY KEYS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block. Do NOT add namespace prefixes for schema-defined fields.
+PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
 
 EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget: Widget (label: string; quantity: number; received_on: date; condition: string)`:
 {
@@ -549,9 +553,11 @@ mod tests {
             md.contains("NEVER drop a value"),
             "guidance must forbid discarding an unmatched value"
         );
+        // Pins the RULE, not the quoted symptom: a reword that keeps the
+        // prohibition but drops the exact phrase should still pass.
         assert!(
-            md.contains("doesn't support"),
-            "guidance must forbid the observed \"type doesn't support it\" reply"
+            md.contains("NEVER drop a value") && md.contains("gone silently"),
+            "guidance must forbid discarding a value and say why it is harmful"
         );
         // The value belongs in THIS call, not behind a schema round-trip that
         // the skill's own tool whitelist cannot make anyway.
@@ -582,6 +588,61 @@ mod tests {
             props.contains("Not limited to the listed fields"),
             "create_node must tell the model extra keys are allowed, got: {props}"
         );
+    }
+
+    /// Both surfaces state the SAME rule, so neither can be reworded into
+    /// contradicting the other while its own test stays green.
+    ///
+    /// The rule is duplicated deliberately — routing does not always land on
+    /// Node Creation, and on those turns the tool schema is the only surface
+    /// carrying it — but deliberate duplication silently becomes divergence
+    /// without something pinning the two together.
+    ///
+    /// The invariant pinned is ADR-063's: a value with no matching field is
+    /// keyed bare on a user-defined type, and `custom:`-prefixed on a core
+    /// type, where unprefixed names are reserved. Getting this wrong writes a
+    /// bare key onto a core type — the collision `update_schema` rejects, and
+    /// which `create_node` does NOT currently validate.
+    #[test]
+    fn both_surfaces_agree_on_the_undeclared_key_rule() {
+        let node_creation_md = seed_skill_nodes()
+            .into_iter()
+            .find(|s| s.title == "Node Creation")
+            .expect("Node Creation skill must exist")
+            .markdown_content;
+        let tool_desc = crate::local_agent::tools::Tool::CreateNode
+            .definition()
+            .parameters_schema["properties"]["properties"]["description"]
+            .as_str()
+            .expect("properties field must document itself")
+            .to_string();
+
+        for (surface, text) in [
+            ("skill guidance", &node_creation_md),
+            ("create_node tool schema", &tool_desc),
+        ] {
+            // Assert the PAIRING, not the mere presence of "custom:" — the
+            // token appears in the worked example too, so a surface that
+            // dropped the rule while keeping the example would still pass a
+            // bare `contains("custom:")`. Verified by mutation: flipping the
+            // tool schema to "bare on a built-in type" must fail this.
+            let states_prefix_rule = text.contains("`custom:`-prefixed on a built-in type")
+                || text.contains("prefix with `custom:`");
+            assert!(
+                states_prefix_rule,
+                "{surface} must tie the custom: prefix to built-in types, not merely mention it"
+            );
+            for core_type in ["text", "task", "date"] {
+                assert!(
+                    text.contains(core_type),
+                    "{surface} must name the core type '{core_type}' the prefix rule applies to"
+                );
+            }
+            assert!(
+                text.contains("reserved"),
+                "{surface} must say why bare keys on core types are disallowed"
+            );
+        }
     }
 
     #[test]
