@@ -1389,4 +1389,57 @@ mod tests {
         );
         assert_eq!(results[0].content, "50% off sale");
     }
+
+    // =========================================================================
+    // Index-string coupling
+    //
+    // Migration v003_property_indexes.rs hardcodes partial expression indexes
+    // whose expressions must byte-for-byte match what resolve_field/
+    // build_property_filter generate, or SQLite won't recognize the index as
+    // covering the query and will silently fall back to a full scan. These
+    // tests fail loudly if either side drifts.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_resolve_field_matches_indexed_expression() {
+        let (query_service, _node_service, _temp) = create_test_services().await;
+
+        for (field, expected) in [
+            ("status", "json_extract(properties, '$.task.status')"),
+            ("due_date", "json_extract(properties, '$.task.due_date')"),
+            ("priority", "json_extract(properties, '$.task.priority')"),
+            ("assignee", "json_extract(properties, '$.task.assignee')"),
+        ] {
+            assert_eq!(query_service.resolve_field(field, "task"), expected);
+        }
+
+        assert_eq!(
+            query_service.resolve_field("status", "project"),
+            "json_extract(properties, '$.project.status')"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_property_filter_matches_indexed_expression() {
+        let (query_service, _node_service, _temp) = create_test_services().await;
+
+        let filter = QueryFilter {
+            filter_type: FilterType::Property,
+            operator: FilterOperator::Equals,
+            property: Some("status".to_string()),
+            value: Some(json!("open")),
+            case_sensitive: None,
+            relationship_type: None,
+            node_id: None,
+        };
+
+        let sql = query_service
+            .build_property_filter(&filter, "task")
+            .unwrap();
+        assert!(
+            sql.starts_with("json_extract(properties, '$.task.status')"),
+            "build_property_filter output must start with the exact expression \
+             idx_task_status is built on, or the index won't cover this filter: {sql}"
+        );
+    }
 }
