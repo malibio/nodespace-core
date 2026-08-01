@@ -70,7 +70,13 @@ export function activeDatabaseSettings(): DatabaseSettings | undefined {
 export function resolveProSyncVariant(): ProSyncVariant {
   if (proSync.tier !== 'pro') return 'teaser';
   const settings = activeDatabaseSettings();
-  const authed = settings?.auth_status === 'connected';
+  // `auth_status` on the settings node hydrates asynchronously — on a fresh
+  // webview it can lag behind an already-live sign-in, which would drop the
+  // variant to `sign-in` and strip the enable-sync / consent affordance so a
+  // new Pro user has no way to turn sync on. The daemon's WatchSyncStatus stream
+  // (`proSync.userEmail`, cleared to '' on sign-out) is the authoritative live
+  // signal, so treat a live sign-in as authed even before the node hydrates.
+  const authed = settings?.auth_status === 'connected' || proSync.userEmail !== '';
   const enabled = settings?.sync_enabled === true;
   // Not yet opted in: sign in first, then present the publish consent.
   if (!enabled) return authed ? 'consent' : 'sign-in';
