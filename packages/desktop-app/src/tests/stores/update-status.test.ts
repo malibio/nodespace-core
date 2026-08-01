@@ -3,6 +3,9 @@
  * dismissal is per-version; download opens the release page.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+// Type-only, so it is erased before `vi.mock` hoisting and cannot pull the
+// module under test in ahead of its own mocks.
+import type { UpdateStatus } from '$lib/stores/update-status.svelte';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })
@@ -18,10 +21,21 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 // Default: the on-demand check finds no update; individual tests drive via events.
-const mockInvoke = vi.fn(async () => ({ current: '0.2.0', latest: null, update_available: false }));
+// Annotated rather than inferred: inference from this default alone would fix
+// `latest` to `null` and the parameter list to zero-arity, rejecting both the
+// forwarded `invoke` arguments and the tests that resolve a real `latest`.
+const mockInvoke = vi.fn(
+  async (..._args: unknown[]): Promise<UpdateStatus> => ({
+    current: '0.2.0',
+    latest: null,
+    update_available: false
+  })
+);
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }));
 
-const mockOpenUrl = vi.fn(async () => {});
+// Rest parameter for the same reason as `mockInvoke` above: the call site
+// forwards `openUrl`'s arguments, which a zero-arity inferred signature rejects.
+const mockOpenUrl = vi.fn(async (..._args: unknown[]) => {});
 vi.mock('$lib/utils/external-links', () => ({ openUrl: (...a: unknown[]) => mockOpenUrl(...a) }));
 
 import { updateStatus, RELEASES_URL } from '$lib/stores/update-status.svelte';
