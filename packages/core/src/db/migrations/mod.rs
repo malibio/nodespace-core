@@ -14,16 +14,18 @@
 
 mod v001_initial_schema;
 mod v002_embedding_origin;
+mod v003_property_indexes;
 
 use anyhow::{Context, Result};
 
 /// Highest migration version known to this build. Bump when adding a migration.
-pub const LATEST_VERSION: i64 = 2;
+pub const LATEST_VERSION: i64 = 3;
 
 async fn apply_migration(tx: &libsql::Transaction, version: i64) -> Result<()> {
     match version {
         1 => v001_initial_schema::apply(tx).await,
         2 => v002_embedding_origin::apply(tx).await,
+        3 => v003_property_indexes::apply(tx).await,
         _ => unreachable!("no migration defined for version {version}"),
     }
 }
@@ -32,6 +34,7 @@ fn migration_name(version: i64) -> &'static str {
     match version {
         1 => "initial_schema",
         2 => "embedding_origin",
+        3 => "property_indexes",
         _ => "unknown",
     }
 }

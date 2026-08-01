@@ -12,7 +12,10 @@
 //! - Query: `query_nodes_simple` by type, by content substring, by `mentioned_by`
 //!   (the mention-join path), and a large result set.
 //! - JSON-path: `QueryService` filtering on an indexed column (`node_type`) vs a
-//!   non-indexed `json_extract` property, over the same corpus.
+//!   non-indexed `json_extract` property, over the same corpus; also at 1k/10k/
+//!   100k scale, contrasting a `task.status` filter covered by migration v003's
+//!   `idx_task_status` partial expression index against the equivalent
+//!   non-indexed `text.category` filter.
 //! - Vector search: `search_embeddings` (`vec0` KNN) over random unit vectors.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -334,9 +337,7 @@ fn bench_query_mentioned_by(c: &mut Criterion) {
                     ))
                     .await
                     .expect("source");
-                svc.create_mention(&src, &target_id)
-                    .await
-                    .expect("mention");
+                svc.create_mention(&src, &target_id).await.expect("mention");
             }
             (svc, temp, target_id)
         });
@@ -355,7 +356,7 @@ fn bench_query_mentioned_by(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// JSON-path benchmarks (indexed column vs non-indexed property)
+// JSON-path benchmarks (indexed column/property vs non-indexed property)
 // ---------------------------------------------------------------------------
 
 /// `QueryService` filtering on the indexed `node_type` column versus a
@@ -425,6 +426,113 @@ fn bench_jsonpath_query(c: &mut Criterion) {
             })
         });
     });
+
+    group.finish();
+}
+
+/// Seed a corpus of `task` nodes (half `status: "open"`, half `status: "done"`)
+/// and return the store + service (+ temp dir to keep the DB alive).
+async fn seed_task_corpus(count: usize) -> (Arc<SqliteStore>, Arc<NodeService>, TempDir) {
+    let (store, svc, temp) = setup().await;
+    let nodes: Vec<Node> = (0..count)
+        .map(|i| {
+            let status = if i % 2 == 0 { "open" } else { "done" };
+            Node::new(
+                "task".to_string(),
+                format!("Task {}", i),
+                json!({ "task": { "status": status } }),
+            )
+        })
+        .collect();
+    svc.bulk_create(nodes).await.expect("seed task corpus");
+    (store, svc, temp)
+}
+
+/// `task.status` filter (migration v003's `idx_task_status` partial expression
+/// index) versus the equivalent non-indexed `text.category` filter, at
+/// increasing corpus sizes, quantifying the index's before/after win as the
+/// table grows.
+fn bench_jsonpath_indexed_vs_non_indexed_at_scale(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut group = c.benchmark_group("jsonpath/scale");
+    group.sample_size(10);
+
+    for count in [1_000usize, 10_000, 100_000] {
+        let (task_store, _task_temp) = rt.block_on(async {
+            let (store, _svc, temp) = seed_task_corpus(count).await;
+            (store, temp)
+        });
+        let task_query_service = QueryService::new(Arc::clone(&task_store));
+
+        group.bench_with_input(
+            BenchmarkId::new("indexed_task_status", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    rt.block_on(async {
+                        let q = QueryDefinition {
+                            target_type: "task".to_string(),
+                            filters: vec![QueryFilter {
+                                filter_type: FilterType::Property,
+                                operator: FilterOperator::Equals,
+                                property: Some("status".to_string()),
+                                value: Some(json!("open")),
+                                case_sensitive: None,
+                                relationship_type: None,
+                                node_id: None,
+                            }],
+                            sorting: None,
+                            limit: Some(count),
+                        };
+                        black_box(task_query_service.execute(&q).await.expect("query"))
+                    })
+                });
+            },
+        );
+
+        let (text_store, _text_temp) = rt.block_on(async {
+            let (store, svc, temp) = setup().await;
+            let nodes: Vec<Node> = (0..count)
+                .map(|i| {
+                    let category = if i % 2 == 0 { "alpha" } else { "beta" };
+                    Node::new(
+                        "text".to_string(),
+                        format!("Categorized node {}", i),
+                        json!({ "text": { "category": category } }),
+                    )
+                })
+                .collect();
+            svc.bulk_create(nodes).await.expect("seed");
+            (store, temp)
+        });
+        let text_query_service = QueryService::new(Arc::clone(&text_store));
+
+        group.bench_with_input(
+            BenchmarkId::new("non_indexed_category", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    rt.block_on(async {
+                        let q = QueryDefinition {
+                            target_type: "text".to_string(),
+                            filters: vec![QueryFilter {
+                                filter_type: FilterType::Property,
+                                operator: FilterOperator::Equals,
+                                property: Some("category".to_string()),
+                                value: Some(json!("alpha")),
+                                case_sensitive: None,
+                                relationship_type: None,
+                                node_id: None,
+                            }],
+                            sorting: None,
+                            limit: Some(count),
+                        };
+                        black_box(text_query_service.execute(&q).await.expect("query"))
+                    })
+                });
+            },
+        );
+    }
 
     group.finish();
 }
@@ -502,6 +610,7 @@ criterion_group!(
     bench_query_simple,
     bench_query_mentioned_by,
     bench_jsonpath_query,
+    bench_jsonpath_indexed_vs_non_indexed_at_scale,
     bench_vector_search,
 );
 criterion_main!(benches);

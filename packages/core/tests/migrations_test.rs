@@ -167,6 +167,47 @@ async fn pre_runner_database_with_origin_already_applied_upgrades_without_error(
 }
 
 #[tokio::test]
+async fn task_status_filter_uses_partial_expression_index() {
+    // End-to-end confirmation that the planner actually picks idx_task_status
+    // for the exact filter shape QueryService generates — a stronger guarantee
+    // than a string-equality check, since SQLite silently ignores an index
+    // whose expression doesn't match byte-for-byte.
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("plan.db");
+    let conn = open_raw(&db_path).await;
+
+    migrations::run(&conn).await.expect("run migrations");
+
+    conn.execute(
+        "INSERT INTO node (id, node_type, content, properties, lifecycle_status, version, created_at, modified_at) \
+         VALUES ('t1', 'task', 'Task 1', '{\"task\":{\"status\":\"open\"}}', 'active', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        (),
+    )
+    .await
+    .expect("insert task");
+
+    let mut rows = conn
+        .query(
+            "EXPLAIN QUERY PLAN SELECT * FROM node WHERE node_type = 'task' AND json_extract(properties, '$.task.status') = 'open'",
+            (),
+        )
+        .await
+        .expect("explain query plan");
+
+    let mut plan = String::new();
+    while let Some(row) = rows.next().await.expect("next plan row") {
+        let detail: String = row.get(3).expect("plan detail column");
+        plan.push_str(&detail);
+        plan.push('\n');
+    }
+
+    assert!(
+        plan.contains("idx_task_status"),
+        "planner should use idx_task_status for this filter shape, got plan: {plan}"
+    );
+}
+
+#[tokio::test]
 async fn database_on_migration_one_upgrades_through_all_subsequent_migrations() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let db_path = temp_dir.path().join("upgrade.db");

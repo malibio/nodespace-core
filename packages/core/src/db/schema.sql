@@ -29,6 +29,17 @@ CREATE INDEX IF NOT EXISTS idx_node_type      ON node (node_type);
 CREATE INDEX IF NOT EXISTS idx_node_modified  ON node (modified_at);
 CREATE INDEX IF NOT EXISTS idx_node_lifecycle ON node (lifecycle_status);
 
+-- Partial expression indexes on the hot task/project properties (agent's
+-- equality/range/sort queries). Each covers only rows of its `node_type`,
+-- matching QueryService's json_extract(properties, '$.<type>.<field>') filters.
+CREATE INDEX IF NOT EXISTS idx_task_status ON node (json_extract(properties, '$.task.status')) WHERE node_type = 'task';
+CREATE INDEX IF NOT EXISTS idx_task_due_date ON node (json_extract(properties, '$.task.due_date')) WHERE node_type = 'task';
+CREATE INDEX IF NOT EXISTS idx_task_priority ON node (json_extract(properties, '$.task.priority')) WHERE node_type = 'task';
+CREATE INDEX IF NOT EXISTS idx_task_assignee ON node (json_extract(properties, '$.task.assignee')) WHERE node_type = 'task';
+-- Composite index serving "open tasks ordered by due date" without a filesort.
+CREATE INDEX IF NOT EXISTS idx_task_status_due_date ON node (json_extract(properties, '$.task.status'), json_extract(properties, '$.task.due_date')) WHERE node_type = 'task';
+CREATE INDEX IF NOT EXISTS idx_project_status ON node (json_extract(properties, '$.project.status')) WHERE node_type = 'project';
+
 CREATE TABLE IF NOT EXISTS relationship (
     id                TEXT    PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     in_node           TEXT    NOT NULL REFERENCES node(id) ON DELETE CASCADE,
