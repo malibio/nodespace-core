@@ -157,8 +157,7 @@ pub async fn create_node(
             position: input.position,
             properties: input.properties,
         })
-        .await
-        .map_err(|e| OpsError::Internal(format!("Failed to create node: {}", e)))?;
+        .await?;
 
     // Add to collection if specified
     let collection_id = if let Some(path) = &collection_path {
@@ -583,5 +582,48 @@ mod tests {
                 ..
             } if node_id == "n1"
         ));
+    }
+
+    /// `create_node`'s `NodeServiceError` -> `OpsError` conversion must go
+    /// through the shared `From` impl (`?`), not a hand-rolled `map_err` that
+    /// flattens every failure to `Internal`. The daemon's gRPC boundary keys
+    /// its status code off the `OpsError` variant
+    /// (`OpsError::InvalidParams` -> `INVALID_ARGUMENT`,
+    /// `OpsError::Internal` -> `INTERNAL`), so losing the variant here would
+    /// report a caller mistake (an unknown node_type) as a server fault.
+    #[tokio::test]
+    async fn create_node_unknown_type_surfaces_as_invalid_params_not_internal() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_create_node_ops_error_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let store = crate::db::SqliteStore::new(temp_dir.join("test.db"))
+            .await
+            .unwrap();
+        let mut store = std::sync::Arc::new(store);
+        let ns = std::sync::Arc::new(crate::services::NodeService::new(&mut store).await.unwrap());
+
+        let err = create_node(
+            &ns,
+            CreateNodeInput {
+                id: None,
+                node_type: "Not A Real Type".to_string(),
+                content: "content".to_string(),
+                parent_id: None,
+                position: crate::services::InsertPositionOwned::End,
+                properties: serde_json::json!({}),
+                collection: None,
+                lifecycle_status: None,
+            },
+        )
+        .await
+        .expect_err("an unknown node_type must be rejected");
+
+        assert!(
+            matches!(err, OpsError::InvalidParams(_)),
+            "expected InvalidParams so the daemon reports INVALID_ARGUMENT, got: {:?}",
+            err
+        );
     }
 }

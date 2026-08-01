@@ -99,6 +99,12 @@ pub enum NodeServiceError {
         parent_id: String,
         node_type: String,
     },
+
+    /// `node_type` is neither a registered core type nor an existing schema id
+    #[error(
+        "Unknown node_type '{node_type}': no such core type or schema. Create the schema first with create_schema, or use an existing type id."
+    )]
+    UnknownNodeType { node_type: String },
 }
 
 impl NodeServiceError {
@@ -207,6 +213,13 @@ impl NodeServiceError {
     pub fn not_a_container(parent_id: impl Into<String>, node_type: impl Into<String>) -> Self {
         Self::NotAContainer {
             parent_id: parent_id.into(),
+            node_type: node_type.into(),
+        }
+    }
+
+    /// Create an unknown-node-type error
+    pub fn unknown_node_type(node_type: impl Into<String>) -> Self {
+        Self::UnknownNodeType {
             node_type: node_type.into(),
         }
     }

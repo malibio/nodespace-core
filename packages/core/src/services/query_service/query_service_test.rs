@@ -643,6 +643,21 @@ mod tests {
     async fn test_query_any_node_type() {
         let (query_service, node_service, _temp) = create_test_services().await;
 
+        // create_node_with_parent now rejects a node_type with no registered
+        // behavior and no schema node, so a custom type needs a schema seeded
+        // first — same as an agent calling create_schema before create_node.
+        let schema = crate::models::Node::new_with_id(
+            "custom_type".to_string(),
+            "schema".to_string(),
+            "Custom Type".to_string(),
+            json!({ "fields": [] }),
+        );
+        node_service
+            .store()
+            .create_node(schema, None, None)
+            .await
+            .unwrap();
+
         // Create a node with custom type
         let custom_node = CreateNodeParams {
             id: None,

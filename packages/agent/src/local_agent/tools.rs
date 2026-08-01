@@ -3672,6 +3672,54 @@ mod tests {
         }
     }
 
+    /// The scenario-4 defect: the model calls `create_node` with an invented
+    /// `node_type` (a display name, a paraphrase of a real schema id) instead
+    /// of copying the id from RELEVANT ENTITY TYPES. Before this fix the call
+    /// SUCCEEDED — CustomNodeBehavior accepts any type string — so the node
+    /// was stored as a bare shell with every supplied property silently
+    /// dropped, and the model was told the write succeeded. It must now
+    /// surface as a loud tool error instead, naming the bad id, so the model
+    /// can retry against the real schema rather than lose the data.
+    #[tokio::test]
+    async fn create_node_rejects_unknown_node_type() {
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let mut store: Arc<SqliteStore> =
+            Arc::new(SqliteStore::new(tmp.path().join("test.db")).await.unwrap());
+        let ns = Arc::new(NodeService::new(&mut store).await.unwrap());
+        let executor = GraphToolExecutor {
+            node_service: Some(ns),
+            embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: None,
+        };
+
+        // The real schema id ("equipment_item") is never created — only the
+        // invented display name is attempted, matching the traced failure.
+        let result = executor
+            .execute(
+                "create_node",
+                json!({
+                    "content": "Laser cutter",
+                    "node_type": "Equipment Item Tracker",
+                    "properties": { "replacement_cost": 2400 },
+                }),
+            )
+            .await;
+
+        assert!(result.is_err(), "expected an error, got {:?}", result);
+        match result.unwrap_err() {
+            ToolError::ExecutionFailed(reason) => {
+                assert!(
+                    reason.contains("Equipment Item Tracker"),
+                    "error should name the offending node_type, got: {reason}"
+                );
+            }
+            other => panic!("Expected ExecutionFailed, got {:?}", other),
+        }
+    }
+
     #[tokio::test]
     async fn update_node_missing_id() {
         let executor = test_executor();
