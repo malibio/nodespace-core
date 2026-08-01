@@ -1220,6 +1220,15 @@ impl NodeService {
     /// unconditionally inside the same transaction — a conflict or failure leaves the subtree
     /// fully intact. One `NodeDeleted` event is emitted per deleted node after commit.
     ///
+    /// **Access gate (ADR-041):** before anything is deleted, the subtree (target + all
+    /// descendants) is checked against `subtree_access_gate()`. If any node is unreadable by
+    /// the actor, the delete is refused in full — no node is removed — and
+    /// `NodeServiceError::InaccessibleDescendants` is returned with the inaccessible count only.
+    /// Community installs never see a refusal here: `AlwaysAllowGate` is the default and only a
+    /// synced Pro daemon injects a gate that can deny. This check runs before the transaction
+    /// opens, not inside it — the count is needed for the refusal message on the common path,
+    /// and a rollback-based check would do wasted work every time.
+    ///
     /// Returns `DeleteResult` with `existed=true` and `deleted_count` (target + all descendants)
     /// on success, or `existed=false` when the target node was already gone.
     pub async fn delete_node(
@@ -1230,9 +1239,50 @@ impl NodeService {
         // Capture root before deletion for embedding queue.
         let root_id_for_embedding = self.get_root_id(node_id).await.ok();
 
+        // Nothing to check or delete if the target is already gone — matches the idempotent
+        // absent-target behavior `delete_subtree_atomic` has always had.
+        let target_exists = self
+            .store
+            .get_node(node_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to read target: {}", e)))?
+            .is_some();
+        if !target_exists {
+            return Ok(crate::models::DeleteResult {
+                existed: false,
+                deleted_count: 0,
+            });
+        }
+
+        // Compute the subtree once; both the access gate and the delete itself use this exact
+        // set so they can never see different subtrees.
+        let subtree_ids = self.store.collect_subtree_ids(node_id).await.map_err(|e| {
+            NodeServiceError::query_failed(format!("Failed to collect subtree: {}", e))
+        })?;
+
+        if let access_gate::SubtreeAccessDecision::Denied { inaccessible_count } = self
+            .subtree_access_gate()
+            .check_subtree_access(&subtree_ids)
+            .await
+        {
+            debug_assert!(
+                inaccessible_count > 0,
+                "a Denied decision must report at least one inaccessible node — \
+                 a gate reporting 0 would surface a confusing refusal message"
+            );
+            return Err(NodeServiceError::inaccessible_descendants(
+                inaccessible_count,
+            ));
+        }
+
         let (existed, deleted_nodes) = self
             .store
-            .delete_subtree_atomic(node_id, expected_version, self.client_id.clone())
+            .delete_subtree_atomic(
+                node_id,
+                expected_version,
+                &subtree_ids,
+                self.client_id.clone(),
+            )
             .await
             .map_err(|e| {
                 let msg = e.to_string();

@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
 // Sub-module declarations
+pub mod access_gate;
 pub(crate) mod bulk;
 pub(crate) mod crud;
 pub(crate) mod embedding;
@@ -834,6 +835,13 @@ pub struct NodeService {
     #[cfg(feature = "nlp")]
     pub(crate) embedding_waker:
         std::sync::Arc<std::sync::OnceLock<crate::services::EmbeddingWaker>>,
+
+    /// Pre-delete subtree access gate (ADR-041). Defaults to [`access_gate::AlwaysAllowGate`]
+    /// so community installs keep today's unconditional-cascade behavior. A Pro daemon
+    /// (`nodespaced-pro`) injects a real gate via `set_subtree_access_gate` after construction —
+    /// held behind `OnceLock` so it can be set once the Pro tenant connection is established.
+    pub(crate) subtree_access_gate:
+        Arc<std::sync::OnceLock<Arc<dyn access_gate::SubtreeAccessGate>>>,
 }
 
 impl Clone for NodeService {
@@ -851,6 +859,7 @@ impl Clone for NodeService {
             // Share the same OnceLock so any clone can observe the waker once set.
             #[cfg(feature = "nlp")]
             embedding_waker: self.embedding_waker.clone(),
+            subtree_access_gate: self.subtree_access_gate.clone(),
         }
     }
 }
@@ -999,6 +1008,7 @@ impl NodeService {
             execution_context: None,
             #[cfg(feature = "nlp")]
             embedding_waker: std::sync::Arc::new(std::sync::OnceLock::new()),
+            subtree_access_gate: Arc::new(std::sync::OnceLock::new()),
         };
 
         // Backfill description subtrees for schemas that still have
@@ -3728,6 +3738,198 @@ mod tests {
         assert_eq!(result.deleted_count, 0);
     }
 
+    // ---------------------------------------------------------------------------
+    // Access-gated cascade delete (ADR-041 "CASCADE requires read access across
+    // the whole subtree"). Community installs always see AlwaysAllowGate (the
+    // default) — these tests inject a stub gate to simulate a synced Pro tenant
+    // denying access to part of a subtree, since nodespace-core itself has no
+    // access-control concept to exercise otherwise.
+    // ---------------------------------------------------------------------------
+
+    /// Denies whenever the checked set contains a designated "restricted" node id —
+    /// stands in for a Pro tenant gate reporting a restricted descendant the actor
+    /// isn't a member of.
+    struct DenyIfPresentGate {
+        restricted_id: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::services::node_service::access_gate::SubtreeAccessGate for DenyIfPresentGate {
+        async fn check_subtree_access(
+            &self,
+            node_ids: &[String],
+        ) -> crate::services::node_service::access_gate::SubtreeAccessDecision {
+            let inaccessible_count = node_ids
+                .iter()
+                .filter(|id| **id == self.restricted_id)
+                .count() as u64;
+            if inaccessible_count > 0 {
+                crate::services::node_service::access_gate::SubtreeAccessDecision::Denied {
+                    inaccessible_count,
+                }
+            } else {
+                crate::services::node_service::access_gate::SubtreeAccessDecision::Allowed
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_refused_when_subtree_has_restricted_descendant() {
+        let (service, _temp) = create_test_service().await;
+
+        // Project (open) -> Task (restricted, actor is not a member)
+        let project_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "Platform Migration".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        let task_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "Contractor rate renegotiation".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_parent_edge(&task_id, &project_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
+            restricted_id: task_id.clone(),
+        }));
+
+        let project = service.get_node(&project_id).await.unwrap().unwrap();
+        let result = service.delete_node(&project_id, project.version).await;
+
+        assert!(
+            matches!(
+                result,
+                Err(NodeServiceError::InaccessibleDescendants {
+                    inaccessible_count: 1
+                })
+            ),
+            "expected InaccessibleDescendants{{1}}, got {:?}",
+            result
+        );
+
+        // Neither the open parent nor the restricted descendant was deleted — the
+        // whole delete aborted, no partial removal.
+        assert!(
+            service.get_node(&project_id).await.unwrap().is_some(),
+            "open parent must survive a refused delete"
+        );
+        assert!(
+            service.get_node(&task_id).await.unwrap().is_some(),
+            "restricted descendant must survive a refused delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_succeeds_when_subtree_fully_readable() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        // Gate is configured to deny a node NOT in this subtree — every node here
+        // is readable, so the delete must succeed unchanged.
+        service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
+            restricted_id: "some-other-restricted-node".to_string(),
+        }));
+
+        let root = service.get_node(&root_id).await.unwrap().unwrap();
+        let result = service.delete_node(&root_id, root.version).await.unwrap();
+
+        assert!(result.existed);
+        assert_eq!(result.deleted_count, 2);
+        assert!(service.get_node(&root_id).await.unwrap().is_none());
+        assert!(service.get_node(&child_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_version_conflict_still_wins_over_access_gate() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        // A gate that would allow this subtree — proves the version conflict is
+        // reached and reported on its own terms, not masked by the gate.
+        service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
+            restricted_id: "unrelated".to_string(),
+        }));
+
+        let result = service.delete_node(&root_id, 999).await;
+        assert!(
+            matches!(result, Err(NodeServiceError::VersionConflict { .. })),
+            "expected VersionConflict, got {:?}",
+            result
+        );
+        assert!(service.get_node(&root_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_occ_on_readable_descendant_unaffected_by_gate() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+        let child_id = service
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_parent_edge(&child_id, &root_id, InsertPosition::End)
+            .await
+            .unwrap();
+
+        // Gate allows everything (readable subtree) — pins that a concurrent edit to
+        // a readable descendant still doesn't abort the cascade with the gate active,
+        // matching test_delete_node_occ_guards_only_target_not_descendants.
+        service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
+            restricted_id: "unrelated".to_string(),
+        }));
+
+        let child_update = NodeUpdate::new().with_content("updated child".to_string());
+        service
+            .update_node_unchecked(&child_id, child_update)
+            .await
+            .unwrap();
+
+        let root = service.get_node(&root_id).await.unwrap().unwrap();
+        let result = service.delete_node(&root_id, root.version).await.unwrap();
+
+        assert!(result.existed);
+        assert_eq!(result.deleted_count, 2);
+    }
+
     // =========================================================================
     // BatchEmitGuard — batched event emission tests
     // =========================================================================
@@ -3917,11 +4119,19 @@ mod tests {
 
         let tagged = service.with_client("sync-service");
         let sync_id = tagged
-            .create_node(Node::new("text".to_string(), "from sync".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "from sync".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
         let local_id = service
-            .create_node(Node::new("text".to_string(), "local".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "local".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
 
@@ -3948,11 +4158,19 @@ mod tests {
 
         let sync_id = service
             .with_client("sync-service")
-            .create_node(Node::new("text".to_string(), "from sync".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "from sync".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
         let local_id = service
-            .create_node(Node::new("text".to_string(), "local".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "local".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
 
@@ -3986,7 +4204,11 @@ mod tests {
             .await
             .unwrap();
         let child_id = sync
-            .create_node(Node::new("text".to_string(), "child".to_string(), json!({})))
+            .create_node(Node::new(
+                "text".to_string(),
+                "child".to_string(),
+                json!({}),
+            ))
             .await
             .unwrap();
 
