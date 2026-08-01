@@ -376,24 +376,34 @@ fn contains_action_claim(text: &str) -> bool {
     const ACTION_PHRASES: &[&str] = &[
         "i created",
         "i've created",
+        "i have created",
         "i updated",
         "i've updated",
+        "i have updated",
         "i found",
         "i've found",
+        "i have found",
         "i added",
         "i've added",
+        "i have added",
         "i deleted",
         "i've deleted",
+        "i have deleted",
         "i removed",
         "i've removed",
+        "i have removed",
         "i marked",
         "i've marked",
+        "i have marked",
         "i set ",
         "i've set",
+        "i have set",
         "i made ",
         "i've made",
+        "i have made",
         "i completed",
         "i've completed",
+        "i have completed",
         "successfully created",
         "successfully updated",
         "successfully added",
@@ -4299,6 +4309,18 @@ mod tests {
         assert!(contains_action_claim("I updated the task status."));
         assert!(contains_action_claim("Successfully created the schema."));
         assert!(contains_action_claim("The node has been created."));
+    }
+
+    /// Regression for #1865: the "I have created" phrasing (as opposed to
+    /// "I created" / "I've created") reached the user unguarded — observed
+    /// verbatim in a fabricated venue-creation claim with zero tool calls.
+    #[test]
+    fn action_claim_detects_have_created_phrasing() {
+        assert!(contains_action_claim(
+            "I have created a new node for \"The Blue Note\" under your Venue Booking Tracker."
+        ));
+        assert!(contains_action_claim("I have updated the record."));
+        assert!(contains_action_claim("I have added the contact email."));
     }
 
     #[test]
