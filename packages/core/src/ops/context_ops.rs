@@ -25,7 +25,7 @@
 //! follow-ups referring to their subject by pronoun or ellipsis still retrieve
 //! the right schema.
 
-use crate::models::SchemaNode;
+use crate::models::{Node, SchemaNode};
 use crate::services::{CollectionService, NodeEmbeddingService, NodeService};
 use std::sync::Arc;
 
@@ -206,6 +206,27 @@ fn related_one_hop_schemas(
         .collect()
 }
 
+/// Parse semantic search results into [`SchemaNode`]s, excluding core types.
+///
+/// Retrieval is scoped only by `node_type == "schema"`, and `text`/`task`/
+/// `date` are stored schema nodes with embeddable content, so an unfiltered
+/// pass-through can surface them. Excluding `is_core` here mirrors the guard
+/// `local_agent_service.rs`'s recently-created-schema injection already
+/// applies before writing into this same `relevant_schemas` vector.
+///
+/// The #1897 `create_node` guidance treats presence in RELEVANT ENTITY TYPES
+/// as proof a type is user-defined (bare property keys) versus built-in
+/// (`custom:`-prefixed) — a core type reaching this block would make the
+/// model write a bare key onto a core type, the exact ADR-063 violation that
+/// guidance exists to prevent.
+fn parse_and_filter_non_core_schemas(results: Vec<(Node, f64)>) -> Vec<SchemaNode> {
+    results
+        .into_iter()
+        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
+        .filter(|s| !s.is_core)
+        .collect()
+}
+
 /// Build the embedding query for schema retrieval from conversation context.
 ///
 /// The last [`BLENDED_HISTORY_TURNS`] turns are prepended to `current_message`,
@@ -293,10 +314,7 @@ pub async fn build_workspace_context(
                 .await
             {
                 Ok(results) => {
-                    let schemas: Vec<SchemaNode> = results
-                        .into_iter()
-                        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
-                        .collect();
+                    let schemas = parse_and_filter_non_core_schemas(results);
                     tracing::debug!(
                         count = schemas.len(),
                         query = q,
@@ -445,6 +463,37 @@ mod tests {
 
     fn sample_schema(id: &str, display_name: &str, fields: &[&str]) -> crate::models::SchemaNode {
         sample_schema_with_relationships(id, display_name, fields, vec![])
+    }
+
+    fn schema_search_result(id: &str, is_core: bool) -> (Node, f64) {
+        let node = Node::new_with_id(
+            id.to_string(),
+            "schema".to_string(),
+            id.to_string(),
+            serde_json::json!({ "isCore": is_core, "fields": [] }),
+        );
+        (node, 0.5)
+    }
+
+    /// Pins the #1900 fix: a core type (`text`/`task`/`date`) is a stored
+    /// schema node with embeddable content, so unfiltered retrieval would
+    /// otherwise return it. Its presence in RELEVANT ENTITY TYPES is what the
+    /// #1897 create_node guidance reads as proof a type is user-defined,
+    /// so an unfiltered core hit would make the model write a bare property
+    /// key onto a core type — the ADR-063 violation that guidance exists to
+    /// prevent.
+    #[test]
+    fn parse_and_filter_non_core_schemas_excludes_core_types() {
+        let results = vec![
+            schema_search_result("text", true),
+            schema_search_result("customer", false),
+            schema_search_result("task", true),
+        ];
+
+        let schemas = parse_and_filter_non_core_schemas(results);
+        let ids: Vec<&str> = schemas.iter().map(|s| s.id.as_str()).collect();
+
+        assert_eq!(ids, vec!["customer"]);
     }
 
     fn sample_schema_with_relationships(
