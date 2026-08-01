@@ -509,7 +509,7 @@ fn def_create_node() -> ToolDefinition {
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
+                    "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from RELEVANT ENTITY TYPES (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
                 },
                 "parent_id": {
                     "type": "string",
