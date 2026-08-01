@@ -312,6 +312,17 @@ impl SqliteStore {
     ) -> Result<Option<String>> {
         self.assert_root_only_membership(&[member_id]).await?;
 
+        // A collection filed into another collection can close a hierarchy cycle
+        // (A member_of B + B member_of A), corrupting the member walk into a loop.
+        // The per-row service path guards this; guard the raw store path too so
+        // direct callers (e.g. markdown import) are covered without relying on the
+        // service. Content/person members have no member_of descendants and can't
+        // cycle, so the check is limited to collection-typed members.
+        if self.get_node_type(member_id).await?.as_deref() == Some("collection") {
+            self.validate_no_member_of_cycle(member_id, collection_id)
+                .await?;
+        }
+
         let tx = self
             .db
             .transaction()

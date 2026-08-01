@@ -537,6 +537,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_add_to_collection_rejects_hierarchy_cycle() -> Result<()> {
+        // The raw store path is reached directly (e.g. by markdown import), so it
+        // must reject a collection-membership edge that closes a hierarchy cycle on
+        // its own, not only via the service path.
+        let (store, _t) = create_test_store().await?;
+
+        let a = Node::new("collection".to_string(), "A".to_string(), json!({}));
+        let a_id = a.id.clone();
+        store.create_node(a, None, None).await?;
+        let b = Node::new("collection".to_string(), "B".to_string(), json!({}));
+        let b_id = b.id.clone();
+        store.create_node(b, None, None).await?;
+
+        store.add_to_collection(&a_id, &b_id).await?; // A member_of B (valid)
+
+        // B member_of A would close the cycle → rejected at the store chokepoint.
+        let err = store
+            .add_to_collection(&b_id, &a_id)
+            .await
+            .expect_err("a cyclic collection membership must be rejected by add_to_collection");
+        assert!(err.to_string().contains("collection_cycle"), "got: {err}");
+
+        // A content member (no member_of descendants) is unaffected by the guard.
+        let root = Node::new("text".to_string(), "root".to_string(), json!({}));
+        let root_id = root.id.clone();
+        store.create_node(root, None, None).await?;
+        assert!(store.add_to_collection(&root_id, &a_id).await?.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_root_only_content_membership_is_enforced() -> Result<()> {
         // ADR-059 §2: a content node may be `member_of` a collection only when it
         // is a root node (no `has_child` parent). Enforced in `add_to_collection`,
