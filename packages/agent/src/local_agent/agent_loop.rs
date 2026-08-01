@@ -123,6 +123,11 @@ pub fn canonical_args(args_json: &str) -> String {
             // repaired retry share one identity. Otherwise the duplicate guards
             // would read them as two different calls and the loop this fix
             // exists to break would still run, just one round longer.
+            //
+            // Not redundant with the repair on the execution path: this one acts
+            // on the raw emitted text for the per-turn duplicate detector, that
+            // one mutates the arguments actually handed to the tool. Neither
+            // covers the other's caller, so removing either leaves a live gap.
             repair_over_quoted_keys(&mut v);
             v.to_string()
         })
@@ -1293,6 +1298,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // keys are simply wrong — so no parse-failure guard fires,
                         // and the rejection would otherwise persist the malformed
                         // shape into history for the next retry to copy verbatim.
+                        //
+                        // `canonical_args` repairs too, but only the copy it takes
+                        // for the duplicate guards' identity — it never sees these
+                        // arguments. This is the only repair the tool itself and
+                        // the cross-turn write guard below observe.
                         repair_over_quoted_keys(&mut args);
                         // Cross-turn duplicate guard. The per-turn `seen_calls`
                         // set above cannot see this: the session is rebuilt from
