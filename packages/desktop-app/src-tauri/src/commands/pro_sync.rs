@@ -35,6 +35,13 @@ const DEFAULT_WORKER_URL: &str = "https://pro.nodespace.ai";
 /// the frontend (e.g. across hot-reloads) don't pile up tasks.
 static STREAM_SPAWNED: AtomicBool = AtomicBool::new(false);
 
+/// Bound on the `WatchSyncStatus` (re)subscribe so a wedged channel can't hang
+/// the forwarding task outside its generation select.
+const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Backoff before re-subscribing after a transient stream end/error (a channel
+/// rebuild wakes the task immediately, ahead of this).
+const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Snapshot of the most recent tier-detection result. Returned to
 /// the frontend on demand so the UI doesn't have to wait for the
 /// `pro:tier-detected` Tauri event when re-mounting.
@@ -88,60 +95,104 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    // `client` is moved into the spawned task by the closure; the
-    // ProClient it was cloned from is `Arc`-backed, so the clone
-    // implicit in `pro.client().await` keeps the underlying
-    // connection alive for the stream's lifetime — no explicit
-    // keep-alive binding is required.
-    let mut client = pro.client().await;
-    // Owned handle (Arc-backed) so the forwarding task can keep the cached
-    // status current for `pro_current_status` re-hydration on reload.
+    // Owned handle (Arc-backed) so the forwarding task can re-fetch the client on
+    // a channel rebuild and keep the cached status current for re-hydration.
     let pro_client = pro.inner().clone();
     let app_handle = app.clone();
 
+    // Self-healing forwarding loop: re-subscribes on the current channel whenever
+    // the stream ends/errors OR the channel is rebuilt after a wedged-connection
+    // recovery (`ProClient::rebind` bumps `generation`). Mirrors the node watcher —
+    // without it a wedge leaves the live-status stream, and the sync pill, stuck
+    // until an app restart. One task runs for the process lifetime (the
+    // `STREAM_SPAWNED` guard), so it is never reset here.
     tokio::spawn(async move {
-        let stream = match client.watch_sync_status(WatchSyncStatusRequest {}).await {
-            Ok(resp) => resp.into_inner(),
-            Err(e) => {
-                tracing::debug!(error = %e, "sync-status subscribe failed");
-                STREAM_SPAWNED.store(false, Ordering::SeqCst);
-                emit_disconnected(&app_handle, format!("sync-status subscribe failed: {e}"));
-                return;
-            }
-        };
-
         use tokio_stream::StreamExt;
-        let mut stream = stream;
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(evt) => {
-                    // Cache the latest status so a reloaded webview can re-hydrate
-                    // deterministically instead of appearing signed out.
-                    pro_client.set_last_status(evt.clone()).await;
-                    let payload = serde_json::json!({
-                        "state": evt.state,
-                        "detail": evt.detail,
-                        "user_email": evt.user_email,
-                    });
-                    if let Err(e) = app_handle.emit("sync:status", payload) {
-                        tracing::warn!(error = %e, "failed to emit sync:status");
-                        break;
+        let mut generation = pro_client.subscribe_generation();
+        loop {
+            // Re-fetch each iteration so a rebind (fresh channel) is picked up.
+            // Bound the subscribe by a timeout: the lazy channel has no client-side
+            // timeout, so a wedge landing exactly during re-subscribe would
+            // otherwise hang here (outside the generation select).
+            let mut client = pro_client.client().await;
+            let subscribe = client.watch_sync_status(WatchSyncStatusRequest {});
+            let mut stream = match tokio::time::timeout(SUBSCRIBE_TIMEOUT, subscribe).await {
+                Ok(Ok(resp)) => resp.into_inner(),
+                // A community daemon never implements CloudSyncService — this is
+                // terminal, not transient. Retrying would wake a free-tier install
+                // every couple of seconds for its whole lifetime (regression:
+                // free users must be unaffected). Stop the task instead.
+                Ok(Err(status)) if status.code() == tonic::Code::Unimplemented => {
+                    tracing::debug!(
+                        "CloudSyncService unimplemented (community daemon) — sync-status task exiting"
+                    );
+                    return;
+                }
+                Ok(Err(status)) => {
+                    tracing::debug!(error = %status, "sync-status subscribe failed");
+                    emit_disconnected(&app_handle, format!("sync-status subscribe failed: {status}"));
+                    // Wait for a channel rebuild or a short backoff, then retry.
+                    tokio::select! {
+                        _ = generation.changed() => {}
+                        _ = tokio::time::sleep(RETRY_BACKOFF) => {}
+                    }
+                    continue;
+                }
+                Err(_elapsed) => {
+                    // Subscribe timed out — the channel may be wedged mid-resubscribe.
+                    // Retry: re-fetching the client picks up a rebind.
+                    tracing::warn!("sync-status subscribe timed out; retrying");
+                    tokio::select! {
+                        _ = generation.changed() => {}
+                        _ = tokio::time::sleep(RETRY_BACKOFF) => {}
+                    }
+                    continue;
+                }
+            };
+
+            // Forward until the stream ends/errors, or the channel is rebuilt.
+            let rebuilt = loop {
+                tokio::select! {
+                    biased;
+                    _ = generation.changed() => break true,
+                    item = stream.next() => match item {
+                        Some(Ok(evt)) => {
+                            // Cache the latest status so a reloaded webview re-hydrates
+                            // deterministically instead of appearing signed out.
+                            pro_client.set_last_status(evt.clone()).await;
+                            let payload = serde_json::json!({
+                                "state": evt.state,
+                                "detail": evt.detail,
+                                "user_email": evt.user_email,
+                            });
+                            if let Err(e) = app_handle.emit("sync:status", payload) {
+                                tracing::warn!(error = %e, "failed to emit sync:status");
+                                break false;
+                            }
+                        }
+                        Some(Err(status)) => {
+                            tracing::warn!(error = %status, "sync-status stream item error");
+                            break false;
+                        }
+                        None => break false,
                     }
                 }
-                Err(status) => {
-                    tracing::warn!(error = %status, "sync-status stream item error");
-                    break;
-                }
+            };
+
+            if rebuilt {
+                // Fresh channel — re-subscribe at once, no disconnected flash.
+                tracing::info!("sync-status: channel rebuilt, re-subscribing");
+                continue;
+            }
+            // Ended/errored on the same channel: grey the pill, back off, retry —
+            // waking immediately if the channel is rebuilt meanwhile.
+            tracing::info!("sync-status stream ended; reconnecting");
+            emit_disconnected(&app_handle, "sync-status stream ended".into());
+            tokio::select! {
+                _ = generation.changed() => {}
+                _ = tokio::time::sleep(RETRY_BACKOFF) => {}
             }
         }
-        STREAM_SPAWNED.store(false, Ordering::SeqCst);
-        tracing::info!("sync-status stream ended");
-        // Tell the frontend the stream is gone so the pill goes grey
-        // instead of stuck on the last status the daemon emitted.
-        // Without this the Svelte side has no way to distinguish
-        // "still connected, just idle" from "stream dropped"; the
-        // pill would lie about state until the window is reloaded.
-        emit_disconnected(&app_handle, "sync-status stream ended".into());
     });
 
     Ok(())

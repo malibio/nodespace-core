@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 use tonic::transport::Channel;
 
 /// Generated bindings for `nodespace.pro.v1`. The proto file lives
@@ -33,6 +33,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 pub struct ProClient {
     inner: Arc<RwLock<ProClientInner>>,
+    /// Bumped by [`ProClient::rebind`] when the underlying channel is rebuilt
+    /// after a wedged-connection recovery. The `WatchSyncStatus` forwarding task
+    /// watches this to drop its stream and re-subscribe on the fresh channel —
+    /// otherwise the live-status stream (and the sync pill) would stay wedged
+    /// until an app restart. `watch::Sender` is not `Clone`, hence the `Arc`.
+    generation: Arc<watch::Sender<u64>>,
 }
 
 struct ProClientInner {
@@ -70,7 +76,14 @@ impl ProClient {
                 tier,
                 last_status,
             })),
+            generation: Arc::new(watch::channel(0u64).0),
         }
+    }
+
+    /// Subscribe to channel-rebuild notifications (see [`ProClient::rebind`]).
+    /// The forwarding task selects on this to re-subscribe on the fresh channel.
+    pub fn subscribe_generation(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
     }
 
     pub async fn tier(&self) -> ProTier {
@@ -100,8 +113,14 @@ impl ProClient {
     /// connection. Only the transport changes — the detected tier and last
     /// cached status are preserved.
     pub async fn rebind(&self, channel: Channel) {
-        let mut inner = self.inner.write().await;
-        inner.client = CloudSyncServiceClient::new(channel);
+        {
+            let mut inner = self.inner.write().await;
+            inner.client = CloudSyncServiceClient::new(channel);
+        }
+        // Bump AFTER installing the new client (and after releasing the lock) so a
+        // forwarding task woken by this notification re-fetches the already-rebound
+        // client — never the old one.
+        self.generation.send_modify(|g| *g = g.wrapping_add(1));
     }
 }
 
