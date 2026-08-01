@@ -78,6 +78,59 @@ async fn render_skill_instructions(node_service: &NodeService, skill_id: &str) -
     flatten_subtree_content(skill_id, &node_map, &adjacency_list).join("\n\n")
 }
 
+/// A skill node's discovery-relevant properties, decoded from whichever shape
+/// `node.properties` is actually in.
+#[derive(Debug, PartialEq)]
+struct SkillProperties {
+    description: String,
+    tool_whitelist: Value,
+    scoped_type_ids: Vec<String>,
+}
+
+impl SkillProperties {
+    /// Decode from a skill node's `properties`.
+    ///
+    /// `skill` has a registered core schema (ADR-030), so `NodeService` hoists
+    /// its schema-defined fields under `properties.skill.*` on write (same as
+    /// `task` under `properties.task.*` — see `behaviors/mod.rs`'s
+    /// task-property validation). Reading `node.properties` flat found
+    /// nothing on any seeded skill node, so every skill's tools and
+    /// entity-type guidance silently vanished at the routing gate. Fall back
+    /// to the flat top level for a node that predates hoisting or was
+    /// constructed directly, as every test in this module does.
+    fn from_node_properties(properties: &Value) -> Self {
+        let skill_props = properties
+            .get("skill")
+            .filter(|v| v.is_object())
+            .unwrap_or(properties);
+
+        let description = skill_props
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let tool_whitelist = skill_props
+            .get("tool_whitelist")
+            .cloned()
+            .unwrap_or(json!([]));
+        let scoped_type_ids = skill_props
+            .get("node_types")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Self {
+            description,
+            tool_whitelist,
+            scoped_type_ids,
+        }
+    }
+}
+
 /// Search for skill nodes via semantic search and return flat results with
 /// schema metadata for the matched skill's scoped types.
 ///
@@ -135,16 +188,11 @@ pub async fn find_skills(
     let mut skills = Vec::with_capacity(total_results);
 
     for (node, confidence) in &skill_results {
-        let description = node
-            .properties
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let tool_whitelist = node
-            .properties
-            .get("tool_whitelist")
-            .cloned()
-            .unwrap_or(json!([]));
+        let SkillProperties {
+            description,
+            tool_whitelist,
+            scoped_type_ids,
+        } = SkillProperties::from_node_properties(&node.properties);
 
         // Attach schema metadata for entity types relevant to this skill.
         // The skill's `node_types` property lists the type IDs in scope.
@@ -152,17 +200,6 @@ pub async fn find_skills(
         // MAX_UNSCOPED_SCHEMA_METADATA to bound token cost for general-purpose
         // skills that haven't declared an explicit scope. Skills should set
         // `node_types` to avoid this fallback as workspaces grow.
-        let scoped_type_ids: Vec<String> = node
-            .properties
-            .get("node_types")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
         let schema_metadata: Vec<Value> = all_schemas
             .iter()
             .filter(|s| {
@@ -238,6 +275,88 @@ mod tests {
             title: None,
             lifecycle_status: "active".to_string(),
         }
+    }
+
+    #[test]
+    fn skill_properties_reads_the_hoisted_shape_node_service_actually_writes() {
+        // The shape every seeded skill node has in the live database: `skill`
+        // is a schema-typed node type (ADR-030), so NodeService hoists its
+        // schema-defined fields under `properties.skill.*` on write, the same
+        // as `task` under `properties.task.*`. A reader expecting flat
+        // `properties.description` finds nothing on a real node.
+        let properties = json!({
+            "skill": {
+                "description": "Modify existing nodes",
+                "tool_whitelist": ["update_node", "resolve_query"],
+                "node_types": ["invoice"],
+            }
+        });
+
+        assert_eq!(
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node", "resolve_query"]),
+                scoped_type_ids: vec!["invoice".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn skill_properties_falls_back_to_flat_shape() {
+        // A node with no `skill` namespace key at all (predates hoisting, or
+        // constructed directly the way every other test in this module does)
+        // must still read correctly rather than silently returning defaults.
+        let properties = json!({
+            "description": "Modify existing nodes",
+            "tool_whitelist": ["update_node"],
+        });
+
+        assert_eq!(
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node"]),
+                scoped_type_ids: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn skill_properties_falls_back_to_flat_shape_when_skill_key_is_null() {
+        // `properties.get("skill")` returning `Some(&Value::Null)` must not
+        // be treated as "the namespace is present" — a bare `.unwrap_or`
+        // would substitute `Null` instead of falling back, silently
+        // discarding any flat data sitting alongside it. Not reachable
+        // through NodeService's real write path (hoisting always leaves an
+        // object, never `null`), but a node built by hand or through a raw
+        // store write could have this shape.
+        let properties = json!({
+            "skill": null,
+            "description": "Modify existing nodes",
+            "tool_whitelist": ["update_node"],
+        });
+
+        assert_eq!(
+            SkillProperties::from_node_properties(&properties),
+            SkillProperties {
+                description: "Modify existing nodes".to_string(),
+                tool_whitelist: json!(["update_node"]),
+                scoped_type_ids: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn skill_properties_missing_entirely_defaults_safely() {
+        assert_eq!(
+            SkillProperties::from_node_properties(&json!({})),
+            SkillProperties {
+                description: String::new(),
+                tool_whitelist: json!([]),
+                scoped_type_ids: vec![],
+            }
+        );
     }
 
     #[test]

@@ -805,9 +805,20 @@ impl NodeBehavior for ProjectNodeBehavior {
             ));
         }
 
-        // Typed fields live under `properties.project.*`. TYPE checks only —
+        // Typed fields live under `properties.project.*` — `project` is a
+        // schema-typed node type, so NodeService hoists its schema-defined
+        // fields there on write, the same as `task` under `properties.task.*`
+        // (see the task-property validation above, which uses the same
+        // nested-first/flat-fallback lookup for the same reason). Falling
+        // back to the flat top level keeps this correct for a node that
+        // predates hoisting or was constructed directly. TYPE checks only —
         // the schema system validates enum membership and allowed values.
-        if let Some(props) = node.properties.get("project") {
+        let project_props = node
+            .properties
+            .get("project")
+            .filter(|v| v.is_object())
+            .or(Some(&node.properties));
+        if let Some(props) = project_props {
             // status / priority must be strings if present.
             for field in ["status", "priority"] {
                 if let Some(v) = props.get(field) {
@@ -3003,6 +3014,44 @@ mod tests {
             json!({ "project": { "start_date": "June 2026", "end_date": "Jan 2026" } }),
         );
         assert!(behavior.validate(&non_iso).is_ok());
+    }
+
+    #[test]
+    fn test_project_node_behavior_falls_back_to_flat_properties() {
+        // A node predating hoisting, or constructed directly, has its typed
+        // fields flat rather than under properties.project.*. Before the
+        // fallback this silently skipped validation entirely rather than
+        // checking the flat data — a bad flat `status` would pass.
+        let behavior = ProjectNodeBehavior;
+
+        let flat_invalid = Node::new(
+            "project".to_string(),
+            "Flat project".to_string(),
+            json!({ "status": 3 }),
+        );
+        assert!(matches!(
+            behavior.validate(&flat_invalid),
+            Err(NodeValidationError::InvalidProperties(_))
+        ));
+
+        let flat_valid = Node::new(
+            "project".to_string(),
+            "Flat project".to_string(),
+            json!({ "status": "active", "start_date": "2026-01-01" }),
+        );
+        assert!(behavior.validate(&flat_valid).is_ok());
+
+        // A `project` key present but null (not an object) must fall back to
+        // the flat data rather than being treated as "the namespace exists."
+        let null_namespace = Node::new(
+            "project".to_string(),
+            "Flat project".to_string(),
+            json!({ "project": null, "status": 3 }),
+        );
+        assert!(matches!(
+            behavior.validate(&null_namespace),
+            Err(NodeValidationError::InvalidProperties(_))
+        ));
     }
 
     #[test]
