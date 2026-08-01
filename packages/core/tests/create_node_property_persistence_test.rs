@@ -172,3 +172,67 @@ async fn reports_zero_only_when_given_no_properties() -> Result<(), Box<dyn std:
     );
     Ok(())
 }
+
+/// The other mechanism behind a zero-property `create_node`: the model invents
+/// a `node_type` (a display name, a paraphrase) instead of copying a real
+/// schema id. Before this test, that call SUCCEEDED — CustomNodeBehavior
+/// accepts any type string, so the node was stored as a bare shell and the
+/// model was told the write succeeded. It must now be rejected loudly instead,
+/// so the model can retry against a real id rather than lose the write.
+#[tokio::test]
+async fn rejects_node_type_with_no_schema_and_no_core_behavior(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ns = test_service().await?;
+    // The real id ("equipment") is never seeded — only the invented display
+    // name is attempted, matching the scenario 4 trace where the schema was
+    // created as "equipment_item" but create_node was called with "Equipment
+    // Item Tracker".
+    let err = node_ops::create_node(
+        &ns,
+        node_ops::CreateNodeInput {
+            id: None,
+            node_type: "Equipment Item Tracker".to_string(),
+            content: "Laser cutter".to_string(),
+            parent_id: None,
+            position: InsertPositionOwned::End,
+            properties: json!({ "replacement_cost": 2400 }),
+            collection: None,
+            lifecycle_status: None,
+        },
+    )
+    .await
+    .expect_err("an invented node_type with no schema must be rejected, not silently accepted");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Equipment Item Tracker"),
+        "error should name the offending node_type, got: {msg}"
+    );
+    Ok(())
+}
+
+/// A `node_type` matching a registered core behavior (e.g. "text") must still
+/// be accepted even though no schema node exists for it — core types are
+/// validated by behavior, not by a schema row.
+#[tokio::test]
+async fn accepts_core_node_type_with_no_schema_node() -> Result<(), Box<dyn std::error::Error>> {
+    let ns = test_service().await?;
+
+    let output = node_ops::create_node(
+        &ns,
+        node_ops::CreateNodeInput {
+            id: None,
+            node_type: "text".to_string(),
+            content: "A plain note".to_string(),
+            parent_id: None,
+            position: InsertPositionOwned::End,
+            properties: json!({}),
+            collection: None,
+            lifecycle_status: None,
+        },
+    )
+    .await?;
+
+    assert_eq!(output.node_type, "text");
+    Ok(())
+}

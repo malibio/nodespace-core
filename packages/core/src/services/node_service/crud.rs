@@ -272,6 +272,24 @@ impl NodeService {
             self.ensure_date_exists(parent_id).await?;
         }
 
+        // Step 1.5: Reject a node_type that is neither a registered core type
+        // nor an existing schema id. Without this, an invented id (a display
+        // name, a paraphrase) falls through to CustomNodeBehavior and the node
+        // is stored as a bare shell: no schema means nothing to validate
+        // supplied properties against, so every one of them is silently
+        // dropped and the caller is told the write succeeded.
+        if self.behaviors.get(&params.node_type).is_none() {
+            let schema_exists = self
+                .store
+                .get_schema(&params.node_type)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+                .is_some();
+            if !schema_exists {
+                return Err(NodeServiceError::unknown_node_type(&params.node_type));
+            }
+        }
+
         // Step 2: Validate parent exists and is a container (if provided)
         if let Some(ref parent_id) = params.parent_id {
             let parent_node = self
