@@ -1241,7 +1241,13 @@ impl NodeService {
 
         // Nothing to check or delete if the target is already gone — matches the idempotent
         // absent-target behavior `delete_subtree_atomic` has always had.
-        if self.store.get_node(node_id).await.ok().flatten().is_none() {
+        let target_exists = self
+            .store
+            .get_node(node_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to read target: {}", e)))?
+            .is_some();
+        if !target_exists {
             return Ok(crate::models::DeleteResult {
                 existed: false,
                 deleted_count: 0,
@@ -1259,6 +1265,11 @@ impl NodeService {
             .check_subtree_access(&subtree_ids)
             .await
         {
+            debug_assert!(
+                inaccessible_count > 0,
+                "a Denied decision must report at least one inaccessible node — \
+                 a gate reporting 0 would surface a confusing refusal message"
+            );
             return Err(NodeServiceError::inaccessible_descendants(
                 inaccessible_count,
             ));

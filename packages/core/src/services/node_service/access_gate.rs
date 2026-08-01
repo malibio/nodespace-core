@@ -62,6 +62,9 @@ impl super::NodeService {
     /// The active gate: the injected Pro gate if one has been set, otherwise
     /// [`AlwaysAllowGate`] (community default).
     pub(crate) fn subtree_access_gate(&self) -> &dyn SubtreeAccessGate {
+        // Safe to hand out a `&'static` reference to a stack-local `static` only because
+        // AlwaysAllowGate is a zero-sized unit struct with no fields to ever go stale — if it
+        // grows state, this would need to move to an `Arc`/`OnceLock` like the injected case.
         static DEFAULT: AlwaysAllowGate = AlwaysAllowGate;
         self.subtree_access_gate
             .get()
