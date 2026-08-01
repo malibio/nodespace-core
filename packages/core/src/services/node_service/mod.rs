@@ -594,6 +594,14 @@ const MARKDOWN_MENTION_PATTERN: &str =
 // Capture group 1: the node ID (without "node/" prefix)
 const PLAIN_MENTION_PATTERN: &str = r"nodespace://(?:node/)?([^\s)?]+)";
 
+// Regex pattern for `[[node-id]]` wikilink references — an ergonomic shorthand for
+// referencing a node by its id (as opposed to the full `[text](nodespace://id)`
+// markdown form). Matches: [[uuid]] or [[node/uuid]]. Capture group 1: the node ID
+// (without the "node/" prefix). The id class excludes `]` and whitespace, so a
+// bracketed phrase like `[[some title]]` never matches; the captured token is then
+// validated by `is_valid_node_id`, so only real UUID/date ids become mentions.
+const WIKILINK_MENTION_PATTERN: &str = r"\[\[(?:node/)?([^\]\s]+)\]\]";
+
 /// Validate if a node ID is valid (UUID or date format)
 ///
 /// Valid formats:
@@ -671,9 +679,10 @@ mod normalize_schema_id_tests {
 
 /// Extract nodespace:// mentions from content
 ///
-/// Supports both markdown format and plain URIs:
+/// Supports markdown links, plain URIs, and `[[node-id]]` wikilinks:
 /// - Markdown: [@text](nodespace://node-id) or [text](nodespace://node-id)
 /// - Plain: nodespace://node-id
+/// - Wikilink: [[node-id]] (shorthand reference by id)
 ///
 /// Accepts both UUID and date format node IDs:
 /// - UUID: abc123-def456-... (36 chars)
@@ -735,6 +744,22 @@ pub fn extract_mentions(content: &str) -> Vec<String> {
                 .any(|(start, end)| match_pos >= *start && match_pos < *end);
 
             if !is_in_markdown && is_valid_node_id(node_id_str) {
+                mentions.insert(node_id_str.to_string());
+            }
+        }
+    }
+
+    // Match `[[node-id]]` wikilink references. These never overlap the markdown or
+    // plain forms (neither contains `[[`), so no range-exclusion is needed — the
+    // captured id is validated the same way, so only real ids become mentions.
+    static WIKILINK_REGEX: OnceLock<Regex> = OnceLock::new();
+    let wikilink_regex =
+        WIKILINK_REGEX.get_or_init(|| Regex::new(WIKILINK_MENTION_PATTERN).unwrap());
+
+    for cap in wikilink_regex.captures_iter(content) {
+        if let Some(node_id) = cap.get(1) {
+            let node_id_str = node_id.as_str();
+            if is_valid_node_id(node_id_str) {
                 mentions.insert(node_id_str.to_string());
             }
         }
@@ -3091,6 +3116,54 @@ mod tests {
         let mentions = extract_mentions(content);
         assert_eq!(mentions.len(), 1);
         assert!(mentions.contains(&"2025-10-24".to_string()));
+    }
+
+    #[test]
+    fn test_extract_mentions_wikilink_uuid_and_date() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let content = format!("See [[{uuid}]] and the log for [[2025-10-24]].");
+        let mentions = extract_mentions(&content);
+        assert_eq!(mentions.len(), 2);
+        assert!(mentions.contains(&uuid.to_string()));
+        assert!(mentions.contains(&"2025-10-24".to_string()));
+    }
+
+    #[test]
+    fn test_extract_mentions_wikilink_strips_node_prefix() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let content = format!("Ref [[node/{uuid}]]");
+        let mentions = extract_mentions(&content);
+        assert_eq!(mentions, vec![uuid.to_string()]);
+    }
+
+    #[test]
+    fn test_extract_mentions_wikilink_ignores_non_ids() {
+        // A bracketed phrase (has whitespace / isn't a valid id) is not a mention;
+        // a token that isn't a UUID or date is filtered by is_valid_node_id.
+        let content = "[[some page title]] and [[not-a-real-id]] and [[]]";
+        let mentions = extract_mentions(content);
+        assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn test_extract_mentions_wikilink_nested_brackets_not_a_mention() {
+        // Malformed nesting corrupts the captured token with a stray bracket, which
+        // is_valid_node_id rejects — a triple-bracketed id is not a mention.
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let content = format!("[[[{uuid}]]]");
+        assert!(extract_mentions(&content).is_empty());
+    }
+
+    #[test]
+    fn test_extract_mentions_wikilink_dedups_with_markdown_form() {
+        // The same id referenced once as a wikilink and once as a markdown link is a
+        // single mention; a second distinct id adds one more.
+        let a = "550e8400-e29b-41d4-a716-446655440000";
+        let b = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+        let content = format!("[[{a}]] then [@X](nodespace://{a}) and [[{b}]]");
+        let mut mentions = extract_mentions(&content);
+        mentions.sort();
+        assert_eq!(mentions, vec![a.to_string(), b.to_string()]);
     }
 
     #[tokio::test]
