@@ -28,7 +28,9 @@ use std::sync::Arc;
 use nodespace_agent::agent_types::{ChatInferenceEngine, ChatMessage, InferenceRequest, Role};
 use nodespace_agent::local_agent::agent_loop::{STAGE1_MAX_TOKENS, STAGE1_SYSTEM_PROMPT};
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
-use nodespace_agent::local_agent::routing::{parse_route_decision, stage1_tool_definitions, RouteDecision};
+use nodespace_agent::local_agent::routing::{
+    parse_route_decision, stage1_tool_definitions, RouteDecision,
+};
 use nodespace_nlp_engine::chat::ChatConfig;
 
 /// Standard on-disk path for the locked native model (ADR-056), matching
@@ -179,9 +181,11 @@ async fn stage1_reformulation_for_venue_tracker_control() {
 #[ignore = "requires the locked native GGUF on disk"]
 async fn stage1_reformulation_for_instance_creation_scenario_4() {
     let engine = load_engine();
-    let decision =
-        run_stage1(&engine, "Log a laser cutter checked out on the 12th, replacement cost 2400")
-            .await;
+    let decision = run_stage1(
+        &engine,
+        "Log a laser cutter checked out on the 12th, replacement cost 2400",
+    )
+    .await;
 
     match decision {
         Some(RouteDecision::Query(q)) => println!("GOLDEN[4] route_query(\"{q}\")"),
@@ -213,9 +217,12 @@ async fn stage1_reformulation_for_scenario_6_update() {
         "Log a laser cutter checked out on the 12th, replacement cost 2400",
         "I've logged the laser cutter as checked out on the 12th, with a replacement cost of 2400.",
     ];
-    let decision =
-        run_stage1_with_history(&engine, &prior_turns, "The 2400 one came back — set it to returned")
-            .await;
+    let decision = run_stage1_with_history(
+        &engine,
+        &prior_turns,
+        "The 2400 one came back — set it to returned",
+    )
+    .await;
 
     match decision {
         Some(RouteDecision::Query(q)) => {

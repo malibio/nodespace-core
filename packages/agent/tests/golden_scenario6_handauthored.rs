@@ -112,7 +112,8 @@ async fn run_turn(
         max_tokens: Some(512),
     };
 
-    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = chunks.clone();
     engine
         .generate(
@@ -264,24 +265,28 @@ async fn golden_medium_history_calibration() {
 
     // Repeat the pattern a few times with slightly varied filler to reach the
     // target token range without changing the underlying facts.
-    let mut history = Vec::new();
-    history.push(ChatMessage::text(
-        Role::User,
-        "I want to keep a record of the equipment my team checks out and what each item costs \
-         to replace"
-            .to_string(),
-    ));
-    history.push(ChatMessage::text(Role::Assistant, verbose_turn_3.to_string()));
-    history.push(ChatMessage::text(Role::System, write_record_3.to_string()));
-    history.push(ChatMessage::text(
-        Role::User,
-        "Log a laser cutter checked out on the 12th, replacement cost 2400".to_string(),
-    ));
-    history.push(ChatMessage::text(Role::Assistant, verbose_turn_4.to_string()));
-    history.push(ChatMessage::text(Role::System, write_record_4.to_string()));
+    let history = vec![
+        ChatMessage::text(
+            Role::User,
+            "I want to keep a record of the equipment my team checks out and what each item costs \
+             to replace"
+                .to_string(),
+        ),
+        ChatMessage::text(Role::Assistant, verbose_turn_3.to_string()),
+        ChatMessage::text(Role::System, write_record_3.to_string()),
+        ChatMessage::text(
+            Role::User,
+            "Log a laser cutter checked out on the 12th, replacement cost 2400".to_string(),
+        ),
+        ChatMessage::text(Role::Assistant, verbose_turn_4.to_string()),
+        ChatMessage::text(Role::System, write_record_4.to_string()),
+    ];
 
     let total_chars: usize = history.iter().map(|m| m.content.len()).sum();
-    println!("GOLDEN[medium-history] history char count: {total_chars} (~{} tokens est.)", total_chars / 4);
+    println!(
+        "GOLDEN[medium-history] history char count: {total_chars} (~{} tokens est.)",
+        total_chars / 4
+    );
 
     let result = run_turn(
         &engine,
@@ -337,7 +342,10 @@ async fn golden_medium_history_terse_control() {
     }
 
     let total_chars: usize = history.iter().map(|m| m.content.len()).sum();
-    println!("GOLDEN[terse-control] history char count: {total_chars} (~{} tokens est.)", total_chars / 4);
+    println!(
+        "GOLDEN[terse-control] history char count: {total_chars} (~{} tokens est.)",
+        total_chars / 4
+    );
 
     let result = run_turn(
         &engine,
