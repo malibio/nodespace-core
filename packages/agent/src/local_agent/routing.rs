@@ -116,15 +116,21 @@ pub fn stage1_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: ROUTE_QUERY_TOOL.to_string(),
             description: "Use when you understand what the user wants. Provide a short search \
-                 query describing the capability needed to fulfil it — describe the task, not \
-                 the user's exact words."
+                 query describing the capability needed to fulfil it, keeping the specific \
+                 nouns the user named (what kind of thing, what item) rather than replacing \
+                 them with a paraphrase — describe the task using the user's own subject, not \
+                 a reinterpreted one."
                 .to_string(),
             parameters_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "A short description of the capability needed, in plain language."
+                        "description": "A short description of the capability needed, in plain \
+                             language, built around the exact noun(s) the user used for the \
+                             subject (e.g. keep 'albums', 'venues', 'equipment' — do not \
+                             substitute a different word for the same thing, like 'watchlist' \
+                             or 'queue' for a category of item the user named directly)."
                     }
                 },
                 "required": ["query"]

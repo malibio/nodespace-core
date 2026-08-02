@@ -1388,7 +1388,7 @@ impl GraphToolExecutor {
             let mut filters = filters;
             if !query.is_empty() {
                 filters.push(query_ops::AgentFilterItem {
-                    filter_type: "content".to_string(),
+                    filter_type: Some("content".to_string()),
                     operator: "contains".to_string(),
                     property: None,
                     value: Some(Value::String(query)),

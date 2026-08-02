@@ -20,12 +20,25 @@ use std::sync::Arc;
 // ============================================================================
 
 /// A single filter item as passed by the agent tool.
+///
+/// `type` is optional on the wire. A model that has worked out the hard part —
+/// which property to compare, with which operator, against which value —
+/// routinely omits the category discriminator, and rejecting an otherwise
+/// complete and correct filter over a token that is derivable from the other
+/// fields turns a solved query into a tool error. [`AgentFilterItem::category`]
+/// infers it: a filter naming a `relationship_type` or an anchor `node_id` is a
+/// relationship filter, and anything naming a `property` is a property filter —
+/// the only two shapes the omission is observed for. An item that names none of
+/// them is genuinely under-specified and still errors, so the inference never
+/// has to guess between `content` and `metadata`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentFilterItem {
     /// Filter category: "property", "content", "relationship", "metadata".
-    #[serde(rename = "type")]
-    pub filter_type: String,
+    /// Optional — see the type-level note; omitted values are inferred from the
+    /// other fields rather than rejected.
+    #[serde(rename = "type", default)]
+    pub filter_type: Option<String>,
     /// Comparison operator: "equals", "contains", "gt", "lt", "gte", "lte",
     /// "in", "exists".
     pub operator: String,
@@ -133,8 +146,31 @@ fn parse_relationship_type(
     }
 }
 
+impl AgentFilterItem {
+    /// The filter category, as given or inferred from the other fields.
+    ///
+    /// Errors only when the item names nothing to infer from — that is a filter
+    /// with no subject at all, which no category would rescue.
+    fn category(&self) -> Result<&str, OpsError> {
+        if let Some(t) = self.filter_type.as_deref() {
+            return Ok(t);
+        }
+        if self.relationship_type.is_some() || self.node_id.is_some() {
+            return Ok("relationship");
+        }
+        if self.property.is_some() {
+            return Ok("property");
+        }
+        Err(OpsError::InvalidParams(
+            "filter must specify 'type' (property, content, relationship, metadata), \
+             or name a 'property' or 'relationship_type' it can be inferred from"
+                .to_string(),
+        ))
+    }
+}
+
 fn to_query_filter(item: AgentFilterItem) -> Result<QueryFilter, OpsError> {
-    let filter_type = parse_filter_type(&item.filter_type)?;
+    let filter_type = parse_filter_type(item.category()?)?;
     let operator = parse_filter_operator(&item.operator)?;
 
     let relationship_type = match &item.relationship_type {
@@ -312,7 +348,7 @@ mod tests {
     #[test]
     fn to_query_filter_property() {
         let item = AgentFilterItem {
-            filter_type: "property".to_string(),
+            filter_type: Some("property".to_string()),
             operator: "equals".to_string(),
             property: Some("status".to_string()),
             value: Some(json!("open")),
@@ -325,6 +361,64 @@ mod tests {
         assert_eq!(qf.operator, FilterOperator::Equals);
         assert_eq!(qf.property.as_deref(), Some("status"));
         assert_eq!(qf.value, Some(json!("open")));
+    }
+
+    /// A filter that names a property but omits `type` is complete enough to
+    /// run: the category is derivable, and rejecting it turns a correct query
+    /// into a tool error over a token the model gains nothing by restating.
+    #[test]
+    fn filter_type_is_inferred_for_a_property_filter() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "equals",
+            "property": "replacement_cost",
+            "value": 2400
+        }))
+        .expect("`type` must be optional on the wire");
+        assert_eq!(item.category().unwrap(), "property");
+        let qf = to_query_filter(item).unwrap();
+        assert_eq!(qf.filter_type, FilterType::Property);
+        assert_eq!(qf.property.as_deref(), Some("replacement_cost"));
+    }
+
+    /// Relationship filters carry their own distinguishing fields, so they are
+    /// inferable too — and must not be mistaken for property filters.
+    #[test]
+    fn filter_type_is_inferred_for_a_relationship_filter() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "equals",
+            "relationship_type": "children",
+            "node_id": "abc-123"
+        }))
+        .unwrap();
+        assert_eq!(item.category().unwrap(), "relationship");
+    }
+
+    /// An explicit `type` always wins over inference — a caller that says
+    /// `content` gets `content`, even alongside a `property` key.
+    #[test]
+    fn explicit_filter_type_overrides_inference() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "type": "metadata",
+            "operator": "equals",
+            "property": "created_at",
+            "value": "2026-01-01"
+        }))
+        .unwrap();
+        assert_eq!(item.category().unwrap(), "metadata");
+    }
+
+    /// Inference must not paper over a filter with no subject at all — there is
+    /// nothing to infer from, and silently picking a category would run a query
+    /// the caller never described.
+    #[test]
+    fn filter_with_nothing_to_infer_from_still_errors() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "exists",
+            "value": true
+        }))
+        .unwrap();
+        assert!(item.category().is_err());
+        assert!(to_query_filter(item).is_err());
     }
 
     #[test]
