@@ -116,10 +116,13 @@ pub fn stage1_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: ROUTE_QUERY_TOOL.to_string(),
             description: "Use when you understand what the user wants. Provide a short search \
-                 query describing the capability needed to fulfil it, keeping the specific \
-                 nouns the user named (what kind of thing, what item) rather than replacing \
-                 them with a paraphrase — describe the task using the user's own subject, not \
-                 a reinterpreted one."
+                 query describing the capability needed to fulfil it, keeping both the specific \
+                 nouns the user named (what kind of thing, what item) AND the action or \
+                 distinguishing detail that determines what kind of capability is needed — a \
+                 status word, a value, or a verb like update/create/delete/list — rather than \
+                 replacing either with a paraphrase or generalizing to a category-level \
+                 description. Describe the task using the user's own subject and intent, not a \
+                 reinterpreted or flattened one."
                 .to_string(),
             parameters_schema: serde_json::json!({
                 "type": "object",
@@ -130,7 +133,11 @@ pub fn stage1_tool_definitions() -> Vec<ToolDefinition> {
                              language, built around the exact noun(s) the user used for the \
                              subject (e.g. keep 'albums', 'venues', 'equipment' — do not \
                              substitute a different word for the same thing, like 'watchlist' \
-                             or 'queue' for a category of item the user named directly)."
+                             or 'queue' for a category of item the user named directly) AND the \
+                             specific action or detail that distinguishes what the user wants \
+                             done — e.g. 'update the equipment record worth 2400 to returned', \
+                             not just 'equipment items'; do not collapse an update/find-a-\
+                             specific-item request into a generic listing description."
                     }
                 },
                 "required": ["query"]

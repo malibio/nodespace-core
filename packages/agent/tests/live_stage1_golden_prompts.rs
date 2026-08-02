@@ -56,10 +56,25 @@ fn load_engine() -> LlamaChatInferenceEngine {
 /// with no prior turns. Returns the raw generated tool-call arguments so a
 /// caller can inspect the reformulated query verbatim, not just the decision.
 async fn run_stage1(engine: &LlamaChatInferenceEngine, message: &str) -> Option<RouteDecision> {
+    run_stage1_with_history(engine, &[], message).await
+}
+
+/// Same as `run_stage1`, but blends `prior_turns` into the routing query the
+/// same way `agent_loop.rs::stage1_query` does for a real multi-turn
+/// conversation, via `context_ops::build_retrieval_query` — the exact
+/// function production calls. Needed for golden cases (like scenario 6) whose
+/// discriminating detail only exists relative to earlier turns.
+async fn run_stage1_with_history(
+    engine: &LlamaChatInferenceEngine,
+    prior_turns: &[&str],
+    message: &str,
+) -> Option<RouteDecision> {
+    let routing_query =
+        nodespace_core::ops::context_ops::build_retrieval_query(prior_turns, message);
     let request = InferenceRequest {
         messages: vec![
             ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
-            ChatMessage::text(Role::User, message.to_string()),
+            ChatMessage::text(Role::User, routing_query),
         ],
         tools: Some(stage1_tool_definitions()),
         temperature: Some(0.1),
@@ -174,5 +189,48 @@ async fn stage1_reformulation_for_instance_creation_scenario_4() {
             println!("GOLDEN[4] route_clarify(\"{question}\")");
         }
         None => println!("GOLDEN[4] no valid tool call parsed"),
+    }
+}
+
+/// Golden case for scenario 6's real root cause (#1922, corrected): Stage 1's
+/// reformulated query drops the update/state-change intent and the
+/// discriminating value ("2400", "returned"), producing a generic listing-
+/// style description that never routes to Graph Editing (the skill that
+/// whitelists `resolve_query`). Confirmed against the actual daemon.log
+/// behind #1917's 9.0/12 matrix run: real Stage-1 input for this turn
+/// (blended per `build_retrieval_query`, matching production exactly)
+/// produced `route_query("equipment items on the books")` — the same shape
+/// as scenario 5's own list query, with "2400"/"returned" gone entirely.
+///
+/// Prior-turn text below is trimmed to what `build_retrieval_query` actually
+/// sees (the reply is truncated per `MAX_CHARS_PER_BLENDED_TURN`, but full
+/// text is harmless here since it's well under that cap for this case).
+#[tokio::test]
+#[ignore = "requires the locked native GGUF on disk"]
+async fn stage1_reformulation_for_scenario_6_update() {
+    let engine = load_engine();
+    let prior_turns = [
+        "Log a laser cutter checked out on the 12th, replacement cost 2400",
+        "I've logged the laser cutter as checked out on the 12th, with a replacement cost of 2400.",
+    ];
+    let decision =
+        run_stage1_with_history(&engine, &prior_turns, "The 2400 one came back — set it to returned")
+            .await;
+
+    match decision {
+        Some(RouteDecision::Query(q)) => {
+            println!("GOLDEN[6] route_query(\"{q}\")");
+            // Pre-fix (main@6321f3d5, before this test's own commit): reliably
+            // reproduced "equipment items on the books" or similar generic
+            // listing phrasing — the failure this test exists to catch. A fix
+            // to `route_query`'s description should make this preserve the
+            // update intent and the discriminating "2400"/"returned" detail,
+            // e.g. something shaped like "update the equipment record worth
+            // 2400 to returned".
+        }
+        Some(RouteDecision::Clarify { question, .. }) => {
+            println!("GOLDEN[6] route_clarify(\"{question}\")");
+        }
+        None => println!("GOLDEN[6] no valid tool call parsed"),
     }
 }
