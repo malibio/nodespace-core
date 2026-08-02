@@ -283,6 +283,39 @@ fn duplicate_write_result(prior: &crate::agent_types::PriorWrite) -> serde_json:
     })
 }
 
+/// Whether `all_tool_executions` (this turn's history) already contains a
+/// successful `create_schema` call.
+///
+/// Structural backstop for `ONE_SCHEMA_PER_REQUEST`: nothing in the tool
+/// surface stops the model from calling `create_schema` a second time within
+/// the same skill invocation (Schema Creation's `max_iterations: 3` permits
+/// it, and `stage2_tools` does not enforce call counts). Split out so the
+/// guard site and its test can share the exact same notion of "already
+/// created a schema this turn."
+fn schema_already_created_this_turn(executions: &[ToolExecutionRecord]) -> bool {
+    executions
+        .iter()
+        .any(|r| r.name == "create_schema" && !r.is_error)
+}
+
+/// Build the tool result returned in place of a refused second `create_schema`
+/// call within one skill invocation.
+///
+/// Mirrors [`duplicate_write_result`]'s shape (informative, not a bare
+/// failure) but is flagged as an error: unlike a duplicate write, this is a
+/// genuine policy violation (`ONE_SCHEMA_PER_REQUEST`) that the model should
+/// stop and report rather than retry differently.
+fn second_schema_refused_result() -> serde_json::Value {
+    serde_json::json!({
+        "error": "second_schema_in_one_request",
+        "message": "Not executed: a schema was already created earlier in this request. \
+             Create exactly one type per request — do not also create a related type the \
+             user didn't ask for. Stop here and report the schema that was already created. \
+             If the user's request genuinely named two separate types, tell them the second \
+             one needs its own follow-up request.",
+    })
+}
+
 /// Maximum tokens any single inference round may generate.
 ///
 /// Small local models (e.g. Gemma-4-E4B) occasionally open an empty
@@ -1366,6 +1399,33 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                                     // as a failure would invite a repair retry —
                                     // the exact loop this guard exists to stop.
                                     is_error: false,
+                                })),
+                            )
+                        } else if tc.function_name == "create_schema"
+                            && schema_already_created_this_turn(&all_tool_executions)
+                        {
+                            // Structural backstop for ONE_SCHEMA_PER_REQUEST
+                            // (see #1905): the prose rule already says "create
+                            // exactly the type asked for", but nothing stops a
+                            // second create_schema call within the same skill
+                            // invocation from actually executing — Schema
+                            // Creation's max_iterations permits up to three
+                            // create_schema calls per turn. Refuse the second
+                            // one outright rather than letting the model split
+                            // a request across two types and silently leave
+                            // one half-populated.
+                            tracing::warn!(
+                                session_id = %session.id,
+                                iteration = iteration,
+                                "Second create_schema call in one skill invocation refused"
+                            );
+                            (
+                                args,
+                                Some(Ok(crate::agent_types::ToolResult {
+                                    tool_call_id: tc.id.clone(),
+                                    name: tc.function_name.clone(),
+                                    result: second_schema_refused_result(),
+                                    is_error: true,
                                 })),
                             )
                         } else {
@@ -5726,6 +5786,265 @@ mod tests {
         assert!(
             calls.lock().unwrap().iter().any(|c| c == "create_node"),
             "a distinct create must not be blocked"
+        );
+    }
+
+    // -- Second create_schema-in-one-turn guard (#1905) ------------------
+
+    fn schema_executor() -> MockToolExecutor {
+        MockToolExecutor::new().with_tool(
+            "create_schema",
+            json!({"type": "object", "properties": {"name": {"type": "string"}}}),
+            json!({"schemaId": "invoice", "isCore": false, "version": 1, "fields": []}),
+        )
+    }
+
+    /// The acceptance criterion: a second `create_schema` call within the same
+    /// skill invocation must not reach the executor, even though nothing in
+    /// the tool whitelist or max_iterations mechanically prevents the model
+    /// from attempting it.
+    #[tokio::test]
+    async fn second_create_schema_in_one_turn_is_not_executed() {
+        let engine = Arc::new(MockEngine::new(vec![
+            // Round 1: create_schema for "Invoice"
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "create_schema".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"name":"Invoice","fields":[]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 2: model tries a second, different create_schema call —
+            // e.g. splitting "track invoices and customers" into two types.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_2".to_string(),
+                    name: "create_schema".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_2".to_string(),
+                    args_json: r#"{"name":"Customer","fields":[]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 12,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            // Round 3: final summary
+            vec![
+                StreamingChunk::Token {
+                    text: "Created the Invoice type.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 15,
+                        completion_tokens: 6,
+                    },
+                },
+            ],
+        ]));
+
+        let executor = Arc::new(RecordingToolExecutor::new(schema_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "keep track of invoices and customers",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| *c == "create_schema")
+                .count(),
+            1,
+            "only the first create_schema call should reach the executor, got {:?}",
+            calls.lock().unwrap()
+        );
+
+        let refused = result
+            .tool_calls_made
+            .iter()
+            .filter(|r| r.name == "create_schema")
+            .nth(1)
+            .expect("the second create_schema call must still produce a tool result");
+        assert!(
+            refused.is_error,
+            "a refused second schema creation is a policy violation, not a benign no-op"
+        );
+    }
+
+    /// A single `create_schema` call in a turn must execute normally — the
+    /// guard only fires on a *second* call after a successful first one.
+    #[tokio::test]
+    async fn single_create_schema_in_one_turn_still_executes() {
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_schema",
+            r#"{"name":"Invoice","fields":[]}"#,
+            "Created the Invoice type.",
+        ));
+        let executor = Arc::new(RecordingToolExecutor::new(schema_executor()));
+        let calls = executor.calls_handle();
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        agent_loop
+            .run_turn(
+                &mut session,
+                "keep track of invoices",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert!(
+            calls.lock().unwrap().iter().any(|c| c == "create_schema"),
+            "a single create_schema call must not be blocked"
+        );
+    }
+
+    /// A `create_schema` call that *fails* (e.g. validation error) must not
+    /// count against the guard — the model needs to be able to retry with a
+    /// corrected payload per SCHEMA_VALIDATION_ERROR_RETRY.
+    #[tokio::test]
+    async fn failed_create_schema_does_not_block_a_retry() {
+        let engine = Arc::new(MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_1".to_string(),
+                    name: "create_schema".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_1".to_string(),
+                    args_json: r#"{"name":"Invoice"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_2".to_string(),
+                    name: "create_schema".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_2".to_string(),
+                    args_json: r#"{"name":"Invoice","fields":[]}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 12,
+                        completion_tokens: 5,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "Created the Invoice type.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 15,
+                        completion_tokens: 6,
+                    },
+                },
+            ],
+        ]));
+
+        // First call errors (missing required "fields"); second call succeeds.
+        struct FirstFailsThenSucceeds {
+            calls: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl AgentToolExecutor for FirstFailsThenSucceeds {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_schema".into(),
+                    description: "Mock tool".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                self.calls.lock().unwrap().push(name.to_string());
+                let has_fields = args.get("fields").is_some();
+                Ok(ToolResult {
+                    tool_call_id: "tc".to_string(),
+                    name: name.to_string(),
+                    result: if has_fields {
+                        json!({"schemaId": "invoice", "isCore": false, "version": 1, "fields": []})
+                    } else {
+                        json!({"error": "\"fields\" is required"})
+                    },
+                    is_error: !has_fields,
+                })
+            }
+        }
+
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let executor = Arc::new(FirstFailsThenSucceeds {
+            calls: Arc::clone(&calls),
+        });
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "keep track of invoices",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect("turn should succeed");
+
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            2,
+            "both attempts must reach the executor — the first failed, so it doesn't count \
+             as \"a schema already created this turn\": {:?}",
+            calls.lock().unwrap()
+        );
+        let second = result
+            .tool_calls_made
+            .iter()
+            .filter(|r| r.name == "create_schema")
+            .nth(1)
+            .expect("second attempt must produce a tool result");
+        assert!(
+            !second.is_error,
+            "the corrected retry should succeed, not be refused as a duplicate schema"
         );
     }
 
