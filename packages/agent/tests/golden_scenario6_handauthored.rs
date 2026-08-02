@@ -353,3 +353,80 @@ async fn golden_medium_history_terse_control() {
     }
     // Not asserted pass/fail — this is the discriminating experiment itself.
 }
+
+/// Isolates SIZE from STYLE at the SAME token count as
+/// `golden_medium_history_calibration` (~412 tokens, verbose/narrative,
+/// FAILED single-rep). This uses TERSE, non-narrative content -- the same
+/// style as `golden_medium_history_terse_control` (149 tokens, PASSED) --
+/// but padded with additional (still terse, still true) facts to land in the
+/// same ~400-450 token range as the failing verbose calibration point.
+///
+/// This is the controlled probe: token count matched to the FAILING case,
+/// style matched to the PASSING case. If this fails, size is implicated as a
+/// driver (matched style, still breaks at this size). If it passes, style is
+/// implicated (matched size, terse style still succeeds) -- meaning the
+/// verbose calibration point's failure was driven by narrative shape, not
+/// raw token count, which has direct design implications for how history
+/// should be compacted (terse facts, not narrative summaries).
+#[tokio::test]
+#[ignore = "requires the locked native GGUF on disk"]
+async fn golden_terse_matched_size_probe() {
+    let engine = load_engine();
+    let system = "You are a graph-editing assistant. When a request refers to something \
+        indirectly (a bare value, a description) rather than by name, call resolve_query to \
+        find it. Never ask the user to supply a node id yourself.";
+
+    // Terse, repeated factual statements -- same style as the terse control,
+    // extended with additional true facts (not filler repetition) to reach
+    // the ~400-450 token range that matches golden_medium_history_calibration.
+    let mut history = Vec::new();
+    let facts = [
+        "Fact: an equipment schema was created with fields: replacement_cost (number).",
+        "Fact: no other schemas were created in this conversation.",
+        "Fact: one equipment_item node was created.",
+        "Fact: that node's replacement_cost is 2400.",
+        "Fact: that node's title is 'Laser Cutter'.",
+        "Fact: no other equipment_item nodes exist yet.",
+        "Fact: the equipment schema has exactly one field: replacement_cost.",
+        "Fact: the laser cutter was logged as checked out, no status field exists yet.",
+        "Fact: node ids are assigned automatically and are not known to the user.",
+        "Fact: the user refers to items by their replacement_cost value, not by id.",
+        "Fact: the schema was created in response to the user's request to track equipment.",
+        "Fact: the replacement_cost field is of type number, not string.",
+        "Fact: the equipment_item node was created after the schema was created.",
+        "Fact: the user's team checks out and returns equipment items over time.",
+        "Fact: only one node currently exists under the equipment_item type.",
+        "Fact: the node's creation was confirmed successfully with no errors.",
+        "Fact: the schema creation was confirmed successfully with no errors.",
+        "Fact: the user has not yet added a status property to the schema.",
+        "Fact: the assistant has not renamed or deleted any existing fields.",
+        "Fact: the conversation so far concerns exactly one equipment item and one schema.",
+        "Fact: the equipment_item type id is 'equipment_item', lowercase with an underscore.",
+        "Fact: the replacement_cost value 2400 was provided directly by the user.",
+        "Fact: the laser cutter is the only item logged so far in this conversation.",
+        "Fact: the schema and node were both created successfully in prior turns.",
+    ];
+    for f in facts {
+        history.push(ChatMessage::text(Role::System, f.to_string()));
+    }
+
+    let total_chars: usize = history.iter().map(|m| m.content.len()).sum();
+    println!(
+        "GOLDEN[terse-matched-size] history char count: {total_chars} (~{} tokens est.)",
+        total_chars / 4
+    );
+
+    let result = run_turn(
+        &engine,
+        system,
+        history,
+        "The 2400 one came back — set it to returned",
+    )
+    .await;
+
+    match &result {
+        Some((name, args)) => println!("GOLDEN[terse-matched-size] {name}({args})"),
+        None => println!("GOLDEN[terse-matched-size] no tool call parsed"),
+    }
+    // Not asserted pass/fail — this is the discriminating experiment itself.
+}
