@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "preinstall": "node ../../enforce-bun.js",
-    "postinstall": "bun run scripts/check-dev-deps.ts || true",
+    "postinstall": "bun run scripts/check-dev-deps.ts || true && bunx svelte-kit sync",
     "dev:check": "bun run scripts/check-dev-deps.ts",
     "dev:browser:proxy": "bun run ../../packages/dev-tools/src/dev-proxy.ts",
     "dev:browser:frontend": "BROWSERSLIST_IGNORE_OLD_DATA=1 bunx vite dev --port 5173",

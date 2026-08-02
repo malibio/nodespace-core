@@ -38,7 +38,6 @@ NodeSpace is an AI-native knowledge management system: Rust backend, Svelte 5 fr
    - Continuing parent-issue work on a shared branch: `EnterWorktree({path: "<repo>/.claude/worktrees/<existing>"})`
 4. **Install dependencies**: `bun install`
 5. **Run test baseline**: `bun run test` — frontend only (Rust tests require warm cache)
-   - If you hit `Cannot find base config file "./.svelte-kit/tsconfig.json"`, run `bunx svelte-kit sync` from `packages/desktop-app/` once, then re-run
    - WAIT for complete output — look for "Test Files X passed" summary and "Duration" line
 6. **Document baseline**: `bun run gh:comment <number> "Frontend: X passed"`
 
