@@ -58,8 +58,11 @@ pub const STAGE1_MAX_TOKENS: u32 = 256;
 pub const STAGE1_SYSTEM_PROMPT: &str =
     "You are routing a user's request to the right capability.\n\
     Call route_query with a short description of the capability the request needs.\n\
+    Call route_multi ONLY if the request contains two or more distinct, unambiguous things to do \
+    — not one thing phrased at length.\n\
     Call route_clarify ONLY if the request is too ambiguous to describe at all.\n\
-    Prefer route_query: most requests can be described even when phrased indirectly.\n\
+    Prefer route_query: most requests can be described even when phrased indirectly, and most \
+    requests are a single intent even when they mention several details.\n\
     Call exactly one tool. Do not answer the user.";
 
 /// Opening phrase of a routing clarification.
@@ -1883,12 +1886,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
 
         let mut routing_decision_tag = "none";
-        let query = match decision {
+        // A single query for Query/None/clarify-suppressed; two or more for
+        // Multi. Retrieval below re-enters once per element — Stage 2's
+        // per-candidate trust boundary and score gating are unchanged, only
+        // how many times retrieval runs for this turn.
+        let queries: Vec<String> = match decision {
             Some(RouteDecision::Query(q)) => {
                 routing_decision_tag = "query";
                 span.set_attribute(KeyValue::new("routing.decision", "query"));
                 span.set_attribute(KeyValue::new("routing.query", q.clone()));
-                q
+                vec![q]
+            }
+            Some(RouteDecision::Multi(qs)) => {
+                routing_decision_tag = "multi";
+                span.set_attribute(KeyValue::new("routing.decision", "multi"));
+                span.set_attribute(KeyValue::new("routing.multi_count", qs.len() as i64));
+                qs
             }
             Some(RouteDecision::Clarify { question, options }) => {
                 // The clarification contract: at most one per intent. If the
@@ -1902,7 +1915,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     tracing::debug!(
                         "stage-1 asked to clarify twice in one intent; falling through to retrieval"
                     );
-                    user_message.to_string()
+                    vec![user_message.to_string()]
                 } else {
                     span.set_attribute(KeyValue::new("routing.decision", "clarify"));
                     outcome.clarification = Some(format_clarification(&question, &options));
@@ -1912,9 +1925,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     // path returns before reaching. Both this and that line carry
                     // `routing_decision` as a plain text field (not only an OTel span
                     // attribute) so an eval scraping the daemon's text log — which has
-                    // no OTel exporter attached — can observe which of Stage 1's four
-                    // outcomes (query/clarify/clarify_suppressed/none) fired, rather
-                    // than inferring it from reply text or downstream tool effects.
+                    // no OTel exporter attached — can observe which of Stage 1's five
+                    // outcomes (query/multi/clarify/clarify_suppressed/none) fired,
+                    // rather than inferring it from reply text or downstream tool effects.
                     tracing::info!(
                         routing_decision = "clarify",
                         routing_latency_ms = elapsed_ms,
@@ -1928,7 +1941,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // that would not parse. Retrieve on the raw message rather than
                 // abandoning routing: a weak query still beats none.
                 span.set_attribute(KeyValue::new("routing.decision", "none"));
-                user_message.to_string()
+                vec![user_message.to_string()]
             }
         };
 
@@ -1936,26 +1949,41 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             return outcome;
         }
 
-        match self
-            .tool_executor
-            .retrieve_skills(&query, routing::RETRIEVAL_TOP_K)
-            .await
-        {
-            Ok(r) => {
-                span.set_attribute(KeyValue::new(
-                    "routing.candidates",
-                    r.candidates.len() as i64,
-                ));
-                span.set_attribute(KeyValue::new(
-                    "routing.top_score",
-                    r.candidates.first().map(|c| c.score).unwrap_or(0.0) as f64,
-                ));
-                outcome.candidates = r.candidates;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "skill retrieval failed; continuing unrouted");
+        // Merge candidates across every query, deduped by skill id (a skill
+        // matching more than one intent's query counts once) and capped at
+        // the same RETRIEVAL_TOP_K the single-query path already respects —
+        // a compound request must not silently widen Stage 2's candidate
+        // bound past the system-owned limit ADR-038 requires.
+        let mut merged: Vec<crate::agent_types::SkillCandidate> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut top_score: f32 = 0.0;
+        for query in &queries {
+            match self
+                .tool_executor
+                .retrieve_skills(query, routing::RETRIEVAL_TOP_K)
+                .await
+            {
+                Ok(r) => {
+                    if let Some(s) = r.candidates.first().map(|c| c.score) {
+                        top_score = top_score.max(s);
+                    }
+                    for c in r.candidates {
+                        if seen_ids.insert(c.id.clone()) {
+                            merged.push(c);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, query, "skill retrieval failed for one query; continuing with the rest");
+                }
             }
         }
+        merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        merged.truncate(routing::RETRIEVAL_TOP_K);
+
+        span.set_attribute(KeyValue::new("routing.candidates", merged.len() as i64));
+        span.set_attribute(KeyValue::new("routing.top_score", top_score as f64));
+        outcome.candidates = merged;
 
         // The latency ADR-038 requires be measured rather than assumed. Covers
         // the Stage-1 generation plus the retrieval step — i.e. everything the

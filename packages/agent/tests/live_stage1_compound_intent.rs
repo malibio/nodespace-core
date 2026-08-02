@@ -48,7 +48,7 @@ use nodespace_agent::local_agent::agent_loop::{STAGE1_MAX_TOKENS, STAGE1_SYSTEM_
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_agent::local_agent::model_manager::GgufModelManager;
 use nodespace_agent::local_agent::routing::{
-    self, RouteDecision, ROUTE_CLARIFY_TOOL, ROUTE_QUERY_TOOL,
+    self, RouteDecision, ROUTE_CLARIFY_TOOL, ROUTE_MULTI_TOOL, ROUTE_QUERY_TOOL,
 };
 use nodespace_nlp_engine::chat::types::{ChatMessage, Role};
 use nodespace_nlp_engine::ChatConfig;
@@ -336,6 +336,9 @@ fn display(outcome: &Stage1Outcome) -> String {
         Stage1Outcome::Decided(RouteDecision::Query(q)) => {
             format!("route_query(\"{q}\")")
         }
+        Stage1Outcome::Decided(RouteDecision::Multi(qs)) => {
+            format!("route_multi({qs:?})")
+        }
         Stage1Outcome::Decided(RouteDecision::Clarify { question, options }) => {
             format!("route_clarify(\"{question}\", options={options:?})")
         }
@@ -400,6 +403,8 @@ async fn stage1_on_compound_unambiguous_requests() {
     let mut clarify_calls = 0usize;
     let mut merged_and_faithful = 0usize;
     let mut merged_and_lossy = 0usize;
+    let mut multi_and_faithful = 0usize;
+    let mut multi_and_lossy = 0usize;
     let mut other_outcomes = 0usize;
 
     for cp in COMPOUND_PROMPTS {
@@ -423,6 +428,24 @@ async fn stage1_on_compound_unambiguous_requests() {
                     merged_and_lossy += 1;
                 }
             }
+            Stage1Outcome::Decided(RouteDecision::Multi(qs)) => {
+                // Faithful here means every intent keyword shows up SOMEWHERE
+                // across the per-intent queries combined — route_multi is
+                // free to split them across elements, unlike route_query
+                // which must fit everything into one string.
+                let combined = qs.join(" ");
+                let faithful = mentions_all(&combined, cp.keywords);
+                line.push_str(&format!(
+                    "\n      (mentions all {} intent keyword(s) across {} queries: {faithful})",
+                    cp.keywords.len(),
+                    qs.len()
+                ));
+                if faithful {
+                    multi_and_faithful += 1;
+                } else {
+                    multi_and_lossy += 1;
+                }
+            }
             Stage1Outcome::Decided(RouteDecision::Clarify { .. }) => clarify_calls += 1,
             _ => other_outcomes += 1,
         }
@@ -437,6 +460,8 @@ async fn stage1_on_compound_unambiguous_requests() {
          route_clarify called: {clarify_calls}/{total}\n\
          route_query, faithful (mentions all intent keywords): {merged_and_faithful}/{total}\n\
          route_query, lossy (dropped or fabricated a detail by this heuristic): {merged_and_lossy}/{total}\n\
+         route_multi, faithful (mentions all intent keywords across queries): {multi_and_faithful}/{total}\n\
+         route_multi, lossy: {multi_and_lossy}/{total}\n\
          other (no call / unparseable / multiple calls / error): {other_outcomes}/{total}\n\
          \n\
          Single-run rate. Per #1862's standing lesson, treat this as directional, not decision-grade,\n\
@@ -471,7 +496,10 @@ mod tests {
     fn tool_name_constants_match_stage1_tool_definitions() {
         let defs = routing::stage1_tool_definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec![ROUTE_QUERY_TOOL, ROUTE_CLARIFY_TOOL]);
+        assert_eq!(
+            names,
+            vec![ROUTE_QUERY_TOOL, ROUTE_CLARIFY_TOOL, ROUTE_MULTI_TOOL]
+        );
     }
 
     /// 2-intent compound prompts get exactly 2 controls each (one per
