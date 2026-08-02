@@ -212,7 +212,7 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
 
    > ⚠️ **`git push` runs a pre-push gate (`scripts/test-gate.ts`, ADR-047)** that re-runs `test:all`, then `cargo build --bin nodespaced`, then the full `test:e2e` suite — every push, not just the first. On a fresh worktree with no Rust build cache this can take **several minutes** (cold `cargo build` alone can exceed 5 minutes). Give the push command a long timeout (10+ minutes) or run it in the background and wait for completion — a command that times out before the hook finishes looks identical to a real failure but isn't one; check the tail of the actual output for a real test failure vs. an incomplete cold build before concluding the push failed. Do not reach for `--no-verify` to work around slowness — it's reserved for WIP Handoff Commits.
 
-5. **Code Review** — run `/pragmatic-code-review` on every PR before merge. NEVER merge without it. If it finds issues, run `/address-review` to fix them, then re-review; repeat until `/pragmatic-code-review` reports no re-review needed. Then STOP — merging is the user's call, not automatic.
+5. **Code Review** — run `/pragmatic-code-review` on every PR before merge. NEVER merge without it. **Always follow it with `/address-review`, unconditionally — even when the review comes back APPROVE with zero findings.** Do not pre-judge from the review text whether anything is "just nits" or "nothing to address" and skip the step on that basis; `/address-review` itself owns that triage and the "is a re-review needed?" decision. Repeat review → address-review until `/address-review` reports no re-review needed. Then STOP — merging is the user's call, not automatic.
 
 6. **Merge & Clean Up** — order matters:
    ```bash
