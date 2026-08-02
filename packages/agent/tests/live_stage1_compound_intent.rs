@@ -129,6 +129,13 @@ enum Stage1Outcome {
     Errored(String),
 }
 
+/// Fires one Stage-1 turn on `user_message` alone.
+///
+/// Production's real call site (`agent_loop.rs`'s `stage1_query`) blends
+/// prior conversation turns into this message before routing. There is no
+/// session here — each prompt below is a fresh, single-turn request — so that
+/// blending has nothing to do and is skipped rather than reimplemented; this
+/// is a deliberate simplification for an isolated probe, not an oversight.
 async fn run_stage1(engine: &Arc<dyn ChatInferenceEngine>, user_message: &str) -> Stage1Outcome {
     let request = InferenceRequest {
         messages: vec![
@@ -306,5 +313,19 @@ mod tests {
     #[test]
     fn every_compound_prompt_has_a_single_intent_control() {
         assert_eq!(COMPOUND_PROMPTS.len(), SINGLE_INTENT_CONTROLS.len());
+    }
+
+    /// `keyword_pair_for` matches on label text, not on `COMPOUND_PROMPTS`
+    /// itself, so a label added or renamed there without a matching arm here
+    /// would silently drop that prompt's `mentions_both` trace hint — no
+    /// compile error, just a quieter printout on the next live run.
+    #[test]
+    fn every_compound_prompt_has_a_keyword_pair() {
+        for (label, _) in COMPOUND_PROMPTS {
+            assert!(
+                keyword_pair_for(label).is_some(),
+                "no keyword pair for compound prompt label {label:?}"
+            );
+        }
     }
 }
