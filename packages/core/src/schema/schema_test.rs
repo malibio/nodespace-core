@@ -1487,6 +1487,179 @@ fn remove_schema_relationship_params_rejects_unknown_field() {
     );
 }
 
+// ============================================================================
+// relationship targetType existence validation (#1905)
+// ============================================================================
+//
+// TARGET_TYPE_MUST_EXIST (skill_rules.rs) already tells the model this in
+// prose; these tests cover the structural backstop added to
+// validate_relationship_targets_exist so a relationship pointing at a type
+// that doesn't exist fails loudly instead of persisting a dangling reference.
+
+#[tokio::test]
+async fn test_create_schema_rejects_relationship_to_nonexistent_target_type() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                { "name": "amount", "type": "number", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await;
+
+    let err = result.expect_err(
+        "a relationship targeting a type that doesn't exist yet must be rejected, not persisted",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("customer"),
+        "error should name the missing target type: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_with_relationship_to_existing_target_type_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                { "name": "amount", "type": "number", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a relationship targeting an existing schema should succeed: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_relationship_with_no_target_type_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // targetType is optional (Option<String>) — omitting it entirely is the
+    // documented escape hatch for "the type doesn't exist yet" and must not
+    // be treated as an invalid target.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                { "name": "amount", "type": "number", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "billed_to", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a relationship with no targetType should not be treated as an invalid target: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_relationships_rejects_nonexistent_target_type() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let invoice_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": invoice_id,
+            "add_relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await;
+
+    let err = result.expect_err(
+        "update_schema add_relationships targeting a nonexistent type must be rejected",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("customer"),
+        "error should name the missing target type: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_relationships_to_existing_target_type_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let invoice_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": invoice_id,
+            "add_relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "add_relationships targeting an existing schema should succeed: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn test_add_schema_relationship_rejects_nonexistent_target_type() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let invoice_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    let result = handle_add_schema_relationship(
+        &svc,
+        json!({
+            "schema_id": invoice_id,
+            "relationship": {
+                "name": "billed_to",
+                "targetType": "customer",
+                "direction": "out",
+                "cardinality": "one"
+            }
+        }),
+    )
+    .await;
+
+    let err =
+        result.expect_err("add_schema_relationship targeting a nonexistent type must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("customer"),
+        "error should name the missing target type: {msg}"
+    );
+}
+
 #[test]
 fn field_rename_rejects_unknown_field() {
     let args = json!({ "from": "old_name", "to": "new_name", "toName": "new_name" });

@@ -141,6 +141,42 @@ async fn schema_is_core(
     Ok(schema.is_some_and(|s| s.is_core))
 }
 
+/// Reject relationships whose `targetType` does not name an existing schema.
+///
+/// `TARGET_TYPE_MUST_EXIST` (`skill_rules.rs`) already tells the model this in
+/// prose, but nothing previously enforced it: `handle_create_schema`,
+/// `handle_update_schema`, and `handle_add_schema_relationship` all persisted
+/// a relationship's `targetType` verbatim with no existence check, so a model
+/// that ignored the prose rule (or split one request into two schemas and
+/// referenced the second before it existed) got a silent success and a
+/// dangling reference instead of an actionable error. `targetType: None` is
+/// left unvalidated — omitting the target entirely is the documented escape
+/// hatch for "the type doesn't exist yet."
+async fn validate_relationship_targets_exist(
+    node_service: &Arc<NodeService>,
+    relationships: &[crate::models::schema::SchemaRelationship],
+) -> Result<(), MarkdownError> {
+    for rel in relationships {
+        let Some(target_type) = rel.target_type.as_deref() else {
+            continue;
+        };
+        let exists = node_service
+            .get_schema_node(target_type)
+            .await
+            .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
+            .is_some();
+        if !exists {
+            return Err(MarkdownError::invalid_params(format!(
+                "Relationship '{}' targets '{}', which is not an existing schema. \
+                 targetType must name a schema that already exists — omit the relationship \
+                 entirely if the target type doesn't exist yet, rather than inventing one.",
+                rel.name, target_type
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Name of a JSON value's type, for error messages.
 fn json_type_name(v: &Value) -> &'static str {
     match v {
@@ -262,6 +298,10 @@ pub async fn handle_create_schema(
 
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
+
+    // Reject a relationship whose targetType doesn't exist yet, before
+    // creating the node — see validate_relationship_targets_exist.
+    validate_relationship_targets_exist(node_service, &relationships).await?;
 
     // Generate schema ID
     let schema_id = crate::services::node_service::normalize_schema_id(&params.name);
@@ -475,6 +515,11 @@ pub async fn handle_add_schema_relationship(
             params.relationship.name, params.schema_id
         )));
     }
+
+    // Reject a targetType that doesn't exist yet — see
+    // validate_relationship_targets_exist.
+    validate_relationship_targets_exist(node_service, std::slice::from_ref(&params.relationship))
+        .await?;
 
     // Build updated relationships
     let mut relationships = schema.relationships.clone();
@@ -785,6 +830,9 @@ pub async fn handle_update_schema(
                 )));
             }
         }
+        // Reject a targetType that doesn't exist yet — see
+        // validate_relationship_targets_exist.
+        validate_relationship_targets_exist(node_service, add_rels).await?;
         relationships_added = add_rels.len();
         relationships.extend(add_rels.clone());
     }
