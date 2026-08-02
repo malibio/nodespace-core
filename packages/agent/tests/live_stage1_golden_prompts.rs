@@ -143,6 +143,7 @@ async fn stage1_reformulation_for_start_tracking_albums() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[8a] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[8a] route_multi({qs:?})"),
         None => println!("GOLDEN[8a] no valid tool call parsed"),
     }
 }
@@ -167,6 +168,7 @@ async fn stage1_reformulation_for_venue_tracker_control() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[8b control] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[8b control] route_multi({qs:?})"),
         None => println!("GOLDEN[8b control] no valid tool call parsed"),
     }
 }
@@ -188,6 +190,7 @@ async fn stage1_reformulation_for_instance_creation_scenario_4() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[4] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[4] route_multi({qs:?})"),
         None => println!("GOLDEN[4] no valid tool call parsed"),
     }
 }
@@ -231,6 +234,7 @@ async fn stage1_reformulation_for_scenario_6_update() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[6] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[6] route_multi({qs:?})"),
         None => println!("GOLDEN[6] no valid tool call parsed"),
     }
 }
