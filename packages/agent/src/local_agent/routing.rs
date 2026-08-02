@@ -332,28 +332,22 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
 /// parameter points at something the model cannot see; a block the model can
 /// see satisfies that purpose whichever site rendered it.
 ///
-/// Still more precise than "some block was rendered for *some* candidate":
-/// `render_candidates_for_prompt` returns `Some` from its header text alone
-/// whenever any candidate clears the score gate, even if that candidate's
-/// own entity-types sub-block is empty (a skill with no schema-typed
-/// entities, e.g. one that only ever acts on `task`/`text`). A caller
-/// checking only "is the block `Some`" would wrongly conclude `resolve_query`
-/// has guidance in that case.
+/// Both checks require a type *listed*, not merely a heading: each renderer
+/// can emit the heading over nothing — `render_candidates_for_prompt` from
+/// its header text alone, and `context_ops`'s from stopping once its
+/// character budget is spent. Either would strand the model with a required
+/// `node_type` pointing at an empty list.
 ///
-/// The workspace check holds itself to the same standard: it requires a type
-/// actually listed under the heading, not merely the heading's presence.
-/// `context_ops`'s renderer emits the heading and then stops adding lines once
-/// its character budget is spent, so a bare heading is reachable — and would
-/// otherwise pass a naive `contains`, reintroducing the strand from the
-/// opposite direction.
-///
-/// **Core types are out of scope by construction.** Both sites filter
-/// `is_core` schemas out (`skill_ops`'s non-core fallback and
-/// `context_ops::parse_and_filter_non_core_schemas`), so a bare-value update
-/// against `task`/`text` renders no block from either source and the tool
-/// stays withheld. That matches `resolve_query`'s own description, whose
-/// examples are all custom-type (an amount, an invoice, a code); it is a
-/// deliberate boundary, not an oversight this function should paper over.
+/// **Core types are out of scope by construction.** Every path that fills the
+/// block today drops `is_core` schemas (`skill_ops`'s *unscoped* non-core
+/// fallback — the branch that applies to `resolve_query`'s unscoped
+/// whitelisting skill — and `context_ops::parse_and_filter_non_core_schemas`),
+/// so a bare-value update against `task`/`text` renders no block from either
+/// source and the tool stays withheld. That matches `resolve_query`'s own
+/// description, whose examples are all custom-type (an amount, an invoice, a
+/// code); it is a deliberate boundary, not an oversight this function should
+/// paper over. See `def_resolve_query` for the one latent path that would
+/// widen it.
 ///
 /// `render_disabled: true` (mirrors the caller's `session.routing_disabled`)
 /// suppresses only the *candidate* path — that flag exists because injecting
@@ -418,14 +412,14 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
 /// Falls back to the full surface when nothing was retrieved, so an
 /// unavailable embedding service degrades to today's behaviour rather than
 /// leaving the model with no tools at all — minus any tool whose required
-/// parameters depend on the routing-only `RELEVANT ENTITY TYPES` block (see
-/// [`super::tools::Tool::requires_routed_guidance`]). That block is injected
-/// by `render_candidates_for_prompt` only alongside a scoped whitelist; on
-/// the full-surface fallback it never renders, so handing over a tool whose
-/// required parameter description points at it would strand the model with
-/// instructions it cannot follow. Offering the tool without its guidance is
-/// worse than not offering it: the model still has every other tool to
-/// answer the request with.
+/// parameters depend on the `RELEVANT ENTITY TYPES` block (see
+/// [`super::tools::Tool::requires_routed_guidance`] and
+/// [`fail_open_surface`]). That exclusion is about *eligibility*, not about
+/// the block being absent: workspace context renders it independently of
+/// routing, so it may well be present on a fail-open turn. But fail-open
+/// means retrieval matched nothing, and ADR-038 puts the trust boundary at
+/// what retrieval surfaced. The model still has every other tool to answer
+/// the request with.
 pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Vec<ToolDefinition> {
     let permitted: std::collections::HashSet<&str> = candidates
         .iter()
