@@ -219,6 +219,51 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
+/// Coerce a `resolve_query` filter's value to match its target field's
+/// declared schema type when the decomposition model emitted the wrong JSON
+/// type for it.
+///
+/// The decomposition call in `exec_resolve_query` asks the model to map a
+/// natural-language value (e.g. "2400") onto a typed field, but nothing
+/// constrains *how* it encodes that value in JSON — a small model reading
+/// digits out of prose readily emits `"2400"` (a JSON string) instead of
+/// `2400` (a JSON number) despite the field being declared `number`, and the
+/// same drift happens for `boolean` fields (`"true"` instead of `true`).
+/// SQLite's `json_extract` preserves the stored value's real type, so a
+/// quoted-string filter compared against a stored number or boolean silently
+/// matches nothing — indistinguishable from "no such node" to the caller.
+/// Only `number`/`boolean` need this: `text`/`enum` fields are already
+/// strings, and `date` filters arrive as `YYYY-MM-DD` strings by
+/// construction (see the decomposition prompt).
+fn coerce_filter_value_to_field_type(
+    mut item: query_ops::AgentFilterItem,
+    schema: Option<&nodespace_core::models::SchemaNode>,
+) -> query_ops::AgentFilterItem {
+    let Some(property) = item.property.as_deref() else {
+        return item;
+    };
+    let Some(field) = schema.and_then(|s| s.get_field(property)) else {
+        return item;
+    };
+    let Some(Value::String(s)) = &item.value else {
+        return item;
+    };
+    match field.field_type.as_str() {
+        "number" => {
+            if let Some(num) = s.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+                item.value = Some(Value::Number(num));
+            }
+        }
+        "boolean" => {
+            if let Ok(b) = s.parse::<bool>() {
+                item.value = Some(Value::Bool(b));
+            }
+        }
+        _ => {}
+    }
+    item
+}
+
 /// Truncate a string to `max_chars`, appending `[truncated]` if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.len() <= max_chars {
@@ -1503,16 +1548,25 @@ impl GraphToolExecutor {
             Fields on this type:\n{field_lines}\n\n\
             Today's date: {today}\n\n\
             User request: \"{request}\"\n\n\
-            Resolve the request against the fields above:\n\
-            - If a value in the request maps to one of the typed fields (e.g. a dollar amount to a \
-            number field, a status word to an enum/status field), emit a filter for it: \
+            The request may describe two different things about the node: what \
+            currently IDENTIFIES it (how to find it), and what it should be CHANGED TO \
+            (the intended update). Only filter on the identifying part — never on the \
+            target state of an update, since the node does not have that value yet and \
+            filtering on it will find nothing. For example, in \"the 2400 one came back \
+            — set it to returned\", \"2400\" identifies the node; \"returned\" is the \
+            update to make elsewhere and must NOT be used as a filter here.\n\n\
+            Resolve the identifying part of the request against the fields above:\n\
+            - If a value that identifies the node maps to one of the typed fields (e.g. a \
+            dollar amount to a number field, a bare number to a number field), emit a \
+            filter for it: \
             {{\"type\":\"property\",\"operator\":\"equals\",\"property\":\"<field name>\",\"value\":<value>}}.\n\
-            - Resolve relative dates (\"next Friday\", \"overdue\", \"recent\") to a concrete YYYY-MM-DD \
-            value and the correct comparison operator (gt/lt/gte/lte/equals) against the matching date field.\n\
+            - Resolve relative dates (\"next Friday\", \"overdue\", \"recent\") that identify the \
+            node to a concrete YYYY-MM-DD value and the correct comparison operator \
+            (gt/lt/gte/lte/equals) against the matching date field.\n\
             - Put any remaining identifying words that should match the title/content as a short \
             \"query\" string (a few keywords, NOT the full sentence).\n\
-            - If nothing resolves to a typed field, leave \"filters\" empty and put your best short \
-            keyword(s) in \"query\".\n\n\
+            - If nothing identifying resolves to a typed field, leave \"filters\" empty and put your \
+            best short keyword(s) in \"query\".\n\n\
             Output EXACTLY this JSON shape, nothing else:\n\
             {{\"query\": \"<keywords or empty string>\", \"filters\": [<filter objects, or empty array>]}}",
             node_type = params.node_type.as_str(),
@@ -1595,6 +1649,7 @@ impl GraphToolExecutor {
                             None
                         }
                     })
+                    .map(|item| coerce_filter_value_to_field_type(item, schema.as_ref()))
                     .collect()
             })
             .unwrap_or_default();
@@ -3383,6 +3438,93 @@ mod tests {
             assert_eq!(result.result["resolved"], json!(true));
         }
 
+        /// Regression test for issue #1908: the decomposition model is not
+        /// constrained to emit a numeric field's value as a JSON number, and
+        /// readily emits it as a JSON string when reading digits out of prose
+        /// (e.g. "the 2400 one"). SQLite's `json_extract` preserves the
+        /// stored value's real type, so an unconverted string filter against
+        /// a stored number compares `2400 = '2400'` and silently matches
+        /// nothing — indistinguishable from "no such node" without this
+        /// coercion.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_coerces_stringified_number_to_match_numeric_field() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "replacement_cost", "type": "number"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            // The decomposition model emits the value as a JSON *string* —
+            // the exact drift this test guards against.
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"replacement_cost","value":"2400"}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(
+                &executor,
+                "Laser cutter",
+                json!({"replacement_cost": 2400, "status": "checked_out"}),
+            )
+            .await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "The 2400 one came back — set it to returned", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.result["resolved"], json!(true));
+        }
+
+        /// Same drift as the numeric-field regression above, but for a
+        /// `boolean` field: the decomposition model can emit `"true"` (a
+        /// JSON string) instead of `true` (a JSON boolean), and the same
+        /// stored-type-preserving `json_extract` comparison silently fails
+        /// to match.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_coerces_stringified_boolean_to_match_boolean_field() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "is_paid", "type": "boolean"},
+                        {"name": "status", "type": "text"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let engine_json = r#"{"query": "", "filters": [{"type":"property","operator":"equals","property":"is_paid","value":"true"}]}"#;
+            let executor = executor_with(ns, engine_json);
+            create_invoice(
+                &executor,
+                "Laser cutter",
+                json!({"is_paid": true, "status": "checked_out"}),
+            )
+            .await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "the paid one", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.result["resolved"], json!(true));
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn resolve_query_reports_no_match_without_a_plan_to_route() {
             let (ns, _tmp) = make_test_service().await;
@@ -3576,6 +3718,196 @@ mod tests {
                     "Expected ExecutionFailed(\"Inference engine unavailable\"), got {:?}",
                     other
                 ),
+            }
+        }
+
+        /// Live-model coverage for issue #1908: drives `exec_resolve_query`'s
+        /// real decomposition prompt against the locked native model
+        /// (ADR-056), closing the gap this suite's own doc comment
+        /// acknowledges — every other test here stubs the engine, so the
+        /// model's actual NL→filter accuracy is otherwise untested by
+        /// `cargo test`.
+        ///
+        /// Covers three phrasings in one model load (loading the GGUF is the
+        /// expensive part): the issue's own paraphrased-identifier repro
+        /// (which also exercises the identify-vs-update-target prompt fix),
+        /// plus a dollar-amount and a relative-date phrasing that had no
+        /// update-target ambiguity and worked before this PR's prompt
+        /// rewrite — reverting the prompt change should not regress them,
+        /// and only a live model can confirm that; the mocked tests can't,
+        /// since they hardcode the engine's response.
+        ///
+        /// Run explicitly:
+        ///   E2E_MODEL=~/.nodespace/models/gemma-4-E4B-it-Q4_K_M.gguf \
+        ///     cargo test -p nodespace-agent --lib \
+        ///     resolve_query_integration::live_resolve_query_phrasings_against_real_model \
+        ///     -- --ignored --nocapture
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore = "requires E2E_MODEL; run explicitly"]
+        async fn live_resolve_query_phrasings_against_real_model() {
+            let Ok(model_path) = std::env::var("E2E_MODEL") else {
+                eprintln!("E2E_MODEL not set — skipping");
+                return;
+            };
+
+            let engine = tokio::task::spawn_blocking(move || {
+                crate::local_agent::inference::LlamaChatInferenceEngine::load(
+                    &model_path,
+                    crate::agent_types::ModelFamily::Gemma4,
+                    nodespace_nlp_engine::ChatConfig::default(),
+                )
+            })
+            .await
+            .expect("load task panicked")
+            .expect("failed to load E2E_MODEL");
+            let engine: Arc<dyn ChatInferenceEngine> = Arc::new(engine);
+
+            // Paraphrased identifier (the issue's own repro): identifying
+            // value ("2400") and update target ("returned") appear in the
+            // same sentence — the case the prompt fix targets directly.
+            {
+                let (ns, _tmp) = make_test_service().await;
+                handle_create_schema(
+                    &ns,
+                    json!({
+                        "name": "Invoice",
+                        "fields": [
+                            {"name": "replacement_cost", "type": "number"},
+                            {"name": "status", "type": "text"}
+                        ]
+                    }),
+                )
+                .await
+                .unwrap();
+                let executor = GraphToolExecutor {
+                    node_service: Some(ns.clone()),
+                    embedding_service: Arc::new(RwLock::new(None)),
+                    inference_engine: Some(engine.clone()),
+                };
+                create_invoice(
+                    &executor,
+                    "Laser cutter",
+                    json!({"replacement_cost": 2400, "status": "checked_out"}),
+                )
+                .await;
+
+                let result = executor
+                    .execute(
+                        "resolve_query",
+                        json!({ "request": "The 2400 one came back — set it to returned", "node_type": "invoice" }),
+                    )
+                    .await
+                    .unwrap();
+                println!("paraphrased-identifier live result: {}", result.result);
+                assert_eq!(
+                    result.result["resolved"],
+                    json!(true),
+                    "real model failed to resolve \"the 2400 one\" against \
+                     replacement_cost: 2400 — got {}",
+                    result.result
+                );
+            }
+
+            // Dollar-amount phrasing: no update-target ambiguity, must keep
+            // working after the prompt rewrite.
+            {
+                let (ns, _tmp) = make_test_service().await;
+                handle_create_schema(
+                    &ns,
+                    json!({
+                        "name": "Invoice",
+                        "fields": [{"name": "amount", "type": "number"}]
+                    }),
+                )
+                .await
+                .unwrap();
+                let executor = GraphToolExecutor {
+                    node_service: Some(ns.clone()),
+                    embedding_service: Arc::new(RwLock::new(None)),
+                    inference_engine: Some(engine.clone()),
+                };
+                create_invoice(&executor, "Invoice #1", json!({"amount": 500})).await;
+
+                let result = executor
+                    .execute(
+                        "resolve_query",
+                        json!({ "request": "Mark the $500 invoice as paid", "node_type": "invoice" }),
+                    )
+                    .await
+                    .unwrap();
+                println!("dollar-amount live result: {}", result.result);
+                assert_eq!(
+                    result.result["resolved"],
+                    json!(true),
+                    "real model failed to resolve the $500 invoice — got {}",
+                    result.result
+                );
+            }
+
+            // Relative-date phrasing: also no update-target ambiguity, must
+            // keep working after the prompt rewrite. "Next Friday" is itself
+            // ambiguous between "this coming Friday" and "the Friday of next
+            // calendar week" — a real model can reasonably land on either
+            // reading, independent of anything this PR changes. Seed both
+            // candidate dates so the assertion targets prompt-following
+            // (did it resolve to *a* correctly-identified node?), not which
+            // calendar reading it picked.
+            {
+                let (ns, _tmp) = make_test_service().await;
+                handle_create_schema(
+                    &ns,
+                    json!({
+                        "name": "Invoice",
+                        "fields": [{"name": "due_date", "type": "date"}]
+                    }),
+                )
+                .await
+                .unwrap();
+                let executor = GraphToolExecutor {
+                    node_service: Some(ns.clone()),
+                    embedding_service: Arc::new(RwLock::new(None)),
+                    inference_engine: Some(engine.clone()),
+                };
+                use chrono::Datelike;
+                let today = chrono::Utc::now();
+                let days_until_this_friday = {
+                    let d = (4 - today.weekday().num_days_from_monday() as i64).rem_euclid(7);
+                    if d == 0 {
+                        7
+                    } else {
+                        d
+                    }
+                };
+                let this_friday = (today + chrono::Duration::days(days_until_this_friday))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                let next_calendar_week_friday = (today
+                    + chrono::Duration::days(days_until_this_friday + 7))
+                .format("%Y-%m-%d")
+                .to_string();
+                create_invoice(&executor, "Invoice #2", json!({"due_date": this_friday})).await;
+                create_invoice(
+                    &executor,
+                    "Invoice #3",
+                    json!({"due_date": next_calendar_week_friday}),
+                )
+                .await;
+
+                let result = executor
+                    .execute(
+                        "resolve_query",
+                        json!({ "request": "Mark the invoice due next Friday as paid", "node_type": "invoice" }),
+                    )
+                    .await
+                    .unwrap();
+                println!("relative-date live result: {}", result.result);
+                assert_eq!(
+                    result.result["resolved"],
+                    json!(true),
+                    "real model failed to resolve the invoice due next Friday under either \
+                     calendar reading — got {}",
+                    result.result
+                );
             }
         }
     }
