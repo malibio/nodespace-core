@@ -340,6 +340,13 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
 /// checking only "is the block `Some`" would wrongly conclude `resolve_query`
 /// has guidance in that case.
 ///
+/// The workspace check holds itself to the same standard: it requires a type
+/// actually listed under the heading, not merely the heading's presence.
+/// `context_ops`'s renderer emits the heading and then stops adding lines once
+/// its character budget is spent, so a bare heading is reachable — and would
+/// otherwise pass a naive `contains`, reintroducing the strand from the
+/// opposite direction.
+///
 /// **Core types are out of scope by construction.** Both sites filter
 /// `is_core` schemas out (`skill_ops`'s non-core fallback and
 /// `context_ops::parse_and_filter_non_core_schemas`), so a bare-value update
@@ -357,7 +364,20 @@ pub fn tools_with_available_guidance<'a>(
     render_disabled: bool,
     workspace_context: &str,
 ) -> std::collections::HashSet<&'a str> {
-    let workspace_has_block = workspace_context.contains(RELEVANT_ENTITY_TYPES_HEADER);
+    // The heading alone is not the guidance — at least one type has to be
+    // listed under it. `context_ops`'s renderer emits the heading and then
+    // breaks out of its per-schema loop once the character budget is spent,
+    // so a budget exhausted by the first line leaves a bare heading behind.
+    // Matching on the heading alone would offer the tool while its required
+    // `node_type` pointed at an empty list — precisely the strand this gate
+    // exists to prevent.
+    // Both renderers emit one `- <type_id>...` line per type (see
+    // `entity_types_block::EntityTypeDescriptor::render_line`), so the first
+    // non-blank line after the heading is the check.
+    let workspace_has_block = workspace_context
+        .split_once(RELEVANT_ENTITY_TYPES_HEADER)
+        .and_then(|(_, after)| after.lines().find(|l| !l.trim().is_empty()))
+        .is_some_and(|first| first.trim_start().starts_with("- "));
     candidates
         .iter()
         .filter(|c| clears_score_gate(c))
@@ -430,9 +450,19 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
     scoped
 }
 
-/// The full tool surface, minus tools whose required parameters depend on
-/// guidance that only routing (not fail-open) injects. Shared by both
-/// fail-open branches of [`stage2_tools`] so they can't drift apart.
+/// The full tool surface, minus tools whose required parameters depend on the
+/// `RELEVANT ENTITY TYPES` block. Shared by both fail-open branches of
+/// [`stage2_tools`] so they can't drift apart.
+///
+/// The exclusion is an *eligibility* judgement, not a claim that the block is
+/// absent. Workspace context can render it independently of routing (see
+/// [`tools_with_available_guidance`]), so on this path the block may well be
+/// in the prompt. But fail-open means retrieval matched nothing: no skill
+/// vouched for this turn, and ADR-038 puts the trust boundary at what
+/// retrieval surfaced. Handing over a tool whose whole purpose is resolving
+/// an ambiguous reference — when the system could not even identify which
+/// capability the request needs — widens the surface at exactly the moment
+/// there is least reason to trust it. Every other tool remains available.
 fn fail_open_surface(all: &[ToolDefinition]) -> Vec<ToolDefinition> {
     all.iter()
         .filter(|t| !super::tools::requires_routed_guidance_tool(&t.name))
@@ -866,6 +896,28 @@ mod tests {
         let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
         let no_block = "Collections: Invoices, Venues\nActive playbooks: none\n";
         assert!(tools_with_available_guidance(&cands, false, no_block).is_empty());
+    }
+
+    #[test]
+    fn a_heading_with_no_type_listed_under_it_does_not_count() {
+        // `context_ops`'s renderer pushes the heading, then breaks out of its
+        // per-schema loop once the character budget is spent — a budget
+        // exhausted by the very first type line leaves the heading behind with
+        // nothing under it. Matching the heading alone would offer the tool
+        // while its required `node_type` pointed at an empty list, which is
+        // the strand this gate exists to prevent.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        let truncated = format!("COLLECTIONS: Invoices\n\n{RELEVANT_ENTITY_TYPES_HEADER}\n");
+        assert!(tools_with_available_guidance(&cands, false, &truncated).is_empty());
+    }
+
+    #[test]
+    fn a_heading_followed_by_prose_rather_than_a_type_line_does_not_count() {
+        // Guards the shape of the check itself: both renderers emit `- <id>`
+        // lines, so anything else under the heading is not a type listing.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        let prose = format!("{RELEVANT_ENTITY_TYPES_HEADER}\n(none recorded yet)\n");
+        assert!(tools_with_available_guidance(&cands, false, &prose).is_empty());
     }
 
     #[test]

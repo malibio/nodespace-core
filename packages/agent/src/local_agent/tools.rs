@@ -376,11 +376,18 @@ fn def_search_nodes() -> ToolDefinition {
 ///
 /// Not a limitation of the resolver — a consequence of its required
 /// `node_type` parameter, whose description sends the model to the `RELEVANT
-/// ENTITY TYPES` block. Both sites that render that block drop `is_core`
-/// schemas (`skill_ops`'s non-core fallback and
-/// `context_ops::parse_and_filter_non_core_schemas`), so for a bare-value
-/// update against `task`/`text` the block never names the type and
+/// ENTITY TYPES` block. As things stand no seeded skill declares `node_types`,
+/// so every path that fills that block drops `is_core` schemas
+/// (`skill_ops`'s unscoped non-core fallback and
+/// `context_ops::parse_and_filter_non_core_schemas`): for a bare-value update
+/// against `task`/`text` the block never names the type, and
 /// `routing::tools_with_available_guidance` correctly withholds the tool.
+///
+/// The one way to widen this without touching either renderer is a skill that
+/// *does* declare `node_types` naming a core type — `skill_ops`'s scoped
+/// branch filters by id, not by `is_core`, so such a type would render. That
+/// is a latent path, not the current behaviour, and it would surface the tool
+/// for core types without the rest of this reasoning being revisited.
 ///
 /// This matches the tool's own examples — an amount, an invoice, a code are
 /// all custom-type — and core types have dedicated verbs (`update_task_status`)
