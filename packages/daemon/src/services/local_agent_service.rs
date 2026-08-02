@@ -1651,7 +1651,7 @@ fn clip_summary(s: &str) -> String {
 ///
 /// Failed calls are excluded: a write that errored did not happen, and recording
 /// it would tell the next turn not to retry work that never landed.
-fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCompletedWrite> {
+pub fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCompletedWrite> {
     executions
         .iter()
         .filter(|r| !r.is_error && is_write_tool(&r.name))
@@ -1659,10 +1659,17 @@ fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatComple
             // Every write tool that reports an affected node does so under `id`
             // (as a `nodespace://` URI — the same form the model uses to refer to
             // nodes elsewhere, so the evidence matches what it already reads).
-            // Schema and relationship writes report no node id at all.
+            // Relationship writes report no node id at all. Schema writes report
+            // no `id` either, but `create_schema`/`update_schema` return the
+            // schema's own identifier under `schema_id` — the same string a
+            // later `create_node` call must copy into `node_type` — so it is
+            // captured here under the same field rather than left blank; a
+            // terse fact built from this record needs that id to reference the
+            // schema by the name a later turn will actually use.
             let node_id = r
                 .result
                 .get("id")
+                .or_else(|| r.result.get("schema_id"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
 
@@ -1797,12 +1804,185 @@ async fn load_chat_messages(node_service: &Arc<NodeService>, node_id: &str) -> V
     }
 }
 
+/// Render a single completed write as a short "Fact: ..." statement, pulling
+/// the field/property detail out of its canonicalised call arguments.
+///
+/// This is the terse-history replacement for an assistant turn's own prose.
+/// Confirmed on the golden scenario-6 sequence
+/// (`packages/agent/tests/golden_scenario6_sequence.rs`): history rendered as
+/// short declarative facts ("Fact: a schema with id 'X' was created, with
+/// fields Y (type) and Z (type).") keeps later turns emitting well-formed
+/// tool calls; the model's own narrative reply to the same turn (paragraphs,
+/// numbered lists, a question back to the user) reproducibly does not, at
+/// matched token count — style is the measured driver, not raw size (see
+/// issue #1925's comment history). `canonical_args` already carries
+/// everything a fact needs — the schema's field list, an instance's property
+/// values — so this reads the structured write record rather than the
+/// model's own account of it, which is both cheaper and cannot drift from
+/// what was actually written.
+///
+/// Returns `None` for a write this function does not yet know how to phrase
+/// as a fact (e.g. `create_relationship`, `create_nodes_from_markdown`); the
+/// caller falls back to `w.summary` for those so no write goes unrecorded.
+fn terse_write_fact(w: &AiChatCompletedWrite) -> Option<String> {
+    // `canonical_args` is either the canonical call JSON verbatim or a
+    // `sha256:`-prefixed digest of it (see `canonical_args_identity`) when the
+    // call was too large to store — the digest form starts with that prefix
+    // rather than `{`, so parsing it as JSON and getting nothing back is the
+    // correct, silent fallback to the plain summary line below.
+    let args: serde_json::Value = serde_json::from_str(&w.canonical_args).ok()?;
+
+    match w.tool.as_str() {
+        "create_schema" => {
+            let name = w.summary.as_deref().unwrap_or("an entity type");
+            let id = w.node_id.as_deref();
+            let fields = args.get("fields").and_then(|v| v.as_array());
+            let field_list = fields.map(|fs| {
+                fs.iter()
+                    .filter_map(|f| {
+                        let fname = f.get("name")?.as_str()?;
+                        let ftype = f.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                        Some(format!("{fname} ({ftype})"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+            let subject = match id {
+                Some(id) => format!("a schema with id '{id}' ('{name}')"),
+                None => format!("a schema named '{name}'"),
+            };
+            Some(match field_list {
+                Some(fl) if !fl.is_empty() => {
+                    format!("Fact: {subject} was created, with fields {fl}.")
+                }
+                _ => format!("Fact: {subject} was created."),
+            })
+        }
+        "update_schema" => {
+            let id = w.node_id.as_deref().or(w.summary.as_deref())?;
+            Some(format!("Fact: the schema '{id}' was updated."))
+        }
+        "create_node" => {
+            let node_type = args.get("node_type").and_then(|v| v.as_str());
+            let props = args
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .filter(|o| !o.is_empty());
+            let prop_list = props.map(|o| {
+                o.iter()
+                    .map(|(k, v)| format!("{k} {}", terse_value(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+            let title = w.summary.as_deref();
+            let mut fact = String::from("Fact: ");
+            match (node_type, title) {
+                (Some(t), Some(title)) => fact.push_str(&format!("a {t} node was created with title '{title}'")),
+                (Some(t), None) => fact.push_str(&format!("a {t} node was created")),
+                (None, Some(title)) => fact.push_str(&format!("a node titled '{title}' was created")),
+                (None, None) => fact.push_str("a node was created"),
+            }
+            if let Some(pl) = prop_list.filter(|s| !s.is_empty()) {
+                fact.push_str(&format!(" and properties {pl}"));
+            }
+            if let Some(id) = w.node_id.as_deref() {
+                fact.push_str(&format!(" (id {id})"));
+            }
+            fact.push('.');
+            Some(fact)
+        }
+        "update_node" => {
+            let id = w.node_id.as_deref()?;
+            let props = args
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .filter(|o| !o.is_empty());
+            let prop_list = props.map(|o| {
+                o.iter()
+                    .map(|(k, v)| format!("{k} {}", terse_value(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+            Some(match prop_list.filter(|s| !s.is_empty()) {
+                Some(pl) => format!("Fact: node {id} was updated with {pl}."),
+                None => format!("Fact: node {id} was updated."),
+            })
+        }
+        "update_task_status" => {
+            let id = w.node_id.as_deref()?;
+            let status = args.get("status").and_then(|v| v.as_str());
+            Some(match status {
+                Some(s) => format!("Fact: task {id} status was set to {s}."),
+                None => format!("Fact: task {id} status was updated."),
+            })
+        }
+        "delete_node" => {
+            let id = w.node_id.as_deref()?;
+            Some(format!("Fact: node {id} was deleted."))
+        }
+        _ => None,
+    }
+}
+
+/// Render a JSON scalar/short value the way a terse fact states it — bare for
+/// strings and numbers, without the quoting/braces that would make the fact
+/// read like a data dump rather than a sentence.
+fn terse_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Render an assistant turn's completed writes as terse factual statements,
+/// one line per write, falling back to the tool name and summary for any
+/// write `terse_write_fact` does not have a phrasing for.
+///
+/// `None` when the turn made no writes (a read-only or conversational turn) —
+/// callers fall back to the turn's own reply text in that case, since there is
+/// no structured record to render instead.
+fn terse_assistant_facts(writes: &[AiChatCompletedWrite]) -> Option<String> {
+    if writes.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = writes
+        .iter()
+        .map(|w| {
+            terse_write_fact(w).unwrap_or_else(|| match w.summary.as_deref() {
+                Some(s) => format!("Fact: {} completed (\"{s}\").", w.tool),
+                None => format!("Fact: {} completed.", w.tool),
+            })
+        })
+        .collect();
+    Some(lines.join(" "))
+}
+
 /// Render persisted messages as the inference history for this turn.
 ///
 /// Separate from `prior_writes_from_history` because `ChatMessage` has no room
 /// for the per-message write record — the very erasure that let the original
 /// duplicate through. Both read the same loaded messages.
-fn node_history_from_messages(messages: Vec<AiChatMessage>) -> Vec<ChatMessage> {
+///
+/// A prior ASSISTANT turn's own reply text is narrative prose by construction
+/// — the model's account of what it did, written for a person to read in the
+/// moment. Confirmed on the golden scenario-6 sequence: feeding that prose
+/// back in as history reproducibly degrades later tool-calling behavior at a
+/// fraction of the size where the existing token-budget summarizer
+/// (`maybe_summarize_history`, `agent_loop.rs`) ever triggers — the failure is
+/// driven by style (narrative vs. terse-factual), not by raw token count. So
+/// an assistant turn that completed graph writes is rendered here as terse
+/// "Fact: ..." statements derived from those writes' own structured record
+/// (`terse_assistant_facts`) instead of its verbatim reply. A turn with no
+/// writes (a read-only answer, a clarifying question) carries no such record
+/// to render, so its own text is kept — dropping it there would erase real
+/// conversational content with nothing to replace it. User turns are never
+/// touched: they are the user's own words, not the model's narration, and the
+/// dilution effect this guards against was only ever measured against
+/// assistant-authored prose.
+pub fn node_history_from_messages(messages: Vec<AiChatMessage>) -> Vec<ChatMessage> {
     messages
         .into_iter()
         .flat_map(|m| {
@@ -1811,7 +1991,12 @@ fn node_history_from_messages(messages: Vec<AiChatMessage>) -> Vec<ChatMessage> 
                 "assistant" => Role::Assistant,
                 _ => return Vec::new(),
             };
-            let mut msg = ChatMessage::text(role, m.content);
+            let content = if role == Role::Assistant {
+                terse_assistant_facts(&m.completed_writes).unwrap_or(m.content)
+            } else {
+                m.content
+            };
+            let mut msg = ChatMessage::text(role, content);
             // Round-trip any persisted reasoning so reloaded history retains it.
             msg.reasoning = m.reasoning;
             // Follow the assistant turn with the record of what it actually wrote,
