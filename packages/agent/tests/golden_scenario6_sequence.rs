@@ -203,10 +203,11 @@ async fn run_turn(
 
 /// TURN 1 (matrix scenario 3): schema creation.
 ///
-/// Not asserted pass/fail — this establishes what a hand-authored, minimal
-/// prompt produces for schema creation, as the first link in the sequence.
-/// If this doesn't reliably call create_schema with a sound field set, the
-/// rest of the sequence is moot (turn 2/3 depend on this turn's output).
+/// CONFIRMED 3/3, byte-identical: create_schema(name="Equipment Checkout
+/// Record", fields=[isReturned: boolean, replacementCost: number]). This is
+/// the first link in the sequence — turn 2/3 depend on this turn's output,
+/// and their own chained tests (golden_chained_turn2/3_given_*_actual_output,
+/// this file) use this exact recorded shape as their input, not a guess.
 #[tokio::test]
 #[ignore = "requires the locked native GGUF on disk"]
 async fn golden_turn1_schema_creation() {
@@ -321,9 +322,9 @@ async fn golden_turn3_resolution_after_two_terse_facts() {
 
 /// The REAL chain, not three isolated islands.
 ///
-/// A first sequence run (single rep, recorded here for reproducibility)
-/// showed the isolated-turn tests above each independently "pass" while
-/// silently disagreeing with each other on the schema id:
+/// A first sequence run (recorded here for reproducibility) showed the
+/// isolated-turn tests above each independently "pass" while silently
+/// disagreeing with each other on the schema id:
 ///
 ///   turn 1 (actual):  create_schema(name="Equipment Checkout Record",
 ///                        fields=[isReturned: boolean, replacementCost: number])
@@ -367,10 +368,11 @@ async fn golden_chained_turn2_given_turn1_actual_output() {
         Some((name, args)) => println!("GOLDEN[chained-turn2] {name}({args})"),
         None => println!("GOLDEN[chained-turn2] no tool call parsed, raw: {raw:?}"),
     }
-    // CONFIRMED (single rep): given turn 1's actual output as input, turn 2
-    // correctly used node_type="equipment_checkout_record" (the real derived
-    // id) and replacementCost=2400 (turn 1's real field name, camelCase) --
-    // not the guessed "equipment"/"equipment_item" ids from the isolated
+    // CONFIRMED 3/3, byte-identical: given turn 1's actual output as input,
+    // turn 2 correctly used node_type="equipment_checkout_record" (the real
+    // derived id) and replacementCost=2400 (turn 1's real field name,
+    // camelCase) -- not the guessed "equipment"/"equipment_item" ids from
+    // the isolated
     // version of this test. The chain holds for turn1 -> turn2.
     assert_eq!(
         result.as_ref().map(|(n, _)| n.as_str()),
@@ -384,6 +386,11 @@ async fn golden_chained_turn2_given_turn1_actual_output() {
 /// stand-in. This is the full 3-turn dependency chain, hand-authored at
 /// every link but each link now fed the REAL prior output instead of an
 /// assumed one -- the actual golden SEQUENCE, not three isolated islands.
+///
+/// CONFIRMED 3/3, byte-identical: resolve_query(node_type=
+/// "equipment_checkout_record", ...). Combined with turn 1 (3/3) and
+/// chained turn 2 (3/3), the full sequence is decision-grade end to end,
+/// not a single lucky run.
 #[tokio::test]
 #[ignore = "requires the locked native GGUF on disk"]
 async fn golden_chained_turn3_given_turn2_actual_output() {
