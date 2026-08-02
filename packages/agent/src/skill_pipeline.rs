@@ -342,7 +342,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Define a new entity type or schema with custom fields, enums, and relationships, or modify an existing schema. Use when user says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice.",
+                "description": "Set up a structured way to keep track of, log, or maintain records for a kind of thing the user hasn't stored before — equipment, bookings, subscriptions, contacts, or any recurring category of item with its own details to fill in. Also covers defining a new entity type or schema with custom fields, enums, and relationships, or modifying an existing schema. Use when the user wants a place to record or organize instances of something new, or says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice.",
                 "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
@@ -821,6 +821,44 @@ mod tests {
         assert!(
             tmpl_tool_whitelist(schema_skill).contains(&"update_schema".to_string()),
             "update_schema must be in Schema Creation tool_whitelist so the model can reach it"
+        );
+    }
+
+    /// Schema Creation's description must lead with the natural phrasing users
+    /// actually use for wanting a new kind of thing tracked, not only technical
+    /// schema vocabulary.
+    ///
+    /// Agent-matrix scenario 3 traced "I want to keep a record of the equipment
+    /// my team checks out..." to semantic retrieval never surfacing this skill
+    /// in the top-3 candidates — the description was a keyword list ("new
+    /// type", "create schema") that this kind of request doesn't lexically
+    /// match, so `create_schema` was unreachable and the model fell back to a
+    /// bare `create_node` or split the request across two schemas trying to
+    /// recover. This test can't validate retrieval outcome (that needs the
+    /// real embedding model — see `bun run eval:agent`), but it pins the
+    /// wording itself against an accidental future trim or revert, which
+    /// would silently regress scenario 3 with no other signal in `cargo test`
+    /// or `bun run test:all`.
+    #[test]
+    fn schema_creation_description_covers_natural_tracking_phrasing() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        let description = schema_skill
+            .root_properties
+            .get("description")
+            .and_then(|v| v.as_str())
+            .expect("Schema Creation must have a description");
+
+        let natural_phrases = ["keep track of", "log", "maintain records for"];
+        assert!(
+            natural_phrases.iter().any(|p| description.contains(p)),
+            "Schema Creation description must contain at least one natural-language \
+             tracking phrase ({natural_phrases:?}) alongside the technical keyword list, \
+             or semantic retrieval will miss requests phrased like \
+             'I want to keep a record of X' (agent-matrix scenario 3). Got: {description:?}"
         );
     }
 
