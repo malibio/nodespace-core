@@ -222,15 +222,32 @@ async fn stage1_reformulation_for_scenario_6_update() {
             println!("GOLDEN[6] route_query(\"{q}\")");
             // Pre-fix (main@6321f3d5, before this test's own commit): reliably
             // reproduced "equipment items on the books" or similar generic
-            // listing phrasing — the failure this test exists to catch. A fix
-            // to `route_query`'s description should make this preserve the
-            // update intent and the discriminating "2400"/"returned" detail,
-            // e.g. something shaped like "update the equipment record worth
-            // 2400 to returned".
+            // listing phrasing — the failure this test exists to catch. Assert
+            // the fix's actual claim (route_query's description now preserves
+            // action/intent alongside the subject noun) rather than only
+            // printing the outcome for a human to eyeball — an un-asserted
+            // golden test stays green through a regression back to the
+            // pre-fix behavior, which is exactly the failure mode this test
+            // exists to catch. Confirmed live against the real model on
+            // 2026-08-02: post-fix output was "set laser cutter to returned
+            // with replacement cost 2400" — both markers present.
+            let lower = q.to_lowercase();
+            assert!(
+                lower.contains("2400"),
+                "route_query dropped the discriminating value (2400): {q:?}"
+            );
+            assert!(
+                lower.contains("return") || lower.contains("update") || lower.contains("set"),
+                "route_query dropped the update/state-change intent: {q:?}"
+            );
         }
         Some(RouteDecision::Clarify { question, .. }) => {
-            println!("GOLDEN[6] route_clarify(\"{question}\")");
+            panic!(
+                "GOLDEN[6] expected route_query (preserving update intent), got \
+                 route_clarify(\"{question}\") instead — Stage 1 should be able to \
+                 describe this request as a capability, not ask for clarification."
+            );
         }
-        None => println!("GOLDEN[6] no valid tool call parsed"),
+        None => panic!("GOLDEN[6] Stage 1 called no tool or emitted unparseable arguments"),
     }
 }
