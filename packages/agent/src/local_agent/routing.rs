@@ -309,34 +309,65 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
 
 /// Wire names of tools that both require routed guidance (see
 /// [`super::tools::Tool::requires_routed_guidance`]) and have that guidance
-/// actually available: an eligible candidate whitelists the tool AND that
-/// candidate's own `schema_metadata` renders a non-empty `RELEVANT ENTITY
-/// TYPES` block.
+/// actually available: an eligible candidate whitelists the tool AND a
+/// `RELEVANT ENTITY TYPES` block will reach this turn's prompt.
 ///
-/// More precise than "some block was rendered for *some* candidate":
+/// The block reaches the prompt from **either** of two independent sites, and
+/// the tool's required parameter cannot tell them apart — it points at a
+/// heading, and one shared constant renders that heading at both:
+///
+/// - **Per-candidate**: this candidate's own `schema_metadata`, rendered into
+///   the Stage-2 candidate block by [`render_candidates_for_prompt`].
+/// - **Workspace context**: schemas retrieved semantically for the turn by
+///   `context_ops::build_workspace_context`, already resident in the system
+///   prompt (`agent_loop`'s `session.dynamic_context`).
+///
+/// Consulting only the first was a reachability bug rather than a
+/// conservative approximation: `resolve_query` is whitelisted by a skill
+/// (Graph Editing) that declares no `node_types`, so `skill_ops` falls back
+/// to "all non-core schemas" for its `schema_metadata`. In a workspace with
+/// no custom schema that fallback is empty, and the tool was withheld from
+/// every turn — including turns whose workspace context *did* carry the
+/// block. The gate's purpose is to never offer a tool whose required
+/// parameter points at something the model cannot see; a block the model can
+/// see satisfies that purpose whichever site rendered it.
+///
+/// Still more precise than "some block was rendered for *some* candidate":
 /// `render_candidates_for_prompt` returns `Some` from its header text alone
 /// whenever any candidate clears the score gate, even if that candidate's
 /// own entity-types sub-block is empty (a skill with no schema-typed
 /// entities, e.g. one that only ever acts on `task`/`text`). A caller
 /// checking only "is the block `Some`" would wrongly conclude `resolve_query`
-/// has guidance in that case. This checks the specific tool's specific
-/// candidate instead.
+/// has guidance in that case.
+///
+/// **Core types are out of scope by construction.** Both sites filter
+/// `is_core` schemas out (`skill_ops`'s non-core fallback and
+/// `context_ops::parse_and_filter_non_core_schemas`), so a bare-value update
+/// against `task`/`text` renders no block from either source and the tool
+/// stays withheld. That matches `resolve_query`'s own description, whose
+/// examples are all custom-type (an amount, an invoice, a code); it is a
+/// deliberate boundary, not an oversight this function should paper over.
 ///
 /// `render_disabled: true` (mirrors the caller's `session.routing_disabled`)
-/// short-circuits to empty — when injection is suppressed for this model, no
-/// candidate's guidance reaches the prompt regardless of what would
-/// otherwise render, so nothing here counts as "available."
-pub fn tools_with_available_guidance(
-    candidates: &[SkillCandidate],
+/// suppresses only the *candidate* path — that flag exists because injecting
+/// the candidate block suppresses tool-calling on some models, which says
+/// nothing about the resident workspace block that is present regardless.
+pub fn tools_with_available_guidance<'a>(
+    candidates: &'a [SkillCandidate],
     render_disabled: bool,
-) -> std::collections::HashSet<&str> {
-    if render_disabled {
-        return std::collections::HashSet::new();
-    }
+    workspace_context: &str,
+) -> std::collections::HashSet<&'a str> {
+    let workspace_has_block = workspace_context.contains(RELEVANT_ENTITY_TYPES_HEADER);
     candidates
         .iter()
         .filter(|c| clears_score_gate(c))
-        .filter(|c| render_schema_metadata(&c.schema_metadata).is_some())
+        .filter(|c| {
+            // A whitelisting candidate still has to clear the score gate: the
+            // workspace block makes the *parameter* answerable, it does not
+            // make an unmatched skill's tools eligible.
+            workspace_has_block
+                || (!render_disabled && render_schema_metadata(&c.schema_metadata).is_some())
+        })
         .flat_map(|c| c.tools.iter().map(|t| t.as_str()))
         .collect()
 }
@@ -729,15 +760,22 @@ mod tests {
         assert!(names.contains(&"search_nodes"));
     }
 
+    /// A workspace context carrying a rendered entity-types block, as
+    /// `context_ops::build_workspace_context` produces it.
+    fn workspace_with_block() -> String {
+        format!("Collections: none\n{RELEVANT_ENTITY_TYPES_HEADER}\n- invoice (amount, status)\n")
+    }
+
     #[test]
     fn tools_with_available_guidance_requires_a_rendered_entity_types_block() {
         // A candidate clearing the gate but with empty schema_metadata (no
         // typed entities) whitelists resolve_query yet renders no entity-
         // types sub-block for it — render_candidates_for_prompt's header text
         // alone would make `candidate_block` `Some`, but that's not the same
-        // as resolve_query having guidance available.
+        // as resolve_query having guidance available. With no workspace block
+        // either, neither site supplies it.
         let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
-        assert!(tools_with_available_guidance(&cands, false).is_empty());
+        assert!(tools_with_available_guidance(&cands, false, "").is_empty());
     }
 
     #[test]
@@ -745,7 +783,7 @@ mod tests {
         let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
         c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
         let cands = vec![c];
-        let available = tools_with_available_guidance(&cands, false);
+        let available = tools_with_available_guidance(&cands, false, "");
         assert!(available.contains("resolve_query"));
     }
 
@@ -753,11 +791,12 @@ mod tests {
     fn tools_with_available_guidance_is_empty_when_rendering_is_disabled() {
         // render_disabled mirrors session.routing_disabled: even a candidate
         // with real schema_metadata contributes nothing once injection is
-        // suppressed for this turn.
+        // suppressed for this turn — absent a workspace block, which is a
+        // separate site that flag says nothing about.
         let mut c = candidate("Graph Editing", 0.9, &["resolve_query"]);
         c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
         let cands = vec![c];
-        assert!(tools_with_available_guidance(&cands, true).is_empty());
+        assert!(tools_with_available_guidance(&cands, true, "").is_empty());
     }
 
     #[test]
@@ -770,7 +809,63 @@ mod tests {
         c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
         let cands = vec![c];
         assert!(!clears_score_gate(&cands[0]));
-        assert!(tools_with_available_guidance(&cands, false).is_empty());
+        assert!(tools_with_available_guidance(&cands, false, "").is_empty());
+    }
+
+    #[test]
+    fn a_workspace_entity_types_block_supplies_guidance_a_candidate_lacks() {
+        // The reachability bug this gate had: Graph Editing whitelists
+        // resolve_query but declares no `node_types`, so `skill_ops` falls
+        // back to "all non-core schemas" — empty in a workspace whose custom
+        // schemas didn't match, leaving `schema_metadata` empty even though
+        // the resident workspace context did carry the block. The tool's
+        // required `node_type` is answerable from that block, so withholding
+        // it here stranded the model with no way to resolve an indirect
+        // target.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        assert!(
+            tools_with_available_guidance(&cands, false, "").is_empty(),
+            "no block at either site: still withheld"
+        );
+        let available = tools_with_available_guidance(&cands, false, &workspace_with_block());
+        assert!(
+            available.contains("resolve_query"),
+            "workspace context carries the block, so the required parameter is answerable"
+        );
+    }
+
+    #[test]
+    fn a_workspace_block_does_not_rescue_a_candidate_below_its_score_bar() {
+        // The workspace block makes the *parameter* answerable; it does not
+        // make an unmatched skill's tools eligible. Routing's trust boundary
+        // (ADR-038) still decides which skills may act.
+        let cands = vec![candidate("Graph Editing", 0.01, &["resolve_query"])];
+        assert!(!clears_score_gate(&cands[0]));
+        assert!(
+            tools_with_available_guidance(&cands, false, &workspace_with_block()).is_empty(),
+            "score gate still governs eligibility"
+        );
+    }
+
+    #[test]
+    fn a_workspace_block_survives_candidate_injection_being_disabled() {
+        // `routing_disabled` exists because injecting the *candidate* block
+        // suppresses tool-calling on some served models. The resident
+        // workspace block is present regardless of that flag, so the tool's
+        // required parameter is still answerable and the tool stays offered.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        let available = tools_with_available_guidance(&cands, true, &workspace_with_block());
+        assert!(available.contains("resolve_query"));
+    }
+
+    #[test]
+    fn a_workspace_block_without_the_shared_heading_does_not_count() {
+        // Matching is on the shared heading constant, not on any schema-ish
+        // prose: a workspace context listing collections and playbooks but no
+        // entity types leaves the required parameter unanswerable.
+        let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
+        let no_block = "Collections: Invoices, Venues\nActive playbooks: none\n";
+        assert!(tools_with_available_guidance(&cands, false, no_block).is_empty());
     }
 
     #[test]

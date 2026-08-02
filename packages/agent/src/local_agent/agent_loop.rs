@@ -733,13 +733,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // candidate availability directly rather than inferring it from
         // whether `candidate_block` as a whole is present, so both cases are
         // covered by the same call precisely instead of an approximation.
-        let available_guidance =
-            routing::tools_with_available_guidance(&routed.candidates, session.routing_disabled);
+        //
+        // `dynamic_ctx` is read first and passed in because the entity-types
+        // block reaches the prompt from two independent sites: the Stage-2
+        // candidate block above, and the resident workspace context built
+        // before this session was created. A tool whose required parameter
+        // points at that heading is satisfiable from either one.
+        let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
+        let available_guidance = routing::tools_with_available_guidance(
+            &routed.candidates,
+            session.routing_disabled,
+            dynamic_ctx,
+        );
         tools.retain(|t| {
             !requires_routed_guidance_tool(&t.name) || available_guidance.contains(t.name.as_str())
         });
 
-        let dynamic_ctx = session.dynamic_context.as_deref().unwrap_or("");
         let model_name = session.model_id.as_deref().unwrap_or("unknown");
         let template_ctx = TemplateContext {
             current_date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
