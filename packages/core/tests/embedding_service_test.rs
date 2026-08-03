@@ -1811,19 +1811,34 @@ async fn test_search_semantic_enumerate_counts_all_instances_of_type() -> Result
 /// requested type, not just the ones that fit under a shared fetch cap. This
 /// pins the fix for `enumerate_nodes` pushing each type down to its own DB
 /// query (independently capped and merged) rather than fetching unfiltered
-/// up to a shared cap and post-filtering by type — the latter would silently
-/// undercount once total node count exceeds the cap, mirroring the exact
-/// "silent wrong count" failure class #1940 was filed to eliminate.
+/// up to a shared cap and post-filtering by type.
+///
+/// Deliberately exceeds `ENUMERATE_FETCH_CAP` (1000): with the pre-fix
+/// shared-cap-then-post-filter behavior, the 1000-node unfiltered fetch is
+/// dominated by "noise" nodes (of a type never requested), so almost none of
+/// the 6 "invoice"/"task" nodes created *after* the noise would survive the
+/// cap — this test fails against the pre-fix code, unlike a small fixture
+/// which happens to pass either way since it never approaches the cap.
 #[tokio::test]
-async fn test_search_semantic_enumerate_multi_type_counts_every_type() -> Result<()> {
+async fn test_search_semantic_enumerate_multi_type_counts_every_type_past_fetch_cap() -> Result<()>
+{
     let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
     let node_service = Arc::new(node_service);
     let embedding_service = Arc::new(embedding_service);
 
+    // Noise: created first, so a shared-cap unfiltered fetch (ordered by
+    // insertion) would exhaust its cap on these before ever reaching the
+    // invoice/task nodes below.
+    for i in 0..1000 {
+        create_root_node(&node_service, "text", &format!("Noise {i}")).await?;
+    }
+
     create_root_node(&node_service, "invoice", "Invoice A").await?;
     create_root_node(&node_service, "invoice", "Invoice B").await?;
+    create_root_node(&node_service, "invoice", "Invoice C").await?;
     create_root_node(&node_service, "task", "Task A").await?;
-    create_root_node(&node_service, "text", "Unrelated note").await?;
+    create_root_node(&node_service, "task", "Task B").await?;
+    create_root_node(&node_service, "task", "Task C").await?;
 
     let output = search_ops::search_semantic(
         &node_service,
@@ -1833,44 +1848,22 @@ async fn test_search_semantic_enumerate_multi_type_counts_every_type() -> Result
     .await?;
 
     assert_eq!(
-        output.count, 3,
-        "expected 2 invoices + 1 task, not the unrelated text node"
+        output.count, 6,
+        "expected 3 invoices + 3 tasks despite 1000 nodes of an unrequested type existing first"
     );
     Ok(())
 }
 
-/// Integration-level complement to `search_ops::tests::test_should_skip_scope_filter_*`
-/// (which unit-tests the scope-skip predicate directly): a literal
-/// (non-"*", non-empty) query with `node_types` set must route through the
-/// real embedding path (`semantic_search_nodes`), not the structural
-/// `enumerate_nodes` path — i.e. `is_enumerate` is correctly false, so
-/// `skip_scope_filter` is never even evaluated as true for this call. The
-/// test harness's `EmbeddingService` is uninitialized, so the embedding path
-/// surfaces as an error rather than a real similarity match; a successful
-/// result here would mean the query was wrongly treated as an enumerate.
-#[tokio::test]
-async fn test_search_semantic_literal_query_with_node_types_does_not_skip_scope_via_enumerate_path(
-) -> Result<()> {
-    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
-    let node_service = Arc::new(node_service);
-    let embedding_service = Arc::new(embedding_service);
-
-    create_root_node(&node_service, "invoice", "Some Invoice").await?;
-
-    let result = search_ops::search_semantic(
-        &node_service,
-        &embedding_service,
-        empty_search_input("overdue payments", Some(vec!["invoice".to_string()])),
-    )
-    .await;
-
-    // The uninitialized test embedding service can't complete a real
-    // similarity search, so this must fail via the embedding path, not
-    // succeed via a structural enumerate — proving `is_enumerate` is false
-    // for a literal query and `skip_scope_filter` was never in play.
-    assert!(
-        result.is_err(),
-        "a literal query must route through semantic_search_nodes, not enumerate_nodes"
-    );
-    Ok(())
-}
+// A full integration test of `skip_scope_filter`'s effect on a real,
+// non-enumerate semantic query would require driving `search_semantic`'s
+// embedding path to a genuine similarity match — which requires generating
+// a real *query* embedding via `EmbeddingService::generate_embedding`, and
+// that call unconditionally errors ("Embedding service not ready") unless a
+// real model has been `.initialize()`d (see `embedding.rs`'s
+// `generate_embedding_internal`; there is no zero-vector stub for queries,
+// unlike some other code paths). No model is loaded in this fast test
+// suite, so that path cannot be driven end-to-end here. The regression this
+// finding was about — `skip_scope_filter` firing for non-enumerate queries
+// — is instead pinned directly and exhaustively at the unit level by
+// `search_ops::tests::test_should_skip_scope_filter_only_for_enumerate_with_explicit_node_types_and_default_scope`,
+// which asserts the predicate's value for all 4 boolean combinations.
