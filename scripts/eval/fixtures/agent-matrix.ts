@@ -48,7 +48,21 @@ export type Expectation =
   | { kind: "toolOnce"; tool: string; minProperties?: number }
   // Tools fired in this order as a subsequence (ignoring routing tools) — other
   // tools may appear between/around them, but these must appear in this order.
-  | { kind: "toolSequence"; tools: string[] }
+  //
+  // `minProperties` carries the same meaning as on `toolOnce`, applied to
+  // `propertiesOn` (defaulting to the last tool in the sequence). A
+  // resolve-then-act chain can call exactly the right tools in exactly the
+  // right order and still drop the user's request: an update_node that
+  // resolved the correct node but sent only its id changes nothing, yet
+  // scores identically to one that persisted the state change, because the
+  // tool name is all that is checked. Set it on any chain whose final call
+  // must carry a value for the turn to have accomplished anything.
+  | {
+      kind: "toolSequence";
+      tools: string[];
+      minProperties?: number;
+      propertiesOn?: string;
+    }
   // The named tool did not fire more than once in a row (no blind retry loop).
   | { kind: "noRetry"; tool: string }
   // Exactly one create_schema call in this turn (no proactive related-type creation).
@@ -211,6 +225,13 @@ export function assertExpectation(
           failure: `Expected sequence [${expect.tools.join(",")}] as a subsequence, got: ${actions.join(",")}`,
         };
       }
+      if (expect.minProperties !== undefined) {
+        return callPersistedProperties(
+          toolCalls,
+          expect.propertiesOn ?? expect.tools[expect.tools.length - 1],
+          expect.minProperties,
+        );
+      }
       return { passed: true };
     }
 
@@ -317,7 +338,14 @@ const GROUPS: MatrixScenario[][] = [
       // node directly (see ADR-064 rule 4) — the model acts on it via
       // update_node without a separate search_nodes call of its own.
       prompt: "The 2400 one came back — set it to returned",
-      expect: { kind: "toolSequence", tools: ["resolve_query", "update_node"] },
+      // minProperties: 1 requires the requested state change to actually reach
+      // update_node. Resolving the right node and then calling update_node with
+      // only its id changes nothing, and without this scores as a pass.
+      expect: {
+        kind: "toolSequence",
+        tools: ["resolve_query", "update_node"],
+        minProperties: 1,
+      },
     },
     {
       id: "7",

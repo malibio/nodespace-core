@@ -596,7 +596,7 @@ fn def_create_node() -> ToolDefinition {
 fn def_update_node() -> ToolDefinition {
     ToolDefinition {
         name: "update_node".into(),
-        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes or get_node), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}.".into(),
+        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"properties\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"properties\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"properties\": {\"isPaid\": true}}.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -610,7 +610,7 @@ fn def_update_node() -> ToolDefinition {
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Properties to merge/update (optional), e.g. {\"status\": \"done\"}"
+                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use the node's OWN existing property keys, copied character for character from the properties returned by resolve_query, get_node, or search_nodes for that node — do not invent a key from the user's wording. Pick the key whose current value the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}. Send only the keys that change, with their new values, not the unchanged ones."
                 }
             },
             "required": ["id"]
@@ -1965,6 +1965,17 @@ impl GraphToolExecutor {
             });
         }
 
+        // Counted from what the CALL supplied, not from the merged result: the
+        // result carries every property the node has, so a call that changed
+        // nothing would report the node's full property count and be
+        // indistinguishable from one that persisted the requested change.
+        // Same question `property_count` answers for create_node.
+        let property_count = new_properties
+            .as_ref()
+            .and_then(|p| p.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0);
+
         let ns = self.node_service()?;
 
         let input = node_ops::UpdateNodeInput {
@@ -1985,7 +1996,11 @@ impl GraphToolExecutor {
         Ok(ok_result(
             tool_call_id,
             "update_node",
-            json!({ "id": node_uri(&output.node_id), "updated": true }),
+            json!({
+                "id": node_uri(&output.node_id),
+                "updated": true,
+                "property_count": property_count
+            }),
         ))
     }
 
