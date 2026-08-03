@@ -17,6 +17,7 @@ use anyhow::Result;
 use nodespace_core::{
     db::SqliteStore,
     models::{EmbeddingConfig, Node},
+    ops::search_ops,
     services::{embedding_service::NodeEmbeddingService, NodeService},
 };
 use nodespace_nlp_engine::{EmbeddingConfig as NlpConfig, EmbeddingService};
@@ -1692,5 +1693,116 @@ async fn test_node_accessor_get_nodes_batch() -> Result<()> {
     let ids: Vec<&str> = vec![root1.id.as_str(), root2.id.as_str()];
     let nodes = node_service.get_nodes(&ids).await?;
     assert_eq!(nodes.len(), 2);
+    Ok(())
+}
+
+// ============================================================================
+// search_ops::search_semantic — "*" / empty query enumerate behavior (#1940)
+// ============================================================================
+//
+// Before the fix, `search_ops::search_semantic` rejected `query: ""` outright
+// ("query cannot be empty or whitespace") and had no special handling for
+// `"*"` at all — a bare `"*"` was embedded and vector-searched like any other
+// string, which has no defined similarity to real content and reliably
+// returns zero matches. This is the CLI/gRPC-side counterpart to the
+// agent-tool regression coverage in
+// `packages/agent/tests/search_nodes_enumerate.rs`.
+
+fn empty_search_input(
+    query: &str,
+    node_types: Option<Vec<String>>,
+) -> search_ops::SearchSemanticInput {
+    search_ops::SearchSemanticInput {
+        query: query.to_string(),
+        threshold: None,
+        limit: None,
+        collection_id: None,
+        collection: None,
+        exclude_collections: None,
+        include_markdown: None,
+        include_archived: None,
+        scope: None,
+        node_types,
+        property_filters: None,
+        include_edges: None,
+        graph_boost: None,
+    }
+}
+
+/// Acceptance criterion: "create a node of type X out-of-band, then assert
+/// `search_nodes` on type X finds it" — CLI/gRPC path, `query: "*"`.
+#[tokio::test]
+async fn test_search_semantic_wildcard_query_enumerates_out_of_band_node() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    let invoice = create_root_node(&node_service, "invoice", "Some Invoice").await?;
+
+    let input = empty_search_input("*", Some(vec!["invoice".to_string()]));
+    let output = search_ops::search_semantic(&node_service, &embedding_service, input).await?;
+
+    assert_eq!(output.count, 1);
+    assert_eq!(output.nodes[0]["id"], invoice.id);
+    Ok(())
+}
+
+/// Empty/whitespace queries must no longer be rejected — they must behave
+/// identically to `"*"` (both mean "enumerate"), matching the agent-tool path.
+#[tokio::test]
+async fn test_search_semantic_empty_query_enumerates_same_as_wildcard() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    create_root_node(&node_service, "invoice", "Some Invoice").await?;
+
+    let wildcard_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("*", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+    let empty_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+    let whitespace_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("   ", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+
+    assert_eq!(wildcard_out.count, 1);
+    assert_eq!(empty_out.count, 1);
+    assert_eq!(whitespace_out.count, 1);
+    Ok(())
+}
+
+/// "How many invoices do we have?" — enumerate scoped to `node_types` must
+/// count every pre-existing instance of that type, not just ones created
+/// through this call, and must not be silently dropped by the default
+/// `Knowledge` scope allowlist (which "invoice" and "task" are not part of).
+#[tokio::test]
+async fn test_search_semantic_enumerate_counts_all_instances_of_type() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    create_root_node(&node_service, "invoice", "Invoice A").await?;
+    create_root_node(&node_service, "invoice", "Invoice B").await?;
+    create_root_node(&node_service, "task", "Task A").await?;
+
+    let output = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("*", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+
+    assert_eq!(output.count, 2);
     Ok(())
 }

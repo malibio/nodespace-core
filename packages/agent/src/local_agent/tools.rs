@@ -330,7 +330,8 @@ fn def_search_nodes() -> ToolDefinition {
         description: "Find, list, and filter nodes. This is the single tool for querying the graph by \
             title, type, and/or typed properties — use it for all three of: \
             (1) title/keyword lookup (query='invoice'); \
-            (2) listing every node of a type (query='', node_type='task' — empty query lists all of that type); \
+            (2) listing every node of a type (query='' or query='*', node_type='task' — both enumerate all of that type; \
+            do not expect '*' to do a wildcard substring match, it means \"no keyword filter\" just like ''); \
             (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — \
             pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). \
             Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. \
@@ -342,7 +343,7 @@ fn def_search_nodes() -> ToolDefinition {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Keyword or phrase to match against node titles (substring match). Pass empty string to skip the title filter (e.g. to list all nodes of a type)."
+                    "description": "Keyword or phrase to match against node titles (substring match). Pass empty string or '*' to skip the title filter and enumerate all matching nodes (e.g. to list all nodes of a type)."
                 },
                 "node_type": {
                     "type": "string",
@@ -1354,17 +1355,24 @@ impl GraphToolExecutor {
     ) -> Result<Vec<Value>, ToolError> {
         let ns = self.node_service()?;
 
+        // "", whitespace-only, and the conventional wildcard "*" all mean
+        // "enumerate — no title/content keyword filter" rather than a
+        // literal search term (matches the CLI/gRPC `search_semantic` path's
+        // `normalize_enumerate_query`, so both surfaces agree on what counts
+        // as "list everything"). Without this, `query: "*"` was treated as a
+        // literal 1-character `contains` filter that (almost) nothing
+        // matches, silently returning zero results.
+        let query = search_ops::normalize_enumerate_query(&query);
+
         let output = if filters.is_empty() {
             // Title/type listing: only `node_ops::query_nodes` filters by title.
-            let filters = if query.is_empty() {
-                None
-            } else {
-                Some(vec![node_ops::QueryFilterItem {
+            let filters = query.map(|q| {
+                vec![node_ops::QueryFilterItem {
                     field: "title".to_string(),
                     operator: "contains".to_string(),
-                    value: Value::String(query),
-                }])
-            };
+                    value: Value::String(q),
+                }]
+            });
 
             node_ops::query_nodes(
                 &ns,
@@ -1386,12 +1394,12 @@ impl GraphToolExecutor {
             // A non-empty title keyword is added as a content filter alongside the
             // property predicates (QueryService has no title path).
             let mut filters = filters;
-            if !query.is_empty() {
+            if let Some(q) = query {
                 filters.push(query_ops::AgentFilterItem {
                     filter_type: Some("content".to_string()),
                     operator: "contains".to_string(),
                     property: None,
-                    value: Some(Value::String(query)),
+                    value: Some(Value::String(q)),
                     case_sensitive: Some(false),
                     relationship_type: None,
                     node_id: None,

@@ -24,11 +24,13 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchNodesParams {
-    /// Keyword or phrase to search for in node titles. Pass an empty string to
-    /// skip the title filter (useful when filtering only by node_type). Defaults
-    /// to empty when omitted entirely — a caller that resolved everything into
-    /// `filters` (e.g. via `resolve_query`) should not have to remember to also
-    /// echo back an empty `query`.
+    /// Keyword or phrase to search for in node titles. Pass an empty string or
+    /// `"*"` to skip the title filter (useful when filtering only by
+    /// node_type) — both are recognized as "enumerate everything", not a
+    /// literal search term (see `search_ops::normalize_enumerate_query`).
+    /// Defaults to empty when omitted entirely — a caller that resolved
+    /// everything into `filters` (e.g. via `resolve_query`) should not have
+    /// to remember to also echo back an empty `query`.
     #[serde(default)]
     pub query: String,
 

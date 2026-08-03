@@ -20,7 +20,9 @@ use crate::NodeClient;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
-    /// Free-text query (pass empty string when using --type for type-only listing).
+    /// Free-text query. Pass an empty string or "*" when using --type for
+    /// type-only listing — both enumerate every node of the type rather than
+    /// being treated as a literal search term.
     #[arg(default_value = "")]
     pub query: String,
     /// Filter results to one or more node types (e.g. `--type task --type text`).

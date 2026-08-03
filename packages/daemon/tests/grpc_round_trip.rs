@@ -10,6 +10,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use nodespace_core::services::{
+    EmbeddingProcessor, EmbeddingScheduler, NodeAccessor, NodeEmbeddingService,
+};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     create_node_request::Position as CreatePos, node_event::Event as NodeEventKind,
@@ -17,10 +20,13 @@ use nodespace_daemon::nodespace::{
     DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, NodeCollectionsRequest,
     ReorderNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
 };
+use nodespace_daemon::services::embeddings_service::EmbeddingReady;
 use nodespace_daemon::{NodeServiceClient, NodeServiceImpl, NodeServiceServer};
+use nodespace_nlp_engine::{EmbeddingConfig as NlpConfig, EmbeddingService};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tonic::Code;
@@ -78,6 +84,86 @@ async fn spawn_test_daemon() -> (
     for _ in 0..50 {
         match NodeServiceClient::connect(endpoint.clone()).await {
             Ok(client) => return (client, shutdown_tx, tempdir),
+            Err(e) => {
+                last_err = Some(e);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+    }
+    panic!("failed to connect to in-process daemon: {:?}", last_err);
+}
+
+/// Like `spawn_test_daemon`, but wires a real (uninitialized — no model file
+/// loaded, matching `create_test_nlp_engine` in
+/// `packages/core/tests/embedding_service_test.rs`) `NodeEmbeddingService` so
+/// `search_nodes` doesn't short-circuit on `Status::unavailable` before
+/// reaching `search_ops::search_semantic`. Also returns the underlying
+/// `CoreNodeService` handle so tests can create nodes out-of-band (i.e.
+/// without going through any search/agent code path) and assert search finds
+/// them, per #1940's acceptance criteria.
+async fn spawn_test_daemon_with_embeddings() -> (
+    NodeServiceClient<tonic::transport::Channel>,
+    Arc<CoreNodeService>,
+    oneshot::Sender<()>,
+    TempDir,
+) {
+    let tempdir = TempDir::new().expect("failed to create tempdir");
+
+    let mut store = Arc::new(
+        SqliteStore::new(tempdir.path().join("daemon-db"))
+            .await
+            .expect("failed to open SqliteStore"),
+    );
+    let node_service = Arc::new(
+        CoreNodeService::new(&mut store)
+            .await
+            .expect("failed to build NodeService"),
+    );
+
+    let nlp = Arc::new(EmbeddingService::new(NlpConfig::default()).unwrap());
+    let node_accessor: Arc<dyn NodeAccessor> = Arc::new((*node_service).clone());
+    let behaviors = node_service.behaviors().clone();
+    let embedding_service = Arc::new(NodeEmbeddingService::new(
+        nlp,
+        store.clone(),
+        node_accessor,
+        behaviors,
+    ));
+    let scheduler = Arc::new(EmbeddingScheduler::new());
+    let processor = Arc::new(
+        EmbeddingProcessor::new(embedding_service.clone(), scheduler.clone(), String::new())
+            .expect("failed to init EmbeddingProcessor"),
+    );
+    let embedding_state = Arc::new(RwLock::new(Some(EmbeddingReady {
+        embedding_service,
+        processor,
+    })));
+
+    let service = NodeServiceImpl::new(node_service.clone(), embedding_state, scheduler);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(NodeServiceServer::new(service))
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("server crashed");
+    });
+
+    let endpoint = format!("http://{}", addr);
+    let mut last_err = None;
+    for _ in 0..50 {
+        match NodeServiceClient::connect(endpoint.clone()).await {
+            Ok(client) => return (client, node_service, shutdown_tx, tempdir),
             Err(e) => {
                 last_err = Some(e);
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -302,6 +388,91 @@ async fn search_nodes_returns_unavailable_without_embedding_service() {
         .expect_err("expected unavailable");
 
     assert_eq!(err.code(), Code::Unavailable);
+
+    let _ = shutdown.send(());
+}
+
+/// #1940 regression, CLI/gRPC path: `nodespace search "*" --type invoice`
+/// must enumerate every pre-existing instance of the type, not silently
+/// return `count: 0`. Creates the node directly through `NodeService`
+/// (out-of-band — not via any search/agent code path) per the issue's
+/// acceptance criteria, matching the bug's own repro
+/// (`nodespace search "*" --type invoice --json` → `count: 0` although two
+/// invoices existed).
+#[tokio::test]
+async fn search_nodes_wildcard_query_enumerates_out_of_band_node() {
+    let (mut client, node_service, shutdown, _tempdir) = spawn_test_daemon_with_embeddings().await;
+
+    let node = nodespace_core::models::Node::new(
+        "invoice".to_string(),
+        "Some Invoice".to_string(),
+        serde_json::json!({ "invoice_number": "AA111", "status": "paid" }),
+    );
+    let node_id = node.id.clone();
+    node_service
+        .create_node(node)
+        .await
+        .expect("out-of-band create_node failed");
+
+    let response = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["invoice".into()],
+            semantic: true,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes failed")
+        .into_inner();
+
+    assert_eq!(
+        response.count, 1,
+        "expected the out-of-band invoice to be found"
+    );
+    assert_eq!(response.nodes[0].id, node_id);
+
+    let _ = shutdown.send(());
+}
+
+/// Empty query must behave identically to "*" on the CLI/gRPC path — no
+/// `InvalidArgument`, and both enumerate the same result set.
+#[tokio::test]
+async fn search_nodes_empty_query_matches_wildcard_query() {
+    let (mut client, node_service, shutdown, _tempdir) = spawn_test_daemon_with_embeddings().await;
+
+    node_service
+        .create_node(nodespace_core::models::Node::new(
+            "invoice".to_string(),
+            "Some Invoice".to_string(),
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("out-of-band create_node failed");
+
+    let wildcard = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["invoice".into()],
+            semantic: true,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes(\"*\") failed")
+        .into_inner();
+
+    let empty = client
+        .search_nodes(SearchRequest {
+            query: "".into(),
+            node_types: vec!["invoice".into()],
+            semantic: true,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes(\"\") must no longer be InvalidArgument")
+        .into_inner();
+
+    assert_eq!(wildcard.count, empty.count);
+    assert_eq!(wildcard.count, 1);
 
     let _ = shutdown.send(());
 }
