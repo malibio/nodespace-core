@@ -168,6 +168,18 @@ fn normalize_param_aliases(args: &mut serde_json::Value) {
     }
 }
 
+/// Apply every argument repair to an already-parsed `Value`, in place.
+///
+/// The one place the set of malformations is listed. Both callers — the parse
+/// boundary (via [`repair_tool_call_arguments`]) and the execution site's
+/// backstop — go through here, so a repair added for a newly observed
+/// malformation reaches both without having to be remembered twice.
+fn repair_parsed_tool_arguments(args: &mut serde_json::Value) {
+    repair_over_quoted_keys(args);
+    repair_leaked_special_token_keys(args);
+    repair_spliced_object_values(args);
+}
+
 /// Strip literal quote characters that the model wrapped around its own JSON
 /// keys, e.g. the key `"\"name\""` (six characters, quotes included) where
 /// `name` was meant.
@@ -321,9 +333,7 @@ pub fn repair_tool_call_arguments(arguments_json: &mut String) {
         return;
     };
     let before = value.clone();
-    repair_over_quoted_keys(&mut value);
-    repair_leaked_special_token_keys(&mut value);
-    repair_spliced_object_values(&mut value);
+    repair_parsed_tool_arguments(&mut value);
     if value != before {
         *arguments_json = value.to_string();
     }
@@ -349,10 +359,24 @@ pub fn repair_tool_call_arguments(arguments_json: &mut String) {
 /// exact `","<name>":` delimiter run, with no further quotes in either part. A
 /// value that merely contains a quote — user prose, embedded JSON — does not
 /// match and is left untouched, the same bar the sibling key repairs hold to.
+///
+/// That shape test is necessary but not sufficient, because unlike the sibling
+/// key repairs this one rewrites *values*, and some values are the user's own
+/// authored text rather than the model's structural choices. A pasted CSV header
+/// fragment (`name","email":`) matches the mechanical shape exactly and would be
+/// silently truncated to `name`. So `content` and `properties` subtrees are
+/// skipped entirely at any depth: those carry user data verbatim, where a string
+/// means whatever the user wrote and no repair is this function's to make. The
+/// malformation this exists for appears in the model's *structural* slots —
+/// `filters`, `fields` — which remain covered.
 fn repair_spliced_object_values(args: &mut serde_json::Value) {
     match args {
         serde_json::Value::Object(obj) => {
-            for value in obj.values_mut() {
+            for (key, value) in obj.iter_mut() {
+                // User-authored text: not the model's structure to repair.
+                if key == "content" || key == "properties" {
+                    continue;
+                }
                 if let serde_json::Value::String(s) = value {
                     if let Some(repaired) = strip_spliced_delimiter_tail(s) {
                         *value = serde_json::Value::String(repaired);
@@ -1740,28 +1764,19 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let (args, tool_result) = match parsed_args {
                     Ok(mut args) => {
                         consecutive_parse_failures = 0;
-                        // Repair the model's own over-quoted JSON keys before the
-                        // tool sees them. The arguments parse as valid JSON — the
-                        // keys are simply wrong — so no parse-failure guard fires,
-                        // and the rejection would otherwise persist the malformed
-                        // shape into history for the next retry to copy verbatim.
+                        // Repair the model's malformed encodings before the tool
+                        // sees them. The arguments parse as valid JSON — the keys
+                        // or values are simply wrong — so no parse-failure guard
+                        // fires and nothing upstream would catch them.
                         //
-                        // `canonical_args` repairs too, but only the copy it takes
-                        // for the duplicate guards' identity — it never sees these
-                        // arguments. This is the only repair the tool itself and
-                        // the cross-turn write guard below observe.
-                        repair_over_quoted_keys(&mut args);
-                        // Separate malformation, same rationale (#1926): a
-                        // leaked Gemma special token corrupting a key rather
-                        // than the model over-quoting one itself.
-                        repair_leaked_special_token_keys(&mut args);
-                        // And a value that swallowed its trailing delimiters
-                        // (#1943). Retained here as a backstop even though
                         // `arguments_json` was already repaired at the parse
-                        // boundary: this is the only repair the tool and the
-                        // cross-turn write guard observe directly, so it must
-                        // not depend on the earlier pass having run.
-                        repair_spliced_object_values(&mut args);
+                        // boundary, so in practice this is a no-op. Retained as a
+                        // backstop because this is the only repair the tool itself
+                        // and the cross-turn write guard observe directly: it must
+                        // not depend on the earlier pass having run. Both sites go
+                        // through the same helper, so the set of malformations
+                        // handled cannot drift apart as new ones are found.
+                        repair_parsed_tool_arguments(&mut args);
                         // Cross-turn duplicate guard. The per-turn `seen_calls`
                         // set above cannot see this: the session is rebuilt from
                         // persisted messages every turn, so a repeat of a write
@@ -7361,6 +7376,38 @@ mod tests {
         assert_eq!(
             v, original,
             "only a value whose entire tail is the `\",\"<name>\":` delimiter run is repairable"
+        );
+    }
+
+    /// The repair rewrites *values*, so it must never reach the user's own
+    /// authored text. A pasted CSV header fragment matches the mechanical splice
+    /// shape exactly, and truncating it would silently corrupt stored data —
+    /// so `content` and `properties` are skipped at any depth.
+    #[test]
+    fn spliced_repair_never_touches_user_authored_content() {
+        let original = serde_json::json!({
+            "id": "node-1",
+            "content": "name\",\"email\":",
+            "properties": {
+                "notes": "Reviewed the paper\",\"Notes\":",
+                "nested": {"deep": "a\",\"b\":"}
+            }
+        });
+        let mut v = original.clone();
+        repair_spliced_object_values(&mut v);
+        assert_eq!(
+            v, original,
+            "user-authored content and properties must survive repair verbatim"
+        );
+
+        // But the model's structural slots are still repaired.
+        let mut structural = serde_json::json!({
+            "filters": [{"type": "task\",\"value\":"}]
+        });
+        repair_spliced_object_values(&mut structural);
+        assert_eq!(
+            structural,
+            serde_json::json!({"filters": [{"type": "task"}]})
         );
     }
 
