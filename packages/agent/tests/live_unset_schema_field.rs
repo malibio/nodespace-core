@@ -585,14 +585,16 @@ async fn deterministic_fieldless_type_is_unaffected() {
     assert!(!stored.is_error);
     assert_eq!(stored.result["content"], json!("just a note"));
 
-    // Whatever `text` defines, the key is either absent or a non-empty list —
-    // never an empty array asserting the type has nothing.
-    if let Some(available) = stored.result.get("available_properties") {
-        assert!(
-            !available.as_array().expect("must be an array").is_empty(),
-            "an empty available_properties claims the type defines no fields; omit the key instead"
-        );
-    }
+    // `text` is seeded with no fields, so the outcome is deterministic: the key
+    // must be ABSENT. Asserting that directly rather than "absent or non-empty"
+    // — a conditional assertion is a test that opts out of failing, and this
+    // one would stop covering the `[]` regression it exists to catch.
+    assert!(
+        stored.result.get("available_properties").is_none(),
+        "a type defining no fields must omit the key: an empty array asserts \
+         'this type has no fields', a stronger claim than 'none were found'. got={}",
+        stored.result
+    );
 }
 
 /// Fetching a schema node itself must not recurse into "the schema of a
@@ -608,18 +610,21 @@ async fn deterministic_get_node_on_a_schema_node_is_sane() {
         .expect("fetching the task schema node must succeed");
 
     assert!(!stored.is_error, "schema fetch errored: {:?}", stored);
-    // Whatever it reports, it must not claim the *schema* node has task's
-    // instance fields set on it.
-    if let Some(available) = stored.result.get("available_properties") {
-        let named: Vec<&str> = available
-            .as_array()
-            .map(|a| a.iter().filter_map(|f| f["name"].as_str()).collect())
-            .unwrap_or_default();
-        assert!(
-            !named.contains(&"due_date"),
-            "the task SCHEMA node was described using task's own instance fields: {named:?}"
-        );
-    }
+    // Deterministic, so asserted directly: `SchemaNode` carries no `node_type`
+    // field, so a schema node emits no `nodeType` and skips the attach block
+    // entirely. The key must be absent.
+    //
+    // Stated as absence rather than "does not contain due_date" because that is
+    // the real invariant. The weaker form would keep passing if a future
+    // `nodeType` on `SchemaNode` started describing the task SCHEMA node with
+    // the *schema* type's fields — wrong, but not `due_date`, so undetected.
+    assert!(
+        stored.result.get("available_properties").is_none(),
+        "a schema node was given an instance field list — 'the schema of a schema' is not \
+         a meaningful description, and schema nodes use a non-namespaced property format \
+         that this list would describe wrongly. got={}",
+        stored.result
+    );
 }
 
 /// The read-path half, live. Observed in production: asked "How many tasks do
@@ -654,6 +659,12 @@ async fn deterministic_get_node_on_a_schema_node_is_sane() {
 /// the same reason. Asserting clean execution here would make this test fail
 /// for a defect it does not own, and tie a schema-visibility fix to an
 /// unrelated serialization bug.
+///
+/// It is tracked separately, with this test named as its repro and the
+/// execution assertion listed as its acceptance criterion — so the scoping is
+/// recorded somewhere durable rather than resting on a sentence in a merged PR
+/// body. When that defect is fixed, the `recovered` count below should move to
+/// asserting the retry ran, not merely that it was attempted.
 ///
 /// The retry is still executed and its outcome printed, so a run that starts
 /// producing well-formed args shows up in the log rather than silently.

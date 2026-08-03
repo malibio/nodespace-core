@@ -549,7 +549,7 @@ fn def_search_semantic() -> ToolDefinition {
 fn def_get_node() -> ToolDefinition {
     ToolDefinition {
         name: "get_node".into(),
-        description: "Get a node by ID. Returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown to include all descendants as a readable document.".into(),
+        description: "Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -1884,8 +1884,19 @@ impl GraphToolExecutor {
                     // ordinary (plain `text` nodes, ad-hoc types), so a missing
                     // schema omits the key rather than failing the lookup the
                     // model actually asked for.
-                    // `nodeType` is the serialized spelling — both the generic
-                    // `Node` and `TaskNode` camelCase it.
+                    // `nodeType` is the serialized spelling on every path that
+                    // carries one: the generic `Node` camelCases it, and
+                    // `TaskNode`/`AiChatNode` rename to it explicitly.
+                    //
+                    // `SchemaNode` is the exception — it has no `node_type`
+                    // field at all, so a schema node emits no `nodeType` and
+                    // skips this block by construction. That is load-bearing:
+                    // it is what stops the `task` SCHEMA node being described
+                    // using `task`'s own instance fields. If `SchemaNode` ever
+                    // gains the field, this needs an explicit
+                    // `node_type != "schema"` guard, because the test covering
+                    // it would keep passing while silently stopping to cover
+                    // anything.
                     if let Some(node_type) = node_data.get("nodeType").and_then(|v| v.as_str()) {
                         let node_type = node_type.to_string();
                         if let Ok(Some(schema)) = ns.get_schema_node(&node_type).await {

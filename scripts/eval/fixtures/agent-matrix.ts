@@ -64,7 +64,17 @@ export type Expectation =
       propertiesOn?: string;
     }
   // The named tool did not fire more than once in a row (no blind retry loop).
-  | { kind: "noRetry"; tool: string }
+  //
+  // `minCalls` additionally requires the tool to have fired at least that many
+  // times. Without it this expectation is satisfied by a turn in which the tool
+  // never fired at all — the loop that detects a repeat never executes — so a
+  // model that stopped and asked the user instead of searching scores
+  // identically to one that searched correctly. That is the failure mode on the
+  // read side, so a scenario testing for it must opt in. Left off by default
+  // rather than made unconditional: changing the shared semantics would also
+  // re-score existing scenarios, and single-run matrix numbers are not
+  // decision-grade enough to absorb that silently.
+  | { kind: "noRetry"; tool: string; minCalls?: number }
   // Exactly one create_schema call in this turn (no proactive related-type creation).
   | { kind: "noExtraTypes" };
 
@@ -268,6 +278,18 @@ export function assertExpectation(
           return {
             passed: false,
             failure: `Expected no repeated '${expect.tool}' calls (retry loop), got: ${actions.join(",")}`,
+          };
+        }
+      }
+      // Checked after the retry loop, not before: a scenario that opts in wants
+      // both "fired at least minCalls times" and "never twice in a row", and the
+      // retry failure is the more specific diagnosis of the two.
+      if (expect.minCalls !== undefined) {
+        const count = actions.filter((t) => t === expect.tool).length;
+        if (count < expect.minCalls) {
+          return {
+            passed: false,
+            failure: `Expected at least ${expect.minCalls} '${expect.tool}' call(s), got ${count} (tools: ${actions.join(",")})`,
           };
         }
       }
@@ -517,12 +539,18 @@ const GROUPS: MatrixScenario[][] = [
       // core values open / in_progress / done / cancelled).
       //
       // `noRetry` rather than `toolOnce`: an empty or narrowing result may
-      // legitimately prompt one follow-up search, and this scenario is not
-      // about call count. What it must not do is loop blindly — or stop and
-      // interrogate the user about its own schema, which shows up here as the
-      // search never firing at all.
+      // legitimately prompt one follow-up search, so a hard count of 1 would
+      // red out correct behavior. What it must not do is loop blindly.
+      //
+      // `minCalls: 1` covers the other half, and is the half this scenario
+      // exists for: the reported failure is the model stopping to interrogate
+      // the user rather than searching, which shows up as the search never
+      // firing. Bare `noRetry` scores that outcome GREEN — its repeat-detecting
+      // loop never executes over zero calls — so without `minCalls` this
+      // scenario would pass on the exact production behavior it was added to
+      // catch, which is worse than not measuring it at all.
       prompt: "How many tasks are still open?",
-      expect: { kind: "noRetry", tool: "search_nodes" },
+      expect: { kind: "noRetry", tool: "search_nodes", minCalls: 1 },
     },
   ],
 ];
