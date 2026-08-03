@@ -132,6 +132,7 @@ pub fn canonical_args(args_json: &str) -> String {
             // one mutates the arguments actually handed to the tool. Neither
             // covers the other's caller, so removing either leaves a live gap.
             repair_over_quoted_keys(&mut v);
+            repair_leaked_special_token_keys(&mut v);
             v.to_string()
         })
         .unwrap_or_else(|_| args_json.to_owned())
@@ -231,6 +232,65 @@ fn repair_over_quoted_keys(args: &mut serde_json::Value) {
         serde_json::Value::Array(items) => {
             for item in items {
                 repair_over_quoted_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Strip Gemma 4's leaked quote-token text (`<|"|>`) from a tool call's JSON
+/// keys, e.g. the key `<|"|>type<|"|>` where `type` was meant.
+///
+/// #1926: grammar-constrained decoding was observed emitting this literal
+/// token text in place of nothing (the surrounding real `"` characters the
+/// model also wrote are the actual delimiters) around a key inside
+/// `create_schema`'s `fields` array — `{"<|"|>type<|"|>":"number",...}` parses
+/// as valid JSON with this garbled key, so no parse-failure guard catches it;
+/// the tool then rejects the call for a missing `"type"` field. Confirmed via
+/// unit test that this specific token was reaching a fully-streamed tool
+/// call's arguments unmodified even after a per-delta strip in the inference
+/// engine — the token can straddle a delta boundary (one chunk ending `<|`,
+/// the next starting `"|>`), where neither half alone contains the substring
+/// a per-delta strip needs to match. Operating here, on the parsed `Value`
+/// after the full argument string has been concatenated, is immune to where
+/// that boundary happened to fall.
+///
+/// Deletion, not substitution: the literal quote characters bracketing the
+/// leaked token in the model's own output are the real delimiters, so
+/// removing the leaked text restores the intended key rather than doubling
+/// quotes. Same recursion shape as [`repair_over_quoted_keys`] and applied
+/// alongside it, for the same reason — the malformation is not
+/// `create_schema`-specific, and a rejected call's malformed shape re-enters
+/// the conversation history for the model to copy on retry.
+fn repair_leaked_special_token_keys(args: &mut serde_json::Value) {
+    const LEAKED_QUOTE_TOKEN: &str = "<|\"|>";
+    match args {
+        serde_json::Value::Object(obj) => {
+            let corrupted: Vec<String> = obj
+                .keys()
+                .filter(|k| k.contains(LEAKED_QUOTE_TOKEN))
+                .cloned()
+                .collect();
+            for key in corrupted {
+                let repaired = key.replace(LEAKED_QUOTE_TOKEN, "");
+                // An empty or already-present repaired name is not a shape
+                // this can claim to understand — a collision would silently
+                // discard one of the two values, same guard as
+                // repair_over_quoted_keys.
+                if repaired.is_empty() || obj.contains_key(&repaired) {
+                    continue;
+                }
+                if let Some(value) = obj.remove(&key) {
+                    obj.insert(repaired, value);
+                }
+            }
+            for value in obj.values_mut() {
+                repair_leaked_special_token_keys(value);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                repair_leaked_special_token_keys(item);
             }
         }
         _ => {}
@@ -1393,6 +1453,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // arguments. This is the only repair the tool itself and
                         // the cross-turn write guard below observe.
                         repair_over_quoted_keys(&mut args);
+                        // Separate malformation, same rationale (#1926): a
+                        // leaked Gemma special token corrupting a key rather
+                        // than the model over-quoting one itself.
+                        repair_leaked_special_token_keys(&mut args);
                         // Cross-turn duplicate guard. The per-turn `seen_calls`
                         // set above cannot see this: the session is rebuilt from
                         // persisted messages every turn, so a repeat of a write
@@ -6539,6 +6603,80 @@ mod tests {
     fn canonical_args_repairs_over_quoted_keys() {
         let malformed = r#"{"fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#;
         let clean = r#"{"fields":[{"name":"capacity","type":"number"}]}"#;
+        assert_eq!(canonical_args(malformed), canonical_args(clean));
+    }
+
+    /// #1926: verbatim shape from the daemon.log trace behind the issue — a
+    /// leaked Gemma quote token corrupting `create_schema`'s `fields[0].type`
+    /// key.
+    #[test]
+    fn leaked_special_token_keys_are_repaired_at_every_depth() {
+        let mut v = serde_json::json!({
+            "name": "Venue Booking Tracker",
+            "fields": [
+                {"<|\"|>type<|\"|>": "number", "name": "replacement_cost"},
+                {"<|\"|>type<|\"|>": "date", "name": "booking_date"}
+            ]
+        });
+        repair_leaked_special_token_keys(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "name": "Venue Booking Tracker",
+                "fields": [
+                    {"type": "number", "name": "replacement_cost"},
+                    {"type": "date", "name": "booking_date"}
+                ]
+            })
+        );
+    }
+
+    /// A repair that would collide with an existing key, or leave nothing
+    /// behind, is not the mechanical malformation this repairs — same guard
+    /// shape as `repair_over_quoted_keys`'s own collision case.
+    #[test]
+    fn leaked_special_token_repair_leaves_colliding_and_empty_keys_untouched() {
+        let mut colliding = serde_json::json!({"<|\"|>type<|\"|>": "number", "type": "text"});
+        repair_leaked_special_token_keys(&mut colliding);
+        assert_eq!(
+            colliding,
+            serde_json::json!({"<|\"|>type<|\"|>": "number", "type": "text"}),
+            "a repair that collides with an existing key must discard neither value"
+        );
+
+        let mut empty = serde_json::json!({"<|\"|>": 1, "plain": 2});
+        repair_leaked_special_token_keys(&mut empty);
+        assert_eq!(
+            empty,
+            serde_json::json!({"<|\"|>": 1, "plain": 2}),
+            "a repair that would leave an empty key name is not unambiguous"
+        );
+    }
+
+    /// User data lives in these payloads — only keys are ever rewritten, a
+    /// value that happens to contain the same substring means whatever the
+    /// user wrote.
+    #[test]
+    fn leaked_special_token_repair_never_rewrites_values() {
+        let mut v = serde_json::json!({
+            "properties": {"note": "literally <|\"|>type<|\"|>", "<|\"|>type<|\"|>": "text"}
+        });
+        repair_leaked_special_token_keys(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "properties": {"note": "literally <|\"|>type<|\"|>", "type": "text"}
+            })
+        );
+    }
+
+    /// Same rationale as `canonical_args_repairs_over_quoted_keys`: the
+    /// malformed call and its repaired retry must resolve to one duplicate-
+    /// guard identity, not two.
+    #[test]
+    fn canonical_args_repairs_leaked_special_token_keys() {
+        let malformed = r#"{"fields":[{"<|\"|>type<|\"|>":"number","name":"replacement_cost"}]}"#;
+        let clean = r#"{"fields":[{"type":"number","name":"replacement_cost"}]}"#;
         assert_eq!(canonical_args(malformed), canonical_args(clean));
     }
 
