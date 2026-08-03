@@ -385,6 +385,11 @@ struct RoutingOutcome {
 /// Only user/assistant turns are blended, matching `schema_retrieval_query`:
 /// tool results are machine payloads whose vocabulary would dilute the query
 /// rather than sharpen it.
+///
+/// Delegates to [`stage1_query_from_turns`], which does the actual framing —
+/// kept as a free function (not inlined here) so `agent_loop.rs`'s own
+/// golden-prompt test harness can build the exact same Stage-1 message from
+/// `prior_turns: &[&str]` without constructing an `AgentSession`.
 fn stage1_query(session: &AgentSession, user_message: &str) -> String {
     let prior = session
         .messages
@@ -396,7 +401,46 @@ fn stage1_query(session: &AgentSession, user_message: &str) -> String {
         .filter(|m| matches!(m.role, Role::User | Role::Assistant))
         .map(|m| m.content.as_str())
         .collect();
-    nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, user_message)
+    stage1_query_from_turns(&prior_turns, user_message)
+}
+
+/// Build the Stage-1 chat message from prior turns and the current message.
+///
+/// When prior turns exist, the blended text is wrapped with an explicit
+/// PRIOR CONTEXT / CURRENT REQUEST boundary rather than handed to the model
+/// as one undifferentiated blob. `build_retrieval_query`'s raw
+/// `parts.join("\n")` output is tuned for embedding recall (#1817:
+/// extraction/reformatting measurably hurts it), but Stage 1 is not an
+/// embedding call — it is a chat turn where the model decides `route_query`
+/// vs `route_multi` vs `route_clarify`, and an unlabeled multi-line blob
+/// reads to the model like several things to do, not one request in light of
+/// history. Confirmed live (#1909): `route_multi` fired on genuinely
+/// single-intent turns, fabricating a second "intent" out of blended prior
+/// content. The wrapper only changes what the Stage-1 *chat* message looks
+/// like; `build_retrieval_query`'s own output, used verbatim for schema
+/// retrieval, is untouched.
+pub fn stage1_query_from_turns(prior_turns: &[&str], user_message: &str) -> String {
+    if prior_turns.is_empty() {
+        return user_message.trim().to_string();
+    }
+
+    let blended =
+        nodespace_core::ops::context_ops::build_retrieval_query(prior_turns, user_message);
+    let current = user_message.trim();
+    // `blended` is prior turns + current message joined by "\n", current
+    // last. Split it back apart at that known boundary rather than
+    // re-deriving the trim/cap logic here, so the two constructions cannot
+    // drift apart in what text they contain — only in how it is framed.
+    let prior_blended = blended
+        .strip_suffix(current)
+        .map(|s| s.trim_end_matches('\n'))
+        .unwrap_or(&blended);
+
+    if prior_blended.is_empty() {
+        current.to_string()
+    } else {
+        format!("PRIOR CONTEXT (for background only — do not treat as part of the current request):\n{prior_blended}\n\nCURRENT REQUEST (route this):\n{current}")
+    }
 }
 
 /// Whether this conversation already asked the user to clarify.
@@ -1978,7 +2022,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 }
             }
         }
-        merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         merged.truncate(routing::RETRIEVAL_TOP_K);
 
         span.set_attribute(KeyValue::new("routing.candidates", merged.len() as i64));
@@ -7336,6 +7384,45 @@ mod tests {
             .messages
             .push(ChatMessage::text(Role::User, "find my notes".to_string()));
         assert_eq!(stage1_query(&session, "find my notes"), "find my notes");
+    }
+
+    #[tokio::test]
+    async fn stage1_query_labels_prior_context_separately_from_the_current_request() {
+        // #1909: an unlabeled blend of prior turns + current message read to
+        // the model like several things to do, and route_multi fired on
+        // genuinely single-intent turns as a result. The current request
+        // must be clearly demarcated from background so the model routes
+        // only what the user is asking for *now*.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "create an invoice for Acme".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Created invoice INV-1 for Acme.".to_string(),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "mark it paid".to_string()));
+
+        let q = stage1_query(&session, "mark it paid");
+        assert!(
+            q.contains("PRIOR CONTEXT"),
+            "prior turns must be introduced as background, not left unlabeled: {q:?}"
+        );
+        assert!(
+            q.contains("CURRENT REQUEST"),
+            "the current message must be explicitly marked as what to route: {q:?}"
+        );
+        let current_request_pos = q.find("CURRENT REQUEST").expect("checked above");
+        let mark_it_paid_pos = q
+            .find("mark it paid")
+            .expect("current message must be present");
+        assert!(
+            mark_it_paid_pos > current_request_pos,
+            "the current message must appear after its CURRENT REQUEST label: {q:?}"
+        );
     }
 
     #[tokio::test]

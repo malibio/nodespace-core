@@ -63,16 +63,18 @@ async fn run_stage1(engine: &LlamaChatInferenceEngine, message: &str) -> Option<
 
 /// Same as `run_stage1`, but blends `prior_turns` into the routing query the
 /// same way `agent_loop.rs::stage1_query` does for a real multi-turn
-/// conversation, via `context_ops::build_retrieval_query` — the exact
-/// function production calls. Needed for golden cases (like scenario 6) whose
-/// discriminating detail only exists relative to earlier turns.
+/// conversation, via `agent_loop::stage1_query_from_turns` — the exact
+/// function production calls (including the PRIOR CONTEXT / CURRENT REQUEST
+/// framing added for #1909, not just the raw `build_retrieval_query` blend).
+/// Needed for golden cases (like scenario 6) whose discriminating detail only
+/// exists relative to earlier turns.
 async fn run_stage1_with_history(
     engine: &LlamaChatInferenceEngine,
     prior_turns: &[&str],
     message: &str,
 ) -> Option<RouteDecision> {
     let routing_query =
-        nodespace_core::ops::context_ops::build_retrieval_query(prior_turns, message);
+        nodespace_agent::local_agent::agent_loop::stage1_query_from_turns(prior_turns, message);
     let request = InferenceRequest {
         messages: vec![
             ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
