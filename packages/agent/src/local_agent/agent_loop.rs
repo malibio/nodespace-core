@@ -1691,8 +1691,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // below, so what is logged and what is gated on can never drift
                 // apart — the signal was previously computed here and only
                 // logged, never acted on.
-                let result_field_count =
-                    persisted_field_count(&tc.function_name, &result_value);
+                let result_field_count = persisted_field_count(&tc.function_name, &result_value);
 
                 tracing::info!(
                     tool = %tc.function_name,
@@ -4838,7 +4837,10 @@ mod tests {
         // A read tool carries neither signal. `None`, not `Some(0)` — absence of
         // the signal must not be read as "persisted nothing", or every
         // search-only turn would trip the no-op guard.
-        assert_eq!(persisted_field_count("search_nodes", &json!({"results": []})), None);
+        assert_eq!(
+            persisted_field_count("search_nodes", &json!({"results": []})),
+            None
+        );
         assert_eq!(persisted_field_count("get_node", &json!({})), None);
     }
 
