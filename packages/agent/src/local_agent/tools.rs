@@ -219,6 +219,43 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
+/// Render a `resolve_query` decomposition field line with an explicit
+/// JSON-encoding hint appended to its declared type.
+///
+/// `EntityFieldDescriptor::render_shape()` alone (`name: type`) names the
+/// target field's type but never constrains *how* the model should encode a
+/// value it maps onto that field — a small model reading digits out of
+/// prose readily emits `"2400"` (a JSON string) instead of `2400` (a JSON
+/// number) for a field declared `number`, and the same drift is plausible in
+/// the opposite direction for `text`/`enum` fields fed a numeric-looking
+/// value. SQLite's `json_extract` preserves the stored value's real type, so
+/// a type-mismatched equality filter compares unequal — silently
+/// indistinguishable from "no such node" to the caller. This is the
+/// "cheaper to try first" fix from issue #1915: state the expected encoding
+/// directly in the prompt rather than adding another
+/// `coerce_filter_value_to_field_type` arm each time a new type is caught
+/// live.
+///
+/// Deliberately local to `exec_resolve_query` rather than added to
+/// `render_shape()` itself: that method also renders the `RELEVANT ENTITY
+/// TYPES` block shown to the primary agent for `create_node`/`search_nodes`
+/// guidance, which is out of this issue's scope and validated by its own
+/// tests — widening it without measuring those call sites risks the same
+/// bystander-regression pattern this project has hit before (see #1912,
+/// #1926).
+fn render_resolve_query_field_line(
+    field: &nodespace_core::ops::entity_types_block::EntityFieldDescriptor,
+) -> String {
+    let shape = field.render_shape();
+    let hint = match field.field_type.as_str() {
+        "number" => " (JSON number, not string)",
+        "boolean" => " (JSON boolean `true`/`false`, not string)",
+        "text" | "enum" => " (JSON string, even if the value looks numeric)",
+        _ => "",
+    };
+    format!("- {shape}{hint}")
+}
+
 /// Coerce a `resolve_query` filter's value to match its target field's
 /// declared schema type when the decomposition model emitted the wrong JSON
 /// type for it.
@@ -235,6 +272,12 @@ fn extract_json_object(text: &str) -> Option<&str> {
 /// Only `number`/`boolean` need this: `text`/`enum` fields are already
 /// strings, and `date` filters arrive as `YYYY-MM-DD` strings by
 /// construction (see the decomposition prompt).
+///
+/// This remains as defense in depth alongside the prompt-level JSON-encoding
+/// hint (`render_resolve_query_field_line`) added in #1915: the hint reduces
+/// how often the model emits the wrong JSON type, but does not guarantee it
+/// — a live model can still drift, and this coercion is what catches it
+/// when it does.
 fn coerce_filter_value_to_field_type(
     mut item: query_ops::AgentFilterItem,
     schema: Option<&nodespace_core::models::SchemaNode>,
@@ -1569,10 +1612,8 @@ impl GraphToolExecutor {
                 .fields
                 .iter()
                 .map(|f| {
-                    format!(
-                        "- {}",
-                        nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f)
-                            .render_shape()
+                    render_resolve_query_field_line(
+                        &nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3501,6 +3542,84 @@ mod tests {
             );
         }
 
+        /// #1915: the decomposition prompt states the expected JSON encoding
+        /// alongside each field's declared type, so the model is told *how*
+        /// to encode a value it maps onto a field — not just what type the
+        /// field is. This is the "cheaper to try first" fix: state the
+        /// encoding in the prompt rather than adding another
+        /// `coerce_filter_value_to_field_type` arm per newly-observed drift.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_prompt_states_json_encoding_per_field_type() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "replacement_cost", "type": "number"},
+                        {"name": "is_paid", "type": "boolean"},
+                        {"name": "vendor_code", "type": "text"},
+                        {
+                            "name": "condition",
+                            "type": "enum",
+                            "coreValues": [
+                                {"value": "checked_out", "label": "Checked out"},
+                                {"value": "returned", "label": "Returned"}
+                            ]
+                        }
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let seen_prompt = Arc::new(std::sync::Mutex::new(String::new()));
+            let engine: Arc<dyn ChatInferenceEngine> = Arc::new(CapturingEngine {
+                response: r#"{"query": "", "filters": []}"#.to_string(),
+                seen_prompt: Arc::clone(&seen_prompt),
+            });
+            let executor = GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: Some(engine),
+            };
+
+            let _ = executor
+                .execute(
+                    "resolve_query",
+                    json!({
+                        "request": "the 2400 one came back",
+                        "node_type": "invoice"
+                    }),
+                )
+                .await;
+
+            let prompt = seen_prompt.lock().unwrap().clone();
+            assert!(
+                prompt.contains("replacement_cost: number (JSON number, not string)"),
+                "a number field must tell the model to emit a JSON number, not a \
+                 quoted string, so a filter on it actually matches the stored \
+                 value; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("is_paid: boolean (JSON boolean `true`/`false`, not string)"),
+                "a boolean field must tell the model to emit a JSON boolean, not a \
+                 quoted string; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("vendor_code: text (JSON string, even if the value looks numeric)"),
+                "a text field must tell the model to keep numeric-looking values as \
+                 JSON strings — the reverse-direction drift #1915 calls out; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains(
+                    "condition: enum (checked_out, returned) (JSON string, even if the value looks numeric)"
+                ),
+                "an enum field gets the same string-encoding hint as text, after its \
+                 legal-values list; got:\n{prompt}"
+            );
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn resolve_query_returns_resolved_node_on_unique_match() {
             let (ns, _tmp) = make_test_service().await;
@@ -4114,6 +4233,55 @@ mod tests {
                     json!(true),
                     "real model failed to resolve the invoice due next Friday under either \
                      calendar reading — got {}",
+                    result.result
+                );
+            }
+
+            // Reverse-direction drift (#1915's own motivating scenario): a
+            // numeric-looking value identifies a `text` field. Nothing in
+            // `coerce_filter_value_to_field_type` covers this direction — it
+            // only coerces string-encoded numbers/booleans *into* number/
+            // boolean fields — so if the model emits a JSON number for
+            // `vendor_code` here, the filter compares a number against a
+            // stored string and silently matches nothing. This is what the
+            // prompt's new JSON-encoding hint (`render_resolve_query_field_line`)
+            // is meant to prevent by telling the model directly to keep a
+            // numeric-looking value as a JSON string for a `text` field.
+            {
+                let (ns, _tmp) = make_test_service().await;
+                handle_create_schema(
+                    &ns,
+                    json!({
+                        "name": "Invoice",
+                        "fields": [{"name": "vendor_code", "type": "text"}]
+                    }),
+                )
+                .await
+                .unwrap();
+                let executor = GraphToolExecutor {
+                    node_service: Some(ns.clone()),
+                    embedding_service: Arc::new(RwLock::new(None)),
+                    inference_engine: Some(engine.clone()),
+                };
+                create_invoice(&executor, "Invoice #4", json!({"vendor_code": "48219"})).await;
+
+                let result = executor
+                    .execute(
+                        "resolve_query",
+                        json!({ "request": "Mark the invoice from vendor 48219 as paid", "node_type": "invoice" }),
+                    )
+                    .await
+                    .unwrap();
+                println!(
+                    "reverse-direction (numeric-into-text) live result: {}",
+                    result.result
+                );
+                assert_eq!(
+                    result.result["resolved"],
+                    json!(true),
+                    "real model failed to resolve vendor_code \"48219\" (text field) — \
+                     likely emitted a JSON number instead of a JSON string for the filter \
+                     value — got {}",
                     result.result
                 );
             }
