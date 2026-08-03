@@ -222,13 +222,16 @@ pub fn transform_links_in_nodes(
 ///
 /// Same as `transform_links_in_nodes` but also returns a `LinkTransformResult`
 /// containing (source_node_id, target_node_id) pairs for creating mention relationships.
+/// Each mention's source is the specific node that contained the link.
 ///
 /// # Arguments
 ///
 /// * `nodes` - Mutable slice of PreparedNodes to transform
 /// * `file_to_root_id` - Map from file path to root node UUID for the import batch
 /// * `current_file_path` - Optional path of the current file being processed
-/// * `source_root_id` - The root node ID of the source document (for mention relationships)
+/// * `source_root_id` - The source document's root node ID; used only to skip a
+///   node linking to its own document root (a mention's source is the containing
+///   node, not this root)
 ///
 /// # Returns
 ///
@@ -254,12 +257,13 @@ pub fn transform_links_in_nodes_with_mentions(
         );
         node.content = new_content;
 
-        // Collect mentions, skipping self-references
+        // Record the mention from the node that actually CONTAINED the link, not
+        // the document root — so a backlink points at the specific node. Skip a
+        // node mentioning itself, and skip a node linking to its own document's
+        // root (structurally redundant: the node already lives under that root).
         for target_id in target_ids {
-            if target_id != source_root_id {
-                result
-                    .mentions
-                    .push((source_root_id.to_string(), target_id));
+            if target_id != node.id && target_id != source_root_id {
+                result.mentions.push((node.id.clone(), target_id));
             }
         }
     }
@@ -338,8 +342,14 @@ fn transform_single_link_with_target(
         return (link_text.to_string(), None);
     }
 
-    // It's a relative or absolute file path - try to resolve it
-    let resolved_path = resolve_relative_path(link_url, current_file_path);
+    // It's a relative or absolute file path - try to resolve it. Strip any
+    // `#anchor` fragment first: the import file→id map is keyed by bare file path,
+    // so `file.md#section` would otherwise miss the lookup and the miss path would
+    // destroy the link (content loss). Resolve to the file's root and drop the
+    // anchor (there is no intra-node anchor target yet); the link and its mention
+    // are preserved.
+    let file_part = link_url.split_once('#').map_or(link_url, |(path, _)| path);
+    let resolved_path = resolve_relative_path(file_part, current_file_path);
 
     // Check if the resolved path exists in our import batch
     if let Some(target_id) = file_to_root_id.get(&resolved_path) {
