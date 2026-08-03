@@ -637,8 +637,47 @@ fn contains_action_claim(text: &str) -> bool {
         "has been updated",
         "has been added",
         "has been deleted",
+        // Bare passive past tense, no "has been". A live turn reported
+        // "Fact: node nodespace://... was updated." with zero tool calls and
+        // passed straight through, because every passive phrase above requires
+        // the "has been" prefix. The claim is identical in force without it.
+        "was created",
+        "were created",
+        "was updated",
+        "were updated",
+        "was added",
+        "were added",
+        "was deleted",
+        "were deleted",
+        "was removed",
+        "were removed",
+        "was set to",
+        "were set to",
+        "was marked",
+        "were marked",
     ];
     ACTION_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// Whether a tool execution demonstrably persisted something.
+///
+/// Reads the same signal the `Tool executed` log line reports as
+/// `result_field_count`: `fields` (create_schema) or `property_count`
+/// (create_node / update_node). Both answer "did this call record anything the
+/// user could later resolve against". A tool that reports neither is not a
+/// write and returns `None` — absence of the signal is not evidence of a no-op,
+/// so only an explicit zero counts as "persisted nothing".
+fn persisted_field_count(result: &serde_json::Value) -> Option<usize> {
+    result
+        .get("fields")
+        .and_then(|f| f.as_array())
+        .map(|a| a.len())
+        .or_else(|| {
+            result
+                .get("property_count")
+                .and_then(|c| c.as_u64())
+                .map(|c| c as usize)
+        })
 }
 
 /// Synthesize a user-facing bullet summary from the tool executions of a turn.
@@ -1243,6 +1282,43 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     normalized
                 };
 
+                // No-op-success guard: the anti-fabrication guard above keys on
+                // *zero* tool calls, so an action claim backed by a call that
+                // succeeded while persisting nothing passes straight through —
+                // the claim looks substantiated because a tool did run and did
+                // return success. That is the more dangerous shape of the two:
+                // an error prompts a retry, a false success does not.
+                //
+                // Fires only when EVERY write this turn persisted zero fields.
+                // A turn with one real write and one empty one is grounded in
+                // the real write, mirroring the `any_real_tool_calls` and
+                // later-retry narrowing the neighbouring guards already apply.
+                // Tools that report no field-count signal are not writes and are
+                // ignored entirely, so read-only turns are unaffected.
+                let write_field_counts: Vec<usize> = all_tool_executions
+                    .iter()
+                    .filter(|r| !r.is_error)
+                    .filter_map(|r| persisted_field_count(&r.result))
+                    .collect();
+                let all_writes_were_empty =
+                    !write_field_counts.is_empty() && write_field_counts.iter().all(|&c| c == 0);
+                let normalized = if !normalized.is_empty()
+                    && all_writes_were_empty
+                    && contains_action_claim(&normalized)
+                {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        write_calls = write_field_counts.len(),
+                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        "No-op success: model claimed an action backed only by writes that persisted nothing — converting to confirmation request"
+                    );
+                    CONFIRMATION_REQUEST.to_string()
+                } else {
+                    normalized
+                };
+
                 // Tool-failure surfacing: if any tool failed and the model's response
                 // doesn't acknowledge the error, replace the response with an honest
                 // error message. Appending to a success claim would produce contradictory
@@ -1596,16 +1672,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // reconcile. On update_node the count is of what the CALL
                 // supplied, so an id-only call reports 0 rather than the
                 // node's existing property count.
-                let result_field_count = result_value
-                    .get("fields")
-                    .and_then(|f| f.as_array())
-                    .map(|a| a.len())
-                    .or_else(|| {
-                        result_value
-                            .get("property_count")
-                            .and_then(|c| c.as_u64())
-                            .map(|c| c as usize)
-                    });
+                // Shares `persisted_field_count` with the no-op-success guard
+                // below, so what is logged and what is gated on can never drift
+                // apart — the signal was previously computed here and only
+                // logged, never acted on.
+                let result_field_count = persisted_field_count(&result_value);
 
                 tracing::info!(
                     tool = %tc.function_name,
@@ -4723,6 +4794,53 @@ mod tests {
             "The helper foo(x) returns a value."
         ));
         assert!(!looks_like_narrated_tool_call(""));
+    }
+
+    // -- persisted_field_count / no-op-success tests --------------------------
+
+    #[test]
+    fn persisted_field_count_reads_both_write_signals() {
+        // create_schema reports what it persisted as an array...
+        assert_eq!(
+            persisted_field_count(&json!({"fields": ["title", "due_date"]})),
+            Some(2)
+        );
+        // ...create_node / update_node as a bare count.
+        assert_eq!(persisted_field_count(&json!({"property_count": 3})), Some(3));
+        // The zero that this issue's call returned alongside `updated: true`.
+        assert_eq!(persisted_field_count(&json!({"property_count": 0})), Some(0));
+    }
+
+    #[test]
+    fn persisted_field_count_is_none_for_non_write_results() {
+        // A read tool carries neither signal. `None`, not `Some(0)` — absence of
+        // the signal must not be read as "persisted nothing", or every
+        // search-only turn would trip the no-op guard.
+        assert_eq!(persisted_field_count(&json!({"results": []})), None);
+        assert_eq!(persisted_field_count(&json!({})), None);
+    }
+
+    #[test]
+    fn action_claim_detects_bare_passive_past_tense() {
+        // The exact live generation that passed the guard untouched: the phrase
+        // list had "has been updated" but no bare "was updated".
+        assert!(contains_action_claim(
+            "Fact: node nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09 was updated."
+        ));
+        assert!(contains_action_claim("The due date was set to 2026-08-06."));
+        assert!(contains_action_claim("Three nodes were created."));
+    }
+
+    #[test]
+    fn action_claim_still_ignores_capability_and_question_phrasing() {
+        // Guard against the new passive phrases over-firing: these describe a
+        // possible or requested action, not a performed one.
+        assert!(!contains_action_claim(
+            "I can update that node if you'd like."
+        ));
+        assert!(!contains_action_claim(
+            "Would you like the due date set to the 6th?"
+        ));
     }
 
     // -- summarize_executions tests ------------------------------------------

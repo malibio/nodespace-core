@@ -353,6 +353,30 @@ const GROUPS: MatrixScenario[][] = [
       prompt: "Do we have anything worth 90000 sitting out?",
       expect: { kind: "noRetry", tool: "search_nodes" },
     },
+    {
+      id: "9",
+      scenario: "9. Set property on existing node",
+      // Distinct from scenario 6, which tests resolving an INDIRECT reference
+      // ("the 2400 one") and happens to update it. Here the referent is a
+      // direct string match, so nothing is being tested about resolution —
+      // the whole assertion is that the *value the prompt supplies* reaches
+      // storage.
+      //
+      // This is the shape that reached production returning `updated: true`
+      // with `property_count: 0`: the model resolved the right node, called
+      // update_node, echoed the node's existing title back as `content`, and
+      // sent no properties at all. The tool reported success, and the model
+      // reported the write as done with a fabricated date. minProperties is
+      // what makes that outcome score red rather than green — without it, a
+      // call that persists nothing is indistinguishable from one that
+      // persisted the date, because the tool name is all that is checked.
+      prompt: "The laser cutter is due back on the 20th",
+      expect: {
+        kind: "toolOnce",
+        tool: "update_node",
+        minProperties: 1,
+      },
+    },
   ],
   // Multi-custom-type CRUD (scenario 8) shares its own chat node.
   [
