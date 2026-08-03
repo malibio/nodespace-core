@@ -268,7 +268,10 @@ impl EntityTypeDescriptor {
     pub fn render_line(&self) -> String {
         let mut line = format!("- {}", self.type_id);
         if let Some(name) = &self.name {
-            line.push_str(&format!(" \"{name}\""));
+            // Escaped: an unescaped `"` in a user-authored display name would
+            // close the quote early and reintroduce the ambiguity this format
+            // exists to remove.
+            line.push_str(&format!(" \"{}\"", name.replace('"', "\\\"")));
         }
 
         if !self.fields.is_empty() {
@@ -405,6 +408,20 @@ mod tests {
             title_template: None,
         };
         assert_eq!(d.render_line(), "- venue");
+    }
+
+    /// A display name containing `"` must not close the quote early — that
+    /// would let the rest of the name spill out unquoted and reintroduce the
+    /// ambiguity this format exists to remove.
+    #[test]
+    fn a_quote_in_the_display_name_is_escaped_not_left_to_close_early() {
+        let d = EntityTypeDescriptor {
+            type_id: "invoice".to_string(),
+            name: Some(r#"The "Big" Invoice"#.to_string()),
+            fields: vec![],
+            title_template: None,
+        };
+        assert_eq!(d.render_line(), r#"- invoice "The \"Big\" Invoice""#);
     }
 
     #[test]
