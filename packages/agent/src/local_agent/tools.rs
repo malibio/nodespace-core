@@ -596,7 +596,7 @@ fn def_create_node() -> ToolDefinition {
 fn def_update_node() -> ToolDefinition {
     ToolDefinition {
         name: "update_node".into(),
-        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"properties\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"properties\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"properties\": {\"isReturned\": true}}.".into(),
+        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"properties\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"properties\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"properties\": {\"isPaid\": true}}.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -610,7 +610,7 @@ fn def_update_node() -> ToolDefinition {
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use the node's OWN existing property keys, copied character for character from the properties returned by resolve_query, get_node, or search_nodes for that node — do not invent a key from the user's wording. Pick the key whose current value the request would change: \"it came back\" against properties {\"isReturned\": false} means {\"isReturned\": true}. Send only the keys that change, with their new values, not the unchanged ones."
+                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use the node's OWN existing property keys, copied character for character from the properties returned by resolve_query, get_node, or search_nodes for that node — do not invent a key from the user's wording. Pick the key whose current value the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}. Send only the keys that change, with their new values, not the unchanged ones."
                 }
             },
             "required": ["id"]
