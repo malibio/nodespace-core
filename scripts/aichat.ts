@@ -240,7 +240,16 @@ export function formatTurnLogLines(slice: string): string[] {
     // source and so must stay last on the line.
     const fields = l.match(/result_field_count=(\d+)/)?.[1];
     const fieldPart = fields === undefined ? "" : ` [fields=${fields}]`;
-    out.push(`[tool] ${tool}${err}${fieldPart} ${args}`);
+    // A write that had no properties to persist in the first place — a plain
+    // text note, or an update that only changed content. Both legitimately
+    // report zero, so `result_field_count` is omitted for them; without this
+    // marker that absence is indistinguishable from a stale baseline recorded
+    // before the field existed, and an assertion keyed on the count silently
+    // passes either way.
+    const contentOnly = /"(?:updated_content_only|content_only)":true/.test(l)
+      ? " [content-only]"
+      : "";
+    out.push(`[tool] ${tool}${err}${fieldPart}${contentOnly} ${args}`);
   }
   // The documented degenerate-empty-generation failure mode: the model opens a
   // turn and emits neither text nor a tool call. local_agent_service.rs then

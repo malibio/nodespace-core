@@ -1869,6 +1869,9 @@ impl GraphToolExecutor {
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         props.extend(flat_extras);
+        // Captured before `props` is moved into the input below. See the
+        // `content_only` flag on the result for why this is needed.
+        let requested_any_properties = !props.is_empty();
         let properties = Value::Object(props);
 
         let ns = self.node_service()?;
@@ -1915,11 +1918,27 @@ impl GraphToolExecutor {
             .map(|o| o.len())
             .unwrap_or(0);
 
-        Ok(ok_result(
-            tool_call_id,
-            "create_node",
-            json!({ "id": node_uri(&output.node_id), "property_count": property_count }),
-        ))
+        // Whether the CALL asked for any properties at all. A `property_count`
+        // of 0 means two very different things depending on this: the model
+        // supplied particulars that failed to persist (data loss), or the node
+        // legitimately has no properties — a plain `text` note has no schema
+        // fields, so zero-of-zero is a complete success. Flagged so the
+        // agent-loop's no-op guard can suppress a false confirmation without
+        // also suppressing a truthful one.
+        let content_only = !requested_any_properties;
+
+        let mut result = json!({
+            "id": node_uri(&output.node_id),
+            "property_count": property_count,
+        });
+        if content_only {
+            result
+                .as_object_mut()
+                .expect("literal is an object")
+                .insert("content_only".into(), json!(true));
+        }
+
+        Ok(ok_result(tool_call_id, "create_node", result))
     }
 
     async fn exec_update_node(
@@ -1977,9 +1996,62 @@ impl GraphToolExecutor {
             .unwrap_or(0);
 
         let ns = self.node_service()?;
+        let node_id = strip_node_uri(&params.id).to_string();
+
+        // No-op gate. The guard above only fires when BOTH fields are absent, so
+        // a call carrying `content` alone satisfies it — including when that
+        // content is the node's existing title echoed back verbatim, which is
+        // exactly the shape a state-change request degrades into when the model
+        // omits `properties`. Such a call provably cannot change anything, yet
+        // the ops layer accepts it, bumps `modifiedAt`, and returns success; the
+        // model then reads that success as confirmation and reports a write that
+        // never happened.
+        //
+        // Checked at the tool boundary rather than in the tool description
+        // because the description already states this requirement plainly and
+        // the model still sent content-only — prose does not repair argument
+        // shape (ADR-064). The comparison is against the node's stored content,
+        // so it rejects only calls that are demonstrably inert, never a genuine
+        // content edit.
+        //
+        // This check is ADVISORY and deliberately not serialized against the
+        // write: another writer could change the content between this read and
+        // the update below, so a call this passes could turn out inert (or the
+        // reverse). The consequence is only a missed or spurious diagnostic —
+        // never data corruption, since the ops layer's version check still
+        // guards the write itself. Do not read this as an atomicity guarantee.
+        if new_properties.is_none() {
+            if let Some(ref content) = params.content {
+                let current = node_ops::get_node(
+                    &ns,
+                    node_ops::GetNodeInput {
+                        node_id: node_id.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| ops_error_to_tool(e, "update_node"))?;
+
+                let unchanged = current
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|existing| existing == content);
+
+                if unchanged {
+                    return Err(ToolError::InvalidArguments {
+                        tool: "update_node".into(),
+                        reason: "This call would change nothing: 'content' is identical to the \
+                                 node's current content and no 'properties' were supplied. If the \
+                                 request was to change the node's state, re-send it with the \
+                                 changed value in 'properties', using the node's own existing \
+                                 property keys."
+                            .into(),
+                    });
+                }
+            }
+        }
 
         let input = node_ops::UpdateNodeInput {
-            node_id: strip_node_uri(&params.id).to_string(),
+            node_id,
             version: None, // ops layer auto-fetches
             node_type: None,
             content: params.content,
@@ -1993,15 +2065,39 @@ impl GraphToolExecutor {
             .await
             .map_err(|e| ops_error_to_tool(e, "update_node"))?;
 
-        Ok(ok_result(
-            tool_call_id,
-            "update_node",
-            json!({
-                "id": node_uri(&output.node_id),
-                "updated": true,
-                "property_count": property_count
-            }),
-        ))
+        // `updated: true` is never returned next to `property_count: 0`. The two
+        // together read as "the update succeeded" and "nothing was written",
+        // and the model resolves that contradiction in favour of success — the
+        // false confirmation this tool's no-op gate above exists to prevent.
+        // Instead the result names what actually landed, so a content-only edit
+        // cannot be read as a persisted state change.
+        let mut result = json!({
+            "id": node_uri(&output.node_id),
+            "property_count": property_count,
+        });
+        let obj = result.as_object_mut().expect("literal is an object");
+        if property_count > 0 {
+            obj.insert("updated".into(), json!(true));
+        } else {
+            obj.insert("updated_content_only".into(), json!(true));
+            // Phrased to avoid the bare passive forms `contains_action_claim`
+            // keys on ("was updated", "was set to", ...). Models frequently
+            // echo a tool result's wording back in their final text, and this
+            // note is returned on a turn whose write persisted no properties —
+            // precisely the turn the no-op guard is watching. Wording it as an
+            // active statement of scope keeps the tool from feeding the model a
+            // phrase the guard would then convert to a confirmation request.
+            obj.insert(
+                "note".into(),
+                json!(
+                    "This call changed only the node's text. It did not change any property \
+                     value, so the node's state (status, dates, and other properties) remains \
+                     exactly as it was."
+                ),
+            );
+        }
+
+        Ok(ok_result(tool_call_id, "update_node", result))
     }
 
     async fn exec_create_relationship(
@@ -3924,6 +4020,238 @@ mod tests {
                     result.result
                 );
             }
+        }
+    }
+
+    /// `update_node`'s no-op gate, against a real store.
+    ///
+    /// The defect these cover is not detectable from the tool's return value in
+    /// isolation: the reproducing call returned `is_error=false` and
+    /// `updated: true`, which is exactly what a real write returns. It has to be
+    /// checked against what the store actually holds afterwards.
+    mod update_node_noop_gate {
+        use super::*;
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        async fn make_test_service() -> (Arc<NodeService>, TempDir) {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("test.db");
+            let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+            let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+            (svc, tmp)
+        }
+
+        fn plain_executor(ns: Arc<NodeService>) -> GraphToolExecutor {
+            GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: None,
+            }
+        }
+
+        /// Creates a task via the real `create_node` path and returns its id.
+        async fn create_task(executor: &GraphToolExecutor, content: &str) -> String {
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": content,
+                        "node_type": "task",
+                        "properties": {"status": "in_progress"},
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error, "fixture task creation failed: {result:?}");
+            strip_node_uri(result.result["id"].as_str().unwrap()).to_string()
+        }
+
+        /// The exact reproducing call: a state-change request ("set the deadline
+        /// to 6-August-2026") that reached `update_node` carrying the node's own
+        /// unchanged title as `content` and no properties at all. Before the
+        /// gate this returned `{"updated": true, "property_count": 0}` and the
+        /// model reported the write as done.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn content_identical_to_stored_content_with_no_properties_is_rejected() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+            let title = "Schedule chip upgrade on the Polestar";
+            let id = create_task(&executor, title).await;
+
+            let err = executor
+                .execute("update_node", json!({ "id": id, "content": title }))
+                .await
+                .expect_err("an inert call must be rejected, not reported as a success");
+
+            match err {
+                ToolError::InvalidArguments { tool, reason } => {
+                    assert_eq!(tool, "update_node");
+                    // The message has to tell the model what to do differently,
+                    // not just that it failed — otherwise the retry repeats the
+                    // same shape.
+                    assert!(
+                        reason.contains("properties"),
+                        "rejection must point at the missing 'properties'; got: {reason}"
+                    );
+                }
+                other => panic!("expected InvalidArguments, got {other:?}"),
+            }
+        }
+
+        /// The gate must reject ONLY provably-inert calls. A genuine content
+        /// edit carries no properties either, and must still go through.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn genuine_content_edit_without_properties_still_succeeds() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+            let id = create_task(&executor, "Buy milk").await;
+
+            let result = executor
+                .execute(
+                    "update_node",
+                    json!({ "id": id, "content": "Buy milk and eggs" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error, "a real content edit must not be rejected");
+            // No `updated: true` next to a zero property count — the result says
+            // what actually changed, so the model cannot read a content edit as
+            // a persisted state change.
+            assert_eq!(result.result["property_count"], json!(0));
+            assert!(result.result.get("updated").is_none());
+            assert_eq!(result.result["updated_content_only"], json!(true));
+
+            let stored = executor
+                .execute("get_node", json!({ "id": id }))
+                .await
+                .unwrap();
+            assert_eq!(stored.result["content"], json!("Buy milk and eggs"));
+        }
+
+        /// The write the reproducing turn was supposed to make. Asserts the
+        /// property reaches storage, not merely that the call returned success —
+        /// the distinction this whole issue turns on.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn property_update_persists_and_reports_a_nonzero_count() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+            let id = create_task(&executor, "Schedule chip upgrade on the Polestar").await;
+
+            let result = executor
+                .execute(
+                    "update_node",
+                    json!({ "id": id, "properties": {"due_date": "2026-08-06"} }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["updated"], json!(true));
+            assert_eq!(result.result["property_count"], json!(1));
+
+            // The load-bearing assertion: read it back out of the store.
+            let stored = executor
+                .execute("get_node", json!({ "id": id }))
+                .await
+                .unwrap();
+            assert_eq!(
+                stored.result["properties"]["due_date"],
+                json!("2026-08-06"),
+                "the requested property must be readable from storage afterwards; got {}",
+                stored.result
+            );
+            // The pre-existing property survives the merge.
+            assert_eq!(stored.result["properties"]["status"], json!("in_progress"));
+        }
+
+        /// A flat (unknown-key) property is promoted into `properties`, so it is
+        /// a real change and must pass the gate even alongside identical
+        /// content — the gate keys on "no properties after promotion", not on
+        /// the raw shape the model happened to send.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn flat_property_alongside_identical_content_is_not_treated_as_a_noop() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+            let title = "Schedule chip upgrade on the Polestar";
+            let id = create_task(&executor, title).await;
+
+            let result = executor
+                .execute(
+                    "update_node",
+                    json!({ "id": id, "content": title, "due_date": "2026-08-06" }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["property_count"], json!(1));
+
+            let stored = executor
+                .execute("get_node", json!({ "id": id }))
+                .await
+                .unwrap();
+            assert_eq!(stored.result["properties"]["due_date"], json!("2026-08-06"));
+        }
+
+        /// A plain text note has no schema fields, so create_node persists it
+        /// with zero properties — a complete success, not a dropped-particulars
+        /// failure. Flagged `content_only` so the agent loop's no-op guard does
+        /// not suppress a truthful confirmation of it.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_without_properties_is_flagged_content_only() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({"content": "Remember to call the vet", "node_type": "text"}),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["property_count"], json!(0));
+            assert_eq!(result.result["content_only"], json!(true));
+        }
+
+        /// ...whereas a create that DID supply properties carries no such flag,
+        /// so a zero count there still reads as dropped particulars.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_with_properties_is_not_flagged_content_only() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": "Buy milk",
+                        "node_type": "task",
+                        "properties": {"status": "in_progress"},
+                    }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert!(result.result.get("content_only").is_none());
+        }
+
+        /// The pre-existing both-absent guard is unchanged.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn id_only_call_is_still_rejected() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+            let id = create_task(&executor, "Buy milk").await;
+
+            let err = executor
+                .execute("update_node", json!({ "id": id }))
+                .await
+                .expect_err("an id-only call must be rejected");
+            assert!(matches!(err, ToolError::InvalidArguments { .. }));
         }
     }
 

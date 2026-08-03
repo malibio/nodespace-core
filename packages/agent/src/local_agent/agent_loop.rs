@@ -638,7 +638,162 @@ fn contains_action_claim(text: &str) -> bool {
         "has been added",
         "has been deleted",
     ];
-    ACTION_PHRASES.iter().any(|p| lower.contains(p))
+    if ACTION_PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+
+    // Bare passive past tense, no "has been". A live turn reported
+    // "Fact: node nodespace://... was updated." with zero tool calls and passed
+    // straight through, because every passive phrase above requires the "has
+    // been" prefix. The claim is identical in force without it.
+    //
+    // NOTE FOR ANYONE EXTENDING THIS LIST: `exec_update_node`'s content-only
+    // `note` (tools.rs) is deliberately worded to avoid every phrase here.
+    // Models echo tool-result wording into their final text, and that note is
+    // returned on exactly the turn the no-op guard watches, so a phrase added
+    // here that the note happens to contain would make the tool feed the guard
+    // its own trigger. `update_node_content_only_note_is_not_itself_an_action_claim`
+    // pins that both ways.
+    //
+    // Matched only when the sentence is ABOUT a node, and is not a question or
+    // a negation. The bare phrases are far too common on their own: "Nothing
+    // was updated because the value already matched" (a negation — the exact
+    // opposite of a claim), "Do you know when it was updated?" (a question),
+    // and "The record shows it was marked returned" (reporting stored state,
+    // not claiming an action) all contain them. Converting any of those to a
+    // confirmation request would make the guard a UX regression, so the
+    // qualifiers below are load-bearing, not defensive padding.
+    const PASSIVE_CLAIMS: &[&str] = &[
+        "was created",
+        "were created",
+        "was updated",
+        "were updated",
+        "was added",
+        "were added",
+        "was deleted",
+        "were deleted",
+        "was removed",
+        "were removed",
+        "was set to",
+        "were set to",
+        "was marked",
+        "were marked",
+    ];
+    // Negators are matched with a leading space (or at sentence start) so they
+    // cannot fire inside an unrelated word. A bare "not " matches inside
+    // "cannot", and "n't " inside "isn't"/"didn't" — all of which routinely
+    // co-occur with a TRUE claim ("The task was updated. I cannot see the old
+    // value."), and each one silently waived the whole response.
+    const NEGATORS: &[&str] = &[
+        "nothing ",
+        "no node",
+        "not ",
+        "never ",
+        "would be",
+        "will be",
+        "could be",
+        "should be",
+    ];
+    // "the record shows ...", "it appears ..." — reporting what storage holds,
+    // not claiming to have changed it.
+    const REPORTING: &[&str] = &[
+        "shows ",
+        "showed ",
+        "indicates ",
+        "appears ",
+        "according to",
+    ];
+
+    // Qualifiers are evaluated PER SENTENCE, against the sentence carrying the
+    // passive phrase — never against the whole response.
+    //
+    // Whole-text qualifiers cannot express a per-clause property, and on a
+    // safety guard the failure defaults to "waive", which is the wrong
+    // direction. Measured on the whole-text version, every one of these
+    // genuine fabricated claims was silently waived:
+    //   "The due date was set to 2026-08-06. I did not change anything else."
+    //   "The task was updated. I cannot see the old value."
+    //   "The node was updated. Anything else?"
+    //   "The node was updated. That should be all."
+    // "Anything else?" and "That should be all." are among the most common LLM
+    // sign-offs, so in practice the guard held only for single-sentence text.
+    // Split so each sentence KEEPS its terminator — otherwise a question mark
+    // is consumed and "Do you know when it was updated?" reads as a statement.
+    let mut sentences: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in lower.char_indices() {
+        if matches!(c, '.' | '!' | '?' | '\n' | ';') {
+            sentences.push(&lower[start..i + c.len_utf8()]);
+            start = i + c.len_utf8();
+        }
+    }
+    if start < lower.len() {
+        sentences.push(&lower[start..]);
+    }
+
+    sentences.iter().any(|sentence| {
+        if !PASSIVE_CLAIMS.iter().any(|p| sentence.contains(p)) {
+            return false;
+        }
+        let trimmed = sentence.trim();
+        if trimmed.ends_with('?') {
+            return false;
+        }
+        // Pad so a negator at sentence start still matches with its required
+        // leading space.
+        let padded = format!(" {trimmed} ");
+        let negated = NEGATORS.iter().any(|n| padded.contains(&format!(" {n}")));
+        let reporting = REPORTING.iter().any(|r| sentence.contains(r));
+        !negated && !reporting
+    })
+}
+
+/// Tools whose results report what they persisted, and are therefore the only
+/// ones [`persisted_field_count`] may read a count from.
+///
+/// Keyed by tool NAME rather than by result shape because the shapes are not
+/// unique to writes: `get_node` on a schema node returns that schema's `fields`
+/// array, which is indistinguishable from `create_schema`'s report of the
+/// fields it just wrote. Reading a schema that happens to define zero fields
+/// would otherwise look exactly like a write that persisted nothing, and a
+/// read-only turn would trip the no-op guard.
+const FIELD_COUNT_REPORTING_WRITES: &[&str] = &["create_schema", "create_node", "update_node"];
+
+/// Whether a tool execution demonstrably persisted something.
+///
+/// Reads the same signal the `Tool executed` log line reports as
+/// `result_field_count`: `fields` (create_schema) or `property_count`
+/// (create_node / update_node). Both answer "did this call record anything the
+/// user could later resolve against". A tool that reports neither — or that is
+/// not a write at all — returns `None`: absence of the signal is not evidence
+/// of a no-op, so only an explicit zero from a known write counts as
+/// "persisted nothing".
+///
+/// A zero is also NOT reported when the call carried no properties to persist
+/// in the first place. Both writes flag that case on the result
+/// (`updated_content_only`, `content_only`), because zero-of-zero is a complete
+/// success — a plain text note has no schema fields, and a content edit changes
+/// content by definition. Only zero-out-of-something-expected is evidence that
+/// the user's particulars were dropped, and only that may suppress the model's
+/// confirmation.
+fn persisted_field_count(tool: &str, result: &serde_json::Value) -> Option<usize> {
+    if !FIELD_COUNT_REPORTING_WRITES.contains(&tool) {
+        return None;
+    }
+    let content_only = |k: &str| result.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    if content_only("updated_content_only") || content_only("content_only") {
+        return None;
+    }
+    result
+        .get("fields")
+        .and_then(|f| f.as_array())
+        .map(|a| a.len())
+        .or_else(|| {
+            result
+                .get("property_count")
+                .and_then(|c| c.as_u64())
+                .map(|c| c as usize)
+        })
 }
 
 /// Synthesize a user-facing bullet summary from the tool executions of a turn.
@@ -1243,6 +1398,43 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     normalized
                 };
 
+                // No-op-success guard: the anti-fabrication guard above keys on
+                // *zero* tool calls, so an action claim backed by a call that
+                // succeeded while persisting nothing passes straight through —
+                // the claim looks substantiated because a tool did run and did
+                // return success. That is the more dangerous shape of the two:
+                // an error prompts a retry, a false success does not.
+                //
+                // Fires only when EVERY write this turn persisted zero fields.
+                // A turn with one real write and one empty one is grounded in
+                // the real write, mirroring the `any_real_tool_calls` and
+                // later-retry narrowing the neighbouring guards already apply.
+                // Tools that report no field-count signal are not writes and are
+                // ignored entirely, so read-only turns are unaffected.
+                let write_field_counts: Vec<usize> = all_tool_executions
+                    .iter()
+                    .filter(|r| !r.is_error)
+                    .filter_map(|r| persisted_field_count(&r.name, &r.result))
+                    .collect();
+                let all_writes_were_empty =
+                    !write_field_counts.is_empty() && write_field_counts.iter().all(|&c| c == 0);
+                let normalized = if !normalized.is_empty()
+                    && all_writes_were_empty
+                    && contains_action_claim(&normalized)
+                {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        model = %session.model_id.as_deref().unwrap_or("unknown"),
+                        iteration = iteration,
+                        write_calls = write_field_counts.len(),
+                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        "No-op success: model claimed an action backed only by writes that persisted nothing — converting to confirmation request"
+                    );
+                    CONFIRMATION_REQUEST.to_string()
+                } else {
+                    normalized
+                };
+
                 // Tool-failure surfacing: if any tool failed and the model's response
                 // doesn't acknowledge the error, replace the response with an honest
                 // error message. Appending to a success claim would produce contradictory
@@ -1596,16 +1788,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // reconcile. On update_node the count is of what the CALL
                 // supplied, so an id-only call reports 0 rather than the
                 // node's existing property count.
-                let result_field_count = result_value
-                    .get("fields")
-                    .and_then(|f| f.as_array())
-                    .map(|a| a.len())
-                    .or_else(|| {
-                        result_value
-                            .get("property_count")
-                            .and_then(|c| c.as_u64())
-                            .map(|c| c as usize)
-                    });
+                // Shares `persisted_field_count` with the no-op-success guard
+                // below, so what is logged and what is gated on can never drift
+                // apart — the signal was previously computed here and only
+                // logged, never acted on.
+                let result_field_count = persisted_field_count(&tc.function_name, &result_value);
 
                 tracing::info!(
                     tool = %tc.function_name,
@@ -4725,6 +4912,190 @@ mod tests {
         assert!(!looks_like_narrated_tool_call(""));
     }
 
+    // -- persisted_field_count / no-op-success tests --------------------------
+
+    #[test]
+    fn persisted_field_count_reads_both_write_signals() {
+        // create_schema reports what it persisted as an array...
+        assert_eq!(
+            persisted_field_count("create_schema", &json!({"fields": ["title", "due_date"]})),
+            Some(2)
+        );
+        // ...create_node / update_node as a bare count.
+        assert_eq!(
+            persisted_field_count("create_node", &json!({"property_count": 3})),
+            Some(3)
+        );
+        // The zero that this issue's call returned alongside `updated: true`.
+        assert_eq!(
+            persisted_field_count("update_node", &json!({"property_count": 0})),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn persisted_field_count_is_none_for_non_write_results() {
+        // A read tool carries neither signal. `None`, not `Some(0)` — absence of
+        // the signal must not be read as "persisted nothing", or every
+        // search-only turn would trip the no-op guard.
+        assert_eq!(
+            persisted_field_count("search_nodes", &json!({"results": []})),
+            None
+        );
+        assert_eq!(persisted_field_count("get_node", &json!({})), None);
+    }
+
+    #[test]
+    fn persisted_field_count_ignores_a_schema_read_that_looks_like_a_write() {
+        // `get_node` on a SCHEMA node returns that schema's own `fields` array,
+        // which is shape-identical to create_schema's report of what it just
+        // wrote. Keyed by tool name precisely so this cannot be mistaken for a
+        // write: a schema defining zero fields would otherwise read as
+        // "persisted nothing" and trip the no-op guard on a read-only turn.
+        assert_eq!(
+            persisted_field_count("get_node", &json!({"fields": [], "nodeType": "schema"})),
+            None
+        );
+        assert_eq!(
+            persisted_field_count(
+                "get_node",
+                &json!({"fields": [{"name": "amount"}], "nodeType": "schema"})
+            ),
+            None
+        );
+        // update_task_status is a genuine write, but reports neither signal —
+        // it must not be counted as an empty write either.
+        assert_eq!(
+            persisted_field_count("update_task_status", &json!({"updated": true})),
+            None
+        );
+    }
+
+    #[test]
+    fn persisted_field_count_ignores_writes_that_had_no_properties_to_persist() {
+        // A plain `text` note has no schema fields, so create_node stores it
+        // with zero properties and that is a COMPLETE success. Counting it as
+        // an empty write would let the no-op guard suppress a truthful "I've
+        // added that note" — turning a correct confirmation into a spurious
+        // "please confirm" and making the guard a UX regression.
+        assert_eq!(
+            persisted_field_count(
+                "create_node",
+                &json!({"id": "nodespace://x", "property_count": 0, "content_only": true})
+            ),
+            None
+        );
+        // Same for a content-only update: content genuinely changed, and
+        // `property_count` is 0 only because no properties were sent.
+        assert_eq!(
+            persisted_field_count(
+                "update_node",
+                &json!({"property_count": 0, "updated_content_only": true})
+            ),
+            None
+        );
+        // But a create that DID ask for properties and persisted none is still
+        // reported — that is the dropped-particulars case the guard exists for.
+        assert_eq!(
+            persisted_field_count("create_node", &json!({"property_count": 0})),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn passive_action_claim_still_fires_when_a_qualifier_appears_elsewhere_in_the_text() {
+        // The under-fire direction, which the over-fire test below cannot see.
+        // Every string here is a GENUINE fabricated-write claim that a
+        // whole-text qualifier check silently waived: a trailing sign-off, a
+        // second sentence mentioning the UI, or "not"/"n't" inside an ordinary
+        // word ("cannot", "isn't") was enough to disable the guard entirely.
+        //
+        // This matters beyond the new no-op guard: contains_action_claim also
+        // gates the pre-existing zero-tool-call anti-fabrication guard, so a
+        // regression here silently narrows a guard that was already shipping.
+        for text in [
+            "The due date was set to 2026-08-06. I did not change anything else.",
+            "The task was updated. I cannot see the old value.",
+            "The due date was set to the 6th. It will be visible on the task page.",
+            "The node was updated; there isn't anything else to change.",
+            "The node was updated. Anything else?",
+            "The task was updated. The page now shows the new date.",
+            "The node was updated. There is no node named X.",
+            "The due date was set to the 6th. It was never set before.",
+            "The node was updated. That should be all.",
+        ] {
+            assert!(
+                contains_action_claim(text),
+                "a real claim must not be waived by a qualifier in a DIFFERENT clause: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn passive_action_claim_does_not_fire_on_questions_negations_or_reports() {
+        // Measured, not assumed: with the bare phrases matched unconditionally,
+        // every string below returned `true`. Each would convert a perfectly
+        // good response into a spurious "please confirm", so these qualifiers
+        // are load-bearing.
+        //
+        // A negation is the OPPOSITE of an action claim.
+        assert!(!contains_action_claim(
+            "Nothing was updated because the value already matched."
+        ));
+        // A question asks about an action, it does not claim one.
+        assert!(!contains_action_claim("Do you know when it was updated?"));
+        // Reporting what storage holds is not claiming to have changed it.
+        assert!(!contains_action_claim(
+            "The record shows it was marked returned on the 12th."
+        ));
+        assert!(!contains_action_claim(
+            "It shows when the item was set to return."
+        ));
+        // Hypotheticals describe an action not yet taken.
+        assert!(!contains_action_claim(
+            "The due date would be set to the 6th if you confirm."
+        ));
+    }
+
+    #[test]
+    fn update_node_content_only_note_is_not_itself_an_action_claim() {
+        // exec_update_node returns this `note` verbatim to the model on a
+        // content-only edit — i.e. on exactly the turn the no-op guard watches.
+        // The guard reads only the model's own response, never a tool result,
+        // so the note cannot trip it directly; but models routinely echo a
+        // result's wording back in their final text, which would. An earlier
+        // draft opened with "Content was updated." and did trip this. Keeping
+        // the assertion means the note can never be reworded back into a phrase
+        // the guard keys on without a test failing.
+        assert!(!contains_action_claim(
+            "This call changed only the node's text. It did not change any property value, \
+             so the node's state (status, dates, and other properties) remains exactly as it was."
+        ));
+    }
+
+    #[test]
+    fn action_claim_detects_bare_passive_past_tense() {
+        // The exact live generation that passed the guard untouched: the phrase
+        // list had "has been updated" but no bare "was updated".
+        assert!(contains_action_claim(
+            "Fact: node nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09 was updated."
+        ));
+        assert!(contains_action_claim("The due date was set to 2026-08-06."));
+        assert!(contains_action_claim("Three nodes were created."));
+    }
+
+    #[test]
+    fn action_claim_still_ignores_capability_and_question_phrasing() {
+        // Guard against the new passive phrases over-firing: these describe a
+        // possible or requested action, not a performed one.
+        assert!(!contains_action_claim(
+            "I can update that node if you'd like."
+        ));
+        assert!(!contains_action_claim(
+            "Would you like the due date set to the 6th?"
+        ));
+    }
+
     // -- summarize_executions tests ------------------------------------------
 
     fn exec_record(name: &str, is_error: bool) -> ToolExecutionRecord {
@@ -4862,6 +5233,133 @@ mod tests {
         assert_eq!(
             result.response, "I found 2 invoice nodes in your workspace.",
             "grounded response after real tool call should pass through unchanged"
+        );
+    }
+
+    // -- No-op-success guard: loop-level tests -------------------------------
+    //
+    // The guard's correctness depends on the INTERACTION of two predicates
+    // (`persisted_field_count` and `contains_action_claim`) with the turn's
+    // accumulated `all_tool_executions`. Unit tests of either predicate alone
+    // cannot show that, so these drive the real `run_turn`.
+
+    /// Executor returning one fixed successful tool result.
+    struct FixedResultExecutor {
+        tool: &'static str,
+        result: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AgentToolExecutor for FixedResultExecutor {
+        async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+            Ok(vec![ToolDefinition {
+                name: self.tool.into(),
+                description: "test tool".into(),
+                parameters_schema: json!({"type": "object"}),
+            }])
+        }
+        async fn execute(
+            &self,
+            name: &str,
+            _a: serde_json::Value,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult {
+                tool_call_id: "tc_1".into(),
+                name: name.into(),
+                result: self.result.clone(),
+                is_error: false,
+            })
+        }
+    }
+
+    async fn run_guard_turn(
+        tool: &'static str,
+        args: &'static str,
+        result: serde_json::Value,
+        final_text: &'static str,
+    ) -> String {
+        let engine = Arc::new(MockEngine::tool_then_text(tool, args, final_text));
+        let agent_loop =
+            LocalAgentLoop::new(engine, Arc::new(FixedResultExecutor { tool, result }));
+        let mut session = new_session();
+        agent_loop
+            .run_turn(
+                &mut session,
+                "do the thing",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+            .response
+    }
+
+    #[tokio::test]
+    async fn noop_guard_converts_a_claim_backed_only_by_an_empty_write() {
+        // The #1937 shape: update_node ran, succeeded, persisted nothing, and
+        // the model reported the write as done.
+        let response = run_guard_turn(
+            "update_node",
+            r#"{"id":"abc","content":"Schedule chip upgrade on the Polestar"}"#,
+            json!({"id": "nodespace://abc", "property_count": 0}),
+            "I have updated the due date to 2026-08-06.",
+        )
+        .await;
+        assert_eq!(
+            response, CONFIRMATION_REQUEST,
+            "a claim backed only by a write that persisted nothing must not reach the user"
+        );
+    }
+
+    #[tokio::test]
+    async fn noop_guard_leaves_a_claim_backed_by_a_real_write_alone() {
+        let response = run_guard_turn(
+            "update_node",
+            r#"{"id":"abc","properties":{"due_date":"2026-08-06"}}"#,
+            json!({"id": "nodespace://abc", "updated": true, "property_count": 1}),
+            "I have updated the due date to 2026-08-06.",
+        )
+        .await;
+        assert_eq!(
+            response, "I have updated the due date to 2026-08-06.",
+            "a claim grounded in a real write must pass through untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn noop_guard_leaves_a_truthful_content_only_edit_alone() {
+        // A rename genuinely persists a change but reports property_count 0.
+        // Converting this would turn a correct confirmation into a spurious
+        // "please confirm" — the guard as a UX regression.
+        let response = run_guard_turn(
+            "update_node",
+            r#"{"id":"abc","content":"Buy milk and eggs"}"#,
+            json!({
+                "id": "nodespace://abc",
+                "property_count": 0,
+                "updated_content_only": true,
+            }),
+            "The title was updated to \"Buy milk and eggs\".",
+        )
+        .await;
+        assert_eq!(response, "The title was updated to \"Buy milk and eggs\".");
+    }
+
+    #[tokio::test]
+    async fn noop_guard_leaves_a_plain_note_creation_alone() {
+        // A `text` node has no schema fields, so zero properties is a complete
+        // success, not dropped particulars.
+        let response = run_guard_turn(
+            "create_node",
+            r#"{"content":"Remember to call the dentist","node_type":"text"}"#,
+            json!({"id": "nodespace://xyz", "property_count": 0, "content_only": true}),
+            "I created a note: \"Remember to call the dentist\".",
+        )
+        .await;
+        assert_eq!(
+            response,
+            "I created a note: \"Remember to call the dentist\"."
         );
     }
 

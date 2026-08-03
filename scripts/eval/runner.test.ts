@@ -22,6 +22,7 @@ import {
   parseTurnOutput,
   partitionExcluded,
 } from "./runner.ts";
+import { assertExpectation } from "./fixtures/agent-matrix.ts";
 import { EnvironmentError } from "./preflight.ts";
 import type { ScenarioResult } from "./types.ts";
 
@@ -276,5 +277,61 @@ describe("parseTurnOutput", () => {
   test("emptyGeneration is undefined (not false) when the marker is absent", () => {
     const turn = parseTurnOutput("assistant> hi", 100);
     expect(turn.emptyGeneration).toBeUndefined();
+  });
+});
+
+describe("agent-matrix minProperties scoring (issue #1937)", () => {
+  // The scenario-9 assertion exists to score a state-change that never reached
+  // storage as RED. Both realistic post-fix outcomes previously scored green:
+  // a gate-rejected call was skipped as `isError`, and a content-only write was
+  // skipped because the tool reports no field count for it. A scenario that
+  // passes whether or not the model does the right thing cannot detect the
+  // regression it was added for.
+  const expect9 = {
+    kind: "toolOnce" as const,
+    tool: "update_node",
+    minProperties: 1,
+  };
+
+  test("a rejected update_node scores red, not skipped", () => {
+    const verdict = assertExpectation(expect9, ["update_node"], [
+      { name: "update_node", isError: true },
+    ]);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failure).toContain("rejected");
+  });
+
+  test("a content-only update scores red, not skipped", () => {
+    const verdict = assertExpectation(expect9, ["update_node"], [
+      { name: "update_node", isError: false, contentOnly: true },
+    ]);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failure).toContain("only content");
+  });
+
+  test("an update that persisted the property scores green", () => {
+    const verdict = assertExpectation(expect9, ["update_node"], [
+      { name: "update_node", isError: false, fieldCount: 1 },
+    ]);
+    expect(verdict.passed).toBe(true);
+  });
+
+  test("an update reporting zero persisted properties scores red", () => {
+    const verdict = assertExpectation(expect9, ["update_node"], [
+      { name: "update_node", isError: false, fieldCount: 0 },
+    ]);
+    expect(verdict.passed).toBe(false);
+  });
+
+  test("parses the content-only marker alongside the error and fields markers", () => {
+    const turn = parseTurnOutput(
+      "[tool] update_node [content-only] {}\nassistant> ok",
+      100,
+    );
+    expect(turn.toolCalls[0]).toEqual({
+      name: "update_node",
+      isError: false,
+      contentOnly: true,
+    });
   });
 });

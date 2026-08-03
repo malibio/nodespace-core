@@ -152,7 +152,32 @@ function callPersistedProperties(
   min: number,
 ): Verdict {
   for (const c of calls) {
-    if (c.name !== tool || c.isError) continue;
+    if (c.name !== tool) continue;
+    // An errored call to the TARGET tool is a failure, not something to skip.
+    // Once the tool-boundary gate rejects a no-op update_node, the reproducing
+    // shape arrives here as `isError` — skipping it made the scenario score
+    // green on exactly the defect it was added to catch. `schemaCallsAreSound`
+    // already treats isError this way; this is the missing instance-side half.
+    if (c.isError) {
+      return {
+        passed: false,
+        failure:
+          `${tool} was rejected, so the requested change never reached storage — ` +
+          `the turn did not accomplish what the prompt asked for`,
+      };
+    }
+    // The write reported that it had no properties to persist. That is a
+    // complete success for a plain note or a rename, but this assertion is
+    // only set on scenarios whose prompt DOES supply a value to store, so
+    // here it means the value never made it into `properties`.
+    if (c.contentOnly) {
+      return {
+        passed: false,
+        failure:
+          `${tool} changed only content and persisted no property values, but the ` +
+          `prompt supplied a value to store — the requested state change was not recorded`,
+      };
+    }
     if (c.fieldCount === undefined) continue;
     if (c.fieldCount < min) {
       return {
@@ -290,7 +315,10 @@ const GROUPS: MatrixScenario[][] = [
       expect: { kind: "noTools" },
     },
   ],
-  // Single-custom-type CRUD chain (scenarios 3-7) shares one chat node.
+  // Single-custom-type CRUD chain (scenarios 3-7, then 9) shares one chat node.
+  // Scenario 9 is deliberately last: it needs the laser cutter that scenario 4
+  // creates, and referring to it by name keeps its own resolution a direct
+  // string match rather than the indirect reference scenario 6 exercises.
   [
     {
       id: "3",
@@ -352,6 +380,48 @@ const GROUPS: MatrixScenario[][] = [
       scenario: "7. Empty-result query",
       prompt: "Do we have anything worth 90000 sitting out?",
       expect: { kind: "noRetry", tool: "search_nodes" },
+    },
+    {
+      id: "9",
+      scenario: "9. Set property on existing node",
+      // Distinct from scenario 6, which tests resolving an INDIRECT reference
+      // ("the 2400 one") and happens to update it. Here the referent is a
+      // direct string match, so nothing is being tested about resolution —
+      // the whole assertion is that the *value the prompt supplies* reaches
+      // storage.
+      //
+      // This is the shape that reached production returning `updated: true`
+      // with `property_count: 0`: the model resolved the right node, called
+      // update_node, echoed the node's existing title back as `content`, and
+      // sent no properties at all. The tool reported success, and the model
+      // reported the write as done with a fabricated value. minProperties is
+      // what makes that outcome score red rather than green — without it, a
+      // call that persists nothing is indistinguishable from one that
+      // persisted the value, because the tool name is all that is checked.
+      //
+      // WINNABILITY (the constraint an earlier draft of this scenario broke):
+      // the prompt must name a value this chain's schema can actually hold.
+      // Scenario 3 builds Equipment Item from a prompt mentioning only
+      // returned-ness and replacement cost, so those two fields are all that
+      // exist. A first draft here asked to set a DUE DATE — a field the schema
+      // has nowhere to put — which made the scenario unwinnable: the model
+      // folded the date into the node's text (a reasonable degradation, and it
+      // reported it honestly as "updated with a note") and scored red for it.
+      // A scenario that reds out correct behavior measures the fixture, not the
+      // model. Same trap as the album/artist case in #1846.
+      //
+      // `replacementCost` is chosen over `isReturned` because scenario 6
+      // already owns the returned-ness transition; re-testing it here would
+      // score the same model behavior twice. "1800" is unambiguous — no
+      // relative-date or unit inference stands between the request and the
+      // write, so a red here means the value did not reach `properties`, which
+      // is the one thing this scenario is for.
+      prompt: "Correction: the laser cutter's replacement cost is 1800, not 2400",
+      expect: {
+        kind: "toolOnce",
+        tool: "update_node",
+        minProperties: 1,
+      },
     },
   ],
   // Multi-custom-type CRUD (scenario 8) shares its own chat node.
