@@ -63,16 +63,18 @@ async fn run_stage1(engine: &LlamaChatInferenceEngine, message: &str) -> Option<
 
 /// Same as `run_stage1`, but blends `prior_turns` into the routing query the
 /// same way `agent_loop.rs::stage1_query` does for a real multi-turn
-/// conversation, via `context_ops::build_retrieval_query` — the exact
-/// function production calls. Needed for golden cases (like scenario 6) whose
-/// discriminating detail only exists relative to earlier turns.
+/// conversation, via `agent_loop::stage1_query_from_turns` — the exact
+/// function production calls (including the PRIOR CONTEXT / CURRENT REQUEST
+/// framing added for #1909, not just the raw `build_retrieval_query` blend).
+/// Needed for golden cases (like scenario 6) whose discriminating detail only
+/// exists relative to earlier turns.
 async fn run_stage1_with_history(
     engine: &LlamaChatInferenceEngine,
     prior_turns: &[&str],
     message: &str,
 ) -> Option<RouteDecision> {
     let routing_query =
-        nodespace_core::ops::context_ops::build_retrieval_query(prior_turns, message);
+        nodespace_agent::local_agent::agent_loop::stage1_query_from_turns(prior_turns, message);
     let request = InferenceRequest {
         messages: vec![
             ChatMessage::text(Role::System, STAGE1_SYSTEM_PROMPT.to_string()),
@@ -145,6 +147,7 @@ async fn stage1_reformulation_for_start_tracking_albums() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[8a] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[8a] route_multi({qs:?})"),
         None => println!("GOLDEN[8a] no valid tool call parsed"),
     }
 }
@@ -169,6 +172,7 @@ async fn stage1_reformulation_for_venue_tracker_control() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[8b control] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[8b control] route_multi({qs:?})"),
         None => println!("GOLDEN[8b control] no valid tool call parsed"),
     }
 }
@@ -192,6 +196,7 @@ async fn stage1_reformulation_for_instance_creation_scenario_4() {
         Some(RouteDecision::Clarify { question, .. }) => {
             println!("GOLDEN[4] route_clarify(\"{question}\")");
         }
+        Some(RouteDecision::Multi(qs)) => println!("GOLDEN[4] route_multi({qs:?})"),
         None => println!("GOLDEN[4] no valid tool call parsed"),
     }
 }
@@ -253,6 +258,12 @@ async fn stage1_reformulation_for_scenario_6_update() {
                 "GOLDEN[6] expected route_query (preserving update intent), got \
                  route_clarify(\"{question}\") instead — Stage 1 should be able to \
                  describe this request as a capability, not ask for clarification."
+            );
+        }
+        Some(RouteDecision::Multi(qs)) => {
+            panic!(
+                "GOLDEN[6] expected route_query for this single-intent update, got \
+                 route_multi({qs:?}) instead — this turn has one intent, not several."
             );
         }
         None => panic!("GOLDEN[6] Stage 1 called no tool or emitted unparseable arguments"),

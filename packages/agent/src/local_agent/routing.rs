@@ -83,12 +83,20 @@ pub enum RouteDecision {
         /// the failure mode to avoid.
         options: Vec<String>,
     },
+    /// The request bundles multiple distinct, unambiguous intents (#1909) —
+    /// one query per intent, each re-entering retrieval independently the
+    /// same way a single `Query` does. Not for a single intent expressed
+    /// verbosely, and not a substitute for `Clarify` when the request is
+    /// genuinely ambiguous rather than compound.
+    Multi(Vec<String>),
 }
 
 /// Wire name of the Stage-1 tool that emits a search query.
 pub const ROUTE_QUERY_TOOL: &str = "route_query";
 /// Wire name of the Stage-1 tool that requests clarification.
 pub const ROUTE_CLARIFY_TOOL: &str = "route_clarify";
+/// Wire name of the Stage-1 tool that emits multiple per-intent queries.
+pub const ROUTE_MULTI_TOOL: &str = "route_multi";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,13 +112,19 @@ struct RouteClarifyParams {
     options: Vec<String>,
 }
 
-/// The two tools offered at Stage 1, and only these two.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteMultiParams {
+    queries: Vec<String>,
+}
+
+/// The three tools offered at Stage 1, and only these three.
 ///
-/// Offering exactly two makes the model's tool choice a discriminated output:
-/// there is no third thing it can call, and no free text to parse. The
-/// alternative — asking in prose for a `QUERY:`/`CLARIFY:` prefix — relies on
-/// the weakest measured channel and needs a parser whose failures are
-/// indistinguishable from model failures.
+/// Offering a fixed, small set makes the model's tool choice a discriminated
+/// output: there is no free text to parse, only a tool name and typed
+/// arguments. The alternative — asking in prose for a `QUERY:`/`CLARIFY:`
+/// prefix — relies on the weakest measured channel and needs a parser whose
+/// failures are indistinguishable from model failures.
 pub fn stage1_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -165,6 +179,32 @@ pub fn stage1_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["question"]
             }),
         },
+        ToolDefinition {
+            name: ROUTE_MULTI_TOOL.to_string(),
+            description: "Use when the request contains two or more DISTINCT, UNAMBIGUOUS intents \
+                 — the user clearly wants several separate things done, not one thing described at \
+                 length. Provide one short query per intent, each built the same way route_query's \
+                 query is (keep the subject noun AND the action/detail for that specific intent). \
+                 Do NOT use this for a single intent, however it's phrased, and do NOT use this \
+                 in place of route_clarify when a single intent is itself ambiguous — those are \
+                 different problems."
+                .to_string(),
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "One short capability query per distinct intent, in the \
+                             order the user mentioned them, each following the same rules as \
+                             route_query's query (keep the subject noun and the action/detail). \
+                             Two or more entries required — a single intent belongs in route_query \
+                             instead."
+                    }
+                },
+                "required": ["queries"]
+            }),
+        },
     ]
 }
 
@@ -194,6 +234,24 @@ pub fn parse_route_decision(tool_name: &str, arguments_json: &str) -> Option<Rou
                 question: question.to_string(),
                 options: p.options,
             })
+        }
+        ROUTE_MULTI_TOOL => {
+            let p: RouteMultiParams = serde_json::from_str(arguments_json).ok()?;
+            let queries: Vec<String> = p
+                .queries
+                .iter()
+                .map(|q| q.trim().to_string())
+                .filter(|q| !q.is_empty())
+                .collect();
+            // Fewer than two non-empty queries is not a genuine compound
+            // intent — either the model over-called this tool for a single
+            // intent (fall through to unrouted retrieval on the raw message
+            // rather than trust a one-element "multi"), or every entry was
+            // blank (no usable decision at all).
+            if queries.len() < 2 {
+                return None;
+            }
+            Some(RouteDecision::Multi(queries))
         }
         _ => None,
     }
@@ -503,10 +561,13 @@ mod tests {
     }
 
     #[test]
-    fn stage1_offers_exactly_the_two_routing_tools() {
+    fn stage1_offers_exactly_the_three_routing_tools() {
         let defs = stage1_tool_definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec![ROUTE_QUERY_TOOL, ROUTE_CLARIFY_TOOL]);
+        assert_eq!(
+            names,
+            vec![ROUTE_QUERY_TOOL, ROUTE_CLARIFY_TOOL, ROUTE_MULTI_TOOL]
+        );
     }
 
     #[test]
@@ -544,6 +605,50 @@ mod tests {
         assert!(parse_route_decision("search_nodes", r#"{"query":"x"}"#).is_none());
         assert!(parse_route_decision(ROUTE_QUERY_TOOL, r#"{"query":"   "}"#).is_none());
         assert!(parse_route_decision(ROUTE_QUERY_TOOL, "not json").is_none());
+    }
+
+    #[test]
+    fn route_multi_parses_two_or_more_queries() {
+        let d = parse_route_decision(
+            ROUTE_MULTI_TOOL,
+            r#"{"queries":["log a $42 lunch expense","remind me to follow up with Sarah Friday"]}"#,
+        );
+        assert_eq!(
+            d,
+            Some(RouteDecision::Multi(vec![
+                "log a $42 lunch expense".into(),
+                "remind me to follow up with Sarah Friday".into(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn route_multi_with_fewer_than_two_usable_queries_yields_no_decision() {
+        // A single-element array is not a genuine compound intent — the model
+        // over-called route_multi for what should have been route_query.
+        // Falling through to "no decision" (unrouted retrieval on the raw
+        // message) beats trusting a one-element "multi".
+        assert!(parse_route_decision(ROUTE_MULTI_TOOL, r#"{"queries":["one thing"]}"#).is_none());
+        // Blank entries don't count toward the two-or-more requirement.
+        assert!(
+            parse_route_decision(ROUTE_MULTI_TOOL, r#"{"queries":["one thing","   "]}"#).is_none()
+        );
+        assert!(parse_route_decision(ROUTE_MULTI_TOOL, r#"{"queries":[]}"#).is_none());
+    }
+
+    #[test]
+    fn route_multi_trims_and_drops_blank_entries_among_valid_ones() {
+        let d = parse_route_decision(
+            ROUTE_MULTI_TOOL,
+            r#"{"queries":["  log expense  ","","  set reminder  "]}"#,
+        );
+        assert_eq!(
+            d,
+            Some(RouteDecision::Multi(vec![
+                "log expense".into(),
+                "set reminder".into(),
+            ]))
+        );
     }
 
     #[test]

@@ -58,8 +58,11 @@ pub const STAGE1_MAX_TOKENS: u32 = 256;
 pub const STAGE1_SYSTEM_PROMPT: &str =
     "You are routing a user's request to the right capability.\n\
     Call route_query with a short description of the capability the request needs.\n\
+    Call route_multi ONLY if the request contains two or more distinct, unambiguous things to do \
+    — not one thing phrased at length.\n\
     Call route_clarify ONLY if the request is too ambiguous to describe at all.\n\
-    Prefer route_query: most requests can be described even when phrased indirectly.\n\
+    Prefer route_query: most requests can be described even when phrased indirectly, and most \
+    requests are a single intent even when they mention several details.\n\
     Call exactly one tool. Do not answer the user.";
 
 /// Opening phrase of a routing clarification.
@@ -382,6 +385,11 @@ struct RoutingOutcome {
 /// Only user/assistant turns are blended, matching `schema_retrieval_query`:
 /// tool results are machine payloads whose vocabulary would dilute the query
 /// rather than sharpen it.
+///
+/// Delegates to [`stage1_query_from_turns`], which does the actual framing —
+/// kept as a free function (not inlined here) so `agent_loop.rs`'s own
+/// golden-prompt test harness can build the exact same Stage-1 message from
+/// `prior_turns: &[&str]` without constructing an `AgentSession`.
 fn stage1_query(session: &AgentSession, user_message: &str) -> String {
     let prior = session
         .messages
@@ -393,7 +401,46 @@ fn stage1_query(session: &AgentSession, user_message: &str) -> String {
         .filter(|m| matches!(m.role, Role::User | Role::Assistant))
         .map(|m| m.content.as_str())
         .collect();
-    nodespace_core::ops::context_ops::build_retrieval_query(&prior_turns, user_message)
+    stage1_query_from_turns(&prior_turns, user_message)
+}
+
+/// Build the Stage-1 chat message from prior turns and the current message.
+///
+/// When prior turns exist, the blended text is wrapped with an explicit
+/// PRIOR CONTEXT / CURRENT REQUEST boundary rather than handed to the model
+/// as one undifferentiated blob. `build_retrieval_query`'s raw
+/// `parts.join("\n")` output is tuned for embedding recall (#1817:
+/// extraction/reformatting measurably hurts it), but Stage 1 is not an
+/// embedding call — it is a chat turn where the model decides `route_query`
+/// vs `route_multi` vs `route_clarify`, and an unlabeled multi-line blob
+/// reads to the model like several things to do, not one request in light of
+/// history. Confirmed live (#1909): `route_multi` fired on genuinely
+/// single-intent turns, fabricating a second "intent" out of blended prior
+/// content. The wrapper only changes what the Stage-1 *chat* message looks
+/// like; `build_retrieval_query`'s own output, used verbatim for schema
+/// retrieval, is untouched.
+pub fn stage1_query_from_turns(prior_turns: &[&str], user_message: &str) -> String {
+    if prior_turns.is_empty() {
+        return user_message.trim().to_string();
+    }
+
+    let blended =
+        nodespace_core::ops::context_ops::build_retrieval_query(prior_turns, user_message);
+    let current = user_message.trim();
+    // `blended` is prior turns + current message joined by "\n", current
+    // last. Split it back apart at that known boundary rather than
+    // re-deriving the trim/cap logic here, so the two constructions cannot
+    // drift apart in what text they contain — only in how it is framed.
+    let prior_blended = blended
+        .strip_suffix(current)
+        .map(|s| s.trim_end_matches('\n'))
+        .unwrap_or(&blended);
+
+    if prior_blended.is_empty() {
+        current.to_string()
+    } else {
+        format!("PRIOR CONTEXT (for background only — do not treat as part of the current request):\n{prior_blended}\n\nCURRENT REQUEST (route this):\n{current}")
+    }
 }
 
 /// Whether this conversation already asked the user to clarify.
@@ -1883,12 +1930,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
 
         let mut routing_decision_tag = "none";
-        let query = match decision {
+        // A single query for Query/None/clarify-suppressed; two or more for
+        // Multi. Retrieval below re-enters once per element — Stage 2's
+        // per-candidate trust boundary and score gating are unchanged, only
+        // how many times retrieval runs for this turn.
+        let queries: Vec<String> = match decision {
             Some(RouteDecision::Query(q)) => {
                 routing_decision_tag = "query";
                 span.set_attribute(KeyValue::new("routing.decision", "query"));
                 span.set_attribute(KeyValue::new("routing.query", q.clone()));
-                q
+                vec![q]
+            }
+            Some(RouteDecision::Multi(qs)) => {
+                routing_decision_tag = "multi";
+                span.set_attribute(KeyValue::new("routing.decision", "multi"));
+                span.set_attribute(KeyValue::new("routing.multi_count", qs.len() as i64));
+                qs
             }
             Some(RouteDecision::Clarify { question, options }) => {
                 // The clarification contract: at most one per intent. If the
@@ -1902,7 +1959,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     tracing::debug!(
                         "stage-1 asked to clarify twice in one intent; falling through to retrieval"
                     );
-                    user_message.to_string()
+                    vec![user_message.to_string()]
                 } else {
                     span.set_attribute(KeyValue::new("routing.decision", "clarify"));
                     outcome.clarification = Some(format_clarification(&question, &options));
@@ -1912,9 +1969,9 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     // path returns before reaching. Both this and that line carry
                     // `routing_decision` as a plain text field (not only an OTel span
                     // attribute) so an eval scraping the daemon's text log — which has
-                    // no OTel exporter attached — can observe which of Stage 1's four
-                    // outcomes (query/clarify/clarify_suppressed/none) fired, rather
-                    // than inferring it from reply text or downstream tool effects.
+                    // no OTel exporter attached — can observe which of Stage 1's five
+                    // outcomes (query/multi/clarify/clarify_suppressed/none) fired,
+                    // rather than inferring it from reply text or downstream tool effects.
                     tracing::info!(
                         routing_decision = "clarify",
                         routing_latency_ms = elapsed_ms,
@@ -1928,7 +1985,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // that would not parse. Retrieve on the raw message rather than
                 // abandoning routing: a weak query still beats none.
                 span.set_attribute(KeyValue::new("routing.decision", "none"));
-                user_message.to_string()
+                vec![user_message.to_string()]
             }
         };
 
@@ -1936,26 +1993,45 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             return outcome;
         }
 
-        match self
-            .tool_executor
-            .retrieve_skills(&query, routing::RETRIEVAL_TOP_K)
-            .await
-        {
-            Ok(r) => {
-                span.set_attribute(KeyValue::new(
-                    "routing.candidates",
-                    r.candidates.len() as i64,
-                ));
-                span.set_attribute(KeyValue::new(
-                    "routing.top_score",
-                    r.candidates.first().map(|c| c.score).unwrap_or(0.0) as f64,
-                ));
-                outcome.candidates = r.candidates;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "skill retrieval failed; continuing unrouted");
+        // Merge candidates across every query, deduped by skill id (a skill
+        // matching more than one intent's query counts once) and capped at
+        // the same RETRIEVAL_TOP_K the single-query path already respects —
+        // a compound request must not silently widen Stage 2's candidate
+        // bound past the system-owned limit ADR-038 requires.
+        let mut merged: Vec<crate::agent_types::SkillCandidate> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut top_score: f32 = 0.0;
+        for query in &queries {
+            match self
+                .tool_executor
+                .retrieve_skills(query, routing::RETRIEVAL_TOP_K)
+                .await
+            {
+                Ok(r) => {
+                    if let Some(s) = r.candidates.first().map(|c| c.score) {
+                        top_score = top_score.max(s);
+                    }
+                    for c in r.candidates {
+                        if seen_ids.insert(c.id.clone()) {
+                            merged.push(c);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, query, "skill retrieval failed for one query; continuing with the rest");
+                }
             }
         }
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        merged.truncate(routing::RETRIEVAL_TOP_K);
+
+        span.set_attribute(KeyValue::new("routing.candidates", merged.len() as i64));
+        span.set_attribute(KeyValue::new("routing.top_score", top_score as f64));
+        outcome.candidates = merged;
 
         // The latency ADR-038 requires be measured rather than assumed. Covers
         // the Stage-1 generation plus the retrieval step — i.e. everything the
@@ -6664,6 +6740,132 @@ mod tests {
         );
     }
 
+    /// A model that calls `route_multi` at Stage 1 with `queries`, then the
+    /// given tool.
+    fn multi_routed_engine(
+        queries: &[&str],
+        tool_name: &str,
+        tool_args: &str,
+        final_text: &str,
+    ) -> MockEngine {
+        MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_MULTI_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "queries": queries }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: tool_name.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: tool_args.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: final_text.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 12,
+                    },
+                },
+            ],
+        ])
+    }
+
+    #[tokio::test]
+    async fn route_multi_issues_one_retrieval_per_query_and_merges_deduped_candidates() {
+        // #1909: route_multi re-enters retrieval once per intent rather than
+        // compressing several intents into Stage 1's single query. This pins
+        // the fan-out (one retrieve_skills call per element of `queries`, in
+        // order) and the merge behavior downstream (agent_loop.rs's
+        // RouteDecision::Multi arm): candidates dedup by skill id across
+        // queries — asserted here via Stage 2's actual injected prompt, not
+        // just that the turn completes, since a failure to dedup would still
+        // let the turn succeed on a duplicated candidate set.
+        let engine = RecordingEngine::new(multi_routed_engine(
+            &["log an expense", "remind me Friday"],
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let prompts = engine.system_prompts_handle();
+        // RoutingToolExecutor returns this same fixed set regardless of query
+        // text (it clones and truncates to `limit`, the same RETRIEVAL_TOP_K
+        // both queries request), so 2 queries produce 2x3 = 6 raw hits with
+        // identical ids before merge. A naive concat would render each
+        // candidate's instructions twice; the merge must collapse that to 3.
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![
+                skill_candidate("highest", 0.9, &["search_nodes"]),
+                skill_candidate("second", 0.7, &["search_nodes"]),
+                skill_candidate("third", 0.5, &["search_nodes"]),
+            ],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "log a $42 lunch expense and remind me to follow up with Sarah on Friday",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            queries.lock().unwrap().as_slice(),
+            &["log an expense".to_string(), "remind me Friday".to_string()],
+            "retrieval must run once per route_multi query, in order"
+        );
+
+        let stage2_prompt = &prompts.lock().unwrap()[1];
+        for kept in ["highest", "second", "third"] {
+            assert!(
+                stage2_prompt.contains(kept),
+                "candidate {kept} must survive the merge: {stage2_prompt}"
+            );
+        }
+        // Each candidate's instruction block would appear twice if the two
+        // queries' identical hits were concatenated rather than deduped by
+        // skill id — this catches a dedup regression the presence checks
+        // above would miss (a duplicated-but-present candidate still
+        // "contains").
+        assert_eq!(
+            stage2_prompt.matches("INSTRUCTIONS FOR highest").count(),
+            1,
+            "a candidate matching both queries must be merged once, not duplicated: {stage2_prompt}"
+        );
+
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+    }
+
     #[tokio::test]
     async fn stage2_tool_surface_is_scoped_to_the_matched_skill() {
         // The matched skill is read-only, so a destructive tool must not be in
@@ -7308,6 +7510,45 @@ mod tests {
             .messages
             .push(ChatMessage::text(Role::User, "find my notes".to_string()));
         assert_eq!(stage1_query(&session, "find my notes"), "find my notes");
+    }
+
+    #[tokio::test]
+    async fn stage1_query_labels_prior_context_separately_from_the_current_request() {
+        // #1909: an unlabeled blend of prior turns + current message read to
+        // the model like several things to do, and route_multi fired on
+        // genuinely single-intent turns as a result. The current request
+        // must be clearly demarcated from background so the model routes
+        // only what the user is asking for *now*.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::text(
+            Role::User,
+            "create an invoice for Acme".to_string(),
+        ));
+        session.messages.push(ChatMessage::text(
+            Role::Assistant,
+            "Created invoice INV-1 for Acme.".to_string(),
+        ));
+        session
+            .messages
+            .push(ChatMessage::text(Role::User, "mark it paid".to_string()));
+
+        let q = stage1_query(&session, "mark it paid");
+        assert!(
+            q.contains("PRIOR CONTEXT"),
+            "prior turns must be introduced as background, not left unlabeled: {q:?}"
+        );
+        assert!(
+            q.contains("CURRENT REQUEST"),
+            "the current message must be explicitly marked as what to route: {q:?}"
+        );
+        let current_request_pos = q.find("CURRENT REQUEST").expect("checked above");
+        let mark_it_paid_pos = q
+            .find("mark it paid")
+            .expect("current message must be present");
+        assert!(
+            mark_it_paid_pos > current_request_pos,
+            "the current message must appear after its CURRENT REQUEST label: {q:?}"
+        );
     }
 
     #[tokio::test]
