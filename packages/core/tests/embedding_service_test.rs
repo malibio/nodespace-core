@@ -17,6 +17,7 @@ use anyhow::Result;
 use nodespace_core::{
     db::SqliteStore,
     models::{EmbeddingConfig, Node},
+    ops::search_ops,
     services::{embedding_service::NodeEmbeddingService, NodeService},
 };
 use nodespace_nlp_engine::{EmbeddingConfig as NlpConfig, EmbeddingService};
@@ -1694,3 +1695,186 @@ async fn test_node_accessor_get_nodes_batch() -> Result<()> {
     assert_eq!(nodes.len(), 2);
     Ok(())
 }
+
+// ============================================================================
+// search_ops::search_semantic — "*" / empty query enumerate behavior (#1940)
+// ============================================================================
+//
+// Before the fix, `search_ops::search_semantic` rejected `query: ""` outright
+// ("query cannot be empty or whitespace") and had no special handling for
+// `"*"` at all — a bare `"*"` was embedded and vector-searched like any other
+// string, which has no defined similarity to real content and reliably
+// returns zero matches. This is the CLI/gRPC-side counterpart to the
+// agent-tool regression coverage in
+// `packages/agent/tests/search_nodes_enumerate.rs`.
+
+fn empty_search_input(
+    query: &str,
+    node_types: Option<Vec<String>>,
+) -> search_ops::SearchSemanticInput {
+    search_ops::SearchSemanticInput {
+        query: query.to_string(),
+        threshold: None,
+        limit: None,
+        collection_id: None,
+        collection: None,
+        exclude_collections: None,
+        include_markdown: None,
+        include_archived: None,
+        scope: None,
+        node_types,
+        property_filters: None,
+        include_edges: None,
+        graph_boost: None,
+    }
+}
+
+/// Acceptance criterion: "create a node of type X out-of-band, then assert
+/// `search_nodes` on type X finds it" — CLI/gRPC path, `query: "*"`.
+#[tokio::test]
+async fn test_search_semantic_wildcard_query_enumerates_out_of_band_node() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    let invoice = create_root_node(&node_service, "invoice", "Some Invoice").await?;
+
+    let input = empty_search_input("*", Some(vec!["invoice".to_string()]));
+    let output = search_ops::search_semantic(&node_service, &embedding_service, input).await?;
+
+    assert_eq!(output.count, 1);
+    assert_eq!(output.nodes[0]["id"], invoice.id);
+    Ok(())
+}
+
+/// Empty/whitespace queries must no longer be rejected — they must behave
+/// identically to `"*"` (both mean "enumerate"), matching the agent-tool path.
+#[tokio::test]
+async fn test_search_semantic_empty_query_enumerates_same_as_wildcard() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    create_root_node(&node_service, "invoice", "Some Invoice").await?;
+
+    let wildcard_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("*", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+    let empty_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+    let whitespace_out = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("   ", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+
+    assert_eq!(wildcard_out.count, 1);
+    assert_eq!(empty_out.count, 1);
+    assert_eq!(whitespace_out.count, 1);
+    Ok(())
+}
+
+/// "How many invoices do we have?" — enumerate scoped to `node_types` must
+/// count every pre-existing instance of that type, not just ones created
+/// through this call, and must not be silently dropped by the default
+/// `Knowledge` scope allowlist (which "invoice" and "task" are not part of).
+#[tokio::test]
+async fn test_search_semantic_enumerate_counts_all_instances_of_type() -> Result<()> {
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    create_root_node(&node_service, "invoice", "Invoice A").await?;
+    create_root_node(&node_service, "invoice", "Invoice B").await?;
+    create_root_node(&node_service, "task", "Task A").await?;
+
+    let output = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("*", Some(vec!["invoice".to_string()])),
+    )
+    .await?;
+
+    assert_eq!(output.count, 2);
+    Ok(())
+}
+
+/// A multi-entry `node_types` enumerate must count every instance of every
+/// requested type, not just the ones that fit under a shared fetch cap. This
+/// pins the fix for `enumerate_nodes` pushing each type down to its own DB
+/// query (independently capped and merged) rather than fetching unfiltered
+/// up to a shared cap and post-filtering by type.
+///
+/// Deliberately exceeds `ENUMERATE_FETCH_CAP` (1000): with the pre-fix
+/// shared-cap-then-post-filter behavior, the 1000-node unfiltered fetch is
+/// dominated by "noise" nodes (of a type never requested), so almost none of
+/// the 6 "invoice"/"task" nodes created *after* the noise would survive the
+/// cap — this test fails against the pre-fix code, unlike a small fixture
+/// which happens to pass either way since it never approaches the cap.
+///
+/// Relies on the enumerate query (`SELECT * FROM node WHERE node_type = ?`,
+/// see `enumerate_nodes` / `SqliteStore::query_nodes`) returning rows in
+/// insertion order — true today because the full-column `SELECT *`
+/// projection is not covered by the `id TEXT PRIMARY KEY` autoindex, forcing
+/// a rowid-order table scan rather than PK-lexicographic (UUID) order. If a
+/// future optimization narrows that projection to only the columns the
+/// autoindex covers, SQLite could switch back to the index and this
+/// noise-first ordering trick would stop being reliable — the fix itself
+/// wouldn't regress, but this test could start silently passing on both old
+/// and new code again.
+#[tokio::test]
+async fn test_search_semantic_enumerate_multi_type_counts_every_type_past_fetch_cap() -> Result<()>
+{
+    let (embedding_service, node_service, _store, _temp_dir) = create_unified_test_env().await?;
+    let node_service = Arc::new(node_service);
+    let embedding_service = Arc::new(embedding_service);
+
+    // Noise: created first, so a shared-cap unfiltered fetch (ordered by
+    // insertion) would exhaust its cap on these before ever reaching the
+    // invoice/task nodes below.
+    for i in 0..1000 {
+        create_root_node(&node_service, "text", &format!("Noise {i}")).await?;
+    }
+
+    create_root_node(&node_service, "invoice", "Invoice A").await?;
+    create_root_node(&node_service, "invoice", "Invoice B").await?;
+    create_root_node(&node_service, "invoice", "Invoice C").await?;
+    create_root_node(&node_service, "task", "Task A").await?;
+    create_root_node(&node_service, "task", "Task B").await?;
+    create_root_node(&node_service, "task", "Task C").await?;
+
+    let output = search_ops::search_semantic(
+        &node_service,
+        &embedding_service,
+        empty_search_input("*", Some(vec!["invoice".to_string(), "task".to_string()])),
+    )
+    .await?;
+
+    assert_eq!(
+        output.count, 6,
+        "expected 3 invoices + 3 tasks despite 1000 nodes of an unrequested type existing first"
+    );
+    Ok(())
+}
+
+// A full integration test of `skip_scope_filter`'s effect on a real,
+// non-enumerate semantic query would require driving `search_semantic`'s
+// embedding path to a genuine similarity match — which requires generating
+// a real *query* embedding via `EmbeddingService::generate_embedding`, and
+// that call unconditionally errors ("Embedding service not ready") unless a
+// real model has been `.initialize()`d (see `embedding.rs`'s
+// `generate_embedding_internal`; there is no zero-vector stub for queries,
+// unlike some other code paths). No model is loaded in this fast test
+// suite, so that path cannot be driven end-to-end here. The regression this
+// finding was about — `skip_scope_filter` firing for non-enumerate queries
+// — is instead pinned directly and exhaustively at the unit level by
+// `search_ops::tests::test_should_skip_scope_filter_only_for_enumerate_with_explicit_node_types_and_default_scope`,
+// which asserts the predicate's value for all 4 boolean combinations.

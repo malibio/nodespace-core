@@ -66,9 +66,7 @@ fn splice_generated_block(source: &str, block: &str) -> String {
         .find(BEGIN_MARKER)
         .unwrap_or_else(|| panic!("SKILL.md is missing the marker: {BEGIN_MARKER}"));
     assert!(
-        source[begin_idx + BEGIN_MARKER.len()..]
-            .find(BEGIN_MARKER)
-            .is_none(),
+        !source[begin_idx + BEGIN_MARKER.len()..].contains(BEGIN_MARKER),
         "SKILL.md has more than one occurrence of the begin marker: {BEGIN_MARKER}"
     );
     let after_begin = begin_idx + BEGIN_MARKER.len();
@@ -77,9 +75,7 @@ fn splice_generated_block(source: &str, block: &str) -> String {
         .unwrap_or_else(|| panic!("SKILL.md is missing the marker: {END_MARKER}"))
         + after_begin;
     assert!(
-        source[end_idx + END_MARKER.len()..]
-            .find(END_MARKER)
-            .is_none(),
+        !source[end_idx + END_MARKER.len()..].contains(END_MARKER),
         "SKILL.md has more than one occurrence of the end marker: {END_MARKER}"
     );
 

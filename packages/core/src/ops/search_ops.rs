@@ -4,7 +4,7 @@
 //! Handles collection resolution, scope filtering, lifecycle filtering,
 //! over-fetching, and optional markdown inlining.
 
-use crate::models::Node;
+use crate::models::{Node, NodeFilter};
 use crate::ops::OpsError;
 use crate::services::{
     CollectionService, NodeEmbeddingService, NodeService, NodeServiceError, SearchNodeFilters,
@@ -13,6 +13,54 @@ use crate::services::{
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// Safety cap on how many nodes are pulled from the DB for an "enumerate"
+/// query (see [`normalize_enumerate_query`]) before service-layer filters
+/// (scope/archived/collection/node_types/property_filters) and `limit` are
+/// applied — mirrors `semantic_search_nodes`'s over-fetch behavior, but an
+/// enumerate has no similarity ranking to over-fetch against, so this is a
+/// flat cap instead of a multiple of `limit`.
+const ENUMERATE_FETCH_CAP: usize = 1000;
+
+/// Recognize the query spellings that mean "list everything (of this type)"
+/// rather than a literal search term, so `search_nodes` (agent path) and
+/// `search_nodes`/`search_semantic` (CLI/gRPC path) agree on what counts as
+/// an enumerate request. Returns `None` for an enumerate query (empty,
+/// whitespace-only, or the conventional wildcard `"*"`); returns
+/// `Some(trimmed)` for anything else, to be used as a literal search term.
+pub fn normalize_enumerate_query(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || trimmed == "*" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Whether the default `Knowledge` scope's allowlist (text/header/code-block/
+/// schema/table) should be bypassed for an explicit `node_types` filter.
+///
+/// An explicit `node_types` filter is a more specific statement of intent
+/// than the default scope guess: without this, a search scoped to
+/// `node_types: ["invoice"]` would return zero results not because no
+/// invoices exist, but because "invoice" isn't a knowledge-scope type — and
+/// no caller of `search_semantic` can express `--scope everything` today (no
+/// CLI/RPC surface for it — see `packages/cli/src/commands/search.rs`).
+///
+/// Scoped to `is_enumerate` only: an ordinary semantic query that also sets
+/// `node_types` (e.g. "overdue payments" + node_types: ["invoice"]) must
+/// keep the default scope filter — bypassing it for every `node_types`-
+/// bearing call would silently disable scope filtering for real semantic
+/// searches too, not just the enumerate case this exists for. An
+/// explicitly-requested non-default `scope` always applies as normal
+/// (`scope_is_default` is `false` in that case).
+fn should_skip_scope_filter(
+    is_enumerate: bool,
+    has_node_types: bool,
+    scope_is_default: bool,
+) -> bool {
+    is_enumerate && has_node_types && scope_is_default
+}
 
 /// Maximum depth for markdown tree traversal
 const MARKDOWN_MAX_DEPTH: usize = 20;
@@ -148,6 +196,69 @@ fn parse_scope(scope: Option<&str>) -> Result<SearchScope, OpsError> {
     }
 }
 
+/// Structural "list everything (of this type)" retrieval for an enumerate
+/// query (see [`normalize_enumerate_query`]) — a DB listing rather than an
+/// embedding-similarity search, since there is no query text to embed.
+///
+/// Returns `(Node, similarity)` pairs with a synthetic `similarity` of `1.0`
+/// so the result shape matches `semantic_search_nodes` and can flow through
+/// the same downstream scope/collection/archived filtering, graph_boost, and
+/// output building in [`search_semantic`].
+///
+/// Every entry in `filters.node_types` is pushed down to the DB query as a
+/// separate `with_node_type` fetch (each independently capped and merged) —
+/// not fetched unfiltered up to a shared cap and post-filtered by type. A
+/// shared-cap-then-post-filter approach silently undercounts once the total
+/// node count (across *all* types) exceeds the cap: the very "silent wrong
+/// count" failure class this function exists to eliminate, just relocated to
+/// a multi-type caller instead of a `"*"` query. `property_filters`, which
+/// has no DB-level pushdown here, is still applied as a post-filter via
+/// [`SearchNodeFilters::matches`], matching how `semantic_search_nodes`
+/// applies the same filters.
+async fn enumerate_nodes(
+    node_service: &Arc<NodeService>,
+    limit: usize,
+    filters: Option<&SearchNodeFilters>,
+) -> Result<Vec<(Node, f64)>, OpsError> {
+    let per_query_limit = ENUMERATE_FETCH_CAP.min(limit.max(1) * 3);
+    let node_types = filters.and_then(|f| f.node_types.as_ref());
+
+    let nodes = match node_types {
+        Some(types) if !types.is_empty() => {
+            let mut merged = Vec::new();
+            for node_type in types {
+                let node_filter = NodeFilter::new()
+                    .with_node_type(node_type.clone())
+                    .with_limit(per_query_limit);
+                let mut matched = node_service
+                    .query_nodes(node_filter)
+                    .await
+                    .map_err(|e| OpsError::Internal(format!("Failed to enumerate nodes: {}", e)))?;
+                merged.append(&mut matched);
+            }
+            merged
+        }
+        _ => {
+            let node_filter = NodeFilter::new().with_limit(per_query_limit);
+            node_service
+                .query_nodes(node_filter)
+                .await
+                .map_err(|e| OpsError::Internal(format!("Failed to enumerate nodes: {}", e)))?
+        }
+    };
+
+    Ok(nodes
+        .into_iter()
+        .filter(|node| {
+            filters
+                .map(|f| f.matches(&node.node_type, &node.properties))
+                .unwrap_or(true)
+        })
+        .take(limit)
+        .map(|node| (node, 1.0))
+        .collect())
+}
+
 // ============================================================================
 // Operation
 // ============================================================================
@@ -179,11 +290,16 @@ pub async fn search_semantic(
             "limit cannot exceed 1000".to_string(),
         ));
     }
-    if input.query.trim().is_empty() {
-        return Err(OpsError::InvalidParams(
-            "query cannot be empty or whitespace".to_string(),
-        ));
-    }
+    // An empty/whitespace query or the conventional wildcard "*" means
+    // "enumerate" rather than "search for this literal term" — same rule the
+    // agent-tool `search_nodes` path applies (see `normalize_enumerate_query`).
+    // Embedding a punctuation-only or empty string has no meaningful
+    // similarity signal, so this bypasses `semantic_search_nodes` entirely in
+    // favor of a structural DB listing (`enumerate_nodes` below), which
+    // returns a synthetic similarity of 1.0 and otherwise flows through the
+    // same scope/collection/archived post-filters and output building as a
+    // real semantic search.
+    let is_enumerate = normalize_enumerate_query(&input.query).is_none();
 
     // Resolve collection include filter
     let (collection_id, collection_member_ids): (Option<String>, Option<HashSet<String>>) =
@@ -291,35 +407,45 @@ pub async fn search_semantic(
         || scope_filters;
     let effective_limit = if has_post_filters { limit * 3 } else { limit };
 
-    let results = embedding_service
-        .semantic_search_nodes(
-            &input.query,
-            effective_limit,
-            threshold,
-            search_filters.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            let err_msg = e.to_string();
-            if err_msg.contains("not initialized") || err_msg.contains("not available") {
-                OpsError::Internal("Embedding service not ready".to_string())
-            } else if err_msg.contains("no embeddings") || err_msg.contains("not found") {
-                OpsError::InvalidParams(
-                    "No content available for semantic search. Try adding content first."
-                        .to_string(),
-                )
-            } else if err_msg.contains("database") || err_msg.contains("Database") {
-                OpsError::Internal(format!("Database error during search: {}", e))
-            } else {
-                OpsError::Internal(format!("Search failed: {}", e))
-            }
-        })?;
+    let results = if is_enumerate {
+        enumerate_nodes(node_service, effective_limit, search_filters.as_ref()).await?
+    } else {
+        embedding_service
+            .semantic_search_nodes(
+                &input.query,
+                effective_limit,
+                threshold,
+                search_filters.as_ref(),
+            )
+            .await
+            .map_err(|e| {
+                let err_msg = e.to_string();
+                if err_msg.contains("not initialized") || err_msg.contains("not available") {
+                    OpsError::Internal("Embedding service not ready".to_string())
+                } else if err_msg.contains("no embeddings") || err_msg.contains("not found") {
+                    OpsError::InvalidParams(
+                        "No content available for semantic search. Try adding content first."
+                            .to_string(),
+                    )
+                } else if err_msg.contains("database") || err_msg.contains("Database") {
+                    OpsError::Internal(format!("Database error during search: {}", e))
+                } else {
+                    OpsError::Internal(format!("Search failed: {}", e))
+                }
+            })?
+    };
+
+    let skip_scope_filter = should_skip_scope_filter(
+        is_enumerate,
+        input.node_types.is_some(),
+        input.scope.is_none(),
+    );
 
     // Apply filters
     let filtered_results: Vec<_> = results
         .into_iter()
         .filter(|(node, _)| {
-            if !NodeEmbeddingService::matches_scope(&node.node_type, &scope) {
+            if !skip_scope_filter && !NodeEmbeddingService::matches_scope(&node.node_type, &scope) {
                 return false;
             }
             if node.lifecycle_status == "archived" && !include_archived {
@@ -515,6 +641,57 @@ mod tests {
     fn test_parse_scope_invalid() {
         let err = parse_scope(Some("bogus")).unwrap_err();
         assert!(matches!(err, OpsError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn test_normalize_enumerate_query_recognizes_enumerate_spellings() {
+        assert_eq!(normalize_enumerate_query(""), None);
+        assert_eq!(normalize_enumerate_query("   "), None);
+        assert_eq!(normalize_enumerate_query("\t\n"), None);
+        assert_eq!(normalize_enumerate_query("*"), None);
+        assert_eq!(normalize_enumerate_query("  *  "), None);
+    }
+
+    #[test]
+    fn test_normalize_enumerate_query_passes_through_literal_terms() {
+        assert_eq!(
+            normalize_enumerate_query("invoice"),
+            Some("invoice".to_string())
+        );
+        assert_eq!(
+            normalize_enumerate_query("  invoice  "),
+            Some("invoice".to_string())
+        );
+        // "*" only means enumerate as the whole (trimmed) query — a wildcard
+        // embedded in a longer literal term is not special-cased.
+        assert_eq!(
+            normalize_enumerate_query("invoice*"),
+            Some("invoice*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_should_skip_scope_filter_only_for_enumerate_with_explicit_node_types_and_default_scope()
+    {
+        // The one case that should skip: enumerate + explicit node_types + no
+        // explicit scope requested.
+        assert!(should_skip_scope_filter(true, true, true));
+
+        // A literal/semantic query must never skip scope filtering, even with
+        // node_types set — this is the bug the review caught: widening
+        // `skip_scope_filter` to every `node_types`-bearing call would
+        // silently disable scope filtering for real semantic searches.
+        assert!(!should_skip_scope_filter(false, true, true));
+
+        // No explicit node_types → nothing to be more specific than the
+        // scope guess, so never skip.
+        assert!(!should_skip_scope_filter(true, false, true));
+        assert!(!should_skip_scope_filter(false, false, true));
+
+        // An explicitly-requested non-default scope always applies as
+        // normal, regardless of enumerate/node_types.
+        assert!(!should_skip_scope_filter(true, true, false));
+        assert!(!should_skip_scope_filter(false, true, false));
     }
 
     /// Verify that graph_boost re-ranking formula correctly promotes well-connected nodes.
