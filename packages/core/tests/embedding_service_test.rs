@@ -1819,6 +1819,17 @@ async fn test_search_semantic_enumerate_counts_all_instances_of_type() -> Result
 /// the 6 "invoice"/"task" nodes created *after* the noise would survive the
 /// cap — this test fails against the pre-fix code, unlike a small fixture
 /// which happens to pass either way since it never approaches the cap.
+///
+/// Relies on the enumerate query (`SELECT * FROM node WHERE node_type = ?`,
+/// see `enumerate_nodes` / `SqliteStore::query_nodes`) returning rows in
+/// insertion order — true today because the full-column `SELECT *`
+/// projection is not covered by the `id TEXT PRIMARY KEY` autoindex, forcing
+/// a rowid-order table scan rather than PK-lexicographic (UUID) order. If a
+/// future optimization narrows that projection to only the columns the
+/// autoindex covers, SQLite could switch back to the index and this
+/// noise-first ordering trick would stop being reliable — the fix itself
+/// wouldn't regress, but this test could start silently passing on both old
+/// and new code again.
 #[tokio::test]
 async fn test_search_semantic_enumerate_multi_type_counts_every_type_past_fetch_cap() -> Result<()>
 {
