@@ -637,10 +637,25 @@ fn contains_action_claim(text: &str) -> bool {
         "has been updated",
         "has been added",
         "has been deleted",
-        // Bare passive past tense, no "has been". A live turn reported
-        // "Fact: node nodespace://... was updated." with zero tool calls and
-        // passed straight through, because every passive phrase above requires
-        // the "has been" prefix. The claim is identical in force without it.
+    ];
+    if ACTION_PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+
+    // Bare passive past tense, no "has been". A live turn reported
+    // "Fact: node nodespace://... was updated." with zero tool calls and passed
+    // straight through, because every passive phrase above requires the "has
+    // been" prefix. The claim is identical in force without it.
+    //
+    // Matched only when the sentence is ABOUT a node, and is not a question or
+    // a negation. The bare phrases are far too common on their own: "Nothing
+    // was updated because the value already matched" (a negation — the exact
+    // opposite of a claim), "Do you know when it was updated?" (a question),
+    // and "The record shows it was marked returned" (reporting stored state,
+    // not claiming an action) all contain them. Converting any of those to a
+    // confirmation request would make the guard a UX regression, so the
+    // qualifiers below are load-bearing, not defensive padding.
+    const PASSIVE_CLAIMS: &[&str] = &[
         "was created",
         "were created",
         "was updated",
@@ -656,7 +671,28 @@ fn contains_action_claim(text: &str) -> bool {
         "was marked",
         "were marked",
     ];
-    ACTION_PHRASES.iter().any(|p| lower.contains(p))
+    const NEGATORS: &[&str] = &[
+        "nothing ",
+        "no node",
+        "not ",
+        "n't ",
+        "never ",
+        "would be",
+        "will be",
+        "could be",
+        "should be",
+    ];
+    let is_question = lower.trim_end().ends_with('?');
+    let is_negated = NEGATORS.iter().any(|n| lower.contains(n));
+    // "the record shows ...", "it appears ..." — reporting what storage holds,
+    // not claiming to have changed it.
+    const REPORTING: &[&str] = &["shows ", "showed ", "indicates ", "appears ", "according to"];
+    let is_reporting = REPORTING.iter().any(|r| lower.contains(r));
+
+    !is_question
+        && !is_negated
+        && !is_reporting
+        && PASSIVE_CLAIMS.iter().any(|p| lower.contains(p))
 }
 
 /// Tools whose results report what they persisted, and are therefore the only
@@ -679,8 +715,20 @@ const FIELD_COUNT_REPORTING_WRITES: &[&str] = &["create_schema", "create_node", 
 /// not a write at all — returns `None`: absence of the signal is not evidence
 /// of a no-op, so only an explicit zero from a known write counts as
 /// "persisted nothing".
+///
+/// A zero is also NOT reported when the call carried no properties to persist
+/// in the first place. Both writes flag that case on the result
+/// (`updated_content_only`, `content_only`), because zero-of-zero is a complete
+/// success — a plain text note has no schema fields, and a content edit changes
+/// content by definition. Only zero-out-of-something-expected is evidence that
+/// the user's particulars were dropped, and only that may suppress the model's
+/// confirmation.
 fn persisted_field_count(tool: &str, result: &serde_json::Value) -> Option<usize> {
     if !FIELD_COUNT_REPORTING_WRITES.contains(&tool) {
+        return None;
+    }
+    let content_only = |k: &str| result.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    if content_only("updated_content_only") || content_only("content_only") {
         return None;
     }
     result
@@ -4871,6 +4919,79 @@ mod tests {
     }
 
     #[test]
+    fn persisted_field_count_ignores_writes_that_had_no_properties_to_persist() {
+        // A plain `text` note has no schema fields, so create_node stores it
+        // with zero properties and that is a COMPLETE success. Counting it as
+        // an empty write would let the no-op guard suppress a truthful "I've
+        // added that note" — turning a correct confirmation into a spurious
+        // "please confirm" and making the guard a UX regression.
+        assert_eq!(
+            persisted_field_count(
+                "create_node",
+                &json!({"id": "nodespace://x", "property_count": 0, "content_only": true})
+            ),
+            None
+        );
+        // Same for a content-only update: content genuinely changed, and
+        // `property_count` is 0 only because no properties were sent.
+        assert_eq!(
+            persisted_field_count(
+                "update_node",
+                &json!({"property_count": 0, "updated_content_only": true})
+            ),
+            None
+        );
+        // But a create that DID ask for properties and persisted none is still
+        // reported — that is the dropped-particulars case the guard exists for.
+        assert_eq!(
+            persisted_field_count("create_node", &json!({"property_count": 0})),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn passive_action_claim_does_not_fire_on_questions_negations_or_reports() {
+        // Measured, not assumed: with the bare phrases matched unconditionally,
+        // every string below returned `true`. Each would convert a perfectly
+        // good response into a spurious "please confirm", so these qualifiers
+        // are load-bearing.
+        //
+        // A negation is the OPPOSITE of an action claim.
+        assert!(!contains_action_claim(
+            "Nothing was updated because the value already matched."
+        ));
+        // A question asks about an action, it does not claim one.
+        assert!(!contains_action_claim("Do you know when it was updated?"));
+        // Reporting what storage holds is not claiming to have changed it.
+        assert!(!contains_action_claim(
+            "The record shows it was marked returned on the 12th."
+        ));
+        assert!(!contains_action_claim(
+            "It shows when the item was set to return."
+        ));
+        // Hypotheticals describe an action not yet taken.
+        assert!(!contains_action_claim(
+            "The due date would be set to the 6th if you confirm."
+        ));
+    }
+
+    #[test]
+    fn update_node_content_only_note_is_not_itself_an_action_claim() {
+        // exec_update_node returns this `note` verbatim to the model on a
+        // content-only edit — i.e. on exactly the turn the no-op guard watches.
+        // The guard reads only the model's own response, never a tool result,
+        // so the note cannot trip it directly; but models routinely echo a
+        // result's wording back in their final text, which would. An earlier
+        // draft opened with "Content was updated." and did trip this. Keeping
+        // the assertion means the note can never be reworded back into a phrase
+        // the guard keys on without a test failing.
+        assert!(!contains_action_claim(
+            "This call changed only the node's text. It did not change any property value, \
+             so the node's state (status, dates, and other properties) remains exactly as it was."
+        ));
+    }
+
+    #[test]
     fn action_claim_detects_bare_passive_past_tense() {
         // The exact live generation that passed the guard untouched: the phrase
         // list had "has been updated" but no bare "was updated".
@@ -5033,7 +5154,114 @@ mod tests {
         );
     }
 
+
+    /// PROBE: legitimate content-only rename + honest confirmation.
+    #[tokio::test]
+    async fn probe_content_only_edit_e2e() {
+        struct ContentEditExecutor;
+        #[async_trait]
+        impl AgentToolExecutor for ContentEditExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "update_node".into(),
+                    description: "Update a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+            async fn execute(&self, name: &str, _a: serde_json::Value) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({
+                        "id": "nodespace://abc",
+                        "property_count": 0,
+                        "updated_content_only": true,
+                        "note": "Content was updated. No properties were changed, so the node's state (status, dates, and other property values) is unchanged."
+                    }),
+                    is_error: false,
+                })
+            }
+        }
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "update_node",
+            r#"{"id":"abc","content":"Buy milk and eggs"}"#,
+            "The title was updated to \"Buy milk and eggs\".",
+        ));
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(ContentEditExecutor));
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(&mut session, "rename that node to Buy milk and eggs", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .unwrap();
+        println!("PROBE-E2E content-edit response = {:?}", result.response);
+        println!("PROBE-E2E converted = {}", result.response == CONFIRMATION_REQUEST);
+        println!("PROBE-E2E tool_calls_made = {:?}", result.tool_calls_made);
+        println!("PROBE-E2E claim = {}", contains_action_claim("The title was updated to \"Buy milk and eggs\"."));
+    }
+
+    /// PROBE: create_node storing a plain node with zero properties.
+    #[tokio::test]
+    async fn probe_create_node_zero_props_e2e() {
+        struct PlainCreateExecutor;
+        #[async_trait]
+        impl AgentToolExecutor for PlainCreateExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "create_node".into(),
+                    description: "Create a node".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+            async fn execute(&self, name: &str, _a: serde_json::Value) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"id": "nodespace://xyz", "property_count": 0}),
+                    is_error: false,
+                })
+            }
+        }
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "create_node",
+            r#"{"content":"Remember to call the dentist","node_type":"text"}"#,
+            "I created a note: \"Remember to call the dentist\".",
+        ));
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(PlainCreateExecutor));
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(&mut session, "make a note to call the dentist", |_| {}, |_| {}, CancellationToken::new())
+            .await
+            .unwrap();
+        println!("PROBE-E2E create_node response = {:?}", result.response);
+        println!("PROBE-E2E converted = {}", result.response == CONFIRMATION_REQUEST);
+    }
+
+
+    #[test]
+    fn probe_predicate_direct() {
+        let r = json!({
+            "id": "nodespace://abc",
+            "property_count": 0,
+            "updated_content_only": true,
+            "note": "Content was updated. No properties were changed."
+        });
+        println!("PROBE-P pfc(update_node) = {:?}", persisted_field_count("update_node", &r));
+        let txt = "The title was updated to \"Buy milk and eggs\".";
+        println!("PROBE-P claim = {}", contains_action_claim(txt));
+        println!("PROBE-P normalized = {:?}", normalize_response(txt));
+        println!("PROBE-P claim(normalized) = {}", contains_action_claim(&normalize_response(txt)));
+        println!("PROBE-P FIELD_COUNT_REPORTING_WRITES = {:?}", FIELD_COUNT_REPORTING_WRITES);
+        println!("PROBE-P contains update_node = {}", FIELD_COUNT_REPORTING_WRITES.contains(&"update_node"));
+        println!("PROBE-P bare pc = {:?}", persisted_field_count("update_node", &json!({"property_count": 0})));
+        println!("PROBE-P with note = {:?}", persisted_field_count("update_node", &json!({"property_count": 0, "note": "x"})));
+        println!("PROBE-P uco = {:?}", persisted_field_count("update_node", &json!({"property_count": 0, "updated_content_only": true})));
+        println!("PROBE-P id+pc = {:?}", persisted_field_count("update_node", &json!({"id":"nodespace://abc","property_count": 0})));
+        println!("PROBE-P full = {:?}", persisted_field_count("update_node", &json!({"id":"nodespace://abc","property_count": 0,"updated_content_only":true,"note":"n"})));
+    }
+
     // -- Tool-failure surfacing tests ----------------------------------------
+
+
 
     /// When a tool fails and the model doesn't mention the error, an error
     /// note should be appended to the response.

@@ -1869,6 +1869,9 @@ impl GraphToolExecutor {
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         props.extend(flat_extras);
+        // Captured before `props` is moved into the input below. See the
+        // `content_only` flag on the result for why this is needed.
+        let requested_any_properties = !props.is_empty();
         let properties = Value::Object(props);
 
         let ns = self.node_service()?;
@@ -1915,11 +1918,27 @@ impl GraphToolExecutor {
             .map(|o| o.len())
             .unwrap_or(0);
 
-        Ok(ok_result(
-            tool_call_id,
-            "create_node",
-            json!({ "id": node_uri(&output.node_id), "property_count": property_count }),
-        ))
+        // Whether the CALL asked for any properties at all. A `property_count`
+        // of 0 means two very different things depending on this: the model
+        // supplied particulars that failed to persist (data loss), or the node
+        // legitimately has no properties — a plain `text` note has no schema
+        // fields, so zero-of-zero is a complete success. Flagged so the
+        // agent-loop's no-op guard can suppress a false confirmation without
+        // also suppressing a truthful one.
+        let content_only = !requested_any_properties;
+
+        let mut result = json!({
+            "id": node_uri(&output.node_id),
+            "property_count": property_count,
+        });
+        if content_only {
+            result
+                .as_object_mut()
+                .expect("literal is an object")
+                .insert("content_only".into(), json!(true));
+        }
+
+        Ok(ok_result(tool_call_id, "create_node", result))
     }
 
     async fn exec_update_node(
@@ -2054,11 +2073,19 @@ impl GraphToolExecutor {
             obj.insert("updated".into(), json!(true));
         } else {
             obj.insert("updated_content_only".into(), json!(true));
+            // Phrased to avoid the bare passive forms `contains_action_claim`
+            // keys on ("was updated", "was set to", ...). Models frequently
+            // echo a tool result's wording back in their final text, and this
+            // note is returned on a turn whose write persisted no properties —
+            // precisely the turn the no-op guard is watching. Wording it as an
+            // active statement of scope keeps the tool from feeding the model a
+            // phrase the guard would then convert to a confirmation request.
             obj.insert(
                 "note".into(),
                 json!(
-                    "Content was updated. No properties were changed, so the node's state \
-                     (status, dates, and other property values) is unchanged."
+                    "This call changed only the node's text. It did not change any property \
+                     value, so the node's state (status, dates, and other properties) remains \
+                     exactly as it was."
                 ),
             );
         }
@@ -4159,6 +4186,51 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(stored.result["properties"]["due_date"], json!("2026-08-06"));
+        }
+
+        /// A plain text note has no schema fields, so create_node persists it
+        /// with zero properties — a complete success, not a dropped-particulars
+        /// failure. Flagged `content_only` so the agent loop's no-op guard does
+        /// not suppress a truthful confirmation of it.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_without_properties_is_flagged_content_only() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({"content": "Remember to call the vet", "node_type": "text"}),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert_eq!(result.result["property_count"], json!(0));
+            assert_eq!(result.result["content_only"], json!(true));
+        }
+
+        /// ...whereas a create that DID supply properties carries no such flag,
+        /// so a zero count there still reads as dropped particulars.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_with_properties_is_not_flagged_content_only() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns);
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": "Buy milk",
+                        "node_type": "task",
+                        "properties": {"status": "in_progress"},
+                    }),
+                )
+                .await
+                .unwrap();
+
+            assert!(!result.is_error);
+            assert!(result.result.get("content_only").is_none());
         }
 
         /// The pre-existing both-absent guard is unchanged.
