@@ -369,6 +369,14 @@ pub fn repair_tool_call_arguments(arguments_json: &mut String) {
 /// means whatever the user wrote and no repair is this function's to make. The
 /// malformation this exists for appears in the model's *structural* slots —
 /// `filters`, `fields` — which remain covered.
+///
+/// Note what that safety rests on: an enumerated list of user-data keys, i.e. a
+/// denylist. It covers every parameter the current tools expose, but a tool
+/// added later with a free-text parameter under some other name (`body`,
+/// `note`, `summary`) would silently fall back inside the blast radius. Whoever
+/// adds one must extend the list here. Inverting to an allowlist of structural
+/// slots would fail safe instead, and is the better shape if this list ever
+/// grows past a couple of entries.
 fn repair_spliced_object_values(args: &mut serde_json::Value) {
     match args {
         serde_json::Value::Object(obj) => {
@@ -7420,9 +7428,13 @@ mod tests {
         let mut args = clean.to_string();
         repair_tool_call_arguments(&mut args);
         assert_eq!(args, clean);
+    }
 
-        // Unparseable arguments cannot be repaired structurally and must reach
-        // the parse-failure path unchanged, which reports the real malformation.
+    /// Unparseable arguments cannot be repaired structurally and must reach the
+    /// parse-failure path unchanged, which reports the real malformation rather
+    /// than something this function invented on the way past.
+    #[test]
+    fn repair_entry_point_leaves_unparseable_arguments_unchanged() {
         let broken = r#"{"query": "unterminated"#;
         let mut args = broken.to_string();
         repair_tool_call_arguments(&mut args);

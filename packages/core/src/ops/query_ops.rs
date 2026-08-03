@@ -197,11 +197,10 @@ impl AgentFilterItem {
 
 /// Whether `s` names one of the four filter categories.
 ///
-/// Kept beside [`parse_filter_type`], which is the authority on the set; this
-/// answers the same question without producing an error value, so
-/// [`AgentFilterItem::category`] can test a candidate before committing to it.
+/// Defers to [`parse_filter_type`] rather than re-listing the set, so there is
+/// exactly one authority on what a category is and the two cannot drift apart.
 fn is_known_category(s: &str) -> bool {
-    matches!(s, "property" | "content" | "relationship" | "metadata")
+    parse_filter_type(s).is_ok()
 }
 
 fn to_query_filter(item: AgentFilterItem) -> Result<QueryFilter, OpsError> {
