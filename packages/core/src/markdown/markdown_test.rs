@@ -2545,10 +2545,45 @@ mod mention_collection_tests {
             "source-root-uuid",
         );
 
-        // Should collect one mention from source to target
+        // Should collect one mention sourced from the node that held the link.
         assert_eq!(result.mentions.len(), 1);
-        assert_eq!(result.mentions[0].0, "source-root-uuid");
+        assert_eq!(result.mentions[0].0, "node1");
         assert_eq!(result.mentions[0].1, "target-uuid-123");
+    }
+
+    #[test]
+    fn test_anchored_file_link_resolves_and_is_preserved() {
+        // Regression: `[Text](file.md#section)` must resolve to the file's root and
+        // keep the link — the `#anchor` must not make the batch lookup miss and
+        // strip the link to plain text (content loss). One bare link and one anchored
+        // link to the same file, both in one node.
+        let mut nodes = vec![PreparedNode::new(
+            "node1".to_string(),
+            "text",
+            "Bare [Doc](target-doc.md) and anchored [Section One](target-doc.md#section-one)."
+                .to_string(),
+            None,
+            1.0,
+            json!({}),
+        )];
+
+        let mut file_map = HashMap::new();
+        file_map.insert(PathBuf::from("target-doc.md"), "target-root".to_string());
+
+        let result =
+            transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-root");
+
+        // Both links transform to the same nodespace:// target; the anchor is dropped
+        // but neither markdown link is destroyed.
+        assert_eq!(
+            nodes[0].content,
+            "Bare [Doc](nodespace://target-root) and anchored [Section One](nodespace://target-root)."
+        );
+        // The anchored link resolves and produces a mention (previously it was lost).
+        assert!(result
+            .mentions
+            .iter()
+            .any(|(s, t)| s == "node1" && t == "target-root"));
     }
 
     #[test]
@@ -2643,9 +2678,9 @@ mod mention_collection_tests {
         let result =
             transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-uuid");
 
-        // Resolved anchor should produce a mention
+        // Resolved anchor should produce a mention sourced from the containing node.
         assert_eq!(result.mentions.len(), 1);
-        assert_eq!(result.mentions[0].0, "source-uuid");
+        assert_eq!(result.mentions[0].0, "node1");
         assert_eq!(result.mentions[0].1, "heading-uuid");
         // And should be transformed to nodespace:// link
         assert_eq!(
@@ -2695,7 +2730,7 @@ mod mention_collection_tests {
 
         // Existing nodespace:// links SHOULD produce mentions (handles re-imports)
         assert_eq!(result.mentions.len(), 1);
-        assert_eq!(result.mentions[0].0, "source-uuid");
+        assert_eq!(result.mentions[0].0, "node1");
         assert_eq!(result.mentions[0].1, "target-abc-123");
     }
 
@@ -2754,13 +2789,15 @@ mod mention_collection_tests {
         let result =
             transform_links_in_nodes_with_mentions(&mut nodes, &file_map, None, "source-root");
 
-        // Should collect mentions from both nodes
+        // Should collect mentions from both nodes, each sourced from the node that
+        // held the link (not collapsed to the document root).
         assert_eq!(result.mentions.len(), 2);
-
-        // All mentions should have the same source (root)
-        for (source, _) in &result.mentions {
-            assert_eq!(source, "source-root");
-        }
+        assert!(result
+            .mentions
+            .contains(&("node1".to_string(), "uuid-1".to_string())));
+        assert!(result
+            .mentions
+            .contains(&("node2".to_string(), "uuid-2".to_string())));
     }
 
     #[test]
