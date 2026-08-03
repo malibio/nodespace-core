@@ -659,15 +659,30 @@ fn contains_action_claim(text: &str) -> bool {
     ACTION_PHRASES.iter().any(|p| lower.contains(p))
 }
 
+/// Tools whose results report what they persisted, and are therefore the only
+/// ones [`persisted_field_count`] may read a count from.
+///
+/// Keyed by tool NAME rather than by result shape because the shapes are not
+/// unique to writes: `get_node` on a schema node returns that schema's `fields`
+/// array, which is indistinguishable from `create_schema`'s report of the
+/// fields it just wrote. Reading a schema that happens to define zero fields
+/// would otherwise look exactly like a write that persisted nothing, and a
+/// read-only turn would trip the no-op guard.
+const FIELD_COUNT_REPORTING_WRITES: &[&str] = &["create_schema", "create_node", "update_node"];
+
 /// Whether a tool execution demonstrably persisted something.
 ///
 /// Reads the same signal the `Tool executed` log line reports as
 /// `result_field_count`: `fields` (create_schema) or `property_count`
 /// (create_node / update_node). Both answer "did this call record anything the
-/// user could later resolve against". A tool that reports neither is not a
-/// write and returns `None` — absence of the signal is not evidence of a no-op,
-/// so only an explicit zero counts as "persisted nothing".
-fn persisted_field_count(result: &serde_json::Value) -> Option<usize> {
+/// user could later resolve against". A tool that reports neither — or that is
+/// not a write at all — returns `None`: absence of the signal is not evidence
+/// of a no-op, so only an explicit zero from a known write counts as
+/// "persisted nothing".
+fn persisted_field_count(tool: &str, result: &serde_json::Value) -> Option<usize> {
+    if !FIELD_COUNT_REPORTING_WRITES.contains(&tool) {
+        return None;
+    }
     result
         .get("fields")
         .and_then(|f| f.as_array())
@@ -1298,7 +1313,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let write_field_counts: Vec<usize> = all_tool_executions
                     .iter()
                     .filter(|r| !r.is_error)
-                    .filter_map(|r| persisted_field_count(&r.result))
+                    .filter_map(|r| persisted_field_count(&r.name, &r.result))
                     .collect();
                 let all_writes_were_empty =
                     !write_field_counts.is_empty() && write_field_counts.iter().all(|&c| c == 0);
@@ -1676,7 +1691,8 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // below, so what is logged and what is gated on can never drift
                 // apart — the signal was previously computed here and only
                 // logged, never acted on.
-                let result_field_count = persisted_field_count(&result_value);
+                let result_field_count =
+                    persisted_field_count(&tc.function_name, &result_value);
 
                 tracing::info!(
                     tool = %tc.function_name,
@@ -4802,13 +4818,19 @@ mod tests {
     fn persisted_field_count_reads_both_write_signals() {
         // create_schema reports what it persisted as an array...
         assert_eq!(
-            persisted_field_count(&json!({"fields": ["title", "due_date"]})),
+            persisted_field_count("create_schema", &json!({"fields": ["title", "due_date"]})),
             Some(2)
         );
         // ...create_node / update_node as a bare count.
-        assert_eq!(persisted_field_count(&json!({"property_count": 3})), Some(3));
+        assert_eq!(
+            persisted_field_count("create_node", &json!({"property_count": 3})),
+            Some(3)
+        );
         // The zero that this issue's call returned alongside `updated: true`.
-        assert_eq!(persisted_field_count(&json!({"property_count": 0})), Some(0));
+        assert_eq!(
+            persisted_field_count("update_node", &json!({"property_count": 0})),
+            Some(0)
+        );
     }
 
     #[test]
@@ -4816,8 +4838,34 @@ mod tests {
         // A read tool carries neither signal. `None`, not `Some(0)` — absence of
         // the signal must not be read as "persisted nothing", or every
         // search-only turn would trip the no-op guard.
-        assert_eq!(persisted_field_count(&json!({"results": []})), None);
-        assert_eq!(persisted_field_count(&json!({})), None);
+        assert_eq!(persisted_field_count("search_nodes", &json!({"results": []})), None);
+        assert_eq!(persisted_field_count("get_node", &json!({})), None);
+    }
+
+    #[test]
+    fn persisted_field_count_ignores_a_schema_read_that_looks_like_a_write() {
+        // `get_node` on a SCHEMA node returns that schema's own `fields` array,
+        // which is shape-identical to create_schema's report of what it just
+        // wrote. Keyed by tool name precisely so this cannot be mistaken for a
+        // write: a schema defining zero fields would otherwise read as
+        // "persisted nothing" and trip the no-op guard on a read-only turn.
+        assert_eq!(
+            persisted_field_count("get_node", &json!({"fields": [], "nodeType": "schema"})),
+            None
+        );
+        assert_eq!(
+            persisted_field_count(
+                "get_node",
+                &json!({"fields": [{"name": "amount"}], "nodeType": "schema"})
+            ),
+            None
+        );
+        // update_task_status is a genuine write, but reports neither signal —
+        // it must not be counted as an empty write either.
+        assert_eq!(
+            persisted_field_count("update_task_status", &json!({"updated": true})),
+            None
+        );
     }
 
     #[test]
