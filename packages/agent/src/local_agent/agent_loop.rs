@@ -6740,6 +6740,132 @@ mod tests {
         );
     }
 
+    /// A model that calls `route_multi` at Stage 1 with `queries`, then the
+    /// given tool.
+    fn multi_routed_engine(
+        queries: &[&str],
+        tool_name: &str,
+        tool_args: &str,
+        final_text: &str,
+    ) -> MockEngine {
+        MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_MULTI_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "queries": queries }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: tool_name.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: tool_args.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: final_text.into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 12,
+                    },
+                },
+            ],
+        ])
+    }
+
+    #[tokio::test]
+    async fn route_multi_issues_one_retrieval_per_query_and_merges_deduped_candidates() {
+        // #1909: route_multi re-enters retrieval once per intent rather than
+        // compressing several intents into Stage 1's single query. This pins
+        // the fan-out (one retrieve_skills call per element of `queries`, in
+        // order) and the merge behavior downstream (agent_loop.rs's
+        // RouteDecision::Multi arm): candidates dedup by skill id across
+        // queries — asserted here via Stage 2's actual injected prompt, not
+        // just that the turn completes, since a failure to dedup would still
+        // let the turn succeed on a duplicated candidate set.
+        let engine = RecordingEngine::new(multi_routed_engine(
+            &["log an expense", "remind me Friday"],
+            "search_nodes",
+            r#"{"query":"x"}"#,
+            "Done.",
+        ));
+        let prompts = engine.system_prompts_handle();
+        // RoutingToolExecutor returns this same fixed set regardless of query
+        // text (it clones and truncates to `limit`, the same RETRIEVAL_TOP_K
+        // both queries request), so 2 queries produce 2x3 = 6 raw hits with
+        // identical ids before merge. A naive concat would render each
+        // candidate's instructions twice; the merge must collapse that to 3.
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new(),
+            vec![
+                skill_candidate("highest", 0.9, &["search_nodes"]),
+                skill_candidate("second", 0.7, &["search_nodes"]),
+                skill_candidate("third", 0.5, &["search_nodes"]),
+            ],
+        );
+        let queries = exec.queries_handle();
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "log a $42 lunch expense and remind me to follow up with Sarah on Friday",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            queries.lock().unwrap().as_slice(),
+            &["log an expense".to_string(), "remind me Friday".to_string()],
+            "retrieval must run once per route_multi query, in order"
+        );
+
+        let stage2_prompt = &prompts.lock().unwrap()[1];
+        for kept in ["highest", "second", "third"] {
+            assert!(
+                stage2_prompt.contains(kept),
+                "candidate {kept} must survive the merge: {stage2_prompt}"
+            );
+        }
+        // Each candidate's instruction block would appear twice if the two
+        // queries' identical hits were concatenated rather than deduped by
+        // skill id — this catches a dedup regression the presence checks
+        // above would miss (a duplicated-but-present candidate still
+        // "contains").
+        assert_eq!(
+            stage2_prompt.matches("INSTRUCTIONS FOR highest").count(),
+            1,
+            "a candidate matching both queries must be merged once, not duplicated: {stage2_prompt}"
+        );
+
+        assert_eq!(result.tool_calls_made[0].name, "search_nodes");
+    }
+
     #[tokio::test]
     async fn stage2_tool_surface_is_scoped_to_the_matched_skill() {
         // The matched skill is read-only, so a destructive tool must not be in
