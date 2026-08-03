@@ -1588,11 +1588,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // well-formed calls it is meant to pass.
                 //
                 // Two shapes report it: `fields` (create_schema — the array it
-                // persisted) and `property_count` (create_node — a bare count,
-                // since its result carries only the new node's id). Both answer
-                // the same question, "did this call persist anything the user
-                // can actually record against", so both feed one field rather
-                // than two the scraper would have to reconcile.
+                // persisted) and `property_count` (create_node and update_node
+                // — a bare count, since their results carry only the node's
+                // id). All answer the same question, "did this call persist
+                // anything the user can actually record against", so they feed
+                // one field rather than several the scraper would have to
+                // reconcile. On update_node the count is of what the CALL
+                // supplied, so an id-only call reports 0 rather than the
+                // node's existing property count.
                 let result_field_count = result_value
                     .get("fields")
                     .and_then(|f| f.as_array())
