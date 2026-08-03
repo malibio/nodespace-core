@@ -37,6 +37,31 @@ pub fn normalize_enumerate_query(query: &str) -> Option<String> {
     }
 }
 
+/// Whether the default `Knowledge` scope's allowlist (text/header/code-block/
+/// schema/table) should be bypassed for an explicit `node_types` filter.
+///
+/// An explicit `node_types` filter is a more specific statement of intent
+/// than the default scope guess: without this, a search scoped to
+/// `node_types: ["invoice"]` would return zero results not because no
+/// invoices exist, but because "invoice" isn't a knowledge-scope type — and
+/// no caller of `search_semantic` can express `--scope everything` today (no
+/// CLI/RPC surface for it — see `packages/cli/src/commands/search.rs`).
+///
+/// Scoped to `is_enumerate` only: an ordinary semantic query that also sets
+/// `node_types` (e.g. "overdue payments" + node_types: ["invoice"]) must
+/// keep the default scope filter — bypassing it for every `node_types`-
+/// bearing call would silently disable scope filtering for real semantic
+/// searches too, not just the enumerate case this exists for. An
+/// explicitly-requested non-default `scope` always applies as normal
+/// (`scope_is_default` is `false` in that case).
+fn should_skip_scope_filter(
+    is_enumerate: bool,
+    has_node_types: bool,
+    scope_is_default: bool,
+) -> bool {
+    is_enumerate && has_node_types && scope_is_default
+}
+
 /// Maximum depth for markdown tree traversal
 const MARKDOWN_MAX_DEPTH: usize = 20;
 
@@ -178,9 +203,16 @@ fn parse_scope(scope: Option<&str>) -> Result<SearchScope, OpsError> {
 /// Returns `(Node, similarity)` pairs with a synthetic `similarity` of `1.0`
 /// so the result shape matches `semantic_search_nodes` and can flow through
 /// the same downstream scope/collection/archived filtering, graph_boost, and
-/// output building in [`search_semantic`]. When `filters` names exactly one
-/// node type, that filter is pushed down to the DB query; multi-type and
-/// property filters are applied as a post-filter via
+/// output building in [`search_semantic`].
+///
+/// Every entry in `filters.node_types` is pushed down to the DB query as a
+/// separate `with_node_type` fetch (each independently capped and merged) —
+/// not fetched unfiltered up to a shared cap and post-filtered by type. A
+/// shared-cap-then-post-filter approach silently undercounts once the total
+/// node count (across *all* types) exceeds the cap: the very "silent wrong
+/// count" failure class this function exists to eliminate, just relocated to
+/// a multi-type caller instead of a `"*"` query. `property_filters`, which
+/// has no DB-level pushdown here, is still applied as a post-filter via
 /// [`SearchNodeFilters::matches`], matching how `semantic_search_nodes`
 /// applies the same filters.
 async fn enumerate_nodes(
@@ -188,20 +220,32 @@ async fn enumerate_nodes(
     limit: usize,
     filters: Option<&SearchNodeFilters>,
 ) -> Result<Vec<(Node, f64)>, OpsError> {
-    let single_type = filters
-        .and_then(|f| f.node_types.as_ref())
-        .filter(|types| types.len() == 1)
-        .map(|types| types[0].clone());
+    let per_query_limit = ENUMERATE_FETCH_CAP.min(limit.max(1) * 3);
+    let node_types = filters.and_then(|f| f.node_types.as_ref());
 
-    let mut node_filter = NodeFilter::new().with_limit(ENUMERATE_FETCH_CAP.min(limit.max(1) * 3));
-    if let Some(node_type) = single_type {
-        node_filter = node_filter.with_node_type(node_type);
-    }
-
-    let nodes = node_service
-        .query_nodes(node_filter)
-        .await
-        .map_err(|e| OpsError::Internal(format!("Failed to enumerate nodes: {}", e)))?;
+    let nodes = match node_types {
+        Some(types) if !types.is_empty() => {
+            let mut merged = Vec::new();
+            for node_type in types {
+                let node_filter = NodeFilter::new()
+                    .with_node_type(node_type.clone())
+                    .with_limit(per_query_limit);
+                let mut matched = node_service
+                    .query_nodes(node_filter)
+                    .await
+                    .map_err(|e| OpsError::Internal(format!("Failed to enumerate nodes: {}", e)))?;
+                merged.append(&mut matched);
+            }
+            merged
+        }
+        _ => {
+            let node_filter = NodeFilter::new().with_limit(per_query_limit);
+            node_service
+                .query_nodes(node_filter)
+                .await
+                .map_err(|e| OpsError::Internal(format!("Failed to enumerate nodes: {}", e)))?
+        }
+    };
 
     Ok(nodes
         .into_iter()
@@ -391,18 +435,11 @@ pub async fn search_semantic(
             })?
     };
 
-    // An explicit `node_types` filter is a more specific statement of intent
-    // than the default scope guess: `scope` defaults to `Knowledge`, whose
-    // allowlist (text/header/code-block/schema/table) silently drops any
-    // caller-requested type outside it — e.g. a search scoped to
-    // `node_types: ["invoice"]` would return zero results not because no
-    // invoices exist, but because "invoice" isn't a knowledge-scope type and
-    // no caller of this function can express `--scope everything` today (no
-    // CLI/RPC surface for it — see `packages/cli/src/commands/search.rs`).
-    // Skip the scope check in that case; the caller already said exactly
-    // which types they want. An explicitly-requested non-default `scope`
-    // still applies as normal.
-    let skip_scope_filter = input.node_types.is_some() && input.scope.is_none();
+    let skip_scope_filter = should_skip_scope_filter(
+        is_enumerate,
+        input.node_types.is_some(),
+        input.scope.is_none(),
+    );
 
     // Apply filters
     let filtered_results: Vec<_> = results
@@ -631,6 +668,30 @@ mod tests {
             normalize_enumerate_query("invoice*"),
             Some("invoice*".to_string())
         );
+    }
+
+    #[test]
+    fn test_should_skip_scope_filter_only_for_enumerate_with_explicit_node_types_and_default_scope()
+    {
+        // The one case that should skip: enumerate + explicit node_types + no
+        // explicit scope requested.
+        assert!(should_skip_scope_filter(true, true, true));
+
+        // A literal/semantic query must never skip scope filtering, even with
+        // node_types set — this is the bug the review caught: widening
+        // `skip_scope_filter` to every `node_types`-bearing call would
+        // silently disable scope filtering for real semantic searches.
+        assert!(!should_skip_scope_filter(false, true, true));
+
+        // No explicit node_types → nothing to be more specific than the
+        // scope guess, so never skip.
+        assert!(!should_skip_scope_filter(true, false, true));
+        assert!(!should_skip_scope_filter(false, false, true));
+
+        // An explicitly-requested non-default scope always applies as
+        // normal, regardless of enumerate/node_types.
+        assert!(!should_skip_scope_filter(true, true, false));
+        assert!(!should_skip_scope_filter(false, true, false));
     }
 
     /// Verify that graph_boost re-ranking formula correctly promotes well-connected nodes.
