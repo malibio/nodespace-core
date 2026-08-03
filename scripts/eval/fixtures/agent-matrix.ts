@@ -152,7 +152,32 @@ function callPersistedProperties(
   min: number,
 ): Verdict {
   for (const c of calls) {
-    if (c.name !== tool || c.isError) continue;
+    if (c.name !== tool) continue;
+    // An errored call to the TARGET tool is a failure, not something to skip.
+    // Once the tool-boundary gate rejects a no-op update_node, the reproducing
+    // shape arrives here as `isError` — skipping it made the scenario score
+    // green on exactly the defect it was added to catch. `schemaCallsAreSound`
+    // already treats isError this way; this is the missing instance-side half.
+    if (c.isError) {
+      return {
+        passed: false,
+        failure:
+          `${tool} was rejected, so the requested change never reached storage — ` +
+          `the turn did not accomplish what the prompt asked for`,
+      };
+    }
+    // The write reported that it had no properties to persist. That is a
+    // complete success for a plain note or a rename, but this assertion is
+    // only set on scenarios whose prompt DOES supply a value to store, so
+    // here it means the value never made it into `properties`.
+    if (c.contentOnly) {
+      return {
+        passed: false,
+        failure:
+          `${tool} changed only content and persisted no property values, but the ` +
+          `prompt supplied a value to store — the requested state change was not recorded`,
+      };
+    }
     if (c.fieldCount === undefined) continue;
     if (c.fieldCount < min) {
       return {
@@ -290,7 +315,10 @@ const GROUPS: MatrixScenario[][] = [
       expect: { kind: "noTools" },
     },
   ],
-  // Single-custom-type CRUD chain (scenarios 3-7) shares one chat node.
+  // Single-custom-type CRUD chain (scenarios 3-7, then 9) shares one chat node.
+  // Scenario 9 is deliberately last: it needs the laser cutter that scenario 4
+  // creates, and referring to it by name keeps its own resolution a direct
+  // string match rather than the indirect reference scenario 6 exercises.
   [
     {
       id: "3",

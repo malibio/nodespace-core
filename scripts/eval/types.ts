@@ -29,6 +29,17 @@ export interface ToolCallRecord {
    * design (a call carrying neither `fields` nor `description` succeeds).
    */
   fieldCount?: number;
+  /**
+   * The write had no properties to persist in the first place — a plain text
+   * node, or an update that changed only content. Both legitimately report a
+   * count of zero, so the tool omits `fieldCount` for them.
+   *
+   * Without this, that absence is indistinguishable from a baseline recorded
+   * before the field existed, and `callPersistedProperties` skips the call as
+   * "unknown" — which made a `minProperties` assertion pass whether or not the
+   * model actually persisted anything.
+   */
+  contentOnly?: boolean;
 }
 
 /** One turn's observable outcome, scraped from an aichat.ts run. */

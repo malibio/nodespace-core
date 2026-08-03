@@ -114,11 +114,14 @@ export function parseTurnOutput(out: string, latencyMs: number): TurnRecord {
   // real tool call. Caught in review as a direct consequence of introducing
   // arbitrary model text into this same stdout stream via the [raw] marker.
   const toolCalls: ToolCallRecord[] = [
-    ...out.matchAll(/^\[tool\] ([a-z_]+)( \[ERROR\])?( \[fields=(\d+)\])?/gm),
+    ...out.matchAll(
+      /^\[tool\] ([a-z_]+)( \[ERROR\])?( \[fields=(\d+)\])?( \[content-only\])?/gm,
+    ),
   ].map((m) => ({
     name: m[1],
     isError: m[2] !== undefined,
     ...(m[4] === undefined ? {} : { fieldCount: Number(m[4]) }),
+    ...(m[5] === undefined ? {} : { contentOnly: true }),
   }));
 
   // Raw generations, one per ReAct iteration: `[raw] iteration=N <json-string>`.

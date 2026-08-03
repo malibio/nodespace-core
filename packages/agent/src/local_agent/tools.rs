@@ -2013,6 +2013,13 @@ impl GraphToolExecutor {
         // shape (ADR-064). The comparison is against the node's stored content,
         // so it rejects only calls that are demonstrably inert, never a genuine
         // content edit.
+        //
+        // This check is ADVISORY and deliberately not serialized against the
+        // write: another writer could change the content between this read and
+        // the update below, so a call this passes could turn out inert (or the
+        // reverse). The consequence is only a missed or spurious diagnostic —
+        // never data corruption, since the ops layer's version check still
+        // guards the write itself. Do not read this as an atomicity guarantee.
         if new_properties.is_none() {
             if let Some(ref content) = params.content {
                 let current = node_ops::get_node(
