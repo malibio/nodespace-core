@@ -462,6 +462,69 @@ const GROUPS: MatrixScenario[][] = [
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
   ],
+  // Core-type schema fields (scenario 10) shares its own chat node.
+  //
+  // Every group above builds its own CUSTOM type first, which is precisely why
+  // this gap went unmeasured: a custom type's fields reach the model through
+  // the RELEVANT ENTITY TYPES block, and that block excludes core types by
+  // construction. So `task`'s own defined fields — due_date, priority,
+  // assignee — were invisible from every direction, and the matrix could not
+  // see it because no scenario ever acted on a core type.
+  //
+  // These use `task` deliberately and create it with `properties` unset beyond
+  // the minimum, so the fields under test are defined-but-unset — the exact
+  // state where "field exists" and "field does not exist" were
+  // indistinguishable.
+  [
+    {
+      id: "10a",
+      scenario: "10a. Core-type instance creation",
+      // Winnability: due_date, priority and assignee are all defined on the
+      // seeded core task schema, so 10b and 10c are answerable in principle.
+      // This turn deliberately supplies NONE of them — the following scenarios
+      // are about writing and filtering a field that has no value yet, which is
+      // only a real test if it starts unset.
+      prompt: "Add a task to schedule the chip upgrade on the Polestar",
+      expect: { kind: "toolOnce", tool: "create_node" },
+    },
+    {
+      id: "10b",
+      scenario: "10b. Set a defined-but-unset core field",
+      // The reported failure: the model asked the user "what field name is
+      // used on this task node that tracks dates?" for `due_date` — a field
+      // defined on the core task schema all along. It was not being obtuse;
+      // get_node returned only populated properties, so the field genuinely
+      // was not visible to it, and the "use the node's own existing property
+      // keys" rule then made declining the correct move.
+      //
+      // The prompt says "due date" in the user's words and never names the
+      // key, so a pass requires the field list to have reached the model
+      // rather than the key having been handed over in the prompt.
+      //
+      // minProperties: 1 is what makes this scenario mean anything: the whole
+      // defect is a turn that ends without the value reaching `properties`.
+      // Without it, a content-only update_node — or the model narrating the
+      // change it did not make — scores identically to a real write.
+      prompt: "Set that task's due date to 6 August 2026",
+      expect: { kind: "toolOnce", tool: "update_node", minProperties: 1 },
+    },
+    {
+      id: "10c",
+      scenario: "10c. Filter core type by enum field",
+      // The read-side half of the same root cause. Observed: the model asked
+      // the user to confirm that `status` was the field and `open` a legal
+      // value — both defined on the core task schema (status is required, with
+      // core values open / in_progress / done / cancelled).
+      //
+      // `noRetry` rather than `toolOnce`: an empty or narrowing result may
+      // legitimately prompt one follow-up search, and this scenario is not
+      // about call count. What it must not do is loop blindly — or stop and
+      // interrogate the user about its own schema, which shows up here as the
+      // search never firing at all.
+      prompt: "How many tasks are still open?",
+      expect: { kind: "noRetry", tool: "search_nodes" },
+    },
+  ],
 ];
 
 const fixture: EvalFixture = {
