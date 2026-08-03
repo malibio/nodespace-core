@@ -2,9 +2,12 @@
 //!
 //! Detection only, no auto-update: the running version comes from Tauri's
 //! `PackageInfo` (i.e. `tauri.conf.json`, the version the bundle actually ships
-//! as), the latest published version is read from the GitHub Releases API, and
-//! the two are compared with semver semantics (so `0.10.0` correctly beats
-//! `0.9.0`, which a lexicographic compare would get wrong). Sourcing the running
+//! as), the latest published version is read from the release source for this build
+//! variant — the public GitHub Releases API for a community build, or the
+//! cloud-worker `/pro/latest-version` proxy for a Pro build (the Pro app ships from
+//! a private repo it can't read directly) — and the two are compared with semver
+//! semantics (so `0.10.0` correctly beats `0.9.0`, which a lexicographic compare
+//! would get wrong). Sourcing the running
 //! version from `PackageInfo` rather than `CARGO_PKG_VERSION` avoids a build that
 //! bumped `tauri.conf.json` but not `Cargo.toml` reporting a stale version and
 //! nagging against its own release.
@@ -23,9 +26,20 @@ use serde::Serialize;
 use std::time::Duration;
 
 /// GitHub Releases "latest" endpoint for the public core repository. The latest
-/// published (non-draft, non-prerelease) release is what a user can install.
+/// published (non-draft, non-prerelease) release is what a **community** user can
+/// install.
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/NodeSpaceAI/nodespace-core/releases/latest";
+
+/// Pro update source: the cloud-worker proxy that returns the latest **private**
+/// nodespace-sync release version (the Pro app can't read that private repo
+/// directly). A Pro build checks this instead of the public core endpoint. Mirrors
+/// the auth-worker URL selection in `commands::pro_sync` — release hits the
+/// canonical domain, debug hits the local `wrangler dev` worker.
+#[cfg(debug_assertions)]
+const PRO_LATEST_URL: &str = "http://127.0.0.1:8787/pro/latest-version";
+#[cfg(not(debug_assertions))]
+const PRO_LATEST_URL: &str = "https://pro.nodespace.ai/pro/latest-version";
 
 /// How long to wait on the network before giving up. Deliberately short — a slow
 /// or unreachable network must not delay the "is there an update" answer, which is
@@ -100,7 +114,15 @@ fn latest_tag_from_json(body: &str) -> Option<String> {
 /// always, the latest and the flag only when a newer version was positively
 /// determined.
 pub async fn check_for_update(current: &str) -> UpdateStatus {
-    match fetch_latest_tag().await {
+    // A Pro build tracks the PRIVATE nodespace-sync releases through the cloud-worker
+    // proxy (it can't read that repo directly); a community build tracks the public
+    // core repo. Either way the comparison and the surfaced banner are identical.
+    let latest = if crate::daemon_setup::is_pro_build() {
+        fetch_pro_latest_version().await
+    } else {
+        fetch_latest_tag().await
+    };
+    match latest {
         Some(tag) if update_available(current, &tag) => UpdateStatus {
             current: current.to_string(),
             latest: Some(tag),
@@ -131,6 +153,44 @@ async fn fetch_latest_tag() -> Option<String> {
     }
     let body = resp.text().await.ok()?;
     latest_tag_from_json(&body)
+}
+
+/// Extract the version from the cloud-worker `/pro/latest-version` body. Pure so the
+/// parsing is unit-tested without a live call. The worker returns
+/// `{ "version": "v0.1.0", … }` on success, or `{ "error": "…" }` (no `version`)
+/// when it is unconfigured or upstream failed — the latter yields `None`, so a Pro
+/// client whose endpoint isn't set up simply sees "no update known".
+fn pro_version_from_json(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value
+        .get("version")?
+        .as_str()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
+/// Fetch the latest Pro release version from the cloud-worker proxy, swallowing
+/// every error to `None` (offline, timeout, 503-unconfigured, 5xx, malformed body).
+/// The worker holds the private-repo token; the client only ever receives a version
+/// string. Kept separate from [`check_for_update`] so [`pro_version_from_json`] is
+/// testable without the network.
+async fn fetch_pro_latest_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .ok()?;
+    let resp = client
+        .get(PRO_LATEST_URL)
+        .header("User-Agent", "nodespace-app")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    pro_version_from_json(&body)
 }
 
 /// Tauri command: run an update check on demand (e.g. from a "check for updates"
@@ -194,6 +254,26 @@ mod tests {
         assert_eq!(latest_tag_from_json(r#"{"message":"API rate limit exceeded"}"#), None);
         assert_eq!(latest_tag_from_json("not json at all"), None);
         assert_eq!(latest_tag_from_json(r#"{"tag_name":""}"#), None);
+    }
+
+    #[test]
+    fn pro_version_parsed_from_worker_json() {
+        // The cloud-worker returns `version` (not GitHub's `tag_name`).
+        let body = r#"{"version":"v0.1.0","name":"NodeSpace Pro v0.1.0","published_at":"2026-08-01T12:00:00Z"}"#;
+        assert_eq!(pro_version_from_json(body).as_deref(), Some("v0.1.0"));
+        // And it feeds the same semver comparison as the community path.
+        assert!(update_available("0.1.0", &pro_version_from_json(r#"{"version":"0.2.0"}"#).unwrap()));
+    }
+
+    #[test]
+    fn pro_unconfigured_or_error_body_yields_none() {
+        // 503-unconfigured / upstream-error bodies carry `error`, not `version`.
+        assert_eq!(
+            pro_version_from_json(r#"{"error":"pro_release_detection_unconfigured"}"#),
+            None
+        );
+        assert_eq!(pro_version_from_json(r#"{"version":""}"#), None);
+        assert_eq!(pro_version_from_json("not json"), None);
     }
 
     #[test]

@@ -44,7 +44,9 @@ const PRO_SUPABASE_URL: Option<&str> = option_env!("NODESPACE_PRO_SUPABASE_URL")
 const PRO_ANON_KEY: Option<&str> = option_env!("NODESPACE_PRO_ANON_KEY");
 
 /// True when this binary was built as the Pro edition (cloud env baked in).
-fn is_pro_build() -> bool {
+/// `pub(crate)` so the update check can pick the Pro release source (see
+/// `update_check`) off the same discriminator the daemon setup uses.
+pub(crate) fn is_pro_build() -> bool {
     PRO_SUPABASE_URL.is_some()
 }
 
