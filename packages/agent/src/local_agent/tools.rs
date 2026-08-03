@@ -3635,7 +3635,7 @@ mod tests {
             );
             assert!(
                 prompt.contains(
-                    "condition: enum (checked_out, returned) (JSON string, even if the value looks numeric)"
+                    "condition: enum {checked_out, returned} (JSON string, even if the value looks numeric)"
                 ),
                 "an enum field gets the same string-encoding hint as text, after its \
                  legal-values list; got:\n{prompt}"
