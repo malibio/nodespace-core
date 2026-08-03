@@ -415,7 +415,21 @@ fn def_search_nodes() -> ToolDefinition {
                                 "type": "string",
                                 "description": "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata."
                             },
+                            // Typed as an explicit union rather than left open.
+                            // This was the only untyped leaf in the schema, so
+                            // llama.cpp compiled it into a permissive "any JSON
+                            // value" grammar rule. Naming the alternatives
+                            // narrows that rule at no cost — these are the only
+                            // shapes the description ever asked for.
+                            //
+                            // Measured honestly: this alone did NOT stop the
+                            // #1943 splice (3 of 3 reps produced byte-identical
+                            // output before and after), so the malformation is
+                            // not the untyped leaf. Kept because a schema that
+                            // states its accepted types is correct on its own
+                            // terms, not as a claimed fix.
                             "value": {
+                                "type": ["string", "number", "boolean", "array"],
                                 "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
                             },
                             "case_sensitive": {

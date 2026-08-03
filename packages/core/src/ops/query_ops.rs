@@ -152,8 +152,25 @@ impl AgentFilterItem {
     /// Errors only when the item names nothing to infer from — that is a filter
     /// with no subject at all, which no category would rescue.
     fn category(&self) -> Result<&str, OpsError> {
+        // A supplied category is honoured only when it actually names one.
+        //
+        // The model routinely writes the *node* type here instead — `"type":
+        // "task"` alongside `"property": "status"` — which is a category-slot
+        // confusion, not a filter it meant differently: `node_type` is a
+        // sibling parameter and carries the same value on the same call.
+        // Observed 3 of 3 on the locked model, and it is the same rejection the
+        // original production report hit, so the two are one defect.
+        //
+        // Falling through to inference rather than erroring costs nothing in
+        // precision: the fields inference reads (`property`,
+        // `relationship_type`, `node_id`) name the filter's actual subject, so
+        // a filter naming `status` is a property filter whatever the model put
+        // in the category slot. An item that names no subject still errors
+        // below, and a *correct* category is still taken as given.
         if let Some(t) = self.filter_type.as_deref() {
-            return Ok(t);
+            if is_known_category(t) {
+                return Ok(t);
+            }
         }
         if self.relationship_type.is_some() || self.node_id.is_some() {
             return Ok("relationship");
@@ -161,12 +178,29 @@ impl AgentFilterItem {
         if self.property.is_some() {
             return Ok("property");
         }
-        Err(OpsError::InvalidParams(
-            "filter must specify 'type' (property, content, relationship, metadata), \
-             or name a 'property' or 'relationship_type' it can be inferred from"
+        // Nothing to infer from. When the model *did* supply a category, name it
+        // — otherwise the error reads as "you omitted type" to a caller who
+        // supplied one, and points the repair at the wrong field.
+        Err(OpsError::InvalidParams(match self.filter_type.as_deref() {
+            Some(given) => format!(
+                "Unknown filter type '{given}'. Supported: property, content, relationship, \
+                 metadata. Note 'type' is the filter category, not the node type — use the \
+                 'node_type' parameter for that. This filter also names no 'property' or \
+                 'relationship_type' to infer the category from."
+            ),
+            None => "filter must specify 'type' (property, content, relationship, metadata), \
+                     or name a 'property' or 'relationship_type' it can be inferred from"
                 .to_string(),
-        ))
+        }))
     }
+}
+
+/// Whether `s` names one of the four filter categories.
+///
+/// Defers to [`parse_filter_type`] rather than re-listing the set, so there is
+/// exactly one authority on what a category is and the two cannot drift apart.
+fn is_known_category(s: &str) -> bool {
+    parse_filter_type(s).is_ok()
 }
 
 fn to_query_filter(item: AgentFilterItem) -> Result<QueryFilter, OpsError> {
@@ -405,6 +439,42 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(item.category().unwrap(), "metadata");
+    }
+
+    /// The reported shape: the model wrote the *node* type into the category
+    /// slot while `node_type` carried the same value alongside. The filter names
+    /// `status`, so its subject is unambiguous and it must run as a property
+    /// filter rather than being rejected over the mislabelled slot.
+    #[test]
+    fn node_type_in_the_category_slot_falls_through_to_inference() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "type": "task",
+            "operator": "equals",
+            "property": "status",
+            "value": "open"
+        }))
+        .unwrap();
+        assert_eq!(item.category().unwrap(), "property");
+        assert!(to_query_filter(item).is_ok());
+    }
+
+    /// Falling through must not become "accept anything". With the category slot
+    /// wrong *and* no subject named, there is still nothing to infer from — and
+    /// the error must name the value the caller actually supplied rather than
+    /// telling them they omitted a field they did not omit.
+    #[test]
+    fn unknown_category_with_nothing_to_infer_from_errors_naming_the_value() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "type": "task",
+            "operator": "exists",
+            "value": true
+        }))
+        .unwrap();
+        let err = item.category().unwrap_err().to_string();
+        assert!(
+            err.contains("task") && err.contains("node_type"),
+            "the error must name the supplied value and point at the right parameter, got: {err}"
+        );
     }
 
     /// Inference must not paper over a filter with no subject at all — there is

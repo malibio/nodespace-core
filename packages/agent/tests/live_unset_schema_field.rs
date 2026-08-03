@@ -38,6 +38,7 @@ use nodespace_agent::agent_types::{
     ChatInferenceEngine, ChatMessage, InferenceRequest, ModelFamily, Role, StreamingChunk,
     ToolDefinition,
 };
+use nodespace_agent::local_agent::agent_loop::repair_tool_call_arguments;
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_agent::local_agent::tools::{all_tool_definitions, GraphToolExecutor};
 use nodespace_agent::AgentToolExecutor;
@@ -632,11 +633,9 @@ async fn deterministic_get_node_on_a_schema_node_is_sane() {
 /// whether "open" was the exact value and which field tracked it — both
 /// defined on the core task schema.
 ///
-/// What this asserts is scoped to what this fix owns: given an empty result
-/// carrying the field list, the model must *attempt the search again against
-/// the right field* rather than stop and interrogate the user. It deliberately
-/// does NOT assert the retry executes cleanly, because a separate, pre-existing
-/// defect prevents that — see below.
+/// Given an empty result carrying the field list, the model must search again
+/// against the right field rather than stop and interrogate the user — and that
+/// retry must actually execute.
 ///
 /// Measured on the locked model, 3 reps each, identical except for the payload:
 ///
@@ -646,28 +645,21 @@ async fn deterministic_get_node_on_a_schema_node_is_sane() {
 /// |                           | to continue. Could you please clarify..."       |
 /// | + `filterable_properties` | 3/3 retried, filtering on `status`               |
 ///
-/// So the field list is what moves the model off asking the user. But all 3
-/// retries serialize their arguments malformed — keys emitted with embedded
-/// quotes (`{"\"property\"": "status"}`) and a value spliced into a neighbouring
-/// field — so the call is rejected by argument parsing before it runs.
+/// So the field list is what moves the model off asking the user.
 ///
-/// That malformation is NOT caused by this change and is not this issue's to
-/// fix: the same defect is recorded in the originating report (a `search_nodes`
-/// filter emitted with `"type": "task"`, rejected as an unknown filter type),
-/// where it is explicitly scoped out as "a model slip that self-corrected on
-/// retry". The sibling no-op-gate suite carries an unparseable-args branch for
-/// the same reason. Asserting clean execution here would make this test fail
-/// for a defect it does not own, and tie a schema-visibility fix to an
-/// unrelated serialization bug.
+/// All 3 retries originally serialized their arguments malformed — keys with
+/// embedded quotes (`{"\"property\"": "status"}`) and a value that swallowed the
+/// next key's delimiters (`"type": "task\",\"value\":"`) — so the call was
+/// rejected before it ran. That is repaired at `LocalAgentLoop`'s parse boundary
+/// (`agent_loop::repair_tool_call_arguments`), which this test calls explicitly
+/// because it drives the inference engine directly with no loop in the path.
 ///
-/// It is tracked separately, with this test named as its repro and the
-/// execution assertion listed as its acceptance criterion — so the scoping is
-/// recorded somewhere durable rather than resting on a sentence in a merged PR
-/// body. When that defect is fixed, the `recovered` count below should move to
-/// asserting the retry ran, not merely that it was attempted.
-///
-/// The retry is still executed and its outcome printed, so a run that starts
-/// producing well-formed args shows up in the log rather than silently.
+/// What repair cannot restore is the comparison value: the model writes the
+/// delimiters that should have introduced `value` as string content, so that
+/// value is never generated. The call therefore reaches the query layer and
+/// fails there for a missing value — which is why this asserts "every retry got
+/// as far as the missing value" rather than "every retry executed". See the
+/// assertion at the end for why that is the honest bar on this model.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires the locked native GGUF on disk"]
 async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
@@ -681,6 +673,11 @@ async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
         .collect();
 
     let mut recovered = 0usize;
+    let mut executed = 0usize;
+    // Retries that got all the way to the query and failed only because the
+    // model never emitted a comparison value — the irreducible residue of the
+    // splice, as opposed to a shape defect repair should have caught.
+    let mut missing_value_only = 0usize;
     let mut asked_the_user = 0usize;
 
     for rep in 0..REPS {
@@ -757,16 +754,33 @@ async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
                 );
                 recovered += 1;
 
-                // Executed for visibility, not asserted — see the doc comment
-                // on the pre-existing arg-serialization defect.
-                match serde_json::from_str::<Value>(&args_json) {
+                // This test drives the inference engine directly, so it must
+                // apply the repair `LocalAgentLoop` applies at its parse
+                // boundary — otherwise it measures a raw call no production
+                // path ever executes.
+                let mut repaired = args_json.clone();
+                repair_tool_call_arguments(&mut repaired);
+                if repaired != args_json {
+                    println!("LIVE[rep {rep}] repaired to: {repaired}");
+                }
+
+                match serde_json::from_str::<Value>(&repaired) {
                     Ok(args) => match executor.execute("search_nodes", args).await {
                         Ok(r) if !r.is_error => {
-                            println!("LIVE[rep {rep}] retry ran, count={}", r.result["count"])
+                            println!("LIVE[rep {rep}] retry ran, count={}", r.result["count"]);
+                            executed += 1;
                         }
                         Ok(r) => println!("LIVE[rep {rep}] retry errored: {}", r.result),
                         Err(e) => {
-                            println!("LIVE[rep {rep}] retry rejected (known arg defect): {e}")
+                            let msg = e.to_string();
+                            // "Missing value" is the query layer reporting an
+                            // `equals` filter with nothing to compare against —
+                            // the value the model never emitted. Anything else
+                            // is a shape defect and must fail the assertion.
+                            if msg.contains("Missing value") {
+                                missing_value_only += 1;
+                            }
+                            println!("LIVE[rep {rep}] retry rejected: {e}");
                         }
                     },
                     Err(e) => println!("LIVE[rep {rep}] retry args unparseable ({e})"),
@@ -789,7 +803,10 @@ async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
         }
     }
 
-    println!("LIVE SUMMARY: recovered={recovered} asked_the_user={asked_the_user} of {REPS}");
+    println!(
+        "LIVE SUMMARY: recovered={recovered} executed={executed} \
+         missing_value_only={missing_value_only} asked_the_user={asked_the_user} of {REPS}"
+    );
     // The reported defect: interrogating the user about the system's own schema.
     assert_eq!(
         asked_the_user, 0,
@@ -805,5 +822,32 @@ async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
         recovered > 0,
         "no rep went back to the graph after the bad filter, so none could have found the \
          open task that exists — filterable_properties is not informing the retry"
+    );
+    // #1943 asked for this to assert the retry EXECUTES. Measured on the locked
+    // model, it cannot, and the reason is not repairable downstream: the model
+    // emits `"type": "task\",\"value\":"`, writing the delimiters that should
+    // have introduced `value` as string content instead. The comparison value
+    // is therefore never generated at all. Repair recovers the truncated `type`
+    // (`task`) and the over-quoted keys, and category inference then routes the
+    // filter correctly — but `equals` with no value is genuinely incomplete, and
+    // inventing "open" here would be fabricating the user's query.
+    //
+    // 3 of 3 reps, before and after the schema/grammar change attempted for it,
+    // produce byte-identical output — so this is a first-emission model defect,
+    // not the history-propagation loop the repair fixes (that one is measured
+    // separately at 8/8 vs 0/8 in nlp-engine/tests/toolcall_json_shape.rs, and
+    // requires a prior malformed tool call, which this prompt has none of).
+    //
+    // So the honest assertion is the one below: repair must carry the call as
+    // far as it can go — usable keys, a clean `type`, correct category routing —
+    // and the residue must be exactly the missing value, not a shape defect.
+    // Asserting `executed == recovered` instead would encode a model capability
+    // this model does not have and leave a permanently red test.
+    assert_eq!(
+        executed + missing_value_only,
+        recovered,
+        "a retry failed for something other than the model's un-emitted comparison value. \
+         Check the `repaired to:` lines above: repair or category inference has regressed, \
+         or a new malformation has appeared"
     );
 }
