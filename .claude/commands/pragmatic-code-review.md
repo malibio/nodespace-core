@@ -144,6 +144,21 @@ After completing the review, **AUTOMATICALLY POST TO GITHUB PR**:
    gh pr review <pr-number> --comment  # if COMMENT
    ```
 
+   **Self-authored PRs**: GitHub rejects `--approve` and `--request-changes` on
+   your own PR with `Can not approve your own pull request`. This is expected —
+   most PRs here are self-reviewed. Do NOT skip the step when it happens: retry
+   as `--comment` and state the real verdict in the body, e.g.
+
+   ```bash
+   gh pr review <pr-number> --comment \
+     --body "Automated pragmatic-code-review: **APPROVE** (posted as a comment — GitHub blocks self-approval). Full findings in the review comment above."
+   ```
+
+   Skipping the retry leaves the PR with review content in comments but no
+   review object, so `gh pr view --json reviews` reports it as never reviewed.
+   The verdict lives in the body either way — `reviewDecision` stays empty on a
+   self-review no matter what, since `COMMENTED` is not an approval decision.
+
 4. **Mark review commit** (for future re-reviews):
    ```bash
    # Tag current HEAD for future delta reviews
