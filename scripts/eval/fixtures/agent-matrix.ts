@@ -394,11 +394,29 @@ const GROUPS: MatrixScenario[][] = [
       // with `property_count: 0`: the model resolved the right node, called
       // update_node, echoed the node's existing title back as `content`, and
       // sent no properties at all. The tool reported success, and the model
-      // reported the write as done with a fabricated date. minProperties is
+      // reported the write as done with a fabricated value. minProperties is
       // what makes that outcome score red rather than green — without it, a
       // call that persists nothing is indistinguishable from one that
-      // persisted the date, because the tool name is all that is checked.
-      prompt: "The laser cutter is due back on the 20th",
+      // persisted the value, because the tool name is all that is checked.
+      //
+      // WINNABILITY (the constraint an earlier draft of this scenario broke):
+      // the prompt must name a value this chain's schema can actually hold.
+      // Scenario 3 builds Equipment Item from a prompt mentioning only
+      // returned-ness and replacement cost, so those two fields are all that
+      // exist. A first draft here asked to set a DUE DATE — a field the schema
+      // has nowhere to put — which made the scenario unwinnable: the model
+      // folded the date into the node's text (a reasonable degradation, and it
+      // reported it honestly as "updated with a note") and scored red for it.
+      // A scenario that reds out correct behavior measures the fixture, not the
+      // model. Same trap as the album/artist case in #1846.
+      //
+      // `replacementCost` is chosen over `isReturned` because scenario 6
+      // already owns the returned-ness transition; re-testing it here would
+      // score the same model behavior twice. "1800" is unambiguous — no
+      // relative-date or unit inference stands between the request and the
+      // write, so a red here means the value did not reach `properties`, which
+      // is the one thing this scenario is for.
+      prompt: "Correction: the laser cutter's replacement cost is 1800, not 2400",
       expect: {
         kind: "toolOnce",
         tool: "update_node",
