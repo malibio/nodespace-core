@@ -1041,7 +1041,7 @@ mod tests {
         ]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(
-            rendered.contains("- task: title: text"),
+            rendered.contains("- task -> title: text"),
             "an entry missing type_id must not take the valid ones with it: {rendered}"
         );
     }
@@ -1060,7 +1060,7 @@ mod tests {
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         // Same notation the workspace-context block uses; both land in one prompt.
         assert!(
-            rendered.contains("- invoice: reference: string; amount: number, required"),
+            rendered.contains("- invoice -> reference: string; amount: number, required"),
             "got: {rendered}"
         );
         // create_node's description promises the template is shown here.
@@ -1083,7 +1083,7 @@ mod tests {
         assert!(!rendered.contains("- marker:"), "got: {rendered}");
         // The populated form is unaffected.
         assert!(
-            rendered.contains("- invoice: amount: number"),
+            rendered.contains("- invoice -> amount: number"),
             "got: {rendered}"
         );
     }
@@ -1123,7 +1123,7 @@ mod tests {
             ]
         }]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
-        assert!(rendered.contains("- task: title: text; status: enum (todo, done)"));
+        assert!(rendered.contains("- task -> title: text; status: enum {todo, done}"));
     }
 
     /// Every eligible candidate carries its own copy of the entity block, so
@@ -1188,8 +1188,8 @@ mod tests {
 
     /// Production `schema_metadata` carries a display `name` alongside the id,
     /// and the block must then read exactly as the workspace-context one does —
-    /// `- id: Name (fields)`. Both are concatenated under a single heading, so
-    /// a type described two ways there reads to the model as two types.
+    /// `- id "Name" -> fields`. Both are concatenated under a single heading,
+    /// so a type described two ways there reads to the model as two types.
     ///
     /// The other fixtures in this module omit `name`, which is why this case
     /// needs its own test: the format the agent actually ships would otherwise
@@ -1208,9 +1208,9 @@ mod tests {
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(
             rendered.contains(
-                "- invoice: Invoice (amount: number, required) [title_template: {reference}]"
+                "- invoice \"Invoice\" -> amount: number, required [title_template: {reference}]"
             ),
-            "named type must render as `- id: Name (fields)`, got: {rendered}"
+            "named type must render as `- id \"Name\" -> fields`, got: {rendered}"
         );
     }
 }

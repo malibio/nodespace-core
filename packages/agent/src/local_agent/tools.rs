@@ -3538,7 +3538,7 @@ mod tests {
 
             let prompt = seen_prompt.lock().unwrap().clone();
             assert!(
-                prompt.contains("condition: enum (checked_out, returned)"),
+                prompt.contains("condition: enum {checked_out, returned}"),
                 "the enum's legal values must reach the prompt the model resolves against, \
                  so \"came back\" can map to `returned` instead of being guessed; got:\n{prompt}"
             );

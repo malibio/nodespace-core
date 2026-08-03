@@ -310,7 +310,7 @@ CALL create_node NOW: You received this instruction because this skill was match
 
 TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
 
-FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields as (name: type) — fields marked `required` MUST be included in the properties map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `properties` is the ONLY way any field value is stored.
+FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields after `->` as `name: type` — fields marked `required` MUST be included in the properties map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `properties` is the ONLY way any field value is stored.
 
 VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `properties` under a key of your own. `properties` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
 
@@ -322,7 +322,7 @@ TITLE: The node title is the content field. If the type has a title_template, th
 
 PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
 
-EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget: Widget (label: string; quantity: number; received_on: date; condition: string)`:
+EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget "Widget" -> label: string; quantity: number; received_on: date; condition: string`:
 {
   "node_type": "widget",
   "content": "Shipment 24",

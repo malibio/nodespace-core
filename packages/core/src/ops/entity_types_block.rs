@@ -83,12 +83,17 @@ impl EntityFieldDescriptor {
     /// it emits a filter for a field the request never mentioned, which matches
     /// nothing — indistinguishable from a genuinely empty result, which is the
     /// failure this whole area keeps reproducing.
+    ///
+    /// Enum values are wrapped in `{}`, not `()` — `render_line` wraps a
+    /// type's whole field list in `()`, and a `()`-wrapped enum inside that
+    /// list would nest identical delimiters with no visual way to tell which
+    /// `)` closes which `(`.
     pub fn render_shape(&self) -> String {
         if self.enum_values.is_empty() {
             format!("{}: {}", self.name, self.field_type)
         } else {
             format!(
-                "{}: {} ({})",
+                "{}: {} {{{}}}",
                 self.name,
                 self.field_type,
                 self.enum_values.join(", ")
@@ -240,27 +245,39 @@ impl EntityTypeDescriptor {
 
     /// Render this type as one line of the block.
     ///
-    /// A type with no fields renders as a bare name: the trailing `": "` of the
-    /// populated form would read as a promise of a field list that never
-    /// arrives.
+    /// `:` carries exactly one meaning in this line — field name to field
+    /// type, inside the field list. Nothing else in the line uses it, so a
+    /// reader (model or human) never has to decide which relationship a given
+    /// `:` expresses:
+    ///
+    /// - the display name is quoted, not colon-prefixed, so `- invoice
+    ///   "Invoice"` cannot be misread as a field declaration `invoice:
+    ///   Invoice`
+    /// - the field list is introduced by `->`, a token used nowhere else in
+    ///   the line
+    /// - enum values are wrapped in `{}` ([`EntityFieldDescriptor::render_shape`]),
+    ///   distinct from the `->`-introduced field list, so a line never nests
+    ///   the same delimiter inside itself
+    ///
+    /// Both call sites — workspace-context (`name: Some`) and per-candidate
+    /// routing (`name: None`) — share this one shape; only whether the quoted
+    /// name segment appears differs, per the doc comment above.
+    ///
+    /// A type with no fields renders with no `->`: a trailing separator would
+    /// read as a promise of a field list that never arrives.
     pub fn render_line(&self) -> String {
-        let head = match &self.name {
-            // The workspace-context path has both id and display name and shows
-            // both, since the id is what `node_type` takes while the name is
-            // what the user's phrasing will resemble.
-            Some(name) => format!("- {}: {}", self.type_id, name),
-            None => format!("- {}", self.type_id),
-        };
+        let mut line = format!("- {}", self.type_id);
+        if let Some(name) = &self.name {
+            // Escaped: an unescaped `"` in a user-authored display name would
+            // close the quote early and reintroduce the ambiguity this format
+            // exists to remove.
+            line.push_str(&format!(" \"{}\"", name.replace('"', "\\\"")));
+        }
 
-        let mut line = if self.fields.is_empty() {
-            head
-        } else {
+        if !self.fields.is_empty() {
             let rendered: Vec<String> = self.fields.iter().map(|f| f.render()).collect();
-            match &self.name {
-                Some(_) => format!("{head} ({})", rendered.join("; ")),
-                None => format!("{head}: {}", rendered.join("; ")),
-            }
-        };
+            line.push_str(&format!(" -> {}", rendered.join("; ")));
+        }
 
         if let Some(tmpl) = &self.title_template {
             line.push_str(&format!(" [title_template: {tmpl}]"));
@@ -412,17 +429,21 @@ mod tests {
         }
     }
 
+    /// Golden test: the exact rendered line for a type with a display name,
+    /// an enum field (core and user values unioned), a required field, and a
+    /// `title_template`. Pins the grammar this module exists to keep
+    /// unambiguous — `:` appears only inside the `->`-introduced field list,
+    /// the display name is quoted rather than colon-prefixed, and enum values
+    /// use `{}` rather than the field list's own delimiter.
     #[test]
     fn renders_type_field_enum_required_and_template() {
         let d = EntityTypeDescriptor::from_schema(&sample_schema());
-        let line = d.render_line();
 
-        assert!(line.contains("- invoice: Invoice"));
-        assert!(line.contains("reference: string"));
-        assert!(line.contains("amount: number, required"));
-        // Core and user enum values are unioned; both are legal on a write.
-        assert!(line.contains("status: enum (draft, sent)"));
-        assert!(line.contains("[title_template: {reference}]"));
+        assert_eq!(
+            d.render_line(),
+            "- invoice \"Invoice\" -> reference: string; amount: number, required; \
+             status: enum {draft, sent} [title_template: {reference}]"
+        );
     }
 
     /// The property this whole module exists to enforce: the typed path and the
@@ -447,6 +468,20 @@ mod tests {
             title_template: None,
         };
         assert_eq!(d.render_line(), "- venue");
+    }
+
+    /// A display name containing `"` must not close the quote early — that
+    /// would let the rest of the name spill out unquoted and reintroduce the
+    /// ambiguity this format exists to remove.
+    #[test]
+    fn a_quote_in_the_display_name_is_escaped_not_left_to_close_early() {
+        let d = EntityTypeDescriptor {
+            type_id: "invoice".to_string(),
+            name: Some(r#"The "Big" Invoice"#.to_string()),
+            fields: vec![],
+            title_template: None,
+        };
+        assert_eq!(d.render_line(), r#"- invoice "The \"Big\" Invoice""#);
     }
 
     #[test]
@@ -519,7 +554,7 @@ mod tests {
         let rendered = render_entity_types(&via_json).expect("one type renders");
 
         assert!(rendered.contains("amount: number, required"));
-        assert!(rendered.contains("status: enum (draft, sent)"));
+        assert!(rendered.contains("status: enum {draft, sent}"));
         assert!(rendered.contains("[title_template: {reference}]"));
     }
 
