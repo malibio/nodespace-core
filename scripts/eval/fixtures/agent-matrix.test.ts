@@ -247,6 +247,57 @@ describe("assertExpectation", () => {
       expect(result.passed).toBe(true);
     });
 
+    // Documents the default's blind spot, so the reason `minCalls` exists is
+    // pinned rather than implied: with zero calls the run-length loop never
+    // executes, so bare noRetry passes a turn in which the tool never fired.
+    // That is the read-path failure mode (the model interrogates the user
+    // instead of searching), which is why a scenario testing for it must opt in.
+    test("bare noRetry passes on zero calls — the reason minCalls exists", () => {
+      expect(assertExpectation(expect_, []).passed).toBe(true);
+    });
+
+    describe("minCalls", () => {
+      const withMin: Expectation = {
+        kind: "noRetry",
+        tool: "search_nodes",
+        minCalls: 1,
+      };
+
+      test("fails when the tool never fired", () => {
+        const result = assertExpectation(withMin, []);
+        expect(result.passed).toBe(false);
+        expect(result.failure).toContain("got 0");
+      });
+
+      test("fails when only routing tools fired", () => {
+        const result = assertExpectation(withMin, ["search_skills"]);
+        expect(result.passed).toBe(false);
+        expect(result.failure).toContain("got 0");
+      });
+
+      test("passes when the tool fired once", () => {
+        expect(assertExpectation(withMin, ["search_nodes"]).passed).toBe(true);
+      });
+
+      test("still reports a retry loop rather than the count", () => {
+        const result = assertExpectation(withMin, [
+          "search_nodes",
+          "search_nodes",
+        ]);
+        expect(result.passed).toBe(false);
+        expect(result.failure).toContain("retry loop");
+      });
+
+      test("counts non-adjacent calls toward the minimum", () => {
+        const result = assertExpectation(withMin, [
+          "search_nodes",
+          "create_node",
+          "search_nodes",
+        ]);
+        expect(result.passed).toBe(true);
+      });
+    });
+
     test("search_skills is filtered out before the run-length check, so it does not break up a repeat", () => {
       // search_skills is a routing tool (ROUTING_TOOLS), stripped by actionTools()
       // before noRetry evaluates adjacency — so this is still two search_nodes in a row.
