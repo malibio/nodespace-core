@@ -1900,7 +1900,10 @@ impl GraphToolExecutor {
                                 );
                             if !available.is_empty() {
                                 if let Some(obj) = node_data.as_object_mut() {
-                                    obj.insert("available_properties".to_string(), json!(available));
+                                    obj.insert(
+                                        "available_properties".to_string(),
+                                        json!(available),
+                                    );
                                 }
                             }
                         }

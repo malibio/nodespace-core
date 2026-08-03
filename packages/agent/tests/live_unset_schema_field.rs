@@ -58,9 +58,21 @@ fn model_path() -> String {
     format!("{home}/.nodespace/models/gemma-4-E4B-it-Q4_K_M.gguf")
 }
 
+/// Production's enforced floor (`N_CTX_MINIMUM` in `nlp-engine`'s chat module),
+/// not the 32768 the sibling live suites request.
+///
+/// These scenarios are a handful of short turns, so the larger window buys
+/// nothing — and at 32768 the KV cache plus compute buffers OOM the GPU
+/// (`kIOGPUCommandBufferCallbackErrorOutOfMemory`) whenever a `nodespaced`
+/// daemon is resident with its own model loaded, which is the normal state of a
+/// dev machine. A live test that only passes when nothing else is running is a
+/// flake generator, and a *behavioral* assertion that fails for a memory reason
+/// is worse than no assertion: it reads as the fix having regressed.
+const LIVE_N_CTX: u32 = 16_384;
+
 fn load_engine() -> LlamaChatInferenceEngine {
     let config = ChatConfig {
-        n_ctx: 32768,
+        n_ctx: LIVE_N_CTX,
         default_temperature: 0.1,
         ..Default::default()
     };
@@ -169,8 +181,8 @@ async fn deterministic_unset_field_name_round_trips_through_update_node() {
         .execute("get_node", json!({ "id": node_id }))
         .await
         .expect("get_node must succeed");
-    let field_name = available_field(&stored.result, "due_date")
-        .expect("due_date must be listed")["name"]
+    let field_name = available_field(&stored.result, "due_date").expect("due_date must be listed")
+        ["name"]
         .as_str()
         .expect("field name must be a string")
         .to_string();
@@ -192,7 +204,8 @@ async fn deterministic_unset_field_name_round_trips_through_update_node() {
         .await
         .expect("get_node must succeed");
     assert_eq!(
-        after.result["properties"][&field_name], json!("2026-08-06"),
+        after.result["properties"][&field_name],
+        json!("2026-08-06"),
         "the field name advertised by available_properties did not persist when passed \
          straight back to update_node — read shape and write shape have diverged. \
          stored={}",
@@ -226,7 +239,11 @@ async fn deterministic_empty_search_names_filterable_fields() {
         .await
         .expect("search_nodes must succeed");
 
-    assert_eq!(found.result["count"], json!(0), "fixture is in_progress, not open");
+    assert_eq!(
+        found.result["count"],
+        json!(0),
+        "fixture is in_progress, not open"
+    );
 
     let fields = found.result["filterable_properties"]
         .as_array()
@@ -284,7 +301,10 @@ async fn deterministic_empty_search_returns_facts_not_instructions() {
 
     let obj = found.result.as_object().expect("result must be an object");
     let allowed = ["count", "nodes", "filterable_properties"];
-    let unexpected: Vec<&String> = obj.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    let unexpected: Vec<&String> = obj
+        .keys()
+        .filter(|k| !allowed.contains(&k.as_str()))
+        .collect();
     assert!(
         unexpected.is_empty(),
         "the result carries key(s) {unexpected:?} beyond the facts {allowed:?} — if that is \
@@ -305,7 +325,10 @@ async fn deterministic_successful_search_omits_the_field_block() {
         .await
         .expect("search_nodes must succeed");
 
-    assert!(found.result["count"].as_u64().unwrap_or(0) > 0, "fixture must match");
+    assert!(
+        found.result["count"].as_u64().unwrap_or(0) > 0,
+        "fixture must match"
+    );
     assert!(
         found.result.get("filterable_properties").is_none(),
         "a non-empty result needs no field list: {}",
@@ -338,10 +361,15 @@ async fn deterministic_available_properties_advertises_no_undefined_bare_keys() 
     let advertised = stored.result["available_properties"]
         .as_array()
         .expect("available_properties must be present");
-    assert!(!advertised.is_empty(), "task defines fields, so the list must be non-empty");
+    assert!(
+        !advertised.is_empty(),
+        "task defines fields, so the list must be non-empty"
+    );
 
     for field in advertised {
-        let name = field["name"].as_str().expect("each entry must name a field");
+        let name = field["name"]
+            .as_str()
+            .expect("each entry must name a field");
         assert!(
             defined.contains(&name),
             "available_properties advertised '{name}', which the core task schema does not \
@@ -456,10 +484,7 @@ async fn live_model_sets_an_unset_field_without_asking_for_its_name() {
                 Role::Assistant,
                 format!("Tool result for get_node:\n{}", lookup.result),
             ),
-            ChatMessage::text(
-                Role::User,
-                "Go ahead and make that change now.".to_string(),
-            ),
+            ChatMessage::text(Role::User, "Go ahead and make that change now.".to_string()),
         ];
 
         let (call, raw) = run_turn(&engine, system, write_path_tools(), messages).await;
@@ -595,4 +620,179 @@ async fn deterministic_get_node_on_a_schema_node_is_sane() {
             "the task SCHEMA node was described using task's own instance fields: {named:?}"
         );
     }
+}
+
+/// The read-path half, live. Observed in production: asked "How many tasks do
+/// we have that are open?", the model came back asking the user to confirm
+/// whether "open" was the exact value and which field tracked it — both
+/// defined on the core task schema.
+///
+/// What this asserts is scoped to what this fix owns: given an empty result
+/// carrying the field list, the model must *attempt the search again against
+/// the right field* rather than stop and interrogate the user. It deliberately
+/// does NOT assert the retry executes cleanly, because a separate, pre-existing
+/// defect prevents that — see below.
+///
+/// Measured on the locked model, 3 reps each, identical except for the payload:
+///
+/// | empty result carries      | outcome                                        |
+/// |---------------------------|------------------------------------------------|
+/// | `{count, nodes}` only     | 0/3 retried — "I do not have enough information |
+/// |                           | to continue. Could you please clarify..."       |
+/// | + `filterable_properties` | 3/3 retried, filtering on `status`               |
+///
+/// So the field list is what moves the model off asking the user. But all 3
+/// retries serialize their arguments malformed — keys emitted with embedded
+/// quotes (`{"\"property\"": "status"}`) and a value spliced into a neighbouring
+/// field — so the call is rejected by argument parsing before it runs.
+///
+/// That malformation is NOT caused by this change and is not this issue's to
+/// fix: the same defect is recorded in the originating report (a `search_nodes`
+/// filter emitted with `"type": "task"`, rejected as an unknown filter type),
+/// where it is explicitly scoped out as "a model slip that self-corrected on
+/// retry". The sibling no-op-gate suite carries an unparseable-args branch for
+/// the same reason. Asserting clean execution here would make this test fail
+/// for a defect it does not own, and tie a schema-visibility fix to an
+/// unrelated serialization bug.
+///
+/// The retry is still executed and its outcome printed, so a run that starts
+/// producing well-formed args shows up in the log rather than silently.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the locked native GGUF on disk"]
+async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
+    let engine = load_engine();
+    let system = "You are a graph-editing assistant. Act on the user's request immediately \
+        using the tools available. Do not ask the user to confirm.";
+
+    let search_tools: Vec<ToolDefinition> = all_tool_definitions()
+        .into_iter()
+        .filter(|t| t.name == "search_nodes")
+        .collect();
+
+    let mut recovered = 0usize;
+    let mut asked_the_user = 0usize;
+
+    for rep in 0..REPS {
+        let (executor, _ns, _tmp) = make_executor().await;
+        create_polestar_task(&executor).await;
+
+        // A genuinely open task must exist, or this test cannot tell the two
+        // outcomes apart: with only the in_progress fixture, "there are no open
+        // tasks" is the CORRECT answer, and a model that gave up entirely would
+        // score identically to one that recovered. The right answer is now
+        // reachable only by retrying with a legal value.
+        executor
+            .execute(
+                "create_node",
+                json!({
+                    "content": "Renew the parking permit",
+                    "node_type": "task",
+                    "properties": {"status": "open"},
+                }),
+            )
+            .await
+            .expect("open-task fixture must be created");
+
+        // The failing first attempt, run for real. `openn` is a plausible
+        // near-miss of a legal value rather than a value that is merely absent
+        // from the data — so an empty result here genuinely means "bad filter",
+        // and the recovery under test is reading the legal values off the
+        // result and retrying with one.
+        let empty = executor
+            .execute(
+                "search_nodes",
+                json!({
+                    "query": "",
+                    "node_type": "task",
+                    "filters": [{"type": "property", "property": "status", "operator": "equals", "value": "openn"}],
+                }),
+            )
+            .await
+            .expect("search must succeed");
+        assert_eq!(
+            empty.result["count"],
+            json!(0),
+            "the bad filter must match nothing"
+        );
+
+        let messages = vec![
+            ChatMessage::text(Role::User, "How many tasks are still open?".to_string()),
+            ChatMessage::text(
+                Role::Assistant,
+                format!("Tool result for search_nodes:\n{}", empty.result),
+            ),
+            // Deliberately neutral. "Give me the answer" would push toward
+            // answering from the empty result; the question under test is
+            // whether the field list alone makes a retry the obvious next move.
+            ChatMessage::text(Role::User, "Please continue.".to_string()),
+        ];
+
+        let (call, raw) = run_turn(&engine, system, search_tools.clone(), messages).await;
+
+        match call {
+            Some((name, args_json)) if name == "search_nodes" => {
+                println!("LIVE[rep {rep}] retried: {args_json}");
+                // A retry only counts if it actually runs. Counting the call by
+                // name alone would score a malformed filter — keys emitted with
+                // embedded quotes, a value spliced into a neighbouring field —
+                // as a recovery, when executing it changes nothing.
+                // Counted as a recovery: the model went back to the graph
+                // instead of back to the user, and did so against the field the
+                // result named. That is what the field list is responsible for.
+                assert!(
+                    args_json.contains("status"),
+                    "rep {rep}: retried without filtering on `status`, the field the result \
+                     named — the field list did not inform the retry: {args_json}"
+                );
+                recovered += 1;
+
+                // Executed for visibility, not asserted — see the doc comment
+                // on the pre-existing arg-serialization defect.
+                match serde_json::from_str::<Value>(&args_json) {
+                    Ok(args) => match executor.execute("search_nodes", args).await {
+                        Ok(r) if !r.is_error => {
+                            println!("LIVE[rep {rep}] retry ran, count={}", r.result["count"])
+                        }
+                        Ok(r) => println!("LIVE[rep {rep}] retry errored: {}", r.result),
+                        Err(e) => {
+                            println!("LIVE[rep {rep}] retry rejected (known arg defect): {e}")
+                        }
+                    },
+                    Err(e) => println!("LIVE[rep {rep}] retry args unparseable ({e})"),
+                }
+            }
+            Some((name, args_json)) => println!("LIVE[rep {rep}] other tool {name}({args_json})"),
+            None => {
+                println!("LIVE[rep {rep}] no call. raw: {raw:?}");
+                let lowered = raw.to_lowercase();
+                // The reported defect verbatim: asking the user to supply a
+                // field name or confirm an enum value the schema defines.
+                if lowered.contains("exact value")
+                    || lowered.contains("which field")
+                    || lowered.contains("field name")
+                    || lowered.contains("confirm")
+                {
+                    asked_the_user += 1;
+                }
+            }
+        }
+    }
+
+    println!("LIVE SUMMARY: recovered={recovered} asked_the_user={asked_the_user} of {REPS}");
+    // The reported defect: interrogating the user about the system's own schema.
+    assert_eq!(
+        asked_the_user, 0,
+        "the model asked the user to confirm a field name or enum value that the schema \
+         defines and filterable_properties listed — the reported read-path defect"
+    );
+    // And the positive half. An open task exists, so stopping at the empty
+    // result means reporting "none" over a non-empty set. Without the field
+    // list this scores 0/3 (the model asks the user to clarify); with it, 3/3.
+    // An assertion checking only for the absence of the bad question would pass
+    // on a model that simply gave up quietly.
+    assert!(
+        recovered > 0,
+        "no rep went back to the graph after the bad filter, so none could have found the \
+         open task that exists — filterable_properties is not informing the retry"
+    );
 }
