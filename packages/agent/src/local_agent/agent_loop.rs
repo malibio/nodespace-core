@@ -133,6 +133,10 @@ pub fn canonical_args(args_json: &str) -> String {
             // covers the other's caller, so removing either leaves a live gap.
             repair_over_quoted_keys(&mut v);
             repair_leaked_special_token_keys(&mut v);
+            // Same rationale (#1943): a malformed call and its repaired retry
+            // must share one identity, or the duplicate guards read them as two
+            // different calls and the loop still runs.
+            repair_spliced_object_values(&mut v);
             v.to_string()
         })
         .unwrap_or_else(|_| args_json.to_owned())
@@ -295,6 +299,90 @@ fn repair_leaked_special_token_keys(args: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+/// Apply every argument repair to a tool call's raw JSON string, in place.
+///
+/// The single entry point for repair, so the set of malformations handled
+/// cannot drift between the record that enters history and the arguments handed
+/// to the tool. Arguments that do not parse are left exactly as sent: they
+/// cannot be repaired structurally, and the parse-failure path downstream
+/// reports the malformed JSON itself, which is the honest error.
+///
+/// Rewrites the string only when a repair actually changed something, so a
+/// well-formed call keeps its original byte-for-byte text rather than being
+/// silently re-serialised into serde's key order.
+/// Public so live-model tests that drive the inference engine directly — with
+/// no `LocalAgentLoop` in the path — can apply the same repair production
+/// applies, and therefore measure what a real turn would do rather than what an
+/// unrepaired raw call does.
+pub fn repair_tool_call_arguments(arguments_json: &mut String) {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(arguments_json) else {
+        return;
+    };
+    let before = value.clone();
+    repair_over_quoted_keys(&mut value);
+    repair_leaked_special_token_keys(&mut value);
+    repair_spliced_object_values(&mut value);
+    if value != before {
+        *arguments_json = value.to_string();
+    }
+}
+
+/// Recover the intended value from a string that swallowed the JSON delimiters
+/// following it, e.g. the value `task","value":` where `task` was meant.
+///
+/// #1943: observed inside `search_nodes`' `filters` array — the model emitted
+/// `"type":"task\",\"value\":` , writing `"`, `,` and `:` as *content* where
+/// they were meant as structure. The result is still valid JSON, so no parse
+/// guard fires; the filter simply loses its `value` and is rejected for an
+/// unknown filter type.
+///
+/// Only the swallowed key's *name* survives in the text — the model never
+/// emitted its value — so this restores the truncated value (`task`) and drops
+/// the fragment. It deliberately does **not** invent a value for the swallowed
+/// key: the filter still fails validation, but it fails naming the field that
+/// is actually missing rather than reporting a nonsense type, and the repaired
+/// shape is what enters history for the retry to copy.
+///
+/// Narrow by construction: it fires only on a string whose entire tail is the
+/// exact `","<name>":` delimiter run, with no further quotes in either part. A
+/// value that merely contains a quote — user prose, embedded JSON — does not
+/// match and is left untouched, the same bar the sibling key repairs hold to.
+fn repair_spliced_object_values(args: &mut serde_json::Value) {
+    match args {
+        serde_json::Value::Object(obj) => {
+            for value in obj.values_mut() {
+                if let serde_json::Value::String(s) = value {
+                    if let Some(repaired) = strip_spliced_delimiter_tail(s) {
+                        *value = serde_json::Value::String(repaired);
+                        continue;
+                    }
+                }
+                repair_spliced_object_values(value);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                repair_spliced_object_values(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Split `value","key":` into its intended value, or return `None` when the
+/// string is not exactly that shape.
+fn strip_spliced_delimiter_tail(s: &str) -> Option<String> {
+    let rest = s.strip_suffix("\":")?;
+    let (value, key) = rest.split_once("\",\"")?;
+    // A quote in either half means this is not the mechanical splice above but
+    // some richer string the model meant, so it is not this function's to touch.
+    // An empty key name is likewise not a shape that can be claimed understood.
+    if value.contains('"') || key.contains('"') || key.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 /// The identity persisted for a call's canonical args.
@@ -1261,7 +1349,25 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let guard = collected_chunks.lock().unwrap_or_else(|p| p.into_inner());
                 guard.clone()
             };
-            let (response_text, iteration_reasoning, tool_calls) = Self::parse_chunks(&chunks);
+            let (response_text, iteration_reasoning, mut tool_calls) = Self::parse_chunks(&chunks);
+
+            // Repair the model's malformed argument encodings here, at the parse
+            // boundary, so every downstream consumer sees one repaired form.
+            //
+            // Repairing at the execution site instead (where this used to happen,
+            // and still happens as a backstop) fixes the copy handed to the tool
+            // but leaves `tc.arguments_json` malformed — and that string is what
+            // the assistant turn pushed below carries into history, and what the
+            // chat template replays verbatim into the next prompt. The model then
+            // copies the shape it reads there: measured at 8 of 8 malformed
+            // retries from a malformed prior call, against 8 of 8 clean retries
+            // from a clean one (`nlp-engine/tests/toolcall_json_shape.rs`). So a
+            // single malformation was self-sustaining — repaired for the tool on
+            // every attempt, yet re-taught to the model on every attempt.
+            // Repairing the record itself is what breaks that loop.
+            for tc in &mut tool_calls {
+                repair_tool_call_arguments(&mut tc.arguments_json);
+            }
 
             iter_span.set_attribute(KeyValue::new("raw_response", response_text.clone()));
             let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1649,6 +1755,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // leaked Gemma special token corrupting a key rather
                         // than the model over-quoting one itself.
                         repair_leaked_special_token_keys(&mut args);
+                        // And a value that swallowed its trailing delimiters
+                        // (#1943). Retained here as a backstop even though
+                        // `arguments_json` was already repaired at the parse
+                        // boundary: this is the only repair the tool and the
+                        // cross-turn write guard observe directly, so it must
+                        // not depend on the earlier pass having run.
+                        repair_spliced_object_values(&mut args);
                         // Cross-turn duplicate guard. The per-turn `seen_calls`
                         // set above cannot see this: the session is rebuilt from
                         // persisted messages every turn, so a repeat of a write
@@ -5914,6 +6027,91 @@ mod tests {
         );
     }
 
+    /// #1943, the propagation half: the assistant turn persisted into history
+    /// must carry the *repaired* arguments, not the malformed ones the model
+    /// emitted.
+    ///
+    /// This is what made the reported retry loop unrecoverable. Repairing only
+    /// the copy handed to the tool (which the sibling test above covers) still
+    /// left `arguments_json` malformed in the record, and the chat template
+    /// replays that string verbatim into the next prompt — where the model
+    /// copies the shape it reads, measured at 8 of 8. So every attempt was
+    /// repaired for the tool and simultaneously re-taught to the model. Asserted
+    /// on `session.messages` rather than on what the tool saw, because the
+    /// record is the channel the defect travelled through.
+    #[tokio::test]
+    async fn history_carries_the_repaired_arguments_not_the_malformed_ones() {
+        struct OkExecutor;
+
+        #[async_trait]
+        impl AgentToolExecutor for OkExecutor {
+            async fn available_tools(&self) -> Result<Vec<ToolDefinition>, ToolError> {
+                Ok(vec![ToolDefinition {
+                    name: "search_nodes".into(),
+                    description: "Search".into(),
+                    parameters_schema: json!({"type": "object"}),
+                }])
+            }
+
+            async fn execute(
+                &self,
+                name: &str,
+                _args: serde_json::Value,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    tool_call_id: "tc_1".into(),
+                    name: name.into(),
+                    result: json!({"count": 1}),
+                    is_error: false,
+                })
+            }
+        }
+
+        // The issue's verbatim 3-of-3 reproduction payload.
+        let engine = Arc::new(MockEngine::tool_then_text(
+            "search_nodes",
+            r#"{"filters":[{"\"operator\"":"equals","\"property\"":"status","\"type\"":"task\",\"value\":"}],"\"node_type\"":"task","query":null}"#,
+            "There is 1 open task.",
+        ));
+        let agent_loop = LocalAgentLoop::new(engine, Arc::new(OkExecutor));
+
+        let mut session = new_session();
+        agent_loop
+            .run_turn(
+                &mut session,
+                "How many tasks are still open?",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        let persisted: Vec<&str> = session
+            .messages
+            .iter()
+            .flat_map(|m| m.tool_calls.iter())
+            .map(|tc| tc.arguments_json.as_str())
+            .collect();
+        assert_eq!(
+            persisted.len(),
+            1,
+            "exactly one tool call should have been persisted, got {persisted:?}"
+        );
+        let recorded: serde_json::Value =
+            serde_json::from_str(persisted[0]).expect("the persisted arguments must be valid JSON");
+        assert_eq!(
+            recorded,
+            json!({
+                "filters": [{"operator": "equals", "property": "status", "type": "task"}],
+                "node_type": "task",
+                "query": null
+            }),
+            "history must carry the repaired shape — a malformed record is replayed \
+             into the next prompt and copied by the model, which is the loop this fixes"
+        );
+    }
+
     /// A model emitting *differently*-malformed arguments each round must not be
     /// able to burn every iteration.
     ///
@@ -7105,6 +7303,83 @@ mod tests {
         let malformed = r#"{"fields":[{"\"name\"":"capacity","\"type\"":"number"}]}"#;
         let clean = r#"{"fields":[{"name":"capacity","type":"number"}]}"#;
         assert_eq!(canonical_args(malformed), canonical_args(clean));
+    }
+
+    /// #1943: the verbatim payload from the issue's 3-of-3 reproduction, run
+    /// through the one entry point the loop actually calls. Both malformations
+    /// are present at once — over-quoted keys at two nesting levels, and a
+    /// `type` value that swallowed the `value` key's delimiters.
+    #[test]
+    fn reported_malformed_search_filter_is_repaired() {
+        let mut args = r#"{"filters":[{"\"operator\"":"equals","\"property\"":"status","\"type\"":"task\",\"value\":"}],"\"node_type\"":"task","query":null}"#.to_string();
+        repair_tool_call_arguments(&mut args);
+
+        let repaired: serde_json::Value =
+            serde_json::from_str(&args).expect("repaired args must still be valid JSON");
+        assert_eq!(
+            repaired,
+            serde_json::json!({
+                "filters": [{"operator": "equals", "property": "status", "type": "task"}],
+                "node_type": "task",
+                "query": null
+            }),
+            "the reported payload must reach the tool with usable keys and a \
+             truncated-but-clean `type`; got {repaired}"
+        );
+    }
+
+    /// The swallowed key's value was never emitted, so the repair must not
+    /// invent one. Recovering `type` while leaving `value` absent is the honest
+    /// outcome — the filter still fails, but it fails naming the field that is
+    /// genuinely missing rather than reporting a nonsense filter type.
+    #[test]
+    fn spliced_repair_does_not_invent_the_swallowed_key() {
+        let mut v = serde_json::json!({"type": "task\",\"value\":"});
+        repair_spliced_object_values(&mut v);
+        assert_eq!(v, serde_json::json!({"type": "task"}));
+        assert!(
+            v.get("value").is_none(),
+            "a value the model never emitted must not be fabricated"
+        );
+    }
+
+    /// User data lives in these payloads. Only the exact mechanical splice is
+    /// claimed — a string that merely contains quotes, commas or colons means
+    /// whatever the user wrote and must survive untouched.
+    #[test]
+    fn spliced_repair_leaves_ordinary_strings_untouched() {
+        let original = serde_json::json!({
+            "quote": "she said \"hello\"",
+            "csv": "a\",\"b",
+            "colon": "note: see \"ref\":",
+            "ends_with_delims": "plain\":",
+            "empty_key": "task\",\"\":",
+            "plain": "task",
+        });
+        let mut v = original.clone();
+        repair_spliced_object_values(&mut v);
+        assert_eq!(
+            v, original,
+            "only a value whose entire tail is the `\",\"<name>\":` delimiter run is repairable"
+        );
+    }
+
+    /// A well-formed call must come back byte-identical, not silently
+    /// re-serialised into serde's key order — the loop-breaker compares raw
+    /// emitted text elsewhere, and a gratuitous rewrite would churn it.
+    #[test]
+    fn repair_entry_point_leaves_clean_arguments_byte_identical() {
+        let clean = r#"{"query":"tasks","node_type":"task","filters":[]}"#;
+        let mut args = clean.to_string();
+        repair_tool_call_arguments(&mut args);
+        assert_eq!(args, clean);
+
+        // Unparseable arguments cannot be repaired structurally and must reach
+        // the parse-failure path unchanged, which reports the real malformation.
+        let broken = r#"{"query": "unterminated"#;
+        let mut args = broken.to_string();
+        repair_tool_call_arguments(&mut args);
+        assert_eq!(args, broken);
     }
 
     /// #1926: verbatim shape from the daemon.log trace behind the issue — a
