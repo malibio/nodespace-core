@@ -33,7 +33,9 @@ use nodespace_agent::agent_types::{
 };
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
 use nodespace_core::models::AiChatMessage;
-use nodespace_daemon::services::local_agent_service::{completed_writes_from, node_history_from_messages};
+use nodespace_daemon::services::local_agent_service::{
+    completed_writes_from, node_history_from_messages,
+};
 use nodespace_nlp_engine::chat::ChatConfig;
 
 fn model_path() -> String {
@@ -140,6 +142,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "assistant".to_string(),
@@ -151,6 +155,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: turn1_writes,
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "user".to_string(),
@@ -159,6 +165,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "assistant".to_string(),
@@ -168,6 +176,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: turn2_writes,
+            question: None,
+            options: Vec::new(),
         },
     ]
 }
@@ -188,14 +198,20 @@ fn real_pipeline_renders_terse_facts_not_narrative_prose() {
         .iter()
         .filter(|m| matches!(m.role, Role::Assistant))
         .collect();
-    assert_eq!(assistant_msgs.len(), 2, "expected exactly 2 assistant turns");
+    assert_eq!(
+        assistant_msgs.len(),
+        2,
+        "expected exactly 2 assistant turns"
+    );
     assert!(
         assistant_msgs[0].content.starts_with("Fact:"),
         "turn 1 assistant content must be a terse fact, got: {:?}",
         assistant_msgs[0].content
     );
     assert!(
-        assistant_msgs[0].content.contains("equipment_checkout_record"),
+        assistant_msgs[0]
+            .content
+            .contains("equipment_checkout_record"),
         "turn 1 fact must carry the derived schema id, got: {:?}",
         assistant_msgs[0].content
     );
@@ -250,7 +266,8 @@ async fn golden_turn3_given_real_pipeline_history() {
         max_tokens: Some(512),
     };
 
-    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = chunks.clone();
     engine
         .generate(

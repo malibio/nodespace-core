@@ -64,7 +64,17 @@ export type Expectation =
       propertiesOn?: string;
     }
   // The named tool did not fire more than once in a row (no blind retry loop).
-  | { kind: "noRetry"; tool: string }
+  //
+  // `minCalls` additionally requires the tool to have fired at least that many
+  // times. Without it this expectation is satisfied by a turn in which the tool
+  // never fired at all — the loop that detects a repeat never executes — so a
+  // model that stopped and asked the user instead of searching scores
+  // identically to one that searched correctly. That is the failure mode on the
+  // read side, so a scenario testing for it must opt in. Left off by default
+  // rather than made unconditional: changing the shared semantics would also
+  // re-score existing scenarios, and single-run matrix numbers are not
+  // decision-grade enough to absorb that silently.
+  | { kind: "noRetry"; tool: string; minCalls?: number }
   // Exactly one create_schema call in this turn (no proactive related-type creation).
   | { kind: "noExtraTypes" };
 
@@ -271,6 +281,18 @@ export function assertExpectation(
           };
         }
       }
+      // Checked after the retry loop, not before: a scenario that opts in wants
+      // both "fired at least minCalls times" and "never twice in a row", and the
+      // retry failure is the more specific diagnosis of the two.
+      if (expect.minCalls !== undefined) {
+        const count = actions.filter((t) => t === expect.tool).length;
+        if (count < expect.minCalls) {
+          return {
+            passed: false,
+            failure: `Expected at least ${expect.minCalls} '${expect.tool}' call(s), got ${count} (tools: ${actions.join(",")})`,
+          };
+        }
+      }
       return { passed: true };
     }
 
@@ -460,6 +482,75 @@ const GROUPS: MatrixScenario[][] = [
       scenario: "8e. Query across types",
       prompt: "Run through the albums for me",
       expect: { kind: "toolOnce", tool: "search_nodes" },
+    },
+  ],
+  // Core-type schema fields (scenario 10) shares its own chat node.
+  //
+  // Every group above builds its own CUSTOM type first, which is precisely why
+  // this gap went unmeasured: a custom type's fields reach the model through
+  // the RELEVANT ENTITY TYPES block, and that block excludes core types by
+  // construction. So `task`'s own defined fields — due_date, priority,
+  // assignee — were invisible from every direction, and the matrix could not
+  // see it because no scenario ever acted on a core type.
+  //
+  // These use `task` deliberately and create it with `properties` unset beyond
+  // the minimum, so the fields under test are defined-but-unset — the exact
+  // state where "field exists" and "field does not exist" were
+  // indistinguishable.
+  [
+    {
+      id: "10a",
+      scenario: "10a. Core-type instance creation",
+      // Winnability: due_date, priority and assignee are all defined on the
+      // seeded core task schema, so 10b and 10c are answerable in principle.
+      // This turn deliberately supplies NONE of them — the following scenarios
+      // are about writing and filtering a field that has no value yet, which is
+      // only a real test if it starts unset.
+      prompt: "Add a task to schedule the chip upgrade on the Polestar",
+      expect: { kind: "toolOnce", tool: "create_node" },
+    },
+    {
+      id: "10b",
+      scenario: "10b. Set a defined-but-unset core field",
+      // The reported failure: the model asked the user "what field name is
+      // used on this task node that tracks dates?" for `due_date` — a field
+      // defined on the core task schema all along. It was not being obtuse;
+      // get_node returned only populated properties, so the field genuinely
+      // was not visible to it, and the "use the node's own existing property
+      // keys" rule then made declining the correct move.
+      //
+      // The prompt says "due date" in the user's words and never names the
+      // key, so a pass requires the field list to have reached the model
+      // rather than the key having been handed over in the prompt.
+      //
+      // minProperties: 1 is what makes this scenario mean anything: the whole
+      // defect is a turn that ends without the value reaching `properties`.
+      // Without it, a content-only update_node — or the model narrating the
+      // change it did not make — scores identically to a real write.
+      prompt: "Set that task's due date to 6 August 2026",
+      expect: { kind: "toolOnce", tool: "update_node", minProperties: 1 },
+    },
+    {
+      id: "10c",
+      scenario: "10c. Filter core type by enum field",
+      // The read-side half of the same root cause. Observed: the model asked
+      // the user to confirm that `status` was the field and `open` a legal
+      // value — both defined on the core task schema (status is required, with
+      // core values open / in_progress / done / cancelled).
+      //
+      // `noRetry` rather than `toolOnce`: an empty or narrowing result may
+      // legitimately prompt one follow-up search, so a hard count of 1 would
+      // red out correct behavior. What it must not do is loop blindly.
+      //
+      // `minCalls: 1` covers the other half, and is the half this scenario
+      // exists for: the reported failure is the model stopping to interrogate
+      // the user rather than searching, which shows up as the search never
+      // firing. Bare `noRetry` scores that outcome GREEN — its repeat-detecting
+      // loop never executes over zero calls — so without `minCalls` this
+      // scenario would pass on the exact production behavior it was added to
+      // catch, which is worse than not measuring it at all.
+      prompt: "How many tasks are still open?",
+      expect: { kind: "noRetry", tool: "search_nodes", minCalls: 1 },
     },
   ],
 ];

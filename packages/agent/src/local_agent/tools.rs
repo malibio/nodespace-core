@@ -219,6 +219,43 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
+/// Render a `resolve_query` decomposition field line with an explicit
+/// JSON-encoding hint appended to its declared type.
+///
+/// `EntityFieldDescriptor::render_shape()` alone (`name: type`) names the
+/// target field's type but never constrains *how* the model should encode a
+/// value it maps onto that field — a small model reading digits out of
+/// prose readily emits `"2400"` (a JSON string) instead of `2400` (a JSON
+/// number) for a field declared `number`, and the same drift is plausible in
+/// the opposite direction for `text`/`enum` fields fed a numeric-looking
+/// value. SQLite's `json_extract` preserves the stored value's real type, so
+/// a type-mismatched equality filter compares unequal — silently
+/// indistinguishable from "no such node" to the caller. This is the
+/// "cheaper to try first" fix from issue #1915: state the expected encoding
+/// directly in the prompt rather than adding another
+/// `coerce_filter_value_to_field_type` arm each time a new type is caught
+/// live.
+///
+/// Deliberately local to `exec_resolve_query` rather than added to
+/// `render_shape()` itself: that method also renders the `RELEVANT ENTITY
+/// TYPES` block shown to the primary agent for `create_node`/`search_nodes`
+/// guidance, which is out of this issue's scope and validated by its own
+/// tests — widening it without measuring those call sites risks the same
+/// bystander-regression pattern this project has hit before (see #1912,
+/// #1926).
+fn render_resolve_query_field_line(
+    field: &nodespace_core::ops::entity_types_block::EntityFieldDescriptor,
+) -> String {
+    let shape = field.render_shape();
+    let hint = match field.field_type.as_str() {
+        "number" => " (JSON number, not string)",
+        "boolean" => " (JSON boolean `true`/`false`, not string)",
+        "text" | "enum" => " (JSON string, even if the value looks numeric)",
+        _ => "",
+    };
+    format!("- {shape}{hint}")
+}
+
 /// Coerce a `resolve_query` filter's value to match its target field's
 /// declared schema type when the decomposition model emitted the wrong JSON
 /// type for it.
@@ -235,6 +272,12 @@ fn extract_json_object(text: &str) -> Option<&str> {
 /// Only `number`/`boolean` need this: `text`/`enum` fields are already
 /// strings, and `date` filters arrive as `YYYY-MM-DD` strings by
 /// construction (see the decomposition prompt).
+///
+/// This remains as defense in depth alongside the prompt-level JSON-encoding
+/// hint (`render_resolve_query_field_line`) added in #1915: the hint reduces
+/// how often the model emits the wrong JSON type, but does not guarantee it
+/// — a live model can still drift, and this coercion is what catches it
+/// when it does.
 fn coerce_filter_value_to_field_type(
     mut item: query_ops::AgentFilterItem,
     schema: Option<&nodespace_core::models::SchemaNode>,
@@ -335,6 +378,10 @@ fn def_search_nodes() -> ToolDefinition {
             (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — \
             pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). \
             Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. \
+            When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that \
+            type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: \
+            retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. \
+            Never ask the user to confirm a field name or value that appears in that list. \
             Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; \
             use search_semantic only for meaning-based / fuzzy questions."
             .into(),
@@ -369,7 +416,21 @@ fn def_search_nodes() -> ToolDefinition {
                                 "type": "string",
                                 "description": "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata."
                             },
+                            // Typed as an explicit union rather than left open.
+                            // This was the only untyped leaf in the schema, so
+                            // llama.cpp compiled it into a permissive "any JSON
+                            // value" grammar rule. Naming the alternatives
+                            // narrows that rule at no cost — these are the only
+                            // shapes the description ever asked for.
+                            //
+                            // Measured honestly: this alone did NOT stop the
+                            // #1943 splice (3 of 3 reps produced byte-identical
+                            // output before and after), so the malformation is
+                            // not the untyped leaf. Kept because a schema that
+                            // states its accepted types is correct on its own
+                            // terms, not as a claimed fix.
                             "value": {
+                                "type": ["string", "number", "boolean", "array"],
                                 "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
                             },
                             "case_sensitive": {
@@ -546,7 +607,7 @@ fn def_search_semantic() -> ToolDefinition {
 fn def_get_node() -> ToolDefinition {
     ToolDefinition {
         name: "get_node".into(),
-        description: "Get a node by ID. Use format=markdown to include all descendants as a readable document.".into(),
+        description: "Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -611,7 +672,7 @@ fn def_update_node() -> ToolDefinition {
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use the node's OWN existing property keys, copied character for character from the properties returned by resolve_query, get_node, or search_nodes for that node — do not invent a key from the user's wording. Pick the key whose current value the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}. Send only the keys that change, with their new values, not the unchanged ones."
+                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use a key the node's type already defines, copied character for character — either one of the node's OWN existing property keys (from the properties returned by resolve_query, get_node, or search_nodes) or any field listed in that node's 'available_properties' from get_node. A field listed there with \"set\": false is still a legitimate target: it is defined on the type and simply has no value yet, so writing it is how it gets one. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. Pick the key the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}; \"set the due date to Friday\" against an available_properties entry {\"name\": \"due_date\", \"set\": false} means {\"due_date\": \"...\"}. When a field lists allowed_values, use one of those values exactly. Send only the keys that change, with their new values, not the unchanged ones."
                 }
             },
             "required": ["id"]
@@ -1453,6 +1514,9 @@ impl GraphToolExecutor {
                 reason: e.to_string(),
             })?;
         let limit = params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
+        // Kept for the empty-result branch below, which needs to know which
+        // type was scoped after `params` is consumed by the query.
+        let queried_type = params.node_type.clone();
 
         let summaries = self
             .run_node_query(
@@ -1465,11 +1529,49 @@ impl GraphToolExecutor {
             )
             .await?;
 
-        Ok(ok_result(
-            tool_call_id,
-            "search_nodes",
-            json!({ "count": summaries.len(), "nodes": summaries }),
-        ))
+        let mut result = json!({ "count": summaries.len(), "nodes": summaries });
+
+        // A zero-result type-scoped search is the one outcome the model cannot
+        // read: "no node matches this filter" and "the field I filtered on
+        // does not exist" look identical, and the observed failure is the model
+        // resolving that ambiguity by asking the user to confirm a field name
+        // (`status`) and an enum value (`open`) the schema already defines.
+        // Naming the type's filterable fields here — on the tool result, per
+        // ADR-064 rule 4 — makes the two distinguishable without touching the
+        // routing block's deliberate core-type exclusion.
+        //
+        // Scoped to the empty case on purpose: appending a field list to every
+        // successful search would put a schema block in front of the model on
+        // turns that never needed one, which is the dilution the resident-prompt
+        // findings warn against.
+        if summaries.is_empty() {
+            if let Some(node_type) = queried_type.filter(|t| !t.is_empty()) {
+                let ns = self.node_service()?;
+                if let Ok(Some(schema)) = ns.get_schema_node(&node_type).await {
+                    let fields: Vec<Value> =
+                        nodespace_core::ops::entity_types_block::build_available_properties(
+                            &schema,
+                            &json!({}),
+                        )
+                        .into_iter()
+                        .map(|mut f| {
+                            // `set` is per-node and there is no node here.
+                            if let Some(obj) = f.as_object_mut() {
+                                obj.remove("set");
+                            }
+                            f
+                        })
+                        .collect();
+                    if !fields.is_empty() {
+                        if let Some(obj) = result.as_object_mut() {
+                            obj.insert("filterable_properties".to_string(), json!(fields));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ok_result(tool_call_id, "search_nodes", result))
     }
 
     /// Resolve an ambiguous natural-language request directly to the node it
@@ -1532,10 +1634,8 @@ impl GraphToolExecutor {
                 .fields
                 .iter()
                 .map(|f| {
-                    format!(
-                        "- {}",
-                        nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f)
-                            .render_shape()
+                    render_resolve_query_field_line(
+                        &nodespace_core::ops::entity_types_block::EntityFieldDescriptor::from_schema_field(f),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1834,7 +1934,56 @@ impl GraphToolExecutor {
                 node_id: id.clone(),
             };
             match node_ops::get_node(&ns, input).await {
-                Ok(node_data) => Ok(ok_result(tool_call_id, "get_node", node_data)),
+                Ok(mut node_data) => {
+                    // Attach the type's full schema field list. `node_data`
+                    // carries only *populated* properties, so without this a
+                    // defined-but-unset field (`due_date` on a fresh task) is
+                    // indistinguishable from one that does not exist, and the
+                    // model cannot name it to write it. See
+                    // `build_available_properties` for why this rides on the
+                    // tool result rather than the routing prompt block.
+                    //
+                    // Best-effort: a node whose type has no stored schema is
+                    // ordinary (plain `text` nodes, ad-hoc types), so a missing
+                    // schema omits the key rather than failing the lookup the
+                    // model actually asked for.
+                    // `nodeType` is the serialized spelling on every path that
+                    // carries one: the generic `Node` camelCases it, and
+                    // `TaskNode`/`AiChatNode` rename to it explicitly.
+                    //
+                    // `SchemaNode` is the exception — it has no `node_type`
+                    // field at all, so a schema node emits no `nodeType` and
+                    // skips this block by construction. That is load-bearing:
+                    // it is what stops the `task` SCHEMA node being described
+                    // using `task`'s own instance fields. If `SchemaNode` ever
+                    // gains the field, this needs an explicit
+                    // `node_type != "schema"` guard, because the test covering
+                    // it would keep passing while silently stopping to cover
+                    // anything.
+                    if let Some(node_type) = node_data.get("nodeType").and_then(|v| v.as_str()) {
+                        let node_type = node_type.to_string();
+                        if let Ok(Some(schema)) = ns.get_schema_node(&node_type).await {
+                            let properties = node_data
+                                .get("properties")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            let available =
+                                nodespace_core::ops::entity_types_block::build_available_properties(
+                                    &schema,
+                                    &properties,
+                                );
+                            if !available.is_empty() {
+                                if let Some(obj) = node_data.as_object_mut() {
+                                    obj.insert(
+                                        "available_properties".to_string(),
+                                        json!(available),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Ok(ok_result(tool_call_id, "get_node", node_data))
+                }
                 Err(OpsError::NotFound { .. }) => Ok(error_result(
                     tool_call_id,
                     "get_node",
@@ -2050,8 +2199,11 @@ impl GraphToolExecutor {
                         reason: "This call would change nothing: 'content' is identical to the \
                                  node's current content and no 'properties' were supplied. If the \
                                  request was to change the node's state, re-send it with the \
-                                 changed value in 'properties', using the node's own existing \
-                                 property keys."
+                                 changed value in 'properties', using a property key this node's \
+                                 type defines. If you do not know which key that is, call get_node \
+                                 on this id and read 'available_properties' — it lists every field \
+                                 the type defines, including ones not yet set on this node, which \
+                                 are still valid to write. Do not ask the user to name the field."
                             .into(),
                     });
                 }
@@ -3394,7 +3546,7 @@ mod tests {
 
             let prompt = seen_prompt.lock().unwrap().clone();
             assert!(
-                prompt.contains("condition: enum (checked_out, returned)"),
+                prompt.contains("condition: enum {checked_out, returned}"),
                 "the enum's legal values must reach the prompt the model resolves against, \
                  so \"came back\" can map to `returned` instead of being guessed; got:\n{prompt}"
             );
@@ -3409,6 +3561,84 @@ mod tests {
             assert!(
                 !prompt.contains("required"),
                 "write-time obligations must not leak into a read/filter prompt; got:\n{prompt}"
+            );
+        }
+
+        /// #1915: the decomposition prompt states the expected JSON encoding
+        /// alongside each field's declared type, so the model is told *how*
+        /// to encode a value it maps onto a field — not just what type the
+        /// field is. This is the "cheaper to try first" fix: state the
+        /// encoding in the prompt rather than adding another
+        /// `coerce_filter_value_to_field_type` arm per newly-observed drift.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_prompt_states_json_encoding_per_field_type() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "replacement_cost", "type": "number"},
+                        {"name": "is_paid", "type": "boolean"},
+                        {"name": "vendor_code", "type": "text"},
+                        {
+                            "name": "condition",
+                            "type": "enum",
+                            "coreValues": [
+                                {"value": "checked_out", "label": "Checked out"},
+                                {"value": "returned", "label": "Returned"}
+                            ]
+                        }
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let seen_prompt = Arc::new(std::sync::Mutex::new(String::new()));
+            let engine: Arc<dyn ChatInferenceEngine> = Arc::new(CapturingEngine {
+                response: r#"{"query": "", "filters": []}"#.to_string(),
+                seen_prompt: Arc::clone(&seen_prompt),
+            });
+            let executor = GraphToolExecutor {
+                node_service: Some(ns),
+                embedding_service: Arc::new(RwLock::new(None)),
+                inference_engine: Some(engine),
+            };
+
+            let _ = executor
+                .execute(
+                    "resolve_query",
+                    json!({
+                        "request": "the 2400 one came back",
+                        "node_type": "invoice"
+                    }),
+                )
+                .await;
+
+            let prompt = seen_prompt.lock().unwrap().clone();
+            assert!(
+                prompt.contains("replacement_cost: number (JSON number, not string)"),
+                "a number field must tell the model to emit a JSON number, not a \
+                 quoted string, so a filter on it actually matches the stored \
+                 value; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("is_paid: boolean (JSON boolean `true`/`false`, not string)"),
+                "a boolean field must tell the model to emit a JSON boolean, not a \
+                 quoted string; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("vendor_code: text (JSON string, even if the value looks numeric)"),
+                "a text field must tell the model to keep numeric-looking values as \
+                 JSON strings — the reverse-direction drift #1915 calls out; got:\n{prompt}"
+            );
+            assert!(
+                prompt.contains(
+                    "condition: enum (checked_out, returned) (JSON string, even if the value looks numeric)"
+                ),
+                "an enum field gets the same string-encoding hint as text, after its \
+                 legal-values list; got:\n{prompt}"
             );
         }
 
@@ -4025,6 +4255,55 @@ mod tests {
                     json!(true),
                     "real model failed to resolve the invoice due next Friday under either \
                      calendar reading — got {}",
+                    result.result
+                );
+            }
+
+            // Reverse-direction drift (#1915's own motivating scenario): a
+            // numeric-looking value identifies a `text` field. Nothing in
+            // `coerce_filter_value_to_field_type` covers this direction — it
+            // only coerces string-encoded numbers/booleans *into* number/
+            // boolean fields — so if the model emits a JSON number for
+            // `vendor_code` here, the filter compares a number against a
+            // stored string and silently matches nothing. This is what the
+            // prompt's new JSON-encoding hint (`render_resolve_query_field_line`)
+            // is meant to prevent by telling the model directly to keep a
+            // numeric-looking value as a JSON string for a `text` field.
+            {
+                let (ns, _tmp) = make_test_service().await;
+                handle_create_schema(
+                    &ns,
+                    json!({
+                        "name": "Invoice",
+                        "fields": [{"name": "vendor_code", "type": "text"}]
+                    }),
+                )
+                .await
+                .unwrap();
+                let executor = GraphToolExecutor {
+                    node_service: Some(ns.clone()),
+                    embedding_service: Arc::new(RwLock::new(None)),
+                    inference_engine: Some(engine.clone()),
+                };
+                create_invoice(&executor, "Invoice #4", json!({"vendor_code": "48219"})).await;
+
+                let result = executor
+                    .execute(
+                        "resolve_query",
+                        json!({ "request": "Mark the invoice from vendor 48219 as paid", "node_type": "invoice" }),
+                    )
+                    .await
+                    .unwrap();
+                println!(
+                    "reverse-direction (numeric-into-text) live result: {}",
+                    result.result
+                );
+                assert_eq!(
+                    result.result["resolved"],
+                    json!(true),
+                    "real model failed to resolve vendor_code \"48219\" (text field) — \
+                     likely emitted a JSON number instead of a JSON string for the filter \
+                     value — got {}",
                     result.result
                 );
             }

@@ -83,12 +83,17 @@ impl EntityFieldDescriptor {
     /// it emits a filter for a field the request never mentioned, which matches
     /// nothing — indistinguishable from a genuinely empty result, which is the
     /// failure this whole area keeps reproducing.
+    ///
+    /// Enum values are wrapped in `{}`, not `()` — `render_line` wraps a
+    /// type's whole field list in `()`, and a `()`-wrapped enum inside that
+    /// list would nest identical delimiters with no visual way to tell which
+    /// `)` closes which `(`.
     pub fn render_shape(&self) -> String {
         if self.enum_values.is_empty() {
             format!("{}: {}", self.name, self.field_type)
         } else {
             format!(
-                "{}: {} ({})",
+                "{}: {} {{{}}}",
                 self.name,
                 self.field_type,
                 self.enum_values.join(", ")
@@ -240,27 +245,39 @@ impl EntityTypeDescriptor {
 
     /// Render this type as one line of the block.
     ///
-    /// A type with no fields renders as a bare name: the trailing `": "` of the
-    /// populated form would read as a promise of a field list that never
-    /// arrives.
+    /// `:` carries exactly one meaning in this line — field name to field
+    /// type, inside the field list. Nothing else in the line uses it, so a
+    /// reader (model or human) never has to decide which relationship a given
+    /// `:` expresses:
+    ///
+    /// - the display name is quoted, not colon-prefixed, so `- invoice
+    ///   "Invoice"` cannot be misread as a field declaration `invoice:
+    ///   Invoice`
+    /// - the field list is introduced by `->`, a token used nowhere else in
+    ///   the line
+    /// - enum values are wrapped in `{}` ([`EntityFieldDescriptor::render_shape`]),
+    ///   distinct from the `->`-introduced field list, so a line never nests
+    ///   the same delimiter inside itself
+    ///
+    /// Both call sites — workspace-context (`name: Some`) and per-candidate
+    /// routing (`name: None`) — share this one shape; only whether the quoted
+    /// name segment appears differs, per the doc comment above.
+    ///
+    /// A type with no fields renders with no `->`: a trailing separator would
+    /// read as a promise of a field list that never arrives.
     pub fn render_line(&self) -> String {
-        let head = match &self.name {
-            // The workspace-context path has both id and display name and shows
-            // both, since the id is what `node_type` takes while the name is
-            // what the user's phrasing will resemble.
-            Some(name) => format!("- {}: {}", self.type_id, name),
-            None => format!("- {}", self.type_id),
-        };
+        let mut line = format!("- {}", self.type_id);
+        if let Some(name) = &self.name {
+            // Escaped: an unescaped `"` in a user-authored display name would
+            // close the quote early and reintroduce the ambiguity this format
+            // exists to remove.
+            line.push_str(&format!(" \"{}\"", name.replace('"', "\\\"")));
+        }
 
-        let mut line = if self.fields.is_empty() {
-            head
-        } else {
+        if !self.fields.is_empty() {
             let rendered: Vec<String> = self.fields.iter().map(|f| f.render()).collect();
-            match &self.name {
-                Some(_) => format!("{head} ({})", rendered.join("; ")),
-                None => format!("{head}: {}", rendered.join("; ")),
-            }
-        };
+            line.push_str(&format!(" -> {}", rendered.join("; ")));
+        }
 
         if let Some(tmpl) = &self.title_template {
             line.push_str(&format!(" [title_template: {tmpl}]"));
@@ -294,6 +311,66 @@ pub fn descriptors_from_json(meta: &Value) -> Vec<EntityTypeDescriptor> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Build the `available_properties` list for a node of a given type: every
+/// field its schema defines, each marked with whether the node currently has a
+/// value for it.
+///
+/// This exists because a node's `properties` map carries only *populated*
+/// fields, so a defined-but-unset field (`due_date` on a fresh task) is, from
+/// the model's side, indistinguishable from a field that does not exist. The
+/// model then either invents a key or — correctly, under the "use the node's
+/// own existing property keys" rule — declines and asks the user to name a
+/// field the system already knows.
+///
+/// Delivered on a *tool result* rather than the routing prompt, per ADR-064
+/// rule 4 (tool results own facts). That choice is what keeps this independent
+/// of the `is_core` exclusion in [`super::context_ops`] and the routing block:
+/// `RELEVANT ENTITY TYPES` answers "which user-defined types are relevant to
+/// this message", a retrieval question over an unbounded set. Core types are
+/// the opposite — a small fixed set that needs to be *always known* when the
+/// model is looking at a node of that type, not *found*. Routing that through
+/// a relevance mechanism would make every core type a retrieval candidate on
+/// every turn, which is what the `is_core` filter exists to prevent.
+///
+/// ADR-063 is unaffected by this channel: the list names only field names the
+/// schema *already defines*, so it opens no path to writing a new bare key
+/// onto a core type. The prefix rule lives in `create_node`'s guidance and
+/// keys off `RELEVANT ENTITY TYPES`, which this deliberately does not touch.
+///
+/// `set` is the load-bearing flag — without it this would merely be a longer
+/// list of names, and "defined but unset" would still be unreadable.
+///
+/// Field names are rendered *flat* (`due_date`, not `task.due_date`). That is
+/// the shape on both sides: `node_to_typed_value` flattens the stored
+/// `{"task":{...}}` namespace for reads, and `NodeService` re-namespaces flat
+/// keys on writes, so a name taken from this list can be passed straight back
+/// to `update_node`.
+pub fn build_available_properties(schema: &SchemaNode, properties: &Value) -> Vec<Value> {
+    schema
+        .fields
+        .iter()
+        .map(|f| {
+            let descriptor = EntityFieldDescriptor::from_schema_field(f);
+            // A JSON null is "no value", the same as an absent key — otherwise
+            // a cleared field would report itself as set and the model would
+            // have no reason to write to it.
+            let is_set = properties
+                .get(&descriptor.name)
+                .map(|v| !v.is_null())
+                .unwrap_or(false);
+            let mut entry = json!({
+                "name": descriptor.name,
+                "type": descriptor.field_type,
+                "set": is_set,
+            });
+            if !descriptor.enum_values.is_empty() {
+                entry["allowed_values"] = json!(descriptor.enum_values);
+            }
+            entry
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -352,17 +429,21 @@ mod tests {
         }
     }
 
+    /// Golden test: the exact rendered line for a type with a display name,
+    /// an enum field (core and user values unioned), a required field, and a
+    /// `title_template`. Pins the grammar this module exists to keep
+    /// unambiguous — `:` appears only inside the `->`-introduced field list,
+    /// the display name is quoted rather than colon-prefixed, and enum values
+    /// use `{}` rather than the field list's own delimiter.
     #[test]
     fn renders_type_field_enum_required_and_template() {
         let d = EntityTypeDescriptor::from_schema(&sample_schema());
-        let line = d.render_line();
 
-        assert!(line.contains("- invoice: Invoice"));
-        assert!(line.contains("reference: string"));
-        assert!(line.contains("amount: number, required"));
-        // Core and user enum values are unioned; both are legal on a write.
-        assert!(line.contains("status: enum (draft, sent)"));
-        assert!(line.contains("[title_template: {reference}]"));
+        assert_eq!(
+            d.render_line(),
+            "- invoice \"Invoice\" -> reference: string; amount: number, required; \
+             status: enum {draft, sent} [title_template: {reference}]"
+        );
     }
 
     /// The property this whole module exists to enforce: the typed path and the
@@ -387,6 +468,20 @@ mod tests {
             title_template: None,
         };
         assert_eq!(d.render_line(), "- venue");
+    }
+
+    /// A display name containing `"` must not close the quote early — that
+    /// would let the rest of the name spill out unquoted and reintroduce the
+    /// ambiguity this format exists to remove.
+    #[test]
+    fn a_quote_in_the_display_name_is_escaped_not_left_to_close_early() {
+        let d = EntityTypeDescriptor {
+            type_id: "invoice".to_string(),
+            name: Some(r#"The "Big" Invoice"#.to_string()),
+            fields: vec![],
+            title_template: None,
+        };
+        assert_eq!(d.render_line(), r#"- invoice "The \"Big\" Invoice""#);
     }
 
     #[test]
@@ -459,7 +554,97 @@ mod tests {
         let rendered = render_entity_types(&via_json).expect("one type renders");
 
         assert!(rendered.contains("amount: number, required"));
-        assert!(rendered.contains("status: enum (draft, sent)"));
+        assert!(rendered.contains("status: enum {draft, sent}"));
         assert!(rendered.contains("[title_template: {reference}]"));
+    }
+
+    /// The core defect: an unset field must still be listed, and must be
+    /// distinguishable from a set one. Without `set`, "defined but unset" and
+    /// "does not exist" read identically and the model declines the write.
+    #[test]
+    fn available_properties_lists_unset_fields_marked_not_set() {
+        let schema = sample_schema();
+        let props = json!({ "reference": "INV-1" });
+
+        let available = build_available_properties(&schema, &props);
+        let by_name = |n: &str| {
+            available
+                .iter()
+                .find(|f| f["name"] == n)
+                .unwrap_or_else(|| panic!("{n} missing from available_properties"))
+                .clone()
+        };
+
+        // Every defined field appears, set or not.
+        assert_eq!(available.len(), 3);
+        assert_eq!(by_name("reference")["set"], json!(true));
+        assert_eq!(by_name("amount")["set"], json!(false));
+        assert_eq!(by_name("status")["set"], json!(false));
+        assert_eq!(by_name("amount")["type"], json!("number"));
+    }
+
+    /// A field explicitly cleared to null has no value, so reporting it as set
+    /// would leave the model with no reason to write to it.
+    #[test]
+    fn available_properties_treats_null_as_unset() {
+        let available = build_available_properties(&sample_schema(), &json!({ "amount": null }));
+        let amount = available.iter().find(|f| f["name"] == "amount").unwrap();
+
+        assert_eq!(amount["set"], json!(false));
+    }
+
+    /// Enum values must ride along, or `open`/`draft` still has to be guessed —
+    /// which is the second half of the reported failure (the model asking the
+    /// user to confirm the enum value, not just the field name).
+    #[test]
+    fn available_properties_exposes_allowed_values() {
+        let available = build_available_properties(&sample_schema(), &json!({}));
+        let status = available.iter().find(|f| f["name"] == "status").unwrap();
+
+        assert_eq!(status["allowed_values"], json!(["draft", "sent"]));
+        // Non-enum fields carry no empty key that would read as "no legal value".
+        let reference = available.iter().find(|f| f["name"] == "reference").unwrap();
+        assert!(reference.get("allowed_values").is_none());
+    }
+
+    /// ADR-063 guard, asserted rather than assumed (the issue requires this
+    /// re-verification for any new delivery path): this list can only ever name
+    /// keys the schema already defines, so it adds no route by which a model
+    /// writes a new bare property key onto a core type. The prefix rule keys off
+    /// `RELEVANT ENTITY TYPES`, which this channel does not touch.
+    #[test]
+    fn available_properties_names_only_schema_defined_fields() {
+        let schema = sample_schema();
+        // Properties carrying keys the schema does not define — including a
+        // bare key of the kind ADR-063 prohibits on a core type.
+        let props = json!({ "reference": "INV-1", "weight": "40kg", "custom:color": "red" });
+
+        let available = build_available_properties(&schema, &props);
+        let names: Vec<&str> = available
+            .iter()
+            .filter_map(|f| f["name"].as_str())
+            .collect();
+
+        assert_eq!(names, vec!["reference", "amount", "status"]);
+        assert!(!names.contains(&"weight"));
+        assert!(!names.contains(&"custom:color"));
+    }
+
+    /// A core schema is handled identically — the whole point of the fix is
+    /// that core types are no longer the blind spot.
+    #[test]
+    fn available_properties_covers_core_schemas() {
+        let mut schema = sample_schema();
+        schema.id = "task".to_string();
+        schema.is_core = true;
+        let mut due = field("due_date", "date");
+        due.required = Some(false);
+        schema.fields = vec![due];
+
+        let available = build_available_properties(&schema, &json!({ "status": "in_progress" }));
+
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0]["name"], json!("due_date"));
+        assert_eq!(available[0]["set"], json!(false));
     }
 }

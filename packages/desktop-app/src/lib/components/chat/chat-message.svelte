@@ -3,13 +3,33 @@
   import type { DisplayMessage } from './types';
   import ChatMarkdown from './chat-markdown.svelte';
 
-  let { message }: { message: DisplayMessage } = $props();
+  let {
+    message,
+    isLatest = false,
+    onSelectOption,
+  }: {
+    message: DisplayMessage;
+    /** Whether this is the most recent message — options are only clickable here. */
+    isLatest?: boolean;
+    onSelectOption?: (_option: string) => void;
+  } = $props();
 
   let showCopyButton = $state(false);
   let copied = $state(false);
 
   const isUser = $derived(message.role === 'user');
   const isAssistant = $derived(message.role === 'assistant');
+  /**
+   * The text to show above the option chips: `content` minus the bullet list
+   * (rendered as chips instead), keeping the backend's opener + question
+   * framing ("I can take that a couple of ways...") intact rather than
+   * dropping it in favor of the bare `question` field.
+   */
+  const clarifyHeaderText = $derived(
+    message.options && message.options.length > 0
+      ? message.content.split('\n\n')[0]
+      : message.content
+  );
 
   async function copyContent() {
     try {
@@ -34,10 +54,25 @@
     {#if message.content}
       <div class="message-content">
         {#if isAssistant}
-          <ChatMarkdown content={message.content} />
+          <ChatMarkdown content={clarifyHeaderText} />
         {:else}
           {message.content}
         {/if}
+      </div>
+    {/if}
+
+    {#if isAssistant && message.options && message.options.length > 0}
+      <div class="clarify-options" role="group" aria-label="Choose one">
+        {#each message.options as option (option)}
+          <button
+            class="clarify-option"
+            type="button"
+            disabled={!isLatest || !onSelectOption}
+            onclick={() => onSelectOption?.(option)}
+          >
+            {option}
+          </button>
+        {/each}
       </div>
     {/if}
 
@@ -112,6 +147,36 @@
 
   .user-message .message-content {
     white-space: pre-wrap;
+  }
+
+  .clarify-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-top: 0.625rem;
+  }
+
+  .clarify-option {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.8125rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+
+  .clarify-option:not(:disabled):hover {
+    background: hsl(var(--accent));
+    border-color: hsl(var(--ring));
+  }
+
+  .clarify-option:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
 
   .reasoning-block {

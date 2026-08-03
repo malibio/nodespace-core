@@ -14,7 +14,21 @@
 //! — no custom error formatting is needed to satisfy that requirement.
 
 use crate::ops::query_ops::{AgentFilterItem, AgentSortItem};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Deserialize `null` as the type's default rather than as a type error.
+///
+/// Paired with `#[serde(default)]`, this makes an explicitly-null field behave
+/// exactly like an omitted one. Used only for fields where the two genuinely
+/// mean the same thing, so that a caller stating "nothing here" explicitly is
+/// not rejected for choosing the more verbose spelling.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 /// Parameters for the `search_nodes` tool — the single query tool for finding,
 /// listing, and filtering nodes by title, type, and/or typed properties.
@@ -31,7 +45,16 @@ pub struct SearchNodesParams {
     /// Defaults to empty when omitted entirely — a caller that resolved
     /// everything into `filters` (e.g. via `resolve_query`) should not have
     /// to remember to also echo back an empty `query`.
-    #[serde(default)]
+    ///
+    /// An explicit `null` is read as that same empty string rather than
+    /// rejected. A model that has resolved its intent into `filters` states "no
+    /// title filter" as `"query": null` at least as readily as by omitting the
+    /// key — measured 3 of 3 on the locked model — and the two plainly mean the
+    /// same thing here, so rejecting one of them fails a correct call over its
+    /// spelling. `deny_unknown_fields` still rejects a *misspelled* key, which
+    /// is the case that guard exists for; this only accepts a null where an
+    /// absent value is already valid.
+    #[serde(default, deserialize_with = "null_as_default")]
     pub query: String,
 
     /// Filter by node type (e.g., "task", "text").
@@ -142,6 +165,43 @@ mod tests {
         assert!(
             err.to_string().contains("caseSensitive"),
             "expected error naming `caseSensitive`, got: {err}"
+        );
+    }
+
+    /// A model that resolved its intent into `filters` states "no title filter"
+    /// as an explicit `null` as readily as by omitting the key. Both mean the
+    /// same thing, so both must deserialize — rejecting the null spelling fails
+    /// an otherwise correct call.
+    #[test]
+    fn search_nodes_params_reads_null_query_as_empty() {
+        let explicit_null = json!({
+            "query": null,
+            "node_type": "task",
+            "filters": [{"type": "property", "operator": "equals", "property": "status", "value": "open"}]
+        });
+        let params = serde_json::from_value::<SearchNodesParams>(explicit_null)
+            .expect("an explicit null query must deserialize");
+        assert_eq!(params.query, "");
+
+        // And the two spellings must agree.
+        let omitted = json!({"node_type": "task"});
+        let from_omitted = serde_json::from_value::<SearchNodesParams>(omitted).unwrap();
+        let from_null = serde_json::from_value::<SearchNodesParams>(
+            json!({"node_type": "task", "query": null}),
+        )
+        .unwrap();
+        assert_eq!(from_omitted.query, from_null.query);
+    }
+
+    /// The null allowance must not weaken the misspelled-key guard it sits
+    /// beside — that is the case `deny_unknown_fields` exists for.
+    #[test]
+    fn null_query_allowance_does_not_admit_unknown_keys() {
+        let args = json!({"query": null, "nodeType": "task"});
+        let err = serde_json::from_value::<SearchNodesParams>(args).unwrap_err();
+        assert!(
+            err.to_string().contains("nodeType"),
+            "expected error naming `nodeType`, got: {err}"
         );
     }
 }

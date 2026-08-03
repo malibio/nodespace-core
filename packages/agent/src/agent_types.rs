@@ -490,6 +490,23 @@ pub struct PriorWrite {
     pub summary: Option<String>,
 }
 
+/// Structured question/options from `route_clarify` (ADR-038), preserved
+/// alongside the flattened `response` text so the frontend can render
+/// clickable options instead of parsing markdown bullets back out of prose.
+///
+/// `response` on [`AgentTurnResult`] still carries `format_clarification`'s
+/// flattened text for the internal LLM-facing history — a bare string is what
+/// `session_already_clarified` scans for and what any plain-text reader of
+/// `response` still gets. This struct is the additional structured channel
+/// the UI needs, per issue #1930.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClarifyPrompt {
+    /// The specific question put to the user.
+    pub question: String,
+    /// Concrete options to offer, when the model supplied any.
+    pub options: Vec<String>,
+}
+
 /// Result of a complete agent turn (one round of generation + tool execution).
 ///
 /// Captures the final assistant response text, any tool calls that were made
@@ -505,6 +522,14 @@ pub struct AgentTurnResult {
     pub tool_calls_made: Vec<ToolExecutionRecord>,
     /// Token usage statistics for this turn.
     pub usage: InferenceUsage,
+    /// `Some` when this turn's response is a `route_clarify` question rather
+    /// than an ordinary reply — carries the structured question/options
+    /// `response` flattens into text, so the frontend can render them
+    /// distinctly. `None` for every other turn, including ordinary
+    /// zero-tool-call replies that merely phrase themselves as a question
+    /// (see #1930's scope note on `agent_loop::run_turn`).
+    #[serde(default)]
+    pub clarify: Option<ClarifyPrompt>,
 }
 
 // ---------------------------------------------------------------------------

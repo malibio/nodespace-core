@@ -589,7 +589,7 @@ mod tests {
         let output = ctx.format_for_prompt(4000);
 
         assert!(output.contains(RELEVANT_ENTITY_TYPES_HEADER));
-        assert!(output.contains("customer: Customer"));
+        assert!(output.contains("customer \"Customer\""));
         // Each field carries its type, so the node-creation guidance's
         // instruction to read field names *and* types has a referent.
         assert!(output.contains("name: string; email: string"));
@@ -667,7 +667,7 @@ mod tests {
         // Core and user values both listed, so the model picks a legal one
         // instead of inventing a value the write path will reject.
         assert!(
-            output.contains("status: enum (open, blocked), required"),
+            output.contains("status: enum {open, blocked}, required"),
             "got: {output}"
         );
     }
@@ -697,10 +697,9 @@ mod tests {
             related_schemas: vec![],
         };
         let output = ctx.format_for_prompt(4000);
-        assert!(output.contains("invoice: Invoice\n"));
-        // No field-descriptor parentheses when there are no fields (the header's
-        // own parenthetical anti-copy clause is unrelated to this).
-        assert!(!output.contains("Invoice ("));
+        assert!(output.contains("invoice \"Invoice\"\n"));
+        // No `->` field-list marker when there are no fields.
+        assert!(!output.contains("Invoice\" ->"));
     }
 
     #[test]
