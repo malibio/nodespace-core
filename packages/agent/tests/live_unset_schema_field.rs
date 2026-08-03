@@ -256,6 +256,42 @@ async fn deterministic_empty_search_names_filterable_fields() {
     );
 }
 
+/// ADR-064 rule 4: a tool result owns *facts*, not procedures. The field list
+/// is a fact and belongs here; prose telling the model what to do about it is a
+/// plan, and belongs in the tool description (rule 2) where tool-selection
+/// guidance lives.
+///
+/// An earlier draft of this fix shipped a `no_matches_hint` prose string
+/// alongside the list. It read as helpful and violated the doctrine — and the
+/// doctrine is measured, not stylistic: instructions delivered as a tool result
+/// dropped continuation from 100% to 44% in this codebase's own testing.
+#[tokio::test(flavor = "multi_thread")]
+async fn deterministic_empty_search_returns_facts_not_instructions() {
+    let (executor, _ns, _tmp) = make_executor().await;
+    create_polestar_task(&executor).await;
+
+    let found = executor
+        .execute(
+            "search_nodes",
+            json!({
+                "query": "",
+                "node_type": "task",
+                "filters": [{"type": "property", "property": "status", "operator": "equals", "value": "open"}],
+            }),
+        )
+        .await
+        .expect("search_nodes must succeed");
+
+    let obj = found.result.as_object().expect("result must be an object");
+    let allowed = ["count", "nodes", "filterable_properties"];
+    let unexpected: Vec<&String> = obj.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    assert!(
+        unexpected.is_empty(),
+        "the result carries key(s) {unexpected:?} beyond the facts {allowed:?} — if that is \
+         procedural prose it belongs in the tool description, not the tool result (ADR-064 rule 4)"
+    );
+}
+
 /// A successful search must NOT carry the field block. Appending schema to
 /// every result would put a block in front of the model on turns that never
 /// needed one — the dilution the resident-prompt findings warn against.
@@ -491,4 +527,72 @@ async fn live_model_sets_an_unset_field_without_asking_for_its_name() {
         persisted > 0,
         "no rep persisted the date — the model still cannot write a defined-but-unset field"
     );
+}
+
+/// A node of a type that defines no fields (`text`) must come back unchanged
+/// rather than erroring or carrying an empty list — the lookup the model asked
+/// for is what matters, and the field list is an addition to it, never a
+/// precondition.
+///
+/// The list must be *absent*, not an empty array: an empty array reads as "this
+/// type has no fields", which is a stronger claim than "no fields were found",
+/// and on a type that does define fields it would be actively wrong.
+#[tokio::test(flavor = "multi_thread")]
+async fn deterministic_fieldless_type_is_unaffected() {
+    let (executor, _ns, _tmp) = make_executor().await;
+    let created = executor
+        .execute(
+            "create_node",
+            json!({ "content": "just a note", "node_type": "text" }),
+        )
+        .await
+        .expect("text node creation must succeed");
+    let node_id = created.result["id"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("nodespace://")
+        .to_string();
+
+    let stored = executor
+        .execute("get_node", json!({ "id": node_id }))
+        .await
+        .expect("get_node must succeed regardless of the field list");
+    assert!(!stored.is_error);
+    assert_eq!(stored.result["content"], json!("just a note"));
+
+    // Whatever `text` defines, the key is either absent or a non-empty list —
+    // never an empty array asserting the type has nothing.
+    if let Some(available) = stored.result.get("available_properties") {
+        assert!(
+            !available.as_array().expect("must be an array").is_empty(),
+            "an empty available_properties claims the type defines no fields; omit the key instead"
+        );
+    }
+}
+
+/// Fetching a schema node itself must not recurse into "the schema of a
+/// schema". Schema nodes use a non-namespaced property format, so treating
+/// their fields as instance properties would describe them wrongly.
+#[tokio::test(flavor = "multi_thread")]
+async fn deterministic_get_node_on_a_schema_node_is_sane() {
+    let (executor, _ns, _tmp) = make_executor().await;
+
+    let stored = executor
+        .execute("get_node", json!({ "id": "task" }))
+        .await
+        .expect("fetching the task schema node must succeed");
+
+    assert!(!stored.is_error, "schema fetch errored: {:?}", stored);
+    // Whatever it reports, it must not claim the *schema* node has task's
+    // instance fields set on it.
+    if let Some(available) = stored.result.get("available_properties") {
+        let named: Vec<&str> = available
+            .as_array()
+            .map(|a| a.iter().filter_map(|f| f["name"].as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            !named.contains(&"due_date"),
+            "the task SCHEMA node was described using task's own instance fields: {named:?}"
+        );
+    }
 }

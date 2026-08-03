@@ -334,6 +334,10 @@ fn def_search_nodes() -> ToolDefinition {
             (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — \
             pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). \
             Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. \
+            When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that \
+            type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: \
+            retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. \
+            Never ask the user to confirm a field name or value that appears in that list. \
             Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; \
             use search_semantic only for meaning-based / fuzzy questions."
             .into(),
@@ -1496,17 +1500,6 @@ impl GraphToolExecutor {
                     if !fields.is_empty() {
                         if let Some(obj) = result.as_object_mut() {
                             obj.insert("filterable_properties".to_string(), json!(fields));
-                            obj.insert(
-                                "no_matches_hint".to_string(),
-                                json!(format!(
-                                    "No '{node_type}' node matched. The fields above are the ones \
-                                     defined on '{node_type}' and are valid to filter on — where a \
-                                     field lists allowed_values, only those values will ever match. \
-                                     If a filter used a field or value not listed, retry with one \
-                                     that is; otherwise the result is genuinely empty. Do not ask \
-                                     the user to confirm a field name or value listed above."
-                                )),
-                            );
                         }
                     }
                 }
