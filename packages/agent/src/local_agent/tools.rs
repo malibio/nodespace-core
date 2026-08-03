@@ -1965,6 +1965,17 @@ impl GraphToolExecutor {
             });
         }
 
+        // Counted from what the CALL supplied, not from the merged result: the
+        // result carries every property the node has, so a call that changed
+        // nothing would report the node's full property count and be
+        // indistinguishable from one that persisted the requested change.
+        // Same question `property_count` answers for create_node.
+        let property_count = new_properties
+            .as_ref()
+            .and_then(|p| p.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0);
+
         let ns = self.node_service()?;
 
         let input = node_ops::UpdateNodeInput {
@@ -1985,7 +1996,11 @@ impl GraphToolExecutor {
         Ok(ok_result(
             tool_call_id,
             "update_node",
-            json!({ "id": node_uri(&output.node_id), "updated": true }),
+            json!({
+                "id": node_uri(&output.node_id),
+                "updated": true,
+                "property_count": property_count
+            }),
         ))
     }
 

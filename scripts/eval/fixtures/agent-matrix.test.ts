@@ -163,6 +163,63 @@ describe("assertExpectation", () => {
     test("fails on an empty tool list", () => {
       expect(assertExpectation(expect_, []).passed).toBe(false);
     });
+
+    // Scenario 6's shape: the right tools in the right order still fail the
+    // turn if the final call carried nothing to persist.
+    describe("minProperties", () => {
+      const withMin: Expectation = {
+        kind: "toolSequence",
+        tools: ["resolve_query", "update_node"],
+        minProperties: 1,
+      };
+      const seq = ["resolve_query", "update_node"];
+
+      test("passes when the last call persisted a property", () => {
+        expect(
+          assertExpectation(withMin, seq, [
+            { name: "update_node", isError: false, fieldCount: 1 },
+          ]).passed,
+        ).toBe(true);
+      });
+
+      test("fails when the sequence is right but nothing was persisted", () => {
+        const result = assertExpectation(withMin, seq, [
+          { name: "update_node", isError: false, fieldCount: 0 },
+        ]);
+        expect(result.passed).toBe(false);
+        expect(result.failure).toContain("update_node");
+      });
+
+      test("checks the last tool by default, not the first", () => {
+        // resolve_query reports no fields; the assertion must target
+        // update_node rather than passing on the resolver's record.
+        const result = assertExpectation(withMin, seq, [
+          { name: "resolve_query", isError: false, fieldCount: 5 },
+          { name: "update_node", isError: false, fieldCount: 0 },
+        ]);
+        expect(result.passed).toBe(false);
+      });
+
+      test("honours an explicit propertiesOn override", () => {
+        const result = assertExpectation(
+          { ...withMin, propertiesOn: "resolve_query" },
+          seq,
+          [
+            { name: "resolve_query", isError: false, fieldCount: 0 },
+            { name: "update_node", isError: false, fieldCount: 9 },
+          ],
+        );
+        expect(result.passed).toBe(false);
+      });
+
+      test("still passes the sequence check when minProperties is unset", () => {
+        expect(
+          assertExpectation({ kind: "toolSequence", tools: seq }, seq, [
+            { name: "update_node", isError: false, fieldCount: 0 },
+          ]).passed,
+        ).toBe(true);
+      });
+    });
   });
 
   describe("noRetry", () => {

@@ -271,8 +271,12 @@ async fn update_node_after_resolve_carries_the_changed_property() {
             "trial {trial}: the resolved node must be acted on with update_node"
         );
 
-        let args: serde_json::Value = serde_json::from_str(&turn.args)
-            .unwrap_or_else(|e| panic!("trial {trial}: args must be valid JSON ({e}): {}", turn.args));
+        let args: serde_json::Value = serde_json::from_str(&turn.args).unwrap_or_else(|e| {
+            panic!(
+                "trial {trial}: args must be valid JSON ({e}): {}",
+                turn.args
+            )
+        });
 
         assert_eq!(
             args.get("id").and_then(|v| v.as_str()),
