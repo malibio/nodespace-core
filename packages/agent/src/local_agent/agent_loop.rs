@@ -6653,6 +6653,26 @@ mod tests {
         );
     }
 
+    /// Two distinct corrupted keys that repair to the same clean name within
+    /// one object: the collision check runs against the live, mutating
+    /// object on each loop iteration (not a frozen snapshot), so the first
+    /// repair wins and the second — now seeing the just-inserted clean key —
+    /// correctly backs off rather than overwriting it. Neither value is
+    /// discarded; the second key is left in its original, still-corrupted
+    /// form rather than silently dropped.
+    #[test]
+    fn leaked_special_token_repair_resolves_same_pass_collisions_without_data_loss() {
+        let mut v = serde_json::json!({"<|\"|>type": "first", "type<|\"|>": "second"});
+        repair_leaked_special_token_keys(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({"type": "first", "type<|\"|>": "second"}),
+            "the first-processed corrupted key repairs cleanly; the second, now \
+             colliding with the repaired key, must be left untouched rather than \
+             overwriting or being discarded: {v:?}"
+        );
+    }
+
     /// User data lives in these payloads — only keys are ever rewritten, a
     /// value that happens to contain the same substring means whatever the
     /// user wrote.
