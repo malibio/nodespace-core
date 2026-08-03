@@ -190,7 +190,66 @@ mod tests {
                 ));
             }
         }
+        // Tool descriptions and their parameter-schema descriptions are
+        // model-facing instructional text too — and under ADR-064 rule 1 they
+        // are the channel guidance is actively being moved INTO, since argument
+        // shape stated on a schema measured 100% compliance where prose did
+        // not. Text pushed there was previously unguarded, so a worked example
+        // built on an eval scenario could be planted in a tool description with
+        // nothing failing. Derived from all_tool_definitions() rather than a
+        // hand-listed set of `def_*` constants, so a tool added later is
+        // covered automatically — the same property the fixture-side
+        // enumeration already has.
+        for def in crate::local_agent::tools::all_tool_definitions() {
+            if !def.description.is_empty() {
+                corpus.push(("local_agent::tools description", def.description));
+            }
+            // Walk the schema rather than reading only top-level
+            // `properties.*.description`: descriptions also sit on nested
+            // object properties and array `items` (e.g. update_schema's
+            // add_fields.items.properties.type), and limiting the walk to a
+            // fixed depth would recreate the same structural hole this
+            // enumeration exists to close.
+            collect_schema_descriptions(
+                &def.parameters_schema,
+                "local_agent::tools parameters_schema",
+                &mut corpus,
+            );
+        }
         corpus
+    }
+
+    /// Push every `description` string found anywhere in a JSON Schema value.
+    ///
+    /// Shape-agnostic on purpose: it recurses through objects and arrays
+    /// without assuming where descriptions live, so nested properties, array
+    /// `items`, and any schema construct added later are all covered without
+    /// this function changing.
+    fn collect_schema_descriptions(
+        value: &serde_json::Value,
+        label: &'static str,
+        corpus: &mut Vec<(&'static str, String)>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "description" {
+                        if let Some(text) = child.as_str() {
+                            if !text.is_empty() {
+                                corpus.push((label, text.to_string()));
+                            }
+                        }
+                    }
+                    collect_schema_descriptions(child, label, corpus);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_schema_descriptions(item, label, corpus);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Extract the `prompt: "..."` / `prompt: '...'` literals from an eval
@@ -426,6 +485,115 @@ mod tests {
         assert!(
             run > 4,
             "detector failed to flag a known-contaminated example (run={run})"
+        );
+    }
+
+    /// The corpus must actually contain the tool channel — otherwise the guard
+    /// passes for the boring reason that it never looked. Asserts against real
+    /// registry text rather than a constructed value, so a refactor that stops
+    /// reaching `all_tool_definitions()` fails here.
+    #[test]
+    fn guidance_corpus_covers_tool_descriptions_and_parameter_schemas() {
+        let corpus = guidance_corpus();
+        let entry_texts: Vec<&str> = corpus.iter().map(|(_, text)| text.as_str()).collect();
+
+        for def in crate::local_agent::tools::all_tool_definitions() {
+            assert!(
+                entry_texts.contains(&def.description.as_str()),
+                "tool {}'s description is absent from guidance_corpus() — text in \
+                 that channel would be unguarded against eval contamination",
+                def.name
+            );
+        }
+
+        // A nested description, not just a top-level one: update_schema states
+        // its field types on add_fields.items.properties.type.
+        let nested = crate::local_agent::tools::all_tool_definitions()
+            .into_iter()
+            .find(|d| d.name == "update_schema")
+            .expect("update_schema must exist in the registry")
+            .parameters_schema["properties"]["add_fields"]["items"]["properties"]["type"]
+            ["description"]
+            .as_str()
+            .expect("update_schema add_fields item type must carry a description")
+            .to_string();
+        assert!(
+            entry_texts.contains(&nested.as_str()),
+            "a nested parameter-schema description ({nested:?}) is absent from \
+             guidance_corpus() — the schema walk is not reaching nested properties"
+        );
+    }
+
+    /// The schema walk must find descriptions regardless of where they sit,
+    /// including shapes the current registry happens not to use yet.
+    #[test]
+    fn schema_description_walk_reaches_arbitrary_nesting() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "top": { "type": "string", "description": "top level" },
+                "list": {
+                    "type": "array",
+                    "description": "array itself",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "deep": { "type": "string", "description": "deeply nested" }
+                        }
+                    }
+                },
+                "variants": {
+                    "oneOf": [
+                        { "type": "string", "description": "inside an array of schemas" }
+                    ]
+                },
+                "empty": { "type": "string", "description": "" }
+            }
+        });
+
+        let mut corpus: Vec<(&'static str, String)> = Vec::new();
+        collect_schema_descriptions(&schema, "test", &mut corpus);
+        let mut found: Vec<String> = corpus.into_iter().map(|(_, text)| text).collect();
+        found.sort();
+
+        assert_eq!(
+            found,
+            vec![
+                "array itself",
+                "deeply nested",
+                "inside an array of schemas",
+                "top level",
+            ],
+            "the walk must reach nested properties, array items, and schema \
+             arrays, and must skip empty descriptions"
+        );
+    }
+
+    /// Pins the detector against contamination planted in the tool channel
+    /// specifically — the gap this corpus extension closes. Mirrors
+    /// `contamination_guard_detects_a_planted_example`, but for a parameter
+    /// description rather than resident prose.
+    #[test]
+    fn contamination_guard_detects_a_planted_example_in_a_tool_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "The user's request, e.g. 'Mark the $500 invoice as paid'"
+                }
+            }
+        });
+
+        let mut corpus: Vec<(&'static str, String)> = Vec::new();
+        collect_schema_descriptions(&schema, "test", &mut corpus);
+        let planted = normalize(&corpus[0].1);
+        let prompt = normalize("Mark the $500 invoice as paid");
+
+        let (run, _) = longest_shared_run(&prompt, &planted);
+        assert!(
+            run > 4,
+            "detector failed to flag a known-contaminated parameter description (run={run})"
         );
     }
 
