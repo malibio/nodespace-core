@@ -20,4 +20,12 @@ export interface DisplayMessage {
   readonly timestamp: number;
   /** Model chain-of-thought, rendered as a collapsible section under the answer. */
   readonly reasoning?: string;
+  /**
+   * A `route_clarify` question (ADR-038), when this turn is a structured
+   * clarification rather than an ordinary reply. `content` still carries the
+   * flattened text as a fallback; when `options` is non-empty the UI renders
+   * them as clickable choices instead of relying on markdown bullet prose.
+   */
+  readonly question?: string;
+  readonly options?: string[];
 }

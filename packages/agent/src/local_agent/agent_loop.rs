@@ -429,7 +429,15 @@ struct RoutingOutcome {
     candidates: Vec<crate::agent_types::SkillCandidate>,
     /// A composed clarification to return instead of running Stage 2. `Some`
     /// only when Stage 1 asked to clarify *and* the contract allowed it.
+    ///
+    /// This is the flattened text `format_clarification` produces — still the
+    /// form persisted into `session.messages` for the LLM-facing history and
+    /// `session_already_clarified`'s scan. [`Self::clarify_prompt`] carries the
+    /// same question/options unflattened, for the frontend.
     clarification: Option<String>,
+    /// The same clarification as structured data, alongside the flattened
+    /// `clarification` string above. `Some` exactly when `clarification` is.
+    clarify_prompt: Option<crate::agent_types::ClarifyPrompt>,
     /// Tokens spent on the Stage-1 turn, so the turn's reported usage covers
     /// the whole two-stage flow rather than under-reporting it.
     usage: InferenceUsage,
@@ -980,6 +988,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 reasoning: None,
                 tool_calls_made: Vec::new(),
                 usage: routed.usage,
+                clarify: routed.clarify_prompt,
             });
         }
 
@@ -1542,11 +1551,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 on_status(LocalAgentStatus::Idle);
                 session.status = LocalAgentStatus::Idle;
 
+                // `clarify: None` here is a scope decision, not an oversight: a
+                // zero-tool-call reply that merely *phrases itself* as a
+                // question (the observed failure on agent-matrix scenarios
+                // 6/8c, tracked as a model-capability gap in #1922/#1927) is
+                // deliberately NOT treated as a clarification. Detecting "this
+                // prose reads like a question" would mean parsing free text
+                // for intent — exactly the unstructured, unreliable channel
+                // ADR-038 built `route_clarify` to avoid. Widening this is a
+                // model-behavior question for #1922/#1927 to own, not a
+                // rendering gap for this turn's response to paper over.
                 return Ok(AgentTurnResult {
                     response: final_response,
                     reasoning,
                     tool_calls_made: all_tool_executions,
                     usage: total_usage,
+                    clarify: None,
                 });
             }
 
@@ -1924,6 +1944,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                             reasoning,
                             tool_calls_made: all_tool_executions,
                             usage: total_usage,
+                            clarify: None,
                         });
                     }
                 }
@@ -1955,6 +1976,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         .then(|| accumulated_reasoning.trim().to_string()),
                     tool_calls_made: all_tool_executions,
                     usage: total_usage,
+                    clarify: None,
                 });
             }
 
@@ -2052,6 +2074,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             reasoning,
             tool_calls_made: all_tool_executions,
             usage: total_usage,
+            clarify: None,
         })
     }
 
@@ -2217,6 +2240,10 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 } else {
                     span.set_attribute(KeyValue::new("routing.decision", "clarify"));
                     outcome.clarification = Some(format_clarification(&question, &options));
+                    outcome.clarify_prompt = Some(crate::agent_types::ClarifyPrompt {
+                        question: question.clone(),
+                        options: options.clone(),
+                    });
                     let elapsed_ms = started.elapsed().as_millis() as i64;
                     span.set_attribute(KeyValue::new("routing.latency_ms", elapsed_ms));
                     // Mirrors the "two-stage routing overhead" line below, which this
@@ -3061,6 +3088,9 @@ mod tests {
         assert_eq!(result.response, "Hello! How can I help?");
         assert!(result.tool_calls_made.is_empty());
         assert!(result.usage.prompt_tokens > 0);
+        // #1930: an ordinary reply — even one phrased conversationally — is
+        // not a `route_clarify` turn and must carry no structured prompt.
+        assert!(result.clarify.is_none());
 
         // Session should have 2 messages: user + assistant
         assert_eq!(session.messages.len(), 2);
@@ -7947,6 +7977,25 @@ mod tests {
         assert!(
             queries.lock().unwrap().is_empty(),
             "a clarification must not trigger retrieval"
+        );
+
+        // #1930: the structured question/options must reach the caller
+        // unflattened too, not just baked into `response`'s markdown prose —
+        // that structure is what lets the frontend render clickable options
+        // instead of parsing bullets back out of text.
+        let clarify = result
+            .clarify
+            .expect("a route_clarify turn must carry a structured ClarifyPrompt");
+        assert_eq!(
+            clarify.question,
+            "Did you want to track debts or search notes?"
+        );
+        assert_eq!(
+            clarify.options,
+            vec![
+                "Track who owes me money".to_string(),
+                "Search existing notes".to_string()
+            ]
         );
     }
 
