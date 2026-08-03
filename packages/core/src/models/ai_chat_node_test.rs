@@ -139,6 +139,8 @@ mod tests {
             timestamp: None,
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         });
 
         let mut props = node.properties.clone();

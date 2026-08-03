@@ -105,6 +105,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "assistant".to_string(),
@@ -112,6 +114,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: turn1_writes,
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "user".to_string(),
@@ -120,6 +124,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         },
         AiChatMessage {
             role: "assistant".to_string(),
@@ -127,6 +133,8 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
             timestamp: None,
             reasoning: None,
             completed_writes: turn2_writes,
+            question: None,
+            options: Vec::new(),
         },
     ]
 }

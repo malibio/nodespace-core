@@ -34,6 +34,18 @@ pub struct AiChatMessage {
     /// Graph writes this assistant turn completed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completed_writes: Vec<AiChatCompletedWrite>,
+
+    /// The clarifying question, when this message is a `route_clarify` turn
+    /// (ADR-038) rather than an ordinary reply. `content` still carries the
+    /// flattened text; this plus `options` is the same data unflattened, for
+    /// the frontend to render clickable options with (#1930).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+
+    /// Concrete options offered alongside `question`. Only meaningful when
+    /// `question` is `Some`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 /// Wire shape for ai-chat nodes sent to the frontend.

@@ -3,13 +3,30 @@
   import type { DisplayMessage } from './types';
   import ChatMarkdown from './chat-markdown.svelte';
 
-  let { message }: { message: DisplayMessage } = $props();
+  let {
+    message,
+    isLatest = false,
+    onSelectOption,
+  }: {
+    message: DisplayMessage;
+    /** Whether this is the most recent message — options are only clickable here. */
+    isLatest?: boolean;
+    onSelectOption?: (_option: string) => void;
+  } = $props();
 
   let showCopyButton = $state(false);
   let copied = $state(false);
 
   const isUser = $derived(message.role === 'user');
   const isAssistant = $derived(message.role === 'assistant');
+  /**
+   * A route_clarify turn (#1930): rendered as clickable choices instead of
+   * markdown bullet prose. Only actionable on the latest message — an earlier
+   * clarify turn the user already answered stays visible but inert.
+   */
+  const clarifyOptions = $derived(
+    isAssistant && isLatest && onSelectOption ? (message.options ?? []) : []
+  );
 
   async function copyContent() {
     try {
@@ -34,10 +51,25 @@
     {#if message.content}
       <div class="message-content">
         {#if isAssistant}
-          <ChatMarkdown content={message.content} />
+          <ChatMarkdown content={message.question ?? message.content} />
         {:else}
           {message.content}
         {/if}
+      </div>
+    {/if}
+
+    {#if isAssistant && message.options && message.options.length > 0}
+      <div class="clarify-options" role="group" aria-label="Choose one">
+        {#each message.options as option (option)}
+          <button
+            class="clarify-option"
+            type="button"
+            disabled={!clarifyOptions.length}
+            onclick={() => onSelectOption?.(option)}
+          >
+            {option}
+          </button>
+        {/each}
       </div>
     {/if}
 
@@ -112,6 +144,36 @@
 
   .user-message .message-content {
     white-space: pre-wrap;
+  }
+
+  .clarify-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-top: 0.625rem;
+  }
+
+  .clarify-option {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.8125rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+
+  .clarify-option:not(:disabled):hover {
+    background: hsl(var(--accent));
+    border-color: hsl(var(--ring));
+  }
+
+  .clarify-option:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
 
   .reasoning-block {

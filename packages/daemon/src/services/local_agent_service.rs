@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nodespace_agent::agent_types::{
-    AgentToolExecutor, ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError,
-    InferenceUsage, LocalAgentStatus, ModelManager, ModelStatus, PriorWrite, Role, StreamingChunk,
-    ToolExecutionRecord,
+    AgentToolExecutor, ChatInferenceEngine, ChatMessage, ChatModelSpec, ClarifyPrompt,
+    InferenceError, InferenceUsage, LocalAgentStatus, ModelManager, ModelStatus, PriorWrite, Role,
+    StreamingChunk, ToolExecutionRecord,
 };
 use nodespace_agent::local_agent::agent_loop::{
     canonical_args, canonical_args_identity, LocalAgentService,
@@ -624,6 +624,7 @@ impl LocalAgentServiceImpl {
                         &result.response,
                         result.reasoning.as_deref(),
                         completed_writes_from(&result.tool_calls_made),
+                        result.clarify.as_ref(),
                     )
                     .await
                 {
@@ -769,6 +770,7 @@ impl LocalAgentServiceImpl {
         content: &str,
         reasoning: Option<&str>,
         completed_writes: Vec<AiChatCompletedWrite>,
+        clarify: Option<&ClarifyPrompt>,
     ) -> Result<(), String> {
         for attempt in 0..5 {
             let node = self
@@ -794,6 +796,8 @@ impl LocalAgentServiceImpl {
                 timestamp: Some(chrono::Utc::now().to_rfc3339()),
                 reasoning,
                 completed_writes: completed_writes.clone(),
+                question: clarify.map(|c| c.question.clone()),
+                options: clarify.map(|c| c.options.clone()).unwrap_or_default(),
             });
 
             // Set status to idle here too (atomic with message append).
@@ -1877,9 +1881,13 @@ fn terse_write_fact(w: &AiChatCompletedWrite) -> Option<String> {
             let title = w.summary.as_deref();
             let mut fact = String::from("Fact: ");
             match (node_type, title) {
-                (Some(t), Some(title)) => fact.push_str(&format!("a {t} node was created with title '{title}'")),
+                (Some(t), Some(title)) => {
+                    fact.push_str(&format!("a {t} node was created with title '{title}'"))
+                }
                 (Some(t), None) => fact.push_str(&format!("a {t} node was created")),
-                (None, Some(title)) => fact.push_str(&format!("a node titled '{title}' was created")),
+                (None, Some(title)) => {
+                    fact.push_str(&format!("a node titled '{title}' was created"))
+                }
                 (None, None) => fact.push_str("a node was created"),
             }
             if let Some(pl) = prop_list.filter(|s| !s.is_empty()) {
@@ -2145,6 +2153,8 @@ mod tests {
             timestamp: Some(chrono::Utc::now().to_rfc3339()),
             reasoning: None,
             completed_writes: Vec::new(),
+            question: None,
+            options: Vec::new(),
         });
         let mut props = serde_json::json!({});
         props["ai-chat"] = ai_chat.to_properties_value();
@@ -2709,6 +2719,7 @@ mod tests {
             "The answer.",
             Some("I reasoned about it."),
             Vec::new(),
+            None,
         )
         .await
         .expect("append");
@@ -2720,6 +2731,74 @@ mod tests {
             .expect("assistant message present");
         assert_eq!(assistant.content, "The answer.");
         assert_eq!(assistant.reasoning.as_deref(), Some("I reasoned about it."));
+    }
+
+    /// #1930: a `route_clarify` turn's structured question/options must
+    /// persist onto the node alongside the flattened `content` text, not only
+    /// as markdown prose — that structure is what the frontend renders as
+    /// clickable options instead of parsed-out bullets.
+    #[tokio::test]
+    async fn clarify_question_and_options_persist_onto_the_node() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        let clarify = ClarifyPrompt {
+            question: "Did you want to track debts or search notes?".to_string(),
+            options: vec![
+                "Track who owes me money".to_string(),
+                "Search existing notes".to_string(),
+            ],
+        };
+        svc.append_assistant_message(
+            &node_id,
+            "I can take that a couple of ways. Did you want to track debts or search notes?\n\n\
+             - Track who owes me money\n- Search existing notes",
+            None,
+            Vec::new(),
+            Some(&clarify),
+        )
+        .await
+        .expect("append");
+
+        let messages = load_chat_messages(&node_service, &node_id).await;
+        let assistant = messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant message present");
+        assert_eq!(
+            assistant.question.as_deref(),
+            Some("Did you want to track debts or search notes?")
+        );
+        assert_eq!(
+            assistant.options,
+            vec![
+                "Track who owes me money".to_string(),
+                "Search existing notes".to_string()
+            ]
+        );
+        // The flattened text is still there too — plain-text readers and the
+        // LLM-facing history scan are unaffected by adding the structured field.
+        assert!(assistant.content.contains("Track who owes me money"));
+    }
+
+    /// An ordinary reply (no clarify) must not gain `question`/`options` —
+    /// only a genuine `route_clarify` turn should ever render option chips.
+    #[tokio::test]
+    async fn ordinary_reply_persists_no_clarify_fields() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_ai_chat_node(&node_service).await;
+
+        svc.append_assistant_message(&node_id, "Here's your answer.", None, Vec::new(), None)
+            .await
+            .expect("append");
+
+        let messages = load_chat_messages(&node_service, &node_id).await;
+        let assistant = messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant message present");
+        assert!(assistant.question.is_none());
+        assert!(assistant.options.is_empty());
     }
 
     /// Build a successful tool execution record.
@@ -2752,9 +2831,15 @@ mod tests {
             serde_json::json!({"id": "nodespace://f1f25564"}),
         )]);
 
-        svc.append_assistant_message(&node_id, "I have added \"Kind of Blue\".", None, writes)
-            .await
-            .expect("append");
+        svc.append_assistant_message(
+            &node_id,
+            "I have added \"Kind of Blue\".",
+            None,
+            writes,
+            None,
+        )
+        .await
+        .expect("append");
 
         // What the NEXT turn actually sees.
         let history = load_node_history(&node_service, &node_id).await;
@@ -2830,7 +2915,7 @@ mod tests {
         let (svc, node_service, _tempdir) = test_service().await;
         let node_id = create_ai_chat_node(&node_service).await;
 
-        svc.append_assistant_message(&node_id, "I found 3 tasks.", None, Vec::new())
+        svc.append_assistant_message(&node_id, "I found 3 tasks.", None, Vec::new(), None)
             .await
             .expect("append");
 
@@ -2931,10 +3016,10 @@ mod tests {
         let node_id = create_ai_chat_node(&node_service).await;
 
         // None and whitespace-only both persist no reasoning field.
-        svc.append_assistant_message(&node_id, "Plain answer.", None, Vec::new())
+        svc.append_assistant_message(&node_id, "Plain answer.", None, Vec::new(), None)
             .await
             .expect("append none");
-        svc.append_assistant_message(&node_id, "Another answer.", Some("   "), Vec::new())
+        svc.append_assistant_message(&node_id, "Another answer.", Some("   "), Vec::new(), None)
             .await
             .expect("append whitespace");
 
@@ -3232,6 +3317,8 @@ model = "model-b"
                     canonical_args: "sha256:abc123".to_string(),
                 },
             ],
+            question: None,
+            options: Vec::new(),
         }];
 
         let prior = prior_writes_from_history(&msgs);
@@ -3264,6 +3351,8 @@ model = "model-b"
                 timestamp: None,
                 reasoning: None,
                 completed_writes: vec![],
+                question: None,
+                options: Vec::new(),
             },
             AiChatMessage {
                 role: "assistant".to_string(),
@@ -3276,6 +3365,8 @@ model = "model-b"
                     summary: Some("Redwood Summit".to_string()),
                     canonical_args: r#"{"content":"Redwood Summit"}"#.to_string(),
                 }],
+                question: None,
+                options: Vec::new(),
             },
         ]);
 
@@ -3342,6 +3433,8 @@ model = "model-b"
                     canonical_args: r#"{"schema_id":"s1"}"#.to_string(),
                 },
             ],
+            question: None,
+            options: Vec::new(),
         }];
 
         assert!(

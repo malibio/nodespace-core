@@ -110,6 +110,8 @@
         toolExecutions: [],
         timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
         reasoning: m.reasoning,
+        question: m.question,
+        options: m.options,
       }));
   });
 
@@ -459,8 +461,12 @@
           <p class="empty-conversation-hint">Type a message below to begin</p>
         </div>
       {:else}
-        {#each displayMessages as message (message.id)}
-          <ChatMessage {message} />
+        {#each displayMessages as message, index (message.id)}
+          <ChatMessage
+            {message}
+            isLatest={index === displayMessages.length - 1}
+            onSelectOption={isProcessing ? undefined : handleSend}
+          />
         {/each}
       {/if}
 
