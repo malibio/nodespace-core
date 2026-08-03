@@ -20,12 +20,15 @@
   const isUser = $derived(message.role === 'user');
   const isAssistant = $derived(message.role === 'assistant');
   /**
-   * A route_clarify turn (#1930): rendered as clickable choices instead of
-   * markdown bullet prose. Only actionable on the latest message — an earlier
-   * clarify turn the user already answered stays visible but inert.
+   * The text to show above the option chips: `content` minus the bullet list
+   * (rendered as chips instead), keeping the backend's opener + question
+   * framing ("I can take that a couple of ways...") intact rather than
+   * dropping it in favor of the bare `question` field.
    */
-  const clarifyOptions = $derived(
-    isAssistant && isLatest && onSelectOption ? (message.options ?? []) : []
+  const clarifyHeaderText = $derived(
+    message.options && message.options.length > 0
+      ? message.content.split('\n\n')[0]
+      : message.content
   );
 
   async function copyContent() {
@@ -51,7 +54,7 @@
     {#if message.content}
       <div class="message-content">
         {#if isAssistant}
-          <ChatMarkdown content={message.question ?? message.content} />
+          <ChatMarkdown content={clarifyHeaderText} />
         {:else}
           {message.content}
         {/if}
@@ -64,7 +67,7 @@
           <button
             class="clarify-option"
             type="button"
-            disabled={!clarifyOptions.length}
+            disabled={!isLatest || !onSelectOption}
             onclick={() => onSelectOption?.(option)}
           >
             {option}

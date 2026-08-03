@@ -49,10 +49,15 @@ describe('ChatMessage clarify options', () => {
     expect(buttons.length).toBe(2);
     expect(buttons[0].textContent?.trim()).toBe('Track who owes me money');
     expect(buttons[1].textContent?.trim()).toBe('Search existing notes');
-    // The question itself still renders as the message text.
-    expect(container.querySelector('.message-content')?.textContent).toContain(
-      'Did you want to track debts or search notes?'
-    );
+    // The question renders as message text, along with the backend's opener
+    // framing ("I can take that a couple of ways...") — only the bullet list
+    // is replaced by chips, the surrounding prose is not dropped.
+    const messageText = container.querySelector('.message-content')?.textContent;
+    expect(messageText).toContain('Did you want to track debts or search notes?');
+    expect(messageText).toContain('I can take that a couple of ways');
+    // The bullet list itself must not also render as markdown prose — the
+    // chips are the only representation of the options.
+    expect(messageText).not.toContain('Track who owes me money');
   });
 
   it('calls onSelectOption with the chosen option text when clicked', async () => {
