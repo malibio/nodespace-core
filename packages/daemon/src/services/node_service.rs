@@ -46,7 +46,7 @@ use crate::nodespace::{
     CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest, CreateRelationshipResponse,
     DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
     ExecuteQueryRequest, ExportMarkdownRequest, ExportMarkdownResponse,
-    FindCollectionByPathRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
+    FindCollectionByPathRequest, FindDuplicateRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
     GetNodesBatchRequest, GetNodesBatchResponse, GetRelatedNodesRequest, GetRelatedNodesResponse,
     GetRootsRequest, GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
@@ -227,6 +227,40 @@ impl GrpcNodeService for NodeServiceImpl {
             node_type,
             node_data: Some(node_to_proto(node)),
         }))
+    }
+
+    async fn find_duplicate(
+        &self,
+        request: Request<FindDuplicateRequest>,
+    ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        // Suggest-don't-block (ADR-065): a match is a normal result, never an error,
+        // and no match returns an EMPTY NodeResponse (empty node_id + no node_data)
+        // rather than NotFound — the caller uses it to offer an adopt-existing
+        // suggestion, so "no duplicate" is an ordinary answer.
+        match this
+            .node_service
+            .find_duplicate_for(&req.node_type, &req.field, &req.value)
+            .await
+            .map_err(service_error_to_status)?
+        {
+            Some(node) => {
+                let node_id = node.id.clone();
+                let node_type = node.node_type.clone();
+                Ok(Response::new(NodeResponse {
+                    node_id,
+                    node_type,
+                    node_data: Some(node_to_proto(node)),
+                }))
+            }
+            None => Ok(Response::new(NodeResponse {
+                node_id: String::new(),
+                node_type: String::new(),
+                node_data: None,
+            })),
+        }
     }
 
     async fn update_node(
@@ -1838,6 +1872,59 @@ mod tests {
         // the impl serves, so a caller like the Pro daemon can bind cloud-sync to
         // it without opening a second store on the same file.
         assert!(Arc::ptr_eq(&svc.node_service(), &core_svc));
+    }
+
+    /// The FindDuplicate RPC (core#1734) surfaces an existing node on a
+    /// uniqueness-flagged match (case-folded), and returns an EMPTY response
+    /// (empty node_id, no node_data) — never NotFound, never an error — when there
+    /// is no duplicate. That empty-not-error convention is the suggest-don't-block
+    /// contract (ADR-065): "no duplicate" is an ordinary answer the caller acts on.
+    #[tokio::test]
+    async fn find_duplicate_rpc_returns_match_or_empty() {
+        let (svc, _tmp) = make_service().await;
+
+        let alice_id = svc
+            .create_node(Request::new(crate::nodespace::CreateNodeRequest {
+                id: None,
+                node_type: "person".to_string(),
+                content: "Alice".to_string(),
+                parent_id: None,
+                collection: None,
+                lifecycle_status: None,
+                properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#.to_string(),
+                position: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .node_id;
+
+        // A colliding email (case-folded — person.email is unique_case_insensitive)
+        // surfaces the existing person.
+        let hit = svc
+            .find_duplicate(Request::new(crate::nodespace::FindDuplicateRequest {
+                node_type: "person".to_string(),
+                field: "email".to_string(),
+                value: "ALICE@example.com".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(hit.node_id, alice_id, "a colliding email must surface the existing person");
+        assert!(hit.node_data.is_some());
+
+        // A never-seen email → empty response, not an error.
+        let miss = svc
+            .find_duplicate(Request::new(crate::nodespace::FindDuplicateRequest {
+                node_type: "person".to_string(),
+                field: "email".to_string(),
+                value: "nobody@example.com".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(miss.node_id.is_empty(), "no duplicate → empty node_id");
+        assert!(miss.node_data.is_none(), "no duplicate → no node_data");
     }
 
     /// A model-less shared build context for constructing a `DatabaseManager`

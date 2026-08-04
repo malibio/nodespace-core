@@ -21,6 +21,12 @@ service NodeService {
   rpc GetChildrenTree(GetChildrenTreeRequest) returns (NodeTreeResponse);
   rpc SearchNodes(SearchRequest) returns (NodeListResponse);
   rpc QueryNodesSimple(QueryNodesSimpleRequest) returns (NodeListResponse);
+  // Suggest-don't-block uniqueness check (ADR-065): return the existing node
+  // whose `field` matches `value` for `node_type`, or an empty NodeResponse
+  // (empty node_id, no node_data) when the field isn't flagged unique, the value
+  // is empty, or there is no conflict. Never rejects — callers use it to offer an
+  // adopt-existing suggestion (core#1734).
+  rpc FindDuplicate(FindDuplicateRequest) returns (NodeResponse);
   rpc MentionAutocomplete(MentionAutocompleteRequest) returns (NodeListResponse);
   rpc UpsertNodeWithParent(UpsertNodeWithParentRequest) returns (NodeResponse);
 
@@ -152,6 +158,12 @@ message NodeResponse {
 
 message GetNodeRequest {
   string node_id = 1;
+}
+
+message FindDuplicateRequest {
+  string node_type = 1;
+  string field = 2;
+  string value = 3;
 }
 
 // GetNode returns NodeResponse (node_id + node_data populated).
