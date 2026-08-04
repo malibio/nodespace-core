@@ -154,19 +154,34 @@ mod tests {
 
     /// Every guidance string that reaches the model, paired with its constant
     /// name for error reporting. Add new guidance constants here.
-    fn guidance_corpus() -> Vec<(&'static str, String)> {
-        let mut corpus: Vec<(&'static str, String)> = vec![
-            ("SCHEMA_CREATION_RULES", SCHEMA_CREATION_RULES.to_string()),
-            ("TOOL_STRATEGY_RULES", TOOL_STRATEGY_RULES.to_string()),
-            ("NODE_REFERENCE_FORMAT", NODE_REFERENCE_FORMAT.to_string()),
+    fn guidance_corpus() -> Vec<(String, String)> {
+        let mut corpus: Vec<(String, String)> = vec![
+            (
+                "SCHEMA_CREATION_RULES".to_string(),
+                SCHEMA_CREATION_RULES.to_string(),
+            ),
+            (
+                "TOOL_STRATEGY_RULES".to_string(),
+                TOOL_STRATEGY_RULES.to_string(),
+            ),
+            (
+                "NODE_REFERENCE_FORMAT".to_string(),
+                NODE_REFERENCE_FORMAT.to_string(),
+            ),
         ];
         // skill_rules.rs `imperative` text is seeded into the DB as prompt
         // content by seed_skill_nodes(), so it is guidance too.
         for r in crate::skill_rules::SCHEMA_RULES {
-            corpus.push(("skill_rules::SCHEMA_RULES", r.imperative.to_string()));
+            corpus.push((
+                "skill_rules::SCHEMA_RULES".to_string(),
+                r.imperative.to_string(),
+            ));
         }
         for r in crate::skill_rules::INTERACTION_RULES {
-            corpus.push(("skill_rules::INTERACTION_RULES", r.imperative.to_string()));
+            corpus.push((
+                "skill_rules::INTERACTION_RULES".to_string(),
+                r.imperative.to_string(),
+            ));
         }
         // Every seeded skill's markdown_content is injected as skill
         // instructions when search_skills routes to it, so it is model-facing
@@ -176,7 +191,10 @@ mod tests {
         // exactly how the skill_pipeline.rs contamination went unnoticed.
         for t in crate::skill_pipeline::seed_skill_nodes() {
             if !t.markdown_content.is_empty() {
-                corpus.push(("skill_pipeline::seed_skill_nodes", t.markdown_content));
+                corpus.push((
+                    "skill_pipeline::seed_skill_nodes".to_string(),
+                    t.markdown_content,
+                ));
             }
         }
         // The seeded prompt nodes ARE the base system prompt. Some interpolate
@@ -185,12 +203,95 @@ mod tests {
         for t in crate::prompt_assembler::PromptAssembler::seed_agent_guidance_nodes() {
             if !t.markdown_content.is_empty() {
                 corpus.push((
-                    "prompt_assembler::seed_agent_guidance_nodes",
+                    "prompt_assembler::seed_agent_guidance_nodes".to_string(),
                     t.markdown_content,
                 ));
             }
         }
+        // Tool descriptions and their parameter-schema descriptions are
+        // model-facing instructional text too — and under ADR-064 rule 1 they
+        // are the channel guidance is actively being moved INTO, since argument
+        // shape stated on a schema measured 100% compliance where prose did
+        // not. Text pushed there was previously unguarded, so a worked example
+        // built on an eval scenario could be planted in a tool description with
+        // nothing failing. Derived from all_tool_definitions() rather than a
+        // hand-listed set of `def_*` constants, so a tool added later is
+        // covered automatically — the same property the fixture-side
+        // enumeration already has.
+        //
+        // Both model-facing tool registries are enumerated, not just the main
+        // one: Stage 1 routing offers its own three tools straight to the model
+        // (`agent_loop.rs` passes `stage1_tool_definitions()` as that turn's
+        // tool surface), so it is the same channel and needs the same guard.
+        // Guarding only one registry would leave the very hole this
+        // enumeration exists to close, one registry over.
+        //
+        // `all_tool_definitions()` is deliberately the unfiltered set rather
+        // than `model_facing_tool_definitions()`: the latter withholds
+        // `search_skills` from the local loop, but it stays model-facing to
+        // external MCP agents, and over-inclusion in a guard costs nothing.
+        for (registry, defs) in [
+            (
+                "local_agent::tools",
+                crate::local_agent::tools::all_tool_definitions(),
+            ),
+            (
+                "routing::stage1_tool_definitions",
+                crate::local_agent::routing::stage1_tool_definitions(),
+            ),
+        ] {
+            for def in defs {
+                let label = format!("{registry} {}", def.name);
+                if !def.description.is_empty() {
+                    corpus.push((format!("{label} description"), def.description));
+                }
+                // Walk the schema rather than reading only top-level
+                // `properties.*.description`: descriptions also sit on nested
+                // object properties and array `items` (e.g. update_schema's
+                // add_fields.items.properties.type), and limiting the walk to a
+                // fixed depth would recreate the same structural hole this
+                // enumeration exists to close.
+                collect_schema_descriptions(
+                    &def.parameters_schema,
+                    &format!("{label} parameters_schema"),
+                    &mut corpus,
+                );
+            }
+        }
         corpus
+    }
+
+    /// Push every `description` string found anywhere in a JSON Schema value.
+    ///
+    /// Shape-agnostic on purpose: it recurses through objects and arrays
+    /// without assuming where descriptions live, so nested properties, array
+    /// `items`, and any schema construct added later are all covered without
+    /// this function changing.
+    fn collect_schema_descriptions(
+        value: &serde_json::Value,
+        label: &str,
+        corpus: &mut Vec<(String, String)>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "description" {
+                        if let Some(text) = child.as_str() {
+                            if !text.is_empty() {
+                                corpus.push((label.to_string(), text.to_string()));
+                            }
+                        }
+                    }
+                    collect_schema_descriptions(child, label, corpus);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_schema_descriptions(item, label, corpus);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Extract the `prompt: "..."` / `prompt: '...'` literals from an eval
@@ -337,7 +438,7 @@ mod tests {
         let corpus = guidance_corpus();
         let tokenized: Vec<(&str, Vec<String>)> = corpus
             .iter()
-            .map(|(name, text)| (*name, normalize(text)))
+            .map(|(name, text)| (name.as_str(), normalize(text)))
             .collect();
 
         let mut violations: Vec<String> = Vec::new();
@@ -426,6 +527,130 @@ mod tests {
         assert!(
             run > 4,
             "detector failed to flag a known-contaminated example (run={run})"
+        );
+    }
+
+    /// The corpus must actually contain the tool channel — otherwise the guard
+    /// passes for the boring reason that it never looked. Asserts against real
+    /// registry text rather than a constructed value, so a refactor that stops
+    /// reaching either registry fails here.
+    ///
+    /// Covers Stage 1 routing as well as the main registry: both are handed
+    /// straight to the model, so guarding only one would leave the same hole
+    /// one registry over.
+    #[test]
+    fn guidance_corpus_covers_tool_descriptions_and_parameter_schemas() {
+        let corpus = guidance_corpus();
+        let entry_texts: Vec<&str> = corpus.iter().map(|(_, text)| text.as_str()).collect();
+
+        let registries = [
+            crate::local_agent::tools::all_tool_definitions(),
+            crate::local_agent::routing::stage1_tool_definitions(),
+        ];
+        let mut tools_checked = 0usize;
+        for def in registries.into_iter().flatten() {
+            assert!(
+                entry_texts.contains(&def.description.as_str()),
+                "tool {}'s description is absent from guidance_corpus() — text in \
+                 that channel would be unguarded against eval contamination",
+                def.name
+            );
+            tools_checked += 1;
+        }
+        assert!(
+            tools_checked > crate::local_agent::tools::all_tool_definitions().len(),
+            "both tool registries must be checked — only the main one was, so \
+             Stage 1 routing text would be unguarded"
+        );
+
+        // A nested description, not just a top-level one: update_schema states
+        // its field types on add_fields.items.properties.type.
+        let nested = crate::local_agent::tools::all_tool_definitions()
+            .into_iter()
+            .find(|d| d.name == "update_schema")
+            .expect("update_schema must exist in the registry")
+            .parameters_schema["properties"]["add_fields"]["items"]["properties"]["type"]
+            ["description"]
+            .as_str()
+            .expect("update_schema add_fields item type must carry a description")
+            .to_string();
+        assert!(
+            entry_texts.contains(&nested.as_str()),
+            "a nested parameter-schema description ({nested:?}) is absent from \
+             guidance_corpus() — the schema walk is not reaching nested properties"
+        );
+    }
+
+    /// The schema walk must find descriptions regardless of where they sit,
+    /// including shapes the current registry happens not to use yet.
+    #[test]
+    fn schema_description_walk_reaches_arbitrary_nesting() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "top": { "type": "string", "description": "top level" },
+                "list": {
+                    "type": "array",
+                    "description": "array itself",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "deep": { "type": "string", "description": "deeply nested" }
+                        }
+                    }
+                },
+                "variants": {
+                    "oneOf": [
+                        { "type": "string", "description": "inside an array of schemas" }
+                    ]
+                },
+                "empty": { "type": "string", "description": "" }
+            }
+        });
+
+        let mut corpus: Vec<(String, String)> = Vec::new();
+        collect_schema_descriptions(&schema, "test", &mut corpus);
+        let mut found: Vec<String> = corpus.into_iter().map(|(_, text)| text).collect();
+        found.sort();
+
+        assert_eq!(
+            found,
+            vec![
+                "array itself",
+                "deeply nested",
+                "inside an array of schemas",
+                "top level",
+            ],
+            "the walk must reach nested properties, array items, and schema \
+             arrays, and must skip empty descriptions"
+        );
+    }
+
+    /// Pins the detector against contamination planted in the tool channel
+    /// specifically — the gap this corpus extension closes. Mirrors
+    /// `contamination_guard_detects_a_planted_example`, but for a parameter
+    /// description rather than resident prose.
+    #[test]
+    fn contamination_guard_detects_a_planted_example_in_a_tool_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "The user's request, e.g. 'Mark the $500 invoice as paid'"
+                }
+            }
+        });
+
+        let mut corpus: Vec<(String, String)> = Vec::new();
+        collect_schema_descriptions(&schema, "test", &mut corpus);
+        let planted = normalize(&corpus[0].1);
+        let prompt = normalize("Mark the $500 invoice as paid");
+
+        let (run, _) = longest_shared_run(&prompt, &planted);
+        assert!(
+            run > 4,
+            "detector failed to flag a known-contaminated parameter description (run={run})"
         );
     }
 
