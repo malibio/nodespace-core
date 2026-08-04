@@ -263,6 +263,7 @@ pub async fn ensure_model_ready(
         .into_inner();
 
     let mut engine_swapped = false;
+    let mut saw_terminal_event = false;
 
     while let Some(event_result) = stream.next().await {
         let event = event_result.map_err(|e| grpc_err(e.message()))?;
@@ -310,6 +311,7 @@ pub async fn ensure_model_ready(
             }
             "ready" => {
                 engine_swapped = event.engine_swapped.unwrap_or(false);
+                saw_terminal_event = true;
                 let _ = app.emit(
                     agent_events::MODEL_STATUS,
                     &ModelStatusEvent {
@@ -327,6 +329,18 @@ pub async fn ensure_model_ready(
             }
             _ => {}
         }
+    }
+
+    // The daemon always ends a well-formed stream with exactly one of
+    // "ready" or "error" (the latter returns above). A stream that closes
+    // without either — e.g. the daemon-side load task panicking and
+    // dropping its sender — must not be reported as success: the caller
+    // otherwise cannot distinguish "model loaded" from "the daemon crashed
+    // mid-load and never told us."
+    if !saw_terminal_event {
+        return Err(grpc_err(
+            "Model load stream ended without a ready or error event".to_string(),
+        ));
     }
 
     Ok(engine_swapped)

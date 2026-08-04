@@ -74,12 +74,20 @@ pub fn verify_model_integrity(path: &Path) -> Result<(), String> {
 /// last hashed: size and mtime always apply; inode additionally applies on
 /// unix, where it also catches a same-size/same-mtime swap (e.g. a backup
 /// restore that preserves mtime) that size+mtime alone would miss.
+///
+/// On non-unix targets (Windows), identity is size+mtime only — this is a
+/// strictly weaker guarantee than unix's size+mtime+inode, since a same-size
+/// same-mtime swap on Windows would not be caught by identity alone (the
+/// digest re-check on the next genuine cache miss still catches it
+/// eventually, just not as early). A stable Windows file-identity equivalent
+/// (`GetFileInformationByHandle`'s file index) could close this gap if it
+/// becomes a real concern.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct FileIdentity {
     size: u64,
     mtime_nanos: i128,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg(unix)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     inode: Option<u64>,
 }
 

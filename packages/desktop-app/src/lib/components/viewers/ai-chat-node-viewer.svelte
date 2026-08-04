@@ -343,16 +343,16 @@
         eventUnlisteners.push(unlistenError);
 
         // Phase updates for the in-flight ensureModelReady call (see
-        // isEnsuringModel below). Not filtered by model_id: only one
-        // ensureModelReady call is ever in flight from this viewer at a
-        // time, and a stale event from a just-finished call arriving after
-        // isEnsuringModel flips back to false is simply ignored below.
+        // isEnsuringModel below). Filtered by model_id so a stale or
+        // cross-talk event for a different model (e.g. another view's
+        // ensureModelReady call) can't flip this viewer's phase label.
         const unlistenModelStatus = await listen<{
           model_id: string;
           status: string;
           message?: string;
         }>(AGENT_EVENTS.MODEL_STATUS, (event) => {
           if (destroyed || !isEnsuringModel) return;
+          if (event.payload.model_id !== model) return;
           const { status } = event.payload;
           if (status === 'verifying' || status === 'loading') {
             ensuringModelPhase = status;

@@ -934,9 +934,31 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // integrity verification read as a frozen "preparing model" — no
         // event arrived until it was already over).
         let this = self.clone();
-        tokio::spawn(async move {
+        let tx_for_panic = tx.clone();
+        let model_id_for_panic = model_id.clone();
+        let join_handle = tokio::spawn(async move {
             this.load_model_and_collect_events(&model_id, Some(&tx))
                 .await;
+        });
+        tokio::spawn(async move {
+            // A detached task's panic does not propagate to this stream —
+            // unlike the caller `.await`-ing the load directly (the
+            // pre-refactor shape), a panic here would otherwise just drop
+            // `tx` and close the stream with no terminal event. The Tauri
+            // command on the other end treats a closed stream with no
+            // "ready"/"error" event as a *successful* (inert) call, so a
+            // silent close would misreport a crash as success. Surface it
+            // as an explicit "error" event instead.
+            if let Err(join_err) = join_handle.await {
+                let _ = tx_for_panic
+                    .send(Ok(ModelLoadProgressEvent {
+                        event_type: "error".to_string(),
+                        model_id: model_id_for_panic,
+                        error_message: Some(format!("Model load task failed: {join_err}")),
+                        ..Default::default()
+                    }))
+                    .await;
+            }
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
