@@ -928,14 +928,15 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let model_id = request.into_inner().model_id;
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<ModelLoadProgressEvent, Status>>(16);
 
-        let events = self.load_model_and_collect_events(&model_id).await;
-
+        // Cloned so the load runs in its own task and streams events to `tx`
+        // as each phase happens, rather than the caller awaiting the whole
+        // load before anything is sent (which is what made a slow phase like
+        // integrity verification read as a frozen "preparing model" — no
+        // event arrived until it was already over).
+        let this = self.clone();
         tokio::spawn(async move {
-            for event in events {
-                if tx.send(Ok(event)).await.is_err() {
-                    break;
-                }
-            }
+            this.load_model_and_collect_events(&model_id, Some(&tx))
+                .await;
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -1202,7 +1203,21 @@ impl LocalAgentServiceImpl {
         discovered
     }
 
-    async fn load_model_and_collect_events(&self, model_id: &str) -> Vec<ModelLoadProgressEvent> {
+    /// Load a model, both collecting every emitted event (for callers that
+    /// want the full sequence, e.g. tests) and — when `live_tx` is provided —
+    /// sending each event on it as soon as it happens. Phases like model
+    /// download already report progress live via their own callback
+    /// (`download`'s `set_progress_callback`); `live_tx` is what lets a
+    /// caller *also* see the "verifying" / "loading" / "ready" phase
+    /// transitions in real time instead of only after the whole load
+    /// finishes, which is what made "preparing model" read as a hang when
+    /// integrity verification took minutes (see `EnsureModelReady`'s use
+    /// below).
+    async fn load_model_and_collect_events(
+        &self,
+        model_id: &str,
+        live_tx: Option<&tokio::sync::mpsc::Sender<Result<ModelLoadProgressEvent, Status>>>,
+    ) -> Vec<ModelLoadProgressEvent> {
         use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
         use nodespace_agent::local_agent::openai_compat_inference::{
             is_openai_compat, parse_openai_compat_id, OpenAiCompatInferenceEngine,
@@ -1210,6 +1225,15 @@ impl LocalAgentServiceImpl {
         use nodespace_nlp_engine::chat::ChatConfig;
 
         let mut events = Vec::new();
+        macro_rules! emit {
+            ($event:expr) => {{
+                let event = $event;
+                if let Some(tx) = live_tx {
+                    let _ = tx.send(Ok(event.clone())).await;
+                }
+                events.push(event);
+            }};
+        }
 
         // OpenAI-compat configs are user-defined (stored in daemon.toml), not part
         // of the model catalog `list()` returns — resolve and branch on them first
@@ -1219,7 +1243,7 @@ impl LocalAgentServiceImpl {
             // UUID; without one, fall back to the config's pinned `model`.
             let (config_id, discovered_model) = parse_openai_compat_id(model_id);
 
-            events.push(ModelLoadProgressEvent {
+            emit!(ModelLoadProgressEvent {
                 event_type: "loading".to_string(),
                 model_id: model_id.to_string(),
                 message: Some("Connecting to OpenAI-compatible endpoint...".to_string()),
@@ -1234,7 +1258,7 @@ impl LocalAgentServiceImpl {
             {
                 Ok(Some(c)) => c,
                 Ok(None) => {
-                    events.push(ModelLoadProgressEvent {
+                    emit!(ModelLoadProgressEvent {
                         event_type: "error".to_string(),
                         model_id: model_id.to_string(),
                         error_message: Some(format!(
@@ -1245,7 +1269,7 @@ impl LocalAgentServiceImpl {
                     return events;
                 }
                 Err(e) => {
-                    events.push(ModelLoadProgressEvent {
+                    emit!(ModelLoadProgressEvent {
                         event_type: "error".to_string(),
                         model_id: model_id.to_string(),
                         error_message: Some(format!(
@@ -1376,7 +1400,7 @@ impl LocalAgentServiceImpl {
             *self.inner.active_model_routing_disabled.lock().await = routing_disabled;
             *self.inner.active_model_routing_key.lock().await = verdict.map(|_| this_key.clone());
 
-            events.push(ModelLoadProgressEvent {
+            emit!(ModelLoadProgressEvent {
                 event_type: "ready".to_string(),
                 model_id: model_id.to_string(),
                 message: Some(format!("{} ready", config.name)),
@@ -1390,7 +1414,7 @@ impl LocalAgentServiceImpl {
         let models = match self.inner.model_manager.list().await {
             Ok(m) => m,
             Err(e) => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(e.to_string()),
@@ -1403,7 +1427,7 @@ impl LocalAgentServiceImpl {
         let model = match models.iter().find(|m| m.id == model_id) {
             Some(m) => m,
             None => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!("Unknown model: {model_id}")),
@@ -1416,7 +1440,7 @@ impl LocalAgentServiceImpl {
         {
             let active = self.inner.active_model_id.lock().await;
             if active.as_deref() == Some(model_id) {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "ready".to_string(),
                     model_id: model_id.to_string(),
                     message: Some(format!("{model_id} already loaded")),
@@ -1430,7 +1454,7 @@ impl LocalAgentServiceImpl {
         match &model.status {
             ModelStatus::Loaded | ModelStatus::Ready => {}
             ModelStatus::NotDownloaded | ModelStatus::Error { .. } => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "downloading".to_string(),
                     model_id: model_id.to_string(),
                     message: Some(format!("Downloading {model_id}...")),
@@ -1438,7 +1462,7 @@ impl LocalAgentServiceImpl {
                 });
 
                 if let Err(e) = self.inner.model_manager.download(model_id).await {
-                    events.push(ModelLoadProgressEvent {
+                    emit!(ModelLoadProgressEvent {
                         event_type: "error".to_string(),
                         model_id: model_id.to_string(),
                         error_message: Some(format!("Download failed: {e}")),
@@ -1448,7 +1472,7 @@ impl LocalAgentServiceImpl {
                 }
             }
             ModelStatus::Downloading { .. } | ModelStatus::Verifying => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!(
@@ -1460,17 +1484,10 @@ impl LocalAgentServiceImpl {
             }
         }
 
-        events.push(ModelLoadProgressEvent {
-            event_type: "loading".to_string(),
-            model_id: model_id.to_string(),
-            message: Some(format!("Loading {model_id}...")),
-            ..Default::default()
-        });
-
         let model_path = match self.inner.model_manager.model_path(model_id) {
             Ok(p) => p,
             Err(e) => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!("Failed to resolve model path: {e}")),
@@ -1479,6 +1496,30 @@ impl LocalAgentServiceImpl {
                 return events;
             }
         };
+
+        // Only announce a distinct "verifying" phase when a real hash is
+        // about to run (cache miss) — this is the case that used to read as
+        // a frozen "preparing model" for minutes. A cache hit resolves
+        // near-instantly inside `ChatEngine::load_model` below, so it is
+        // folded into "loading" rather than flashing a phase the user has no
+        // real time to see.
+        if let Some(expected_sha256) = &model.sha256 {
+            if !nodespace_nlp_engine::config::is_verification_cached(&model_path, expected_sha256) {
+                emit!(ModelLoadProgressEvent {
+                    event_type: "verifying".to_string(),
+                    model_id: model_id.to_string(),
+                    message: Some(format!("Verifying {model_id} integrity...")),
+                    ..Default::default()
+                });
+            }
+        }
+
+        emit!(ModelLoadProgressEvent {
+            event_type: "loading".to_string(),
+            model_id: model_id.to_string(),
+            message: Some(format!("Loading {model_id}...")),
+            ..Default::default()
+        });
 
         let (family, chat_config) = match self.inner.model_manager.model_spec_for(model_id) {
             Ok(spec) => {
@@ -1492,7 +1533,7 @@ impl LocalAgentServiceImpl {
                 (spec.family, config)
             }
             Err(e) => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!("Failed to look up model spec: {e}")),
@@ -1511,7 +1552,7 @@ impl LocalAgentServiceImpl {
         let engine = match engine_result {
             Ok(Ok(e)) => e,
             Ok(Err(e)) => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!("Failed to load inference engine: {e}")),
@@ -1520,7 +1561,7 @@ impl LocalAgentServiceImpl {
                 return events;
             }
             Err(e) => {
-                events.push(ModelLoadProgressEvent {
+                emit!(ModelLoadProgressEvent {
                     event_type: "error".to_string(),
                     model_id: model_id.to_string(),
                     error_message: Some(format!("Task join error: {e}")),
@@ -1531,7 +1572,7 @@ impl LocalAgentServiceImpl {
         };
 
         if let Err(e) = self.inner.model_manager.load(model_id).await {
-            events.push(ModelLoadProgressEvent {
+            emit!(ModelLoadProgressEvent {
                 event_type: "error".to_string(),
                 model_id: model_id.to_string(),
                 error_message: Some(format!("Failed to mark model as loaded: {e}")),
@@ -1548,7 +1589,7 @@ impl LocalAgentServiceImpl {
         *self.inner.active_model_routing_disabled.lock().await = false;
         *self.inner.active_model_routing_key.lock().await = None;
 
-        events.push(ModelLoadProgressEvent {
+        emit!(ModelLoadProgressEvent {
             event_type: "ready".to_string(),
             model_id: model_id.to_string(),
             message: Some(format!("{model_id} ready")),
@@ -3040,7 +3081,7 @@ mod tests {
         // must surface a specific "no config found" error, not fall through to
         // the GGUF path-resolution failure the bug report described.
         let events = svc
-            .load_model_and_collect_events("openai-compat:missing-uuid")
+            .load_model_and_collect_events("openai-compat:missing-uuid", None)
             .await;
 
         let error_event = events
@@ -3077,7 +3118,7 @@ api_key = "sk-test"
             .expect("write daemon.toml");
 
         let events = svc
-            .load_model_and_collect_events("openai-compat:abc-123")
+            .load_model_and_collect_events("openai-compat:abc-123", None)
             .await;
 
         let ready_event = events
@@ -3121,7 +3162,7 @@ model = "model-a"
         // First load: no discovery segment in the id, so `model` resolves
         // from the config's pinned field.
         let first = svc
-            .load_model_and_collect_events("openai-compat:abc-123")
+            .load_model_and_collect_events("openai-compat:abc-123", None)
             .await;
         assert!(
             first.iter().any(|e| e.event_type == "ready"),
@@ -3156,7 +3197,7 @@ model = "model-b"
         // `self.inner` state instead of consulting `config.routing_ok` or
         // re-probing.
         let second = svc
-            .load_model_and_collect_events("openai-compat:abc-123")
+            .load_model_and_collect_events("openai-compat:abc-123", None)
             .await;
         assert!(
             second.iter().any(|e| e.event_type == "ready"),

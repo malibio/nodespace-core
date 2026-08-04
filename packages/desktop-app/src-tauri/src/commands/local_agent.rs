@@ -288,6 +288,16 @@ pub async fn ensure_model_ready(
                     );
                 }
             }
+            "verifying" => {
+                let _ = app.emit(
+                    agent_events::MODEL_STATUS,
+                    &ModelStatusEvent {
+                        model_id: event.model_id,
+                        status: "verifying".to_string(),
+                        message: event.message,
+                    },
+                );
+            }
             "loading" => {
                 let _ = app.emit(
                     agent_events::MODEL_STATUS,

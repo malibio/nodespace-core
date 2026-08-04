@@ -114,6 +114,10 @@ message EnsureModelReadyRequest {
 //
 // event_type values:
 //   "downloading"  — model file is being downloaded (bytes fields populated)
+//   "verifying"    — model file integrity is being checked (SHA-256); only
+//                    emitted when this is a cache miss and a full hash is
+//                    actually about to run, since a cache hit finishes before
+//                    there is anything worth reporting progress on
 //   "loading"      — model is being loaded into memory
 //   "ready"        — model is loaded and the engine is ready
 //   "error"        — an error occurred (error_message populated)

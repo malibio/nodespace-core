@@ -209,9 +209,14 @@ impl ChatEngine {
             // Integrity gate: reject a tampered/substituted artifact before native
             // llama.cpp parses it with full authority. Mirrors the embedding-model
             // load gate; the digest is the selected catalog entry's pinned SHA-256.
+            //
+            // Uses the verified-state cache: an unchanged file that was already
+            // verified (at download or a prior load) is not re-hashed. Any change
+            // to the file's identity (size/mtime/inode) still forces a full
+            // re-hash, so a post-install tamper is still refused.
             match expected_sha256 {
                 Some(expected) => {
-                    crate::config::verify_file_sha256(path, expected)
+                    crate::config::verify_file_sha256_cached(path, expected)
                         .map_err(ChatError::IntegrityError)?;
                     tracing::info!("Chat model integrity verified: {}", model_path);
                 }

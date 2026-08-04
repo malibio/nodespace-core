@@ -62,6 +62,15 @@
   let eventUnlisteners: Array<() => void> = [];
   /** True while ensureModelReady is running (may include download time for local models). */
   let isEnsuringModel = $state(false);
+  /**
+   * Current phase reported by the daemon while ensureModelReady is running.
+   * `null` until the first `model://status` event of a given run arrives, so
+   * the overlay shows a generic label rather than falsely claiming a phase
+   * before it is confirmed. Distinguishing "verifying" from "loading" matters
+   * because a cache-miss integrity check can take minutes on a multi-GB
+   * model — a flat "preparing model" spinner over that reads as a hang.
+   */
+  let ensuringModelPhase = $state<'verifying' | 'loading' | null>(null);
 
   const SOFT_MESSAGE_CAP = 500;
 
@@ -242,6 +251,7 @@
     // For local models this may trigger a download — isEnsuringModel shows an
     // overlay so the user sees progress rather than a frozen UI.
     isEnsuringModel = true;
+    ensuringModelPhase = null;
     try {
       await ensureModelReady(model);
     } catch (err) {
@@ -252,6 +262,7 @@
       return;
     } finally {
       isEnsuringModel = false;
+      ensuringModelPhase = null;
     }
 
     // Set status:'processing' so the typing indicator appears and the daemon
@@ -330,6 +341,24 @@
           streamingContent = '';
         });
         eventUnlisteners.push(unlistenError);
+
+        // Phase updates for the in-flight ensureModelReady call (see
+        // isEnsuringModel below). Not filtered by model_id: only one
+        // ensureModelReady call is ever in flight from this viewer at a
+        // time, and a stale event from a just-finished call arriving after
+        // isEnsuringModel flips back to false is simply ignored below.
+        const unlistenModelStatus = await listen<{
+          model_id: string;
+          status: string;
+          message?: string;
+        }>(AGENT_EVENTS.MODEL_STATUS, (event) => {
+          if (destroyed || !isEnsuringModel) return;
+          const { status } = event.payload;
+          if (status === 'verifying' || status === 'loading') {
+            ensuringModelPhase = status;
+          }
+        });
+        eventUnlisteners.push(unlistenModelStatus);
       }
     } finally {
       nodeReady = true;
@@ -508,10 +537,21 @@
 
   <!-- Model-load overlay: shown while ensureModelReady is running (covers downloads too). -->
   {#if isEnsuringModel}
-    <div class="ensure-model-overlay" role="status" aria-label="Preparing model">
+    {@const label =
+      ensuringModelPhase === 'verifying'
+        ? 'Verifying model integrity…'
+        : ensuringModelPhase === 'loading'
+          ? 'Loading model…'
+          : 'Preparing model…'}
+    <div class="ensure-model-overlay" role="status" aria-label={label}>
       <div class="ensure-model-box">
         <span class="ensure-model-spinner" aria-hidden="true"></span>
-        <span class="ensure-model-label">Preparing model…</span>
+        <div class="ensure-model-text">
+          <span class="ensure-model-label">{label}</span>
+          {#if ensuringModelPhase === 'verifying'}
+            <span class="ensure-model-sublabel">This can take a few minutes on a large model's first check.</span>
+          {/if}
+        </div>
       </div>
     </div>
   {/if}
@@ -757,10 +797,21 @@
     animation: spin 0.75s linear infinite;
   }
 
+  .ensure-model-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
   .ensure-model-label {
     font-size: 0.9375rem;
     font-weight: 500;
     color: hsl(var(--foreground));
+  }
+
+  .ensure-model-sublabel {
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
   }
 
   @keyframes spin {

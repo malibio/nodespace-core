@@ -951,6 +951,13 @@ async fn perform_download(params: DownloadParams) -> Result<(), ModelError> {
             ))
         })?;
 
+    // The stream-verify above already confirmed `final_path`'s bytes match
+    // `expected_sha256`. Record that now so the load-time integrity gate
+    // (`ChatEngine::load_model` / embedding load) can skip re-hashing this
+    // multi-GB file on its very first load instead of re-deriving a fact
+    // this download just established.
+    nodespace_nlp_engine::config::record_verified_sha256(&final_path, &expected_sha256);
+
     Ok(())
 }
 
