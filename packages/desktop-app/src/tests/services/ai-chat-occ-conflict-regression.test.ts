@@ -81,8 +81,11 @@ describe('ai-chat OCC conflict during an active turn', () => {
    * frontend's racing write is rejected: reply appended, status back to idle.
    */
   const completedTurn = makeChatNode({
+    // `idle` is what the daemon actually writes on turn completion
+    // (`append_assistant_message` / `write_ai_chat_status`), so the fixture
+    // mirrors production rather than a value it never sends.
     version: 4,
-    status: 'active',
+    status: 'idle',
     messages: [
       { role: 'user', content: 'What is on my plate today?' },
       { role: 'assistant', content: 'You have two tasks due today.' }
@@ -122,7 +125,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
     // The exact bug: the viewer's `isProcessing` is `status === 'processing'`.
     // Hydrating an unflattened payload left this undefined AND dropped the
     // reply, so the indicator hung with nothing to show.
-    expect(chat?.status).toBe('active');
+    expect(chat?.status).toBe('idle');
     expect(chat?.status).not.toBe('processing');
 
     // The reply the daemon already persisted must be visible.
@@ -151,7 +154,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
       version: 4,
       properties: {
         'ai-chat': {
-          status: 'active',
+          status: 'idle',
           messages: [
             { role: 'user', content: 'What is on my plate today?' },
             { role: 'assistant', content: 'You have two tasks due today.' }

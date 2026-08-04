@@ -29,7 +29,7 @@ use nodespace_agent::local_agent::tools::{
 use nodespace_core::models::{
     AiChatCompletedWrite, AiChatMessage, AiChatNode, NodeFilter, NodeUpdate,
 };
-use nodespace_core::services::{NodeEmbeddingService, NodeService};
+use nodespace_core::services::{NodeEmbeddingService, NodeService, NodeServiceError};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -489,7 +489,9 @@ impl LocalAgentServiceImpl {
         let history = node_history_from_messages(messages);
         if history.is_empty() {
             tracing::warn!(node_id, "ai-chat history empty — skipping turn");
-            let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+            if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
+            }
             self.inner.turn_tokens.lock().await.remove(&node_id);
             return;
         }
@@ -499,7 +501,9 @@ impl LocalAgentServiceImpl {
             Some(m) if m.role == Role::User => m.content.clone(),
             _ => {
                 tracing::warn!(node_id, "ai-chat last message is not from user — skipping");
-                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+                if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                    tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
+                }
                 self.inner.turn_tokens.lock().await.remove(&node_id);
                 return;
             }
@@ -702,7 +706,16 @@ impl LocalAgentServiceImpl {
                 });
             } else {
                 // Stuck in processing but no trailing user message — reset to idle.
-                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+                // This is the recovery sweep for already-stuck nodes, so a silent
+                // failure here means recovery quietly did not happen and the node
+                // stays stuck across restarts with nothing in the log to find it by.
+                if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                    tracing::warn!(
+                        node_id,
+                        error = %e,
+                        "failed to reset stuck ai-chat node to idle during recovery"
+                    );
+                }
             }
         }
     }
@@ -753,10 +766,15 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt + 1 < MAX_WRITE_ATTEMPTS => {
+                // Only a lost race is retryable. A deterministic fault (invalid
+                // update, database error) fails the same way every attempt, so
+                // retrying it just burns the budget in a tight loop and buries
+                // the real cause behind a generic exhaustion message.
+                Err(NodeServiceError::VersionConflict { .. })
+                    if attempt + 1 < MAX_WRITE_ATTEMPTS =>
+                {
                     tracing::debug!(
                         node_id,
-                        error = %e,
                         attempt,
                         "version conflict writing ai-chat status, retrying"
                     );
@@ -830,10 +848,12 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt + 1 < MAX_WRITE_ATTEMPTS => {
+                // Retry only a lost race — see write_ai_chat_status.
+                Err(NodeServiceError::VersionConflict { .. })
+                    if attempt + 1 < MAX_WRITE_ATTEMPTS =>
+                {
                     tracing::debug!(
                         node_id,
-                        error = %e,
                         attempt,
                         "version conflict appending assistant message, retrying"
                     );
@@ -2669,34 +2689,40 @@ mod tests {
         );
     }
 
-    /// The retry budget must actually be spendable across every attempt.
+    /// Both ai-chat write helpers must return an `Err` when they cannot write,
+    /// never panic.
     ///
-    /// This guards a real regression: the loop ran `for attempt in 0..5` but
-    /// only retried `if attempt == 0`, so the second lost race returned an
-    /// error and the turn's terminal write was dropped — leaving the node in
-    /// `processing` with no reply, the user-visible hang. The retry condition
-    /// must stay tied to `MAX_WRITE_ATTEMPTS`, not to a hardcoded first pass.
-    ///
-    /// Interleaving a foreign write into the exact read/write gap of these
-    /// `&self` helpers is not reachable without adding a seam to production
-    /// code, so this pins the budget arithmetic that governs both loops.
-    #[test]
-    fn ai_chat_write_retry_budget_spans_all_attempts() {
-        // Mirror of the loop guard in write_ai_chat_status /
-        // append_assistant_message: every attempt but the last retries.
-        let retries: Vec<usize> = (0..MAX_WRITE_ATTEMPTS)
-            .filter(|attempt| attempt + 1 < MAX_WRITE_ATTEMPTS)
-            .collect();
+    /// The exhaustion arm of these retry loops used to be `unreachable!()`,
+    /// which was in fact reachable: it would have panicked the turn task
+    /// instead of letting the caller fall through to its idle-reset. This
+    /// drives the non-retryable branch (the node no longer exists) and asserts
+    /// the failure is returned rather than unwound.
+    #[tokio::test]
+    async fn ai_chat_write_failure_returns_err_instead_of_panicking() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_processing_node_with_user_message(&node_service, "Hello").await;
 
-        assert_eq!(
-            retries.len(),
-            MAX_WRITE_ATTEMPTS - 1,
-            "every attempt except the final one must retry (the pre-fix guard \
-             retried only attempt 0, spending 1 of {MAX_WRITE_ATTEMPTS} attempts)"
+        let node = node_service
+            .get_node(&node_id)
+            .await
+            .expect("get node")
+            .expect("node exists");
+        node_service
+            .delete_node(&node_id, node.version)
+            .await
+            .expect("delete node");
+
+        assert!(
+            svc.write_ai_chat_status(&node_id, "idle", None)
+                .await
+                .is_err(),
+            "a write to a missing node must return Err, not panic"
         );
         assert!(
-            retries.contains(&1),
-            "a second lost race must still retry — this is the dropped-reply regression"
+            svc.append_assistant_message(&node_id, "Reply.", None, Vec::new(), None)
+                .await
+                .is_err(),
+            "an append to a missing node must return Err, not panic"
         );
     }
 

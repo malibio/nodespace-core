@@ -1,6 +1,12 @@
 import type { Node } from './node';
 
-export type AiChatStatus = 'active' | 'processing' | 'archived';
+/**
+ * `idle` is what the daemon writes when a turn completes or is reset
+ * (`append_assistant_message` / `write_ai_chat_status`); `active` is the
+ * initial state of a node that has never run a turn. The viewer only ever
+ * tests for `processing`, so any other member simply clears the indicator.
+ */
+export type AiChatStatus = 'active' | 'idle' | 'processing' | 'archived';
 export type AiChatProvider = 'native' | 'openai' | 'openai-compat' | 'pty';
 
 export interface OpenAiCompatConfig {
