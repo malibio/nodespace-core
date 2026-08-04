@@ -1407,7 +1407,16 @@ export class SharedNodeStore {
                   // Clear queued operations to prevent stale-version retries
                   PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
-                  const currentNode = occError.conflictData.current_node;
+                  // Normalize before hydrating: this payload crosses the same
+                  // sync boundary as a `database`-sourced broadcast, so it gets
+                  // the same typed-field promotion. Without it a type-specific
+                  // node (ai-chat, task) would land in the store with its
+                  // fields still buried under `properties[<type>]` — e.g. an
+                  // ai-chat node with no top-level `status`/`messages`, which
+                  // strands the viewer's typing indicator after a conflict.
+                  const currentNode = occError.conflictData.current_node
+                    ? normalizeNodeData(occError.conflictData.current_node)
+                    : null;
                   if (currentNode) {
                     // Hydrate directly from the authoritative node returned by daemon
                     this.nodesSet(nodeId, currentNode);
@@ -2150,7 +2159,12 @@ export class SharedNodeStore {
             );
             PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
-            const currentNode = occError.conflictData.current_node;
+            // Normalized for the same reason as the generic update path above:
+            // the conflict payload is a sync-boundary node and must get the
+            // same typed-field promotion a broadcast would.
+            const currentNode = occError.conflictData.current_node
+              ? normalizeNodeData(occError.conflictData.current_node)
+              : null;
             if (currentNode) {
               this.nodesSet(nodeId, currentNode);
               this.versions.set(nodeId, currentNode.version ?? 1);

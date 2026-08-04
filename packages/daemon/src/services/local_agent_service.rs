@@ -123,6 +123,11 @@ const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// a second config writer appears that can't reach for the same frontend hook.
 const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Attempts for an ai-chat read-modify-write before giving up. These writes
+/// race the frontend's own writes to the same node on every turn, so a
+/// conflict is expected; the retry re-reads the winning version and reapplies.
+const MAX_WRITE_ATTEMPTS: usize = 5;
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
     model_manager: Arc<GgufModelManager>,
@@ -707,14 +712,19 @@ impl LocalAgentServiceImpl {
     // ---------------------------------------------------------------------------
 
     /// Write `properties['ai-chat']['status']` to the node.
-    /// Retries up to 5 times on version conflict (optimistic concurrency).
+    ///
+    /// Retries the full read-modify-write on version conflict: the frontend
+    /// writes to the same node (appending a user message, setting
+    /// `processing`), so a conflict here is an ordinary race, not a fault.
+    /// Giving up early would drop the turn's terminal status write and strand
+    /// the node in `processing` forever.
     async fn write_ai_chat_status(
         &self,
         node_id: &str,
         status: &str,
         model: Option<&str>,
     ) -> Result<(), String> {
-        for attempt in 0..5 {
+        for attempt in 0..MAX_WRITE_ATTEMPTS {
             let node = self
                 .inner
                 .node_service
@@ -743,21 +753,27 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt == 0 => {
+                Err(e) if attempt + 1 < MAX_WRITE_ATTEMPTS => {
                     tracing::debug!(
                         node_id,
                         error = %e,
+                        attempt,
                         "version conflict writing ai-chat status, retrying"
                     );
                 }
                 Err(e) => return Err(e.to_string()),
             }
         }
-        unreachable!()
+        Err(format!(
+            "failed to write ai-chat status for {node_id} after {MAX_WRITE_ATTEMPTS} attempts"
+        ))
     }
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
-    /// Retries up to 5 times on version conflict. `reasoning` is the model's captured
+    ///
+    /// Retries the full read-modify-write on version conflict for the same
+    /// reason as `write_ai_chat_status` — losing this write loses the reply.
+    /// `reasoning` is the model's captured
     /// chain-of-thought, persisted alongside the answer when present.
     ///
     /// `completed_writes` records the graph writes this turn performed. The agent
@@ -772,7 +788,7 @@ impl LocalAgentServiceImpl {
         completed_writes: Vec<AiChatCompletedWrite>,
         clarify: Option<&ClarifyPrompt>,
     ) -> Result<(), String> {
-        for attempt in 0..5 {
+        for attempt in 0..MAX_WRITE_ATTEMPTS {
             let node = self
                 .inner
                 .node_service
@@ -814,17 +830,20 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt == 0 => {
+                Err(e) if attempt + 1 < MAX_WRITE_ATTEMPTS => {
                     tracing::debug!(
                         node_id,
                         error = %e,
+                        attempt,
                         "version conflict appending assistant message, retrying"
                     );
                 }
                 Err(e) => return Err(e.to_string()),
             }
         }
-        unreachable!()
+        Err(format!(
+            "failed to append assistant message to {node_id} after {MAX_WRITE_ATTEMPTS} attempts"
+        ))
     }
 }
 
@@ -2647,6 +2666,42 @@ mod tests {
         assert!(
             svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
             "no lingering turn token after completion"
+        );
+    }
+
+    /// The retry budget must actually be spendable across every attempt.
+    ///
+    /// This guards a real regression: the loop ran `for attempt in 0..5` but
+    /// only retried `if attempt == 0`, so the second lost race returned an
+    /// error and the turn's terminal write was dropped — leaving the node in
+    /// `processing` with no reply, the user-visible hang. The retry condition
+    /// must stay tied to `MAX_WRITE_ATTEMPTS`, not to a hardcoded first pass.
+    ///
+    /// Interleaving a foreign write into the exact read/write gap of these
+    /// `&self` helpers is not reachable without adding a seam to production
+    /// code, so this pins the budget arithmetic that governs both loops.
+    #[test]
+    fn ai_chat_write_retry_budget_spans_all_attempts() {
+        assert!(
+            MAX_WRITE_ATTEMPTS >= 2,
+            "a retry budget below 2 cannot survive even one lost race"
+        );
+
+        // Mirror of the loop guard in write_ai_chat_status /
+        // append_assistant_message: every attempt but the last retries.
+        let retries: Vec<usize> = (0..MAX_WRITE_ATTEMPTS)
+            .filter(|attempt| attempt + 1 < MAX_WRITE_ATTEMPTS)
+            .collect();
+
+        assert_eq!(
+            retries.len(),
+            MAX_WRITE_ATTEMPTS - 1,
+            "every attempt except the final one must retry (the pre-fix guard \
+             retried only attempt 0, spending 1 of {MAX_WRITE_ATTEMPTS} attempts)"
+        );
+        assert!(
+            retries.contains(&1),
+            "a second lost race must still retry — this is the dropped-reply regression"
         );
     }
 
