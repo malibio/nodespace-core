@@ -94,6 +94,13 @@ interface CollectionsDataState {
    * these are exempt from the hide-empty filter for the lifetime of the session.
    * Without this the user's own just-created collection vanishes on the very
    * refresh that was meant to reveal it.
+   *
+   * The exemption is keyed on an id that can outlive the collection it was
+   * granted for: backend collection ids are derived from the name, so deleting
+   * "Architecture" and later receiving a same-named collection from sync would
+   * reuse the exempt id, and renaming one leaves the old id exempt (harmless —
+   * nothing matches it) while the new id is not. Both are accepted session-
+   * scoped fuzziness in a visibility heuristic, and a reset clears the set.
    */
   locallyCreatedIds: Set<string>;
   /** Subset of `locallyCreatedIds` whose backend create has not resolved yet */
@@ -125,6 +132,16 @@ class CollectionsDataStore {
    * never during the pre-load window.
    */
   hasLoaded = $state(false);
+
+  /**
+   * Bumped by `reset()`. An in-flight `createCollection` captures this before
+   * awaiting and abandons its reconcile if the value changed — otherwise the
+   * resolution of a create started against the previous database would write
+   * its exemption and error into the freshly-reset store. That bleeds across
+   * databases in practice, because collection ids are derived from the name:
+   * the same "Architecture" id is exempt in every database.
+   */
+  #generation = 0;
 
   /**
    * Transform flat collections into tree structure for UI display.
@@ -178,6 +195,7 @@ class CollectionsDataStore {
    * Returns the new collection's id, or null on failure.
    */
   async createCollection(name: string, description?: string): Promise<string | null> {
+    const generation = this.#generation;
     const tempId = `pending-collection-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
     const optimistic: CollectionInfo = {
@@ -202,7 +220,22 @@ class CollectionsDataStore {
 
     try {
       const id = await collectionService.createCollection(name, description);
+      // A backend that reports success without an id has not created anything
+      // we can reconcile against — treat it as a failure rather than seeding a
+      // permanently-exempt placeholder keyed on an empty id. The browser dev
+      // proxy's unimplemented create resolves '' exactly like this.
+      if (!id) {
+        throw new Error('Collection create returned no id');
+      }
       log.debug('Created collection', { id, name });
+
+      // A reset (database switch) landed while this create was in flight: the
+      // collection belongs to the previous database, so drop the result rather
+      // than writing its exemption into the fresh store.
+      if (generation !== this.#generation) {
+        log.debug('Discarding create that resolved after a store reset', { id, name });
+        return id;
+      }
 
       // Reconcile: swap the temporary id for the backend's real one. If a
       // concurrent reload already brought the real row in, drop the placeholder
@@ -224,6 +257,12 @@ class CollectionsDataStore {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create collection';
       log.error('Failed to create collection', { name, error: message });
+
+      // As above: a create that fails after a reset must not leave its error
+      // on a store that now represents a different database.
+      if (generation !== this.#generation) {
+        return null;
+      }
 
       const locallyCreatedIds = new Set(this.state.locallyCreatedIds);
       locallyCreatedIds.delete(tempId);
@@ -280,6 +319,9 @@ class CollectionsDataStore {
 
   /** Clear all cached data */
   reset(): void {
+    // Invalidate any in-flight create so its resolution cannot write into the
+    // state this reset is establishing.
+    this.#generation++;
     this.state = {
       ...initialDataState,
       members: new Map(),

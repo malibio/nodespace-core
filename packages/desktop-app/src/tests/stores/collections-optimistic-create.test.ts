@@ -179,6 +179,92 @@ describe('optimistic collection creation', () => {
     expect(tree.map((c) => c.id)).toEqual(['real-id-1']);
   });
 
+  it('treats a falsy id from the backend as a failure rather than a confirmed create', async () => {
+    // The browser dev proxy's unimplemented create resolves '' instead of
+    // throwing. Reconciling that would seed a permanently-exempt collection
+    // keyed on an empty id, which also collides in the sidebar's keyed each.
+    mockCreateCollection.mockResolvedValue('');
+
+    const id = await collectionsData.createCollection('Architecture');
+
+    expect(id).toBeNull();
+    expect(collectionsData.collectionsTree).toEqual([]);
+    expect(collectionsData.state.collections).toEqual([]);
+    expect(collectionsData.state.locallyCreatedIds.has('')).toBe(false);
+    expect(collectionsData.state.error).toBeTruthy();
+  });
+
+  it('discards a create that resolves after a reset instead of leaking into the new store', async () => {
+    let resolveCreate: (id: string) => void = () => {};
+    mockCreateCollection.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveCreate = resolve;
+      })
+    );
+
+    const createPromise = collectionsData.createCollection('Architecture');
+
+    // Database switch mid-flight.
+    collectionsData.reset();
+
+    resolveCreate('real-id-1');
+    await createPromise;
+
+    // The exemption belongs to the previous database. Collection ids are
+    // derived from the name, so leaking it here could wrongly un-hide a
+    // same-named empty collection in the newly-selected database.
+    expect(collectionsData.state.locallyCreatedIds.size).toBe(0);
+    expect(collectionsData.state.pendingIds.size).toBe(0);
+    expect(collectionsData.state.collections).toEqual([]);
+
+    mockGetAllCollections.mockResolvedValue([makeCollection('real-id-1', 'Architecture', 0)]);
+    await collectionsData.loadCollections();
+    expect(collectionsData.collectionsTree).toEqual([]);
+  });
+
+  it('does not leave a stale error on the store when a create fails after a reset', async () => {
+    let rejectCreate: (err: Error) => void = () => {};
+    mockCreateCollection.mockReturnValue(
+      new Promise<string>((_resolve, reject) => {
+        rejectCreate = reject;
+      })
+    );
+
+    const createPromise = collectionsData.createCollection('Architecture');
+    collectionsData.reset();
+
+    rejectCreate(new Error('boom'));
+    await createPromise;
+
+    expect(collectionsData.state.error).toBeNull();
+  });
+
+  it('handles two concurrent creates without dropping or duplicating either', async () => {
+    const resolvers: Array<(id: string) => void> = [];
+    mockCreateCollection.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    const first = collectionsData.createCollection('Alpha');
+    const second = collectionsData.createCollection('Beta');
+
+    expect(collectionsData.collectionsTree.map((c) => c.name)).toEqual(['Alpha', 'Beta']);
+
+    // Resolve out of order to make sure each reconciles against its own temp id.
+    resolvers[1]('id-beta');
+    resolvers[0]('id-alpha');
+    await Promise.all([first, second]);
+
+    const ids = collectionsData.collectionsTree.map((c) => c.id);
+    expect(ids).toEqual(expect.arrayContaining(['id-alpha', 'id-beta']));
+    expect(ids).toHaveLength(2);
+    expect(collectionsData.state.pendingIds.size).toBe(0);
+    expect(ids.some((id) => id.startsWith('pending-collection-'))).toBe(false);
+  });
+
   it('resets the locally-created exemption on store reset', async () => {
     mockCreateCollection.mockResolvedValue('real-id-1');
     await collectionsData.createCollection('Architecture');

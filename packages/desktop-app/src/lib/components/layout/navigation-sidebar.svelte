@@ -43,6 +43,10 @@
   let creatingCollection = $state(false);
   let newCollectionName = $state('');
   let createBusy = $state(false);
+  // Message shown when a create is rolled back. Optimistic UI hides the round
+  // trip, so without this a rejected create (a duplicate name is the common
+  // one) would just make the row silently vanish with no explanation.
+  let createError = $state('');
 
   function focusOnMount(node: HTMLInputElement) {
     node.focus();
@@ -53,17 +57,28 @@
     if (!name || createBusy) return;
     // Dismiss the form immediately — the store inserts the collection into the
     // list optimistically, so the user sees the new entry rather than a form
-    // frozen on a round-trip. A failed create rolls the entry back out.
+    // frozen on a round-trip.
     createBusy = true;
+    createError = '';
     newCollectionName = '';
     creatingCollection = false;
-    await collectionsData.createCollection(name);
+
+    const id = await collectionsData.createCollection(name);
     createBusy = false;
+
+    if (!id) {
+      // Rolled back. Reopen the form with the name restored so the user can see
+      // what failed and correct it (e.g. pick a non-duplicate name).
+      createError = collectionsData.state.error ?? 'Failed to create collection';
+      newCollectionName = name;
+      creatingCollection = true;
+    }
   }
 
   function cancelNewCollection() {
     newCollectionName = '';
     creatingCollection = false;
+    createError = '';
   }
 
   // Schema types from global store (reactive — updates when schemas are created/deleted externally)
@@ -467,8 +482,9 @@
                 <input
                   class="new-collection-input"
                   placeholder="Collection name…"
+                  aria-label="New collection name"
+                  aria-invalid={createError ? 'true' : undefined}
                   bind:value={newCollectionName}
-                  disabled={createBusy}
                   use:focusOnMount
                   onkeydown={(e) => {
                     if (e.key === 'Enter') submitNewCollection();
@@ -476,6 +492,12 @@
                   }}
                 />
               </div>
+              {#if createError}
+                <div class="collection-item new-collection-error" role="alert">
+                  <div class="expand-area"></div>
+                  <span>{createError}</span>
+                </div>
+              {/if}
             {:else}
               <div class="collection-item">
                 <div class="expand-area"></div>
@@ -917,13 +939,14 @@
   }
 
   /* Borderless so the row matches a real collection entry instead of drawing a
-     box around itself. */
+     box around itself. The UA focus ring is deliberately left in place — there
+     is no border for it to conflict with, and it is the only focus affordance
+     the input has. */
   .new-collection-input {
     flex: 1;
     min-width: 0;
     background: none;
     border: none;
-    outline: none;
     color: inherit;
     padding: 0.4rem 0;
     font-size: inherit;
@@ -932,6 +955,18 @@
   .new-collection-input::placeholder {
     color: hsl(var(--muted-foreground));
     opacity: 0.75;
+  }
+
+  /* Rollback message for a failed create, shown under the reopened input */
+  .new-collection-error {
+    color: hsl(var(--destructive));
+    padding-bottom: 0.4rem;
+    white-space: normal;
+  }
+
+  .new-collection-error:hover {
+    background: none;
+    color: hsl(var(--destructive));
   }
 
   /* Optimistically-inserted collection awaiting backend confirmation */
