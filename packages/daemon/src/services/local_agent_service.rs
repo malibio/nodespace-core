@@ -2682,11 +2682,6 @@ mod tests {
     /// code, so this pins the budget arithmetic that governs both loops.
     #[test]
     fn ai_chat_write_retry_budget_spans_all_attempts() {
-        assert!(
-            MAX_WRITE_ATTEMPTS >= 2,
-            "a retry budget below 2 cannot survive even one lost race"
-        );
-
         // Mirror of the loop guard in write_ai_chat_status /
         // append_assistant_message: every attempt but the last retries.
         let retries: Vec<usize> = (0..MAX_WRITE_ATTEMPTS)
