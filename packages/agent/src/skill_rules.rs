@@ -98,7 +98,7 @@ pub const NAME_PLACEHOLDER_EXCEPTION: SchemaRule = SchemaRule {
 
 pub const ENUM_FORMAT: SchemaRule = SchemaRule {
     id: "enum-format",
-    imperative: "ENUMS: Use lowercase values with readable labels, e.g. {\"value\": \"in_progress\", \"label\": \"In Progress\"}.",
+    imperative: "ENUMS: Use lowercase values with readable labels, e.g. `{\"value\": \"in_progress\", \"label\": \"In Progress\"}`.",
     prose: "**Enums:** lowercase values with readable labels — `{\"value\":\"in_progress\",\"label\":\"In Progress\"}`.",
 };
 
@@ -110,7 +110,7 @@ pub const RELATIONSHIP_VS_FIELD: SchemaRule = SchemaRule {
 
 pub const TARGET_TYPE_MUST_EXIST: SchemaRule = SchemaRule {
     id: "target-type-must-exist",
-    imperative: "The targetType MUST be an existing schema ID from the ENTITY TYPES list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:\n- Invoice billed_to customer (one): {\"name\": \"billed_to\", \"targetType\": \"customer\", \"direction\": \"out\", \"cardinality\": \"one\"}\n- Project has_task task (many): {\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}",
+    imperative: "The targetType MUST be an existing schema ID from the ENTITY TYPES list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:\n- Invoice billed_to customer (one): `{\"name\": \"billed_to\", \"targetType\": \"customer\", \"direction\": \"out\", \"cardinality\": \"one\"}`\n- Project has_task task (many): `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}`",
     prose: "`targetType` must be an existing schema ID. Examples: `{\"name\":\"billed_to\",\"targetType\":\"customer\",\"direction\":\"out\",\"cardinality\":\"one\"}`, `{\"name\":\"has_task\",\"targetType\":\"task\",\"direction\":\"out\",\"cardinality\":\"many\"}`.",
 };
 

@@ -63,6 +63,8 @@ FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholde
 - Project with fields [name, status, ...]: title_template = "{{name}} ({{status}})"
 
 EXAMPLE — Invoice schema (references existing 'customer' type):
+
+```json
 {{
   "name": "Invoice",
   "description": "A billing invoice linked to a customer",
@@ -83,8 +85,11 @@ EXAMPLE — Invoice schema (references existing 'customer' type):
     {{"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}}
   ]
 }}
+```
 
 EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH are in fields):
+
+```json
 {{
   "name": "Project",
   "description": "A tracked project with status and timeline",
@@ -105,7 +110,8 @@ EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH
   "relationships": [
     {{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}}
   ]
-}}"#,
+}}
+```"#,
         one_schema_per_request = ONE_SCHEMA_PER_REQUEST.imperative,
         schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.imperative,
@@ -280,14 +286,14 @@ MULTIPLE DOCUMENTS: If the user asks about multiple topics, call search_semantic
 search_nodes is the single tool for finding, listing, and filtering nodes — by title, by type, and by typed property. It returns each node's properties.
 
 LISTING BY TYPE: To list all nodes of a type, use search_nodes with an empty query. Examples:
-- "list all tasks" → search_nodes(query="", node_type="task")
-- "list all customers" → search_nodes(query="", node_type="<customer-schema-id>")
+- "list all tasks" → `search_nodes(query="", node_type="task")`
+- "list all customers" → `search_nodes(query="", node_type="<customer-schema-id>")`
 
 STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc.) or comparison operators (gt, lt, gte, lte, in), pass filters to search_nodes. Examples:
-- "find all my open tasks" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])
-- "tasks due tomorrow" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])
-- "tasks due this week" → search_nodes(node_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])
-- "find tasks for Acme" → search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])
+- "find all my open tasks" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])`
+- "tasks due tomorrow" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])`
+- "tasks due this week" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])`
+- "find tasks for Acme" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])`
 - Date format: always YYYY-MM-DD. Operators: equals, contains, gt, lt, gte, lte, in, exists."#.to_string(),
         },
         NodeTemplate {
@@ -323,6 +329,8 @@ TITLE: The node title is the content field. If the type has a title_template, th
 PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
 
 EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget "Widget" -> label: string; quantity: number; received_on: date; condition: string`:
+
+```json
 {
   "node_type": "widget",
   "content": "Shipment 24",
@@ -333,6 +341,8 @@ EXAMPLE — the shape of the call, NOT the values. Copy the structure; take ever
     "condition": "sealed"
   }
 }
+```
+
 Never reuse "widget" or these field names — they are placeholders. Your node_type and property keys both come from the RELEVANT ENTITY TYPES block.
 
 SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete."#.to_string(),
@@ -700,11 +710,66 @@ mod tests {
                     seed.title
                 );
                 assert!(
-                    matches!(child.node_type.as_str(), "header" | "text"),
-                    "Skill '{}' child has unexpected node_type '{}' — expected 'header' or 'text'",
+                    matches!(child.node_type.as_str(), "header" | "text" | "code-block"),
+                    "Skill '{}' child has unexpected node_type '{}' — expected 'header', \
+                     'text', or 'code-block'",
                     seed.title,
                     child.node_type
                 );
+            }
+        }
+    }
+
+    /// Skills whose guidance carries a worked JSON example must produce real
+    /// `code-block` children, not JSON flattened into a prose `text` node.
+    ///
+    /// The seeding pipeline is a genuine markdown import — `prepare_nodes_from_markdown`
+    /// turns ` ``` ` fences into `code-block` nodes — so an unfenced JSON example
+    /// silently degrades to paragraph text. Fencing is what makes these examples
+    /// round-trip as structured markdown (`flatten_subtree_content` re-emits each
+    /// node's content verbatim, fence markers included).
+    #[test]
+    fn seed_skill_json_examples_produce_code_block_children() {
+        // Only these two seeds carry multi-line JSON worked examples; the rest
+        // use inline code spans for short call shapes, which stay in `text`.
+        let expected: &[(&str, usize)] = &[("Node Creation", 1), ("Schema Creation", 2)];
+
+        for (title, want_blocks) in expected {
+            let seed = seed_skill_nodes()
+                .into_iter()
+                .find(|s| s.title == *title)
+                .unwrap_or_else(|| panic!("No seeded skill titled '{title}'"));
+            let nodes = prepare_nodes_from_template(&seed)
+                .unwrap_or_else(|e| panic!("Template '{title}' failed: {e:?}"));
+
+            let code_blocks: Vec<&str> = nodes[1..]
+                .iter()
+                .filter(|n| n.node_type == "code-block")
+                .map(|n| n.content.as_str())
+                .collect();
+
+            assert_eq!(
+                code_blocks.len(),
+                *want_blocks,
+                "Skill '{title}' should produce {want_blocks} 'code-block' child(ren) from its \
+                 fenced JSON example(s), got {}. Unfenced JSON is parsed as prose instead.",
+                code_blocks.len()
+            );
+
+            for block in &code_blocks {
+                assert!(
+                    block.starts_with("```json"),
+                    "Skill '{title}' code-block should keep its ```json fence verbatim so it \
+                     round-trips as markdown, got: {}",
+                    block.chars().take(40).collect::<String>()
+                );
+                let body = block
+                    .trim_start_matches("```json")
+                    .trim_end_matches("```")
+                    .trim();
+                serde_json::from_str::<serde_json::Value>(body).unwrap_or_else(|e| {
+                    panic!("Skill '{title}' fenced example is not valid JSON: {e}\n{body}")
+                });
             }
         }
     }
