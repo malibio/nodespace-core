@@ -37,8 +37,9 @@
   let collectionMembers = $derived(collectionsState.selectedCollectionMembers);
 
   // Inline "New collection" form for the Collections section. New collections are
-  // created open (the app has no privacy toggle yet); the daemon makes the caller
-  // an admin member so it appears in this list on the loadCollections refresh.
+  // created open (the app has no privacy toggle yet). A new collection starts with
+  // zero members, so the store inserts it optimistically and exempts it from the
+  // hide-empty filter — that is what makes it appear here the instant it is named.
   let creatingCollection = $state(false);
   let newCollectionName = $state('');
   let createBusy = $state(false);
@@ -50,13 +51,14 @@
   async function submitNewCollection() {
     const name = newCollectionName.trim();
     if (!name || createBusy) return;
+    // Dismiss the form immediately — the store inserts the collection into the
+    // list optimistically, so the user sees the new entry rather than a form
+    // frozen on a round-trip. A failed create rolls the entry back out.
     createBusy = true;
-    const id = await collectionsData.createCollection(name);
+    newCollectionName = '';
+    creatingCollection = false;
+    await collectionsData.createCollection(name);
     createBusy = false;
-    if (id) {
-      newCollectionName = '';
-      creatingCollection = false;
-    }
   }
 
   function cancelNewCollection() {
@@ -377,7 +379,7 @@
             {#each collections as collection (collection.id)}
               {@const hasChildren = collection.children && collection.children.length > 0}
               {@const isExpanded = isCollectionExpanded(collection.id)}
-              <div class="collection-item">
+              <div class="collection-item" class:pending={collection.pending}>
                 <div class="expand-area">
                   {#if hasChildren}
                     <button
@@ -475,13 +477,16 @@
                 />
               </div>
             {:else}
-              <button
-                class="new-collection-btn"
-                onclick={() => (creatingCollection = true)}
-                title="Create a new collection"
-              >
-                + New collection
-              </button>
+              <div class="collection-item">
+                <div class="expand-area"></div>
+                <button
+                  class="collection-name-btn new-collection-btn"
+                  onclick={() => (creatingCollection = true)}
+                  title="Create a new collection"
+                >
+                  + New collection
+                </button>
+              </div>
             {/if}
           </div>
         </Collapsible.Content>
@@ -900,31 +905,38 @@
     white-space: nowrap; /* Keep on single line, scroll horizontally if needed */
   }
 
+  /* Renders as a placeholder collection entry: same .collection-item row and
+     .collection-name-btn layout as a real collection, so it sits indented under
+     the "Collections" header rather than reading as a sibling of it. */
   .new-collection-btn {
-    width: 100%;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: hsl(var(--muted-foreground));
-    text-align: left;
-    padding: 0.4rem 0 0.4rem 1.5rem;
-    font-size: inherit;
-    white-space: nowrap;
+    opacity: 0.75;
   }
 
-  .new-collection-btn:hover {
-    color: hsl(var(--foreground));
+  .collection-item:hover .new-collection-btn {
+    opacity: 1;
   }
 
+  /* Borderless so the row matches a real collection entry instead of drawing a
+     box around itself. */
   .new-collection-input {
     flex: 1;
     min-width: 0;
-    background: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
-    border-radius: 4px;
+    background: none;
+    border: none;
+    outline: none;
     color: inherit;
-    padding: 0.25rem 0.4rem;
+    padding: 0.4rem 0;
     font-size: inherit;
+  }
+
+  .new-collection-input::placeholder {
+    color: hsl(var(--muted-foreground));
+    opacity: 0.75;
+  }
+
+  /* Optimistically-inserted collection awaiting backend confirmation */
+  .collection-item.pending .collection-name-btn {
+    opacity: 0.6;
   }
 
   /* Expand chevron inside collection item */
