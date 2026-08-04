@@ -23,7 +23,7 @@ use crate::skill_rules::{
     ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
     SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
     SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
-    TITLE_TEMPLATE_PLACEHOLDERS,
+    TITLE_TEMPLATE_PLACEHOLDERS, UNIQUE_FIELD_FLAGS,
 };
 use nodespace_core::markdown::{NodeTemplate, SeedTier};
 
@@ -61,6 +61,20 @@ FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholde
 - Customer with fields [first_name, last_name]: title_template = "{{first_name}} {{last_name}}"
 - Invoice with fields [invoice_number, ...]: title_template = "Invoice #{{invoice_number}}"
 - Project with fields [name, status, ...]: title_template = "{{name}} ({{status}})"
+
+{unique_field_flags}
+
+EXAMPLE — Customer schema (email flagged unique_case_insensitive):
+{{
+  "name": "Customer",
+  "description": "A customer contact",
+  "title_template": "{{first_name}} {{last_name}}",
+  "fields": [
+    {{"name": "first_name", "type": "text", "required": true}},
+    {{"name": "last_name", "type": "text", "required": true}},
+    {{"name": "email", "type": "text", "required": true, "unique_case_insensitive": true}}
+  ]
+}}
 
 EXAMPLE — Invoice schema (references existing 'customer' type):
 {{
@@ -117,6 +131,7 @@ EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.imperative,
         title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.imperative,
+        unique_field_flags = UNIQUE_FIELD_FLAGS.imperative,
     )
 }
 

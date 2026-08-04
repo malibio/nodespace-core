@@ -337,6 +337,9 @@ nodespace schema get person
 # Create a new schema
 nodespace schema create --params '{"name":"Invoice","description":"A billing invoice linked to a customer","title_template":"Invoice #{invoice_number}","fields":[{"name":"invoice_number","type":"text","required":true},{"name":"amount","type":"number","required":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"draft","label":"Draft"},{"value":"paid","label":"Paid"}]}],"relationships":[{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}]}'
 
+# Create a schema with a unique field — email flagged unique_case_insensitive
+nodespace schema create --params '{"name":"Customer","description":"A customer contact","title_template":"{first_name} {last_name}","fields":[{"name":"first_name","type":"text","required":true},{"name":"last_name","type":"text","required":true},{"name":"email","type":"text","required":true,"unique_case_insensitive":true}]}'
+
 # Update an existing schema — add/remove/rename fields, without re-creating it
 nodespace schema update --params '{"schema_id":"invoice","add_fields":[{"name":"notes","type":"text"}]}'
 ```
@@ -361,6 +364,8 @@ If `create` rejects the schema with a validation error (not "already exists") �
 **Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Examples: `{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`.
 
 **Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.
+
+**Unique fields:** set `"unique": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. "each customer should have a unique email" → flag `email` unique). Use `"unique_case_insensitive": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{"name":"email","type":"text","unique_case_insensitive":true}`.
 <!-- END GENERATED: schema-rules -->
 
 A `description` field is fine when it adds value beyond the title. Field names are alphanumeric-and-underscore only — the CLAUDE.md-documented `custom:` namespace prefix convention applies to natural-language schema authoring in the local agent, not to explicit `fields` arrays passed here; don't prefix field names when calling `schema create`/`update` directly.

@@ -16,6 +16,7 @@ use nodespace_agent::skill_rules::{
     EDIT_DONT_RECREATE, ENUM_FORMAT, FIELDS_FROM_REQUEST_ONLY, NAME_PLACEHOLDER_EXCEPTION,
     NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD, SCHEMA_ALREADY_EXISTS,
     SCHEMA_VALIDATION_ERROR_RETRY, TARGET_TYPE_MUST_EXIST, TITLE_TEMPLATE_PLACEHOLDERS,
+    UNIQUE_FIELD_FLAGS,
 };
 use std::env;
 use std::fs;
@@ -41,7 +42,8 @@ fn render_schema_rules_block() -> String {
          {fields_from_request_only}\n\n\
          {enum_format}\n\n\
          {relationship_vs_field} {target_type_must_exist}\n\n\
-         {title_template_placeholders}",
+         {title_template_placeholders}\n\n\
+         {unique_field_flags}",
         one_schema_per_request = ONE_SCHEMA_PER_REQUEST.prose,
         schema_already_exists = SCHEMA_ALREADY_EXISTS.prose,
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.prose,
@@ -53,6 +55,7 @@ fn render_schema_rules_block() -> String {
         relationship_vs_field = RELATIONSHIP_VS_FIELD.prose,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.prose,
         title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.prose,
+        unique_field_flags = UNIQUE_FIELD_FLAGS.prose,
     )
 }
 

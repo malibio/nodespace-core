@@ -788,6 +788,8 @@ fn def_create_schema() -> ToolDefinition {
                             "required": { "type": "boolean", "description": "Whether this field is required" },
                             "indexed": { "type": "boolean", "description": "Whether to index for search/filter" },
                             "description": { "type": "string", "description": "Field description" },
+                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
+                            "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. Same advisory-only semantics as 'unique'; do not set both on the same field." },
                             "coreValues": {
                                 "type": "array",
                                 "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.",
@@ -856,6 +858,8 @@ fn def_update_schema() -> ToolDefinition {
                             "name": { "type": "string" },
                             "type": { "type": "string", "description": "text, number, date, enum, boolean" },
                             "description": { "type": "string" },
+                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
+                            "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. Same advisory-only semantics as 'unique'; do not set both on the same field." },
                             "coreValues": {
                                 "type": "array",
                                 "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.",
