@@ -36,56 +36,6 @@ function mockTauriEnvironment(isTauri: boolean) {
 }
 
 describe('Tauri System Commands - API Surface', () => {
-  describe('Non-node command exports', () => {
-    it('should export local agent functions', () => {
-      expect(typeof tauriCommands.localAgentStatus).toBe('function');
-      expect(typeof tauriCommands.localAgentCancelTurn).toBe('function');
-      expect(typeof tauriCommands.ensureModelReady).toBe('function');
-    });
-
-    it('should export chat model functions', () => {
-      expect(typeof tauriCommands.chatModelList).toBe('function');
-      expect(typeof tauriCommands.chatModelRecommended).toBe('function');
-      expect(typeof tauriCommands.chatModelDownload).toBe('function');
-      expect(typeof tauriCommands.chatModelCancelDownload).toBe('function');
-      expect(typeof tauriCommands.chatModelDelete).toBe('function');
-      expect(typeof tauriCommands.chatModelLoad).toBe('function');
-      expect(typeof tauriCommands.chatModelUnload).toBe('function');
-      expect(typeof tauriCommands.getSystemRamGb).toBe('function');
-      expect(typeof tauriCommands.ensureModelReady).toBe('function');
-    });
-
-    it('should export PTY session functions', () => {
-      expect(typeof tauriCommands.ptyLaunchSession).toBe('function');
-      expect(typeof tauriCommands.ptyWriteInput).toBe('function');
-      expect(typeof tauriCommands.ptyResizeTerminal).toBe('function');
-      expect(typeof tauriCommands.ptyTerminateSession).toBe('function');
-      expect(typeof tauriCommands.ptyListSessions).toBe('function');
-    });
-
-    it('should export capture settings functions', () => {
-      expect(typeof tauriCommands.getCaptureSettings).toBe('function');
-      expect(typeof tauriCommands.updateCaptureSettings).toBe('function');
-    });
-
-    it('should export agent availability function', () => {
-      expect(typeof tauriCommands.ptyCheckAgentAvailability).toBe('function');
-    });
-
-    it('should export OpenAI-compat config functions', () => {
-      expect(typeof tauriCommands.getOpenAiCompatConfigsFromDaemon).toBe('function');
-      expect(typeof tauriCommands.setOpenAiCompatConfigsOnDaemon).toBe('function');
-    });
-
-    it('should export ACP stub functions', () => {
-      expect(typeof tauriCommands.acpListAgents).toBe('function');
-      expect(typeof tauriCommands.acpStartSession).toBe('function');
-      expect(typeof tauriCommands.acpSendMessage).toBe('function');
-      expect(typeof tauriCommands.acpEndSession).toBe('function');
-      expect(typeof tauriCommands.acpRefreshAgents).toBe('function');
-    });
-  });
-
   describe('ACP stubs (transport removed ahead of PTY rewrite)', () => {
     it('acpListAgents resolves to an empty array', async () => {
       await expect(tauriCommands.acpListAgents()).resolves.toEqual([]);

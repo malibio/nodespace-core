@@ -16,14 +16,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { collectionService } from '$lib/services/collection-service';
 
 describe('Collection Service', () => {
-  describe('environment detection', () => {
-    it('should use MockCollectionService in test environment', () => {
-      // In test env, collectionService should be the mock implementation
-      expect(collectionService).toBeDefined();
-    });
-  });
-
   describe('MockCollectionService methods', () => {
+    // The module-level `collectionService` singleton resolves to MockCollectionService
+    // under NODE_ENV=test (see the `getCollectionService dispatcher` tests below for
+    // coverage of the other two branches), so exercising its methods here doubles as
+    // confirmation that the dispatcher picked the mock implementation.
     it('getAllCollections should return empty array', async () => {
       const result = await collectionService.getAllCollections();
       expect(result).toEqual([]);
