@@ -165,7 +165,8 @@ async fn run_turn(
         max_tokens: Some(512),
     };
 
-    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chunks: Arc<std::sync::Mutex<Vec<StreamingChunk>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = chunks.clone();
     engine
         .generate(
@@ -303,7 +304,10 @@ async fn golden_turn3_resolution_after_two_terse_facts() {
     let (result, raw) = run_turn(
         &engine,
         system,
-        vec![hand_authored_resolve_query_tool(), hand_authored_update_node_tool()],
+        vec![
+            hand_authored_resolve_query_tool(),
+            hand_authored_update_node_tool(),
+        ],
         history,
         "The 2400 one came back — set it to returned",
     )
@@ -418,7 +422,10 @@ async fn golden_chained_turn3_given_turn2_actual_output() {
     let (result, raw) = run_turn(
         &engine,
         system,
-        vec![hand_authored_resolve_query_tool(), hand_authored_update_node_tool()],
+        vec![
+            hand_authored_resolve_query_tool(),
+            hand_authored_update_node_tool(),
+        ],
         history,
         "The 2400 one came back — set it to returned",
     )
