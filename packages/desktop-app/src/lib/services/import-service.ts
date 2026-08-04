@@ -177,13 +177,6 @@ class ImportService {
 
     this.unlistenProgress = unlisten;
   }
-
-  private teardownProgressListener(): void {
-    if (this.unlistenProgress) {
-      this.unlistenProgress();
-      this.unlistenProgress = null;
-    }
-  }
 }
 
 // Singleton instance

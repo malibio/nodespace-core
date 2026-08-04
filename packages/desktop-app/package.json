@@ -33,7 +33,7 @@
     "test:integration:full": "bun run test && bun run test:browser && bun run test:perf && bun run rust:test",
     "test:e2e": "bunx vitest run --config vitest.e2e.config.ts",
     "test:e2e:watch": "bunx vitest --config vitest.e2e.config.ts",
-    "test:all": "bun run test && bun run rust:test",
+    "test:all": "bun run test:coverage && bun run rust:test",
     "rust:test": "cd src-tauri && cargo test --lib -p nodespace-core -- --test-threads=2",
     "quality:check": "bunx eslint 'src/**/*.{ts,svelte}' && BROWSERSLIST_IGNORE_OLD_DATA=1 bunx svelte-check",
     "quality:fix": "bunx eslint --fix 'src/**/*.{ts,svelte}' && BROWSERSLIST_IGNORE_OLD_DATA=1 bunx svelte-check",
