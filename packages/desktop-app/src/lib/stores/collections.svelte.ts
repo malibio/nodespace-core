@@ -38,6 +38,13 @@ export interface CollectionItem {
   name: string;
   memberCount: number;
   children?: CollectionItem[];
+  /**
+   * True while this collection is an unconfirmed optimistic insert — the local
+   * entry shown immediately on create, before the backend write resolves. The
+   * sidebar uses it to render the row in a pending style; it clears when the
+   * create call returns and the entry is reconciled with its real id.
+   */
+  pending?: boolean;
 }
 
 export interface CollectionMember {
@@ -81,6 +88,23 @@ interface CollectionsDataState {
   members: Map<string, Node[]>;
   loading: boolean;
   error: string | null;
+  /**
+   * IDs of collections the user created in this session. A brand-new collection
+   * has zero members, which `pruneEmptyCollections` would otherwise hide — so
+   * these are exempt from the hide-empty filter for the lifetime of the session.
+   * Without this the user's own just-created collection vanishes on the very
+   * refresh that was meant to reveal it.
+   *
+   * The exemption is keyed on an id that can outlive the collection it was
+   * granted for: backend collection ids are derived from the name, so deleting
+   * "Architecture" and later receiving a same-named collection from sync would
+   * reuse the exempt id, and renaming one leaves the old id exempt (harmless —
+   * nothing matches it) while the new id is not. Both are accepted session-
+   * scoped fuzziness in a visibility heuristic, and a reset clears the set.
+   */
+  locallyCreatedIds: Set<string>;
+  /** Subset of `locallyCreatedIds` whose backend create has not resolved yet */
+  pendingIds: Set<string>;
 }
 
 const initialDataState: CollectionsDataState = {
@@ -88,12 +112,16 @@ const initialDataState: CollectionsDataState = {
   members: new Map(),
   loading: false,
   error: null,
+  locallyCreatedIds: new Set(),
+  pendingIds: new Set(),
 };
 
 class CollectionsDataStore {
   state = $state<CollectionsDataState>({
     ...initialDataState,
     members: new Map(),
+    locallyCreatedIds: new Set(),
+    pendingIds: new Set(),
   });
 
   /**
@@ -106,12 +134,25 @@ class CollectionsDataStore {
   hasLoaded = $state(false);
 
   /**
+   * Bumped whenever the store stops representing the data it did — `reset()`
+   * and `forgetLocallyCreated()` (the database switch). An in-flight
+   * `createCollection` captures this before awaiting and abandons its reconcile
+   * if the value changed, so a create issued against the previous database
+   * cannot write its exemption or error into the store afterwards.
+   */
+  #generation = 0;
+
+  /**
    * Transform flat collections into tree structure for UI display.
    * Uses parentCollectionIds to build proper hierarchy. Hides collections with
    * no member nodes visible to the current user.
    */
   get collectionsTree(): CollectionItem[] {
-    return buildCollectionsTree(this.state.collections);
+    return buildCollectionsTree(
+      this.state.collections,
+      this.state.locallyCreatedIds,
+      this.state.pendingIds
+    );
   }
 
   /** Load all collections from backend */
@@ -119,9 +160,20 @@ class CollectionsDataStore {
     this.state = { ...this.state, loading: true, error: null };
 
     try {
-      const collections = await collectionService.getAllCollections();
-      log.debug('Loaded collections', { count: collections.length });
-      this.state = { ...this.state, collections, loading: false };
+      const fetched = await collectionService.getAllCollections();
+      log.debug('Loaded collections', { count: fetched.length });
+      // Preserve optimistic entries the backend has not confirmed yet: a reload
+      // that raced an in-flight create must not make the new collection blink
+      // out of the sidebar between the optimistic insert and its confirmation.
+      const fetchedIds = new Set(fetched.map((c) => c.id));
+      const unconfirmed = this.state.collections.filter(
+        (c) => this.state.pendingIds.has(c.id) && !fetchedIds.has(c.id)
+      );
+      this.state = {
+        ...this.state,
+        collections: [...fetched, ...unconfirmed],
+        loading: false,
+      };
       this.hasLoaded = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load collections';
@@ -131,19 +183,101 @@ class CollectionsDataStore {
   }
 
   /**
-   * Create a new collection, then refresh the list so it appears immediately.
-   * Returns the new collection's id, or null on failure (error surfaced in state).
+   * Create a new collection optimistically: the entry is inserted into local
+   * state and visible in the sidebar immediately, before the backend write is
+   * confirmed — matching the instant-appearance UX node creation already has.
+   * The backend derives the collection's real id from its name, so the
+   * optimistic entry carries a temporary id that is swapped for the real one
+   * when the create call resolves. On failure the entry is rolled back out of
+   * local state and the error surfaced.
+   *
+   * Returns the new collection's id, or null on failure.
    */
   async createCollection(name: string, description?: string): Promise<string | null> {
+    const generation = this.#generation;
+    const tempId = `pending-collection-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    const optimistic: CollectionInfo = {
+      id: tempId,
+      content: name,
+      nodeType: 'collection',
+      createdAt: now,
+      modifiedAt: now,
+      version: 1,
+      properties: description ? { description } : {},
+      memberCount: 0,
+      parentCollectionIds: [],
+    };
+
+    this.state = {
+      ...this.state,
+      collections: [...this.state.collections, optimistic],
+      locallyCreatedIds: new Set(this.state.locallyCreatedIds).add(tempId),
+      pendingIds: new Set(this.state.pendingIds).add(tempId),
+      error: null,
+    };
+
     try {
       const id = await collectionService.createCollection(name, description);
+      // A backend that reports success without an id has not created anything
+      // we can reconcile against — treat it as a failure rather than seeding a
+      // permanently-exempt placeholder keyed on an empty id. The browser dev
+      // proxy's unimplemented create resolves '' exactly like this.
+      if (!id) {
+        throw new Error('Collection create returned no id');
+      }
       log.debug('Created collection', { id, name });
-      await this.loadCollections();
+
+      // A reset or database switch landed while this create was in flight: the
+      // collection belongs to the database we just left, so drop the result
+      // rather than writing its exemption into the current store. Reported as
+      // a failure — the collection is not in the store the caller can see, so
+      // returning its id would have the sidebar treat it as successfully
+      // created and shown when neither is true.
+      if (generation !== this.#generation) {
+        log.debug('Discarding create that resolved after the store moved on', { id, name });
+        return null;
+      }
+
+      // Reconcile: swap the temporary id for the backend's real one. If a
+      // concurrent reload already brought the real row in, drop the placeholder
+      // instead of seeding a duplicate.
+      const alreadyPresent = this.state.collections.some((c) => c.id === id);
+      const collections = alreadyPresent
+        ? this.state.collections.filter((c) => c.id !== tempId)
+        : this.state.collections.map((c) => (c.id === tempId ? { ...c, id } : c));
+
+      const locallyCreatedIds = new Set(this.state.locallyCreatedIds);
+      locallyCreatedIds.delete(tempId);
+      locallyCreatedIds.add(id);
+
+      const pendingIds = new Set(this.state.pendingIds);
+      pendingIds.delete(tempId);
+
+      this.state = { ...this.state, collections, locallyCreatedIds, pendingIds };
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create collection';
       log.error('Failed to create collection', { name, error: message });
-      this.state = { ...this.state, error: message };
+
+      // As above: a create that fails after a reset must not leave its error
+      // on a store that now represents a different database.
+      if (generation !== this.#generation) {
+        return null;
+      }
+
+      const locallyCreatedIds = new Set(this.state.locallyCreatedIds);
+      locallyCreatedIds.delete(tempId);
+      const pendingIds = new Set(this.state.pendingIds);
+      pendingIds.delete(tempId);
+
+      this.state = {
+        ...this.state,
+        collections: this.state.collections.filter((c) => c.id !== tempId),
+        locallyCreatedIds,
+        pendingIds,
+        error: message,
+      };
       return null;
     }
   }
@@ -185,19 +319,52 @@ class CollectionsDataStore {
     return this.state.collections.find((c) => c.id === collectionId);
   }
 
+  /**
+   * Drop the hide-empty exemptions without clearing the rest of the cache.
+   *
+   * Called when switching databases. The exemptions are per-database: backend
+   * collection ids are derived from the name, so the id granted to a locally
+   * created "Architecture" is the *same* id "Architecture" would have in the
+   * newly-selected database. Carrying the set across the switch would wrongly
+   * un-hide a same-named empty collection there. Also invalidates any in-flight
+   * create, whose result belongs to the database being left.
+   */
+  forgetLocallyCreated(): void {
+    this.#generation++;
+    this.state = {
+      ...this.state,
+      locallyCreatedIds: new Set(),
+      pendingIds: new Set(),
+    };
+  }
+
   /** Clear all cached data */
   reset(): void {
-    this.state = { ...initialDataState, members: new Map() };
+    // Invalidate any in-flight create so its resolution cannot write into the
+    // state this reset is establishing.
+    this.#generation++;
+    this.state = {
+      ...initialDataState,
+      members: new Map(),
+      locallyCreatedIds: new Set(),
+      pendingIds: new Set(),
+    };
     this.hasLoaded = false;
   }
 
   /** Set test data directly (for testing purposes only) */
-  _setTestData(collections: CollectionInfo[], members: Map<string, Node[]>): void {
+  _setTestData(
+    collections: CollectionInfo[],
+    members: Map<string, Node[]>,
+    locallyCreatedIds: Set<string> = new Set()
+  ): void {
     this.state = {
       collections,
       members,
       loading: false,
       error: null,
+      locallyCreatedIds,
+      pendingIds: new Set(),
     };
     this.hasLoaded = true;
   }
@@ -346,11 +513,19 @@ export interface SelectedCollectionInfo {
  * reflects RBAC visibility: the local DB only holds member edges the signed-in
  * user can see. This filter therefore hides collections that are empty *for
  * this user*, not just globally empty ones.
+ *
+ * Collections in `exempt` are always kept regardless of member count: these are
+ * the ones the user created in this session, and hiding a just-created
+ * collection because it is still empty is the bug this exemption exists to
+ * prevent, not the RBAC-emptiness case the filter is for.
  */
-function pruneEmptyCollections(items: CollectionItem[]): CollectionItem[] {
+function pruneEmptyCollections(
+  items: CollectionItem[],
+  exempt: ReadonlySet<string>
+): CollectionItem[] {
   return items.reduce<CollectionItem[]>((kept, item) => {
-    const keptChildren = item.children ? pruneEmptyCollections(item.children) : [];
-    if (item.memberCount > 0 || keptChildren.length > 0) {
+    const keptChildren = item.children ? pruneEmptyCollections(item.children, exempt) : [];
+    if (item.memberCount > 0 || keptChildren.length > 0 || exempt.has(item.id)) {
       kept.push({ ...item, children: keptChildren });
     }
     return kept;
@@ -369,8 +544,16 @@ const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
 /**
  * Transform flat collections into tree structure for UI display.
  * Uses parentCollectionIds to build proper hierarchy.
+ *
+ * `locallyCreatedIds` are exempt from the hide-empty filter (see
+ * `pruneEmptyCollections`); `pendingIds` additionally mark entries whose
+ * backend create is still in flight, so the sidebar can style them as pending.
  */
-function buildCollectionsTree(collections: CollectionInfo[]): CollectionItem[] {
+function buildCollectionsTree(
+  collections: CollectionInfo[],
+  locallyCreatedIds: ReadonlySet<string> = new Set(),
+  pendingIds: ReadonlySet<string> = new Set()
+): CollectionItem[] {
   // Build a map of id -> CollectionItem for quick lookup
   const itemMap = new Map<string, CollectionItem>();
   for (const c of collections) {
@@ -379,6 +562,7 @@ function buildCollectionsTree(collections: CollectionInfo[]): CollectionItem[] {
       name: c.content, // Collection name is stored in content field
       memberCount: c.memberCount,
       children: [],
+      pending: pendingIds.has(c.id),
     });
   }
 
@@ -421,8 +605,9 @@ function buildCollectionsTree(collections: CollectionInfo[]): CollectionItem[] {
 
   // Hide collections with no member nodes visible to the current user. Keep a
   // collection whenever it — or any descendant — has members, so populated
-  // sub-collections under an empty parent remain reachable.
-  return pruneEmptyCollections(topLevel);
+  // sub-collections under an empty parent remain reachable, and always keep the
+  // ones this user just created even though they start empty.
+  return pruneEmptyCollections(topLevel, locallyCreatedIds);
 }
 
 /**

@@ -37,11 +37,16 @@
   let collectionMembers = $derived(collectionsState.selectedCollectionMembers);
 
   // Inline "New collection" form for the Collections section. New collections are
-  // created open (the app has no privacy toggle yet); the daemon makes the caller
-  // an admin member so it appears in this list on the loadCollections refresh.
+  // created open (the app has no privacy toggle yet). A new collection starts with
+  // zero members, so the store inserts it optimistically and exempts it from the
+  // hide-empty filter — that is what makes it appear here the instant it is named.
   let creatingCollection = $state(false);
   let newCollectionName = $state('');
   let createBusy = $state(false);
+  // Message shown when a create is rolled back. Optimistic UI hides the round
+  // trip, so without this a rejected create (a duplicate name is the common
+  // one) would just make the row silently vanish with no explanation.
+  let createError = $state('');
 
   function focusOnMount(node: HTMLInputElement) {
     node.focus();
@@ -50,18 +55,34 @@
   async function submitNewCollection() {
     const name = newCollectionName.trim();
     if (!name || createBusy) return;
+    // Dismiss the form immediately — the store inserts the collection into the
+    // list optimistically, so the user sees the new entry rather than a form
+    // frozen on a round-trip.
     createBusy = true;
+    createError = '';
+    newCollectionName = '';
+    creatingCollection = false;
+
     const id = await collectionsData.createCollection(name);
     createBusy = false;
-    if (id) {
-      newCollectionName = '';
-      creatingCollection = false;
+
+    const failure = collectionsData.state.error;
+    if (!id && failure) {
+      // Rolled back. Reopen the form with the name restored so the user can see
+      // what failed and correct it (e.g. pick a non-duplicate name).
+      createError = failure;
+      newCollectionName = name;
+      creatingCollection = true;
     }
+    // A null id with no error means the create was discarded because the store
+    // moved to a different database. That collection belongs to the database we
+    // left, so there is nothing to report or retry here — leave the form closed.
   }
 
   function cancelNewCollection() {
     newCollectionName = '';
     creatingCollection = false;
+    createError = '';
   }
 
   // Schema types from global store (reactive — updates when schemas are created/deleted externally)
@@ -377,7 +398,7 @@
             {#each collections as collection (collection.id)}
               {@const hasChildren = collection.children && collection.children.length > 0}
               {@const isExpanded = isCollectionExpanded(collection.id)}
-              <div class="collection-item">
+              <div class="collection-item" class:pending={collection.pending}>
                 <div class="expand-area">
                   {#if hasChildren}
                     <button
@@ -465,8 +486,9 @@
                 <input
                   class="new-collection-input"
                   placeholder="Collection name…"
+                  aria-label="New collection name"
+                  aria-invalid={createError ? 'true' : undefined}
                   bind:value={newCollectionName}
-                  disabled={createBusy}
                   use:focusOnMount
                   onkeydown={(e) => {
                     if (e.key === 'Enter') submitNewCollection();
@@ -474,14 +496,23 @@
                   }}
                 />
               </div>
+              {#if createError}
+                <div class="collection-item new-collection-error" role="alert">
+                  <div class="expand-area"></div>
+                  <span>{createError}</span>
+                </div>
+              {/if}
             {:else}
-              <button
-                class="new-collection-btn"
-                onclick={() => (creatingCollection = true)}
-                title="Create a new collection"
-              >
-                + New collection
-              </button>
+              <div class="collection-item">
+                <div class="expand-area"></div>
+                <button
+                  class="collection-name-btn new-collection-btn"
+                  onclick={() => (creatingCollection = true)}
+                  title="Create a new collection"
+                >
+                  + New collection
+                </button>
+              </div>
             {/if}
           </div>
         </Collapsible.Content>
@@ -900,31 +931,51 @@
     white-space: nowrap; /* Keep on single line, scroll horizontally if needed */
   }
 
+  /* Renders as a placeholder collection entry: same .collection-item row and
+     .collection-name-btn layout as a real collection, so it sits indented under
+     the "Collections" header rather than reading as a sibling of it. */
   .new-collection-btn {
-    width: 100%;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: hsl(var(--muted-foreground));
-    text-align: left;
-    padding: 0.4rem 0 0.4rem 1.5rem;
-    font-size: inherit;
-    white-space: nowrap;
+    opacity: 0.75;
   }
 
-  .new-collection-btn:hover {
-    color: hsl(var(--foreground));
+  .collection-item:hover .new-collection-btn {
+    opacity: 1;
   }
 
+  /* Borderless so the row matches a real collection entry instead of drawing a
+     box around itself. The UA focus ring is deliberately left in place — there
+     is no border for it to conflict with, and it is the only focus affordance
+     the input has. */
   .new-collection-input {
     flex: 1;
     min-width: 0;
-    background: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
-    border-radius: 4px;
+    background: none;
+    border: none;
     color: inherit;
-    padding: 0.25rem 0.4rem;
+    padding: 0.4rem 0;
     font-size: inherit;
+  }
+
+  .new-collection-input::placeholder {
+    color: hsl(var(--muted-foreground));
+    opacity: 0.75;
+  }
+
+  /* Rollback message for a failed create, shown under the reopened input */
+  .new-collection-error {
+    color: hsl(var(--destructive));
+    padding-bottom: 0.4rem;
+    white-space: normal;
+  }
+
+  .new-collection-error:hover {
+    background: none;
+    color: hsl(var(--destructive));
+  }
+
+  /* Optimistically-inserted collection awaiting backend confirmation */
+  .collection-item.pending .collection-name-btn {
+    opacity: 0.6;
   }
 
   /* Expand chevron inside collection item */

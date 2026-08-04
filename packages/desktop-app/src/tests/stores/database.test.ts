@@ -46,8 +46,12 @@ vi.mock('$lib/stores/reactive-structure-tree.svelte', () => ({
 }));
 
 const loadCollections = vi.fn((..._a: unknown[]) => undefined);
+const forgetLocallyCreated = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/collections.svelte', () => ({
-  collectionsData: { loadCollections: (...a: unknown[]) => loadCollections(...a) }
+  collectionsData: {
+    loadCollections: (...a: unknown[]) => loadCollections(...a),
+    forgetLocallyCreated: (...a: unknown[]) => forgetLocallyCreated(...a)
+  }
 }));
 
 const loadSchemas = vi.fn((..._a: unknown[]) => undefined);
@@ -209,6 +213,20 @@ describe('Database Store', () => {
       expect(addTab).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
       expect(loadSchemas).toHaveBeenCalledOnce();
+      // The hide-empty exemptions are per-database (collection ids are derived
+      // from the name), so they are dropped before the new database loads —
+      // otherwise a same-named empty collection would be un-hidden there.
+      expect(forgetLocallyCreated).toHaveBeenCalledOnce();
+      expect(forgetLocallyCreated.mock.invocationCallOrder[0]).toBeLessThan(
+        loadCollections.mock.invocationCallOrder[0]
+      );
+      // switchTo wraps its whole body in a try/catch that only records the
+      // failure on `this.error`, so anything that throws mid-switch — an
+      // incomplete mock being the usual culprit — is otherwise swallowed and
+      // shows up as a confusing "spy not called" rather than the real cause.
+      // Asserting the switch left no error catches that wherever it happens,
+      // including after the last side effect asserted above.
+      expect(databaseStore.error).toBeNull();
     });
 
     it('completes the switch even if the Pro sync re-target fails', async () => {
