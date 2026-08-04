@@ -2689,16 +2689,23 @@ mod tests {
         );
     }
 
-    /// Both ai-chat write helpers must return an `Err` when they cannot write,
-    /// never panic.
+    /// A write against a node that no longer exists must return `Err` on the
+    /// first attempt, not retry.
     ///
-    /// The exhaustion arm of these retry loops used to be `unreachable!()`,
-    /// which was in fact reachable: it would have panicked the turn task
-    /// instead of letting the caller fall through to its idle-reset. This
-    /// drives the non-retryable branch (the node no longer exists) and asserts
-    /// the failure is returned rather than unwound.
+    /// This became meaningful with the retry narrowing: `update_node`
+    /// disambiguates a failed version-gated write into `NodeNotFound` (the row
+    /// is gone) versus `VersionConflict` (the version moved), so a concurrent
+    /// delete now fails fast instead of burning the whole budget. Both helpers
+    /// also bail at their opening `get_node` in this case, which is the path
+    /// this test drives.
+    ///
+    /// Note what this does NOT cover: the retry-exhaustion arm. Reaching that
+    /// needs a writer interleaved into the read/write gap of these `&self`
+    /// helpers, which is not reachable without adding a seam to production
+    /// code. The exhaustion arm returning `Err` rather than the `unreachable!()`
+    /// it replaced is therefore still unpinned by any test.
     #[tokio::test]
-    async fn ai_chat_write_failure_returns_err_instead_of_panicking() {
+    async fn ai_chat_writes_on_a_missing_node_return_err() {
         let (svc, node_service, _tempdir) = test_service().await;
         let node_id = create_processing_node_with_user_message(&node_service, "Hello").await;
 
@@ -2716,13 +2723,13 @@ mod tests {
             svc.write_ai_chat_status(&node_id, "idle", None)
                 .await
                 .is_err(),
-            "a write to a missing node must return Err, not panic"
+            "a status write to a missing node must return Err"
         );
         assert!(
             svc.append_assistant_message(&node_id, "Reply.", None, Vec::new(), None)
                 .await
                 .is_err(),
-            "an append to a missing node must return Err, not panic"
+            "an append to a missing node must return Err"
         );
     }
 

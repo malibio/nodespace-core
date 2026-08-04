@@ -11,10 +11,11 @@
 //!
 //! # Status values
 //!
-//! `status` is intentionally a plain `String`, not an enum: the daemon writes
-//! `"processing"` / `"idle"` while the frontend interface declares
-//! `active | processing | archived`. These are not yet reconciled, so the struct
-//! captures the value verbatim rather than forcing a lossy mapping.
+//! `status` is intentionally a plain `String`, not an enum. Two orthogonal
+//! state machines currently share this one key: a turn state the daemon drives
+//! (`processing` while inference runs, `idle` once it completes) and a session
+//! lifecycle the PTY path uses (`active` / `archived`). The struct captures the
+//! value verbatim rather than forcing a lossy mapping over both axes.
 
 use crate::models::{Node, ValidationError};
 use chrono::{DateTime, Utc};
