@@ -172,6 +172,15 @@ export default defineConfig({
       // deliberately via `bun run test:perf`; the ADR-047 CI gate skips them.
       ...(process.env.CI ? ['src/tests/performance/**'] : [])
     ],
+    // Forward the coverage marker into the test process. Vitest forks its
+    // workers, so a shell-level env var set by the `test:coverage` script does
+    // not otherwise reach test code. Performance assertions read this to pick a
+    // budget appropriate to instrumented vs uninstrumented execution — see
+    // `architecture-benchmarks.test.ts`.
+    env: {
+      NODESPACE_TEST_COVERAGE: process.env.NODESPACE_TEST_COVERAGE ?? ''
+    },
+
     environment: 'happy-dom', // Fast, modern DOM for Bun compatibility
     globals: true,
     setupFiles: ['src/tests/setup-svelte-mocks.ts', 'src/tests/setup.ts'],

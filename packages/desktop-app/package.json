@@ -26,7 +26,7 @@
     "test:browser:watch": "bunx vitest --config vitest.browser.config.ts",
     "test:webkit": "bunx vitest run --config vitest.webkit.config.ts",
     "test:webkit:watch": "bunx vitest --config vitest.webkit.config.ts",
-    "test:coverage": "bunx vitest run --coverage",
+    "test:coverage": "NODESPACE_TEST_COVERAGE=1 bunx vitest run --coverage",
     "test:perf": "TEST_FULL_PERFORMANCE=1 bunx vitest run src/tests/performance/",
     "test:db": "TEST_USE_DATABASE=true bunx vitest run",
     "test:db:watch": "TEST_USE_DATABASE=true bunx vitest",
