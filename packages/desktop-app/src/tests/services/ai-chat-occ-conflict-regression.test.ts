@@ -184,6 +184,36 @@ describe('ai-chat OCC conflict during an active turn', () => {
     expect(Array.isArray(chat?.messages)).toBe(true);
   }, 5000);
 
+  it('does not install a conflict payload older than what the store already has', async () => {
+    // Both writers into this store — conflict hydration and daemon broadcast —
+    // must agree on which snapshot wins. A broadcast that already delivered a
+    // newer turn must not be undone by an out-of-order conflict payload.
+    seedProcessingNode();
+    store.setNode(completedTurn, dbSource);
+
+    const stalePayload = makeChatNode({
+      version: 2,
+      status: 'processing',
+      messages: [{ role: 'user', content: 'What is on my plate today?' }]
+    });
+
+    vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+      makeVersionConflictError(stalePayload)
+    );
+    // The stale branch falls through to a server resync; keep that from
+    // re-introducing state and masking what this test is asserting.
+    vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(completedTurn);
+
+    store.updateNode(CHAT_ID, { properties: { status: 'processing' } }, viewerSource);
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const chat = readChat(store);
+    expect(chat?.version).toBe(4);
+    expect(chat?.status).not.toBe('processing');
+    expect(chat?.messages).toHaveLength(2);
+  }, 5000);
+
   it('surfaces the conflict to the user and records the rollback', async () => {
     seedProcessingNode();
 

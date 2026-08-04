@@ -1417,7 +1417,29 @@ export class SharedNodeStore {
                   const currentNode = occError.conflictData.current_node
                     ? normalizeNodeData(occError.conflictData.current_node)
                     : null;
-                  if (currentNode) {
+                  // Route the hydration through the same staleness policy a
+                  // daemon broadcast gets. This path writes via `nodesSet`
+                  // rather than `setNode`, so without this check the two
+                  // writers into this store apply different policies and can
+                  // disagree about which snapshot wins — the conflict payload
+                  // could install a snapshot an already-applied broadcast had
+                  // superseded. `current_node` is normally the newest state
+                  // (the daemon fetches it at conflict time), so this skips
+                  // only in the genuine out-of-order case.
+                  const hydrationIsStale =
+                    currentNode !== null &&
+                    shouldSkipStaleAiChatUpdate(currentNode, this.nodes.get(nodeId), {
+                      type: 'database',
+                      reason: 'occ-resync'
+                    });
+                  if (hydrationIsStale) {
+                    log.debug(
+                      `OCC hydration for ${nodeId} is older than local state — ` +
+                        `keeping local and resyncing`
+                    );
+                  }
+
+                  if (currentNode && !hydrationIsStale) {
                     // Hydrate directly from the authoritative node returned by daemon
                     this.nodesSet(nodeId, currentNode);
                     this.versions.set(nodeId, currentNode.version ?? 1);

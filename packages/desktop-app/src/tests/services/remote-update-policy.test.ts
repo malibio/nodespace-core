@@ -161,4 +161,56 @@ describe('shouldSkipStaleAiChatUpdate', () => {
     const incoming = makeNode({ nodeType: 'ai-chat' });
     expect(shouldSkipStaleAiChatUpdate(incoming, existing, databaseSource)).toBe(true);
   });
+
+  it('skips a snapshot whose version is older, even with more messages', () => {
+    const existing = {
+      ...makeNode({ nodeType: 'ai-chat', version: 5 }),
+      messages: [1]
+    } as Node;
+    const incoming = {
+      ...makeNode({ nodeType: 'ai-chat', version: 4 }),
+      messages: [1, 2, 3]
+    } as Node;
+    expect(shouldSkipStaleAiChatUpdate(incoming, existing, databaseSource)).toBe(true);
+  });
+
+  it('applies a newer snapshot that legitimately has fewer messages', () => {
+    // A cancelled turn drops its partial reply: newer version, shorter history.
+    // Count-only comparison would discard this permanently and strand the UI on
+    // a message list the daemon has already superseded.
+    const existing = {
+      ...makeNode({ nodeType: 'ai-chat', version: 4 }),
+      messages: [1, 2, 3]
+    } as Node;
+    const incoming = {
+      ...makeNode({ nodeType: 'ai-chat', version: 5 }),
+      messages: [1, 2]
+    } as Node;
+    expect(shouldSkipStaleAiChatUpdate(incoming, existing, databaseSource)).toBe(false);
+  });
+
+  it('falls back to message count when versions are equal', () => {
+    const existing = {
+      ...makeNode({ nodeType: 'ai-chat', version: 7 }),
+      messages: [1, 2, 3]
+    } as Node;
+    const incoming = {
+      ...makeNode({ nodeType: 'ai-chat', version: 7 }),
+      messages: [1]
+    } as Node;
+    expect(shouldSkipStaleAiChatUpdate(incoming, existing, databaseSource)).toBe(true);
+  });
+
+  it('falls back to message count when a version is missing', () => {
+    const existing = {
+      ...makeNode({ nodeType: 'ai-chat' }),
+      version: undefined,
+      messages: [1, 2, 3]
+    } as unknown as Node;
+    const incoming = {
+      ...makeNode({ nodeType: 'ai-chat', version: 9 }),
+      messages: [1]
+    } as Node;
+    expect(shouldSkipStaleAiChatUpdate(incoming, existing, databaseSource)).toBe(true);
+  });
 });

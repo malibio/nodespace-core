@@ -72,7 +72,7 @@ export type RemoteUpdateDecision =
  * module's doc comment) and must not raise a phantom notification.
  *
  * ai-chat nodes are exempt from the skip — see `shouldSkipStaleAiChatUpdate`
- * for that separate guard (message-count heuristic, not editing state).
+ * for that separate guard (version, then message count — not editing state).
  */
 export function decideRemoteUpdate(
   incoming: Node,
@@ -103,8 +103,23 @@ export function decideRemoteUpdate(
  * would cause version drift: the store stays at the user-send version while
  * the daemon is N+1 ahead, so the next user send hits an OCC conflict.
  * Always accept daemon updates for ai-chat EXCEPT when the incoming snapshot
- * has strictly fewer messages than what's already in the store (a stale
- * broadcast racing a newer one).
+ * is a stale broadcast racing a newer one.
+ *
+ * Staleness is decided by VERSION first, message count only as a tiebreak.
+ * Message count alone is not a safe staleness signal: a turn that rewrites
+ * history rather than appending (a cancelled turn dropping its partial reply,
+ * say) legitimately produces a newer snapshot with fewer messages, and
+ * count-only comparison would discard it permanently. Version is the
+ * authority the daemon actually increments, so:
+ *
+ *   - incoming version strictly older  → stale, skip.
+ *   - incoming version strictly newer  → authoritative, apply.
+ *   - versions equal or uncomparable   → fall back to the message count,
+ *     which is what distinguishes two broadcasts of the same generation.
+ *
+ * This is the same policy the OCC hydration path applies, so the two writers
+ * into this store (conflict hydration and daemon broadcast) can no longer
+ * disagree about which snapshot wins.
  */
 export function shouldSkipStaleAiChatUpdate(
   incoming: Node,
@@ -114,6 +129,15 @@ export function shouldSkipStaleAiChatUpdate(
   if (incoming.nodeType !== 'ai-chat' || source.type !== 'database' || !existingNode) {
     return false;
   }
+
+  const incomingVersion = incoming.version;
+  const existingVersion = existingNode.version;
+  if (typeof incomingVersion === 'number' && typeof existingVersion === 'number') {
+    if (incomingVersion !== existingVersion) {
+      return incomingVersion < existingVersion;
+    }
+  }
+
   type AiChatLike = Node & { messages?: unknown[] };
   const incomingMsgs = (incoming as AiChatLike).messages;
   const existingMsgs = (existingNode as AiChatLike).messages;
