@@ -1911,8 +1911,10 @@ export class SharedNodeStore {
     for (const node of normalizedNodes) {
       const existingNode = this.nodes.get(node.id);
 
-      // Same guard as setNode: never overwrite an ai-chat node with a snapshot
-      // that has fewer messages than what's already in the store.
+      // Same guard as setNode: never overwrite an ai-chat node with a stale
+      // snapshot (older version, or same version with fewer messages). These
+      // nodes come from a fresh tree load, so they carry current server
+      // versions — which is exactly what the guard compares on.
       if (shouldSkipStaleAiChatUpdate(node, existingNode, source)) {
         log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id });
         continue;
