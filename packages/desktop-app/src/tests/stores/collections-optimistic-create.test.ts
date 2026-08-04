@@ -204,11 +204,12 @@ describe('optimistic collection creation', () => {
 
     const createPromise = collectionsData.createCollection('Architecture');
 
-    // Database switch mid-flight.
     collectionsData.reset();
 
     resolveCreate('real-id-1');
-    await createPromise;
+    // Reported as a failure: the collection is not in the store the caller can
+    // see, so a non-null id would have the sidebar treat it as created+shown.
+    await expect(createPromise).resolves.toBeNull();
 
     // The exemption belongs to the previous database. Collection ids are
     // derived from the name, so leaking it here could wrongly un-hide a
@@ -236,6 +237,44 @@ describe('optimistic collection creation', () => {
     rejectCreate(new Error('boom'));
     await createPromise;
 
+    expect(collectionsData.state.error).toBeNull();
+  });
+
+  it('forgetLocallyCreated drops the exemptions carried into a different database', async () => {
+    mockCreateCollection.mockResolvedValue('arch-id');
+    await collectionsData.createCollection('Architecture');
+    expect(collectionsData.state.locallyCreatedIds.has('arch-id')).toBe(true);
+
+    // Switching databases: the exemption is per-database, because collection
+    // ids are derived from the name — 'Architecture' has this same id in every
+    // database, so carrying it over would un-hide an empty one there.
+    collectionsData.forgetLocallyCreated();
+
+    mockGetAllCollections.mockResolvedValue([makeCollection('arch-id', 'Architecture', 0)]);
+    await collectionsData.loadCollections();
+
+    expect(collectionsData.collectionsTree).toEqual([]);
+  });
+
+  it('discards a create that resolves after a database switch', async () => {
+    let resolveCreate: (id: string) => void = () => {};
+    mockCreateCollection.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveCreate = resolve;
+      })
+    );
+
+    const createPromise = collectionsData.createCollection('Architecture');
+    collectionsData.forgetLocallyCreated();
+
+    resolveCreate('arch-id');
+    await expect(createPromise).resolves.toBeNull();
+
+    expect(collectionsData.state.locallyCreatedIds.size).toBe(0);
+    expect(collectionsData.state.pendingIds.size).toBe(0);
+    // No error either — a discarded create is not a failure to report to the
+    // user, so the sidebar leaves its form closed rather than showing a message
+    // about a database they have already left.
     expect(collectionsData.state.error).toBeNull();
   });
 

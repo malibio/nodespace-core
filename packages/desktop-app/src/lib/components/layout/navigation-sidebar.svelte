@@ -66,13 +66,17 @@
     const id = await collectionsData.createCollection(name);
     createBusy = false;
 
-    if (!id) {
+    const failure = collectionsData.state.error;
+    if (!id && failure) {
       // Rolled back. Reopen the form with the name restored so the user can see
       // what failed and correct it (e.g. pick a non-duplicate name).
-      createError = collectionsData.state.error ?? 'Failed to create collection';
+      createError = failure;
       newCollectionName = name;
       creatingCollection = true;
     }
+    // A null id with no error means the create was discarded because the store
+    // moved to a different database. That collection belongs to the database we
+    // left, so there is nothing to report or retry here — leave the form closed.
   }
 
   function cancelNewCollection() {

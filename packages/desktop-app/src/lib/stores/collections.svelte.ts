@@ -134,12 +134,11 @@ class CollectionsDataStore {
   hasLoaded = $state(false);
 
   /**
-   * Bumped by `reset()`. An in-flight `createCollection` captures this before
-   * awaiting and abandons its reconcile if the value changed — otherwise the
-   * resolution of a create started against the previous database would write
-   * its exemption and error into the freshly-reset store. That bleeds across
-   * databases in practice, because collection ids are derived from the name:
-   * the same "Architecture" id is exempt in every database.
+   * Bumped whenever the store stops representing the data it did — `reset()`
+   * and `forgetLocallyCreated()` (the database switch). An in-flight
+   * `createCollection` captures this before awaiting and abandons its reconcile
+   * if the value changed, so a create issued against the previous database
+   * cannot write its exemption or error into the store afterwards.
    */
   #generation = 0;
 
@@ -229,12 +228,15 @@ class CollectionsDataStore {
       }
       log.debug('Created collection', { id, name });
 
-      // A reset (database switch) landed while this create was in flight: the
-      // collection belongs to the previous database, so drop the result rather
-      // than writing its exemption into the fresh store.
+      // A reset or database switch landed while this create was in flight: the
+      // collection belongs to the database we just left, so drop the result
+      // rather than writing its exemption into the current store. Reported as
+      // a failure — the collection is not in the store the caller can see, so
+      // returning its id would have the sidebar treat it as successfully
+      // created and shown when neither is true.
       if (generation !== this.#generation) {
-        log.debug('Discarding create that resolved after a store reset', { id, name });
-        return id;
+        log.debug('Discarding create that resolved after the store moved on', { id, name });
+        return null;
       }
 
       // Reconcile: swap the temporary id for the backend's real one. If a
@@ -315,6 +317,25 @@ class CollectionsDataStore {
   /** Get a collection by ID from cached data */
   getCollectionById(collectionId: string): CollectionInfo | undefined {
     return this.state.collections.find((c) => c.id === collectionId);
+  }
+
+  /**
+   * Drop the hide-empty exemptions without clearing the rest of the cache.
+   *
+   * Called when switching databases. The exemptions are per-database: backend
+   * collection ids are derived from the name, so the id granted to a locally
+   * created "Architecture" is the *same* id "Architecture" would have in the
+   * newly-selected database. Carrying the set across the switch would wrongly
+   * un-hide a same-named empty collection there. Also invalidates any in-flight
+   * create, whose result belongs to the database being left.
+   */
+  forgetLocallyCreated(): void {
+    this.#generation++;
+    this.state = {
+      ...this.state,
+      locallyCreatedIds: new Set(),
+      pendingIds: new Set(),
+    };
   }
 
   /** Clear all cached data */

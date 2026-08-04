@@ -244,7 +244,11 @@ class DatabaseStore {
         true
       );
 
-      // Reload the sidebar from the new database.
+      // Reload the sidebar from the new database. The locally-created
+      // exemptions belong to the database being left — collection ids are
+      // derived from the name, so keeping them would wrongly un-hide a
+      // same-named empty collection in the new one.
+      collectionsData.forgetLocallyCreated();
       collectionsData.loadCollections();
       schemasData.loadSchemas();
       // Re-hydrate the new database's DatabaseSettingsNode (the previous one was
