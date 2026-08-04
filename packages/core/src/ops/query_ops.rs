@@ -158,8 +158,19 @@ impl AgentFilterItem {
         if self.relationship_type.is_some() || self.node_id.is_some() {
             return Ok("relationship");
         }
-        if self.property.is_some() {
-            return Ok("property");
+        if let Some(prop) = self.property.as_deref() {
+            // `content` is the top-level SQL `content` column, not a key inside the
+            // `properties` JSON blob — so a filter naming it must route to the
+            // content search (`LOWER(content) LIKE …`), NOT the property path, which
+            // builds `json_extract(properties, '$.<type>.content')` that is
+            // structurally always NULL and yields a silent `count: 0` false-negative
+            // (an existing "Buy cereal" task returns nothing). Any other property
+            // name keeps the property path.
+            return Ok(if prop == "content" {
+                "content"
+            } else {
+                "property"
+            });
         }
         Err(OpsError::InvalidParams(
             "filter must specify 'type' (property, content, relationship, metadata), \
@@ -378,6 +389,39 @@ mod tests {
         let qf = to_query_filter(item).unwrap();
         assert_eq!(qf.filter_type, FilterType::Property);
         assert_eq!(qf.property.as_deref(), Some("replacement_cost"));
+    }
+
+    /// core#1957: a filter naming `property: "content"` with no explicit `type`
+    /// must infer the CONTENT category. Content lives in the top-level SQL `content`
+    /// column, so routing it to the property path builds a `json_extract(properties,
+    /// …)` that is structurally always NULL and silently returns zero results (an
+    /// existing "Buy cereal" task returns `count: 0`). A non-content property is
+    /// unaffected and still infers the property category.
+    #[test]
+    fn content_property_infers_the_content_filter_not_json_extract() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "contains",
+            "property": "content",
+            "value": "cereal"
+        }))
+        .expect("`type` must be optional on the wire");
+        assert_eq!(item.category().unwrap(), "content");
+        assert_eq!(
+            to_query_filter(item).unwrap().filter_type,
+            FilterType::Content
+        );
+
+        let prop: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "equals",
+            "property": "status",
+            "value": "open"
+        }))
+        .unwrap();
+        assert_eq!(prop.category().unwrap(), "property");
+        assert_eq!(
+            to_query_filter(prop).unwrap().filter_type,
+            FilterType::Property
+        );
     }
 
     /// Relationship filters carry their own distinguishing fields, so they are
