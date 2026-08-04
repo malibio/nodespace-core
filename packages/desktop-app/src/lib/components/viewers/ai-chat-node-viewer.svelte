@@ -12,12 +12,16 @@
   picker flow. It is locked (disabled) after the first user message is sent.
 
   Node-as-message-queue architecture: the node is the single source of truth.
-  - Frontend only writes `updateNode` to append user messages.
+  - Frontend writes `updateNode` to append the user message and set
+    `status: 'processing'` — that status write is the trigger the daemon watches
+    for. The daemon owns every subsequent status write for the turn.
   - LocalAgentService in the daemon reacts to node changes and drives inference.
   - Streaming tokens arrive via Tauri events (local-agent://chunk) and accumulate
     in a local `streamingContent` buffer. The buffer is cleared when WatchNodes
     delivers the completed assistant message.
-  - Typing indicator driven by `node.properties['ai-chat']['status'] === 'processing'`.
+  - Typing indicator driven by the node's top-level `status === 'processing'`. The
+    daemon flattens the `ai-chat` namespace before it reaches the frontend, so
+    this reads `node.status`, never `node.properties['ai-chat'].status`.
 -->
 
 <script lang="ts">

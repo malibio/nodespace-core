@@ -275,13 +275,19 @@ pub async fn update_node(
                 expected_version,
                 actual_version,
             }) => {
-                // Embed current state for client-side merge
+                // Embed current state for client-side merge, in the FLATTENED
+                // wire shape (`node_to_typed_value`) every other read/write
+                // returns. Serializing the raw `Node` here instead would leave
+                // type-specific fields buried under `properties[<type>]`, and
+                // the client hydrates this payload directly into its store —
+                // so an ai-chat conflict would strand the viewer with
+                // `status`/`messages` undefined at the top level.
                 let current_node = node_service
                     .get_node(&node_id)
                     .await
                     .ok()
                     .flatten()
-                    .and_then(|n| serde_json::to_value(&n).ok());
+                    .and_then(|n| node_to_typed_value(n).ok());
                 return Err(OpsError::VersionConflict {
                     node_id,
                     expected: expected_version,

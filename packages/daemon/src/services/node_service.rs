@@ -905,13 +905,17 @@ impl GrpcNodeService for NodeServiceImpl {
                 // Fetch the authoritative current state so the client can
                 // hydrate without a second round-trip (mirrors the pattern
                 // used by node_ops::update_node for regular-node conflicts).
+                // Flattened via `node_to_typed_value` so the payload matches
+                // the wire shape of every other response — the client writes
+                // it straight into its store, where type-specific fields are
+                // read from the top level.
                 let current_node = this
                     .node_service
                     .get_node(&node_id)
                     .await
                     .ok()
                     .flatten()
-                    .and_then(|n| serde_json::to_value(&n).ok());
+                    .and_then(|n| nodespace_core::models::node_to_typed_value(n).ok());
                 return Err(ops_error_to_status(OpsError::VersionConflict {
                     node_id,
                     expected: expected_version,
@@ -2370,6 +2374,93 @@ mod tests {
             embedded_version >= 2,
             "current_node must carry the post-conflict version (got {})",
             embedded_version
+        );
+    }
+
+    /// A generic-path (non-task) VersionConflict must embed `current_node` in the
+    /// FLATTENED wire shape the frontend's typed converters expect — the same shape
+    /// every successful read/write returns. An ai-chat node whose `status` and
+    /// `messages` sit under `properties["ai-chat"]` instead of at the top level
+    /// hydrates the store with a node whose `status` is undefined, which strands
+    /// the viewer's typing indicator after a conflict.
+    #[tokio::test]
+    async fn update_node_version_conflict_embeds_flattened_current_node() {
+        let (svc, _tmp) = make_service().await;
+
+        let chat_id = "b1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        let create_req = Request::new(crate::nodespace::CreateNodeRequest {
+            id: Some(chat_id.to_string()),
+            node_type: "ai-chat".to_string(),
+            content: String::new(),
+            parent_id: None,
+            collection: None,
+            lifecycle_status: None,
+            properties: serde_json::json!({
+                "ai-chat": { "status": "processing", "messages": [] }
+            })
+            .to_string(),
+            position: None,
+        });
+        svc.create_node(create_req).await.unwrap();
+
+        // Concurrent winner: daemon completes the turn and writes status idle.
+        svc.node_service
+            .update_node(
+                chat_id,
+                1,
+                nodespace_core::models::NodeUpdate {
+                    content: None,
+                    node_type: None,
+                    properties: Some(serde_json::json!({
+                        "ai-chat": {
+                            "status": "idle",
+                            "messages": [{ "role": "assistant", "content": "hi" }]
+                        }
+                    })),
+                    title: None,
+                    lifecycle_status: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Stale frontend write at version 1.
+        let conflict_req = Request::new(crate::nodespace::UpdateNodeRequest {
+            node_id: chat_id.to_string(),
+            version: Some(1),
+            node_type: None,
+            content: None,
+            properties: Some(
+                serde_json::json!({ "ai-chat": { "status": "processing" } }).to_string(),
+            ),
+            add_to_collection: None,
+            remove_from_collection: None,
+            lifecycle_status: None,
+        });
+        let err = svc
+            .update_node(conflict_req)
+            .await
+            .expect_err("expected VersionConflict error");
+
+        assert_eq!(err.code(), tonic::Code::Aborted);
+        let header = err
+            .metadata()
+            .get("x-version-conflict")
+            .expect("x-version-conflict header missing");
+        let json: serde_json::Value = serde_json::from_str(header.to_str().unwrap()).unwrap();
+
+        let current = &json["current_node"];
+        assert!(!current.is_null(), "current_node must be embedded");
+
+        // The frontend reads these at the TOP level (AiChatNode is a flat shape).
+        assert_eq!(
+            current["status"], "idle",
+            "current_node must carry flattened top-level status (got {current})"
+        );
+        assert!(
+            current["messages"].is_array(),
+            "current_node must carry flattened top-level messages (got {current})"
         );
     }
 

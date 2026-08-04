@@ -29,7 +29,7 @@ use nodespace_agent::local_agent::tools::{
 use nodespace_core::models::{
     AiChatCompletedWrite, AiChatMessage, AiChatNode, NodeFilter, NodeUpdate,
 };
-use nodespace_core::services::{NodeEmbeddingService, NodeService};
+use nodespace_core::services::{NodeEmbeddingService, NodeService, NodeServiceError};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -122,6 +122,11 @@ const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// of the cross-service wiring. Deferred as YAGNI, not ruled out — revisit if
 /// a second config writer appears that can't reach for the same frontend hook.
 const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Attempts for an ai-chat read-modify-write before giving up. These writes
+/// race the frontend's own writes to the same node on every turn, so a
+/// conflict is expected; the retry re-reads the winning version and reapplies.
+const MAX_WRITE_ATTEMPTS: usize = 5;
 
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
@@ -484,7 +489,9 @@ impl LocalAgentServiceImpl {
         let history = node_history_from_messages(messages);
         if history.is_empty() {
             tracing::warn!(node_id, "ai-chat history empty — skipping turn");
-            let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+            if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
+            }
             self.inner.turn_tokens.lock().await.remove(&node_id);
             return;
         }
@@ -494,7 +501,9 @@ impl LocalAgentServiceImpl {
             Some(m) if m.role == Role::User => m.content.clone(),
             _ => {
                 tracing::warn!(node_id, "ai-chat last message is not from user — skipping");
-                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+                if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                    tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
+                }
                 self.inner.turn_tokens.lock().await.remove(&node_id);
                 return;
             }
@@ -697,7 +706,16 @@ impl LocalAgentServiceImpl {
                 });
             } else {
                 // Stuck in processing but no trailing user message — reset to idle.
-                let _ = self.write_ai_chat_status(&node_id, "idle", None).await;
+                // This is the recovery sweep for already-stuck nodes, so a silent
+                // failure here means recovery quietly did not happen and the node
+                // stays stuck across restarts with nothing in the log to find it by.
+                if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
+                    tracing::warn!(
+                        node_id,
+                        error = %e,
+                        "failed to reset stuck ai-chat node to idle during recovery"
+                    );
+                }
             }
         }
     }
@@ -707,14 +725,19 @@ impl LocalAgentServiceImpl {
     // ---------------------------------------------------------------------------
 
     /// Write `properties['ai-chat']['status']` to the node.
-    /// Retries up to 5 times on version conflict (optimistic concurrency).
+    ///
+    /// Retries the full read-modify-write on version conflict: the frontend
+    /// writes to the same node (appending a user message, setting
+    /// `processing`), so a conflict here is an ordinary race, not a fault.
+    /// Giving up early would drop the turn's terminal status write and strand
+    /// the node in `processing` forever.
     async fn write_ai_chat_status(
         &self,
         node_id: &str,
         status: &str,
         model: Option<&str>,
     ) -> Result<(), String> {
-        for attempt in 0..5 {
+        for attempt in 0..MAX_WRITE_ATTEMPTS {
             let node = self
                 .inner
                 .node_service
@@ -743,21 +766,32 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt == 0 => {
+                // Only a lost race is retryable. A deterministic fault (invalid
+                // update, database error) fails the same way every attempt, so
+                // retrying it just burns the budget in a tight loop and buries
+                // the real cause behind a generic exhaustion message.
+                Err(NodeServiceError::VersionConflict { .. })
+                    if attempt + 1 < MAX_WRITE_ATTEMPTS =>
+                {
                     tracing::debug!(
                         node_id,
-                        error = %e,
+                        attempt,
                         "version conflict writing ai-chat status, retrying"
                     );
                 }
                 Err(e) => return Err(e.to_string()),
             }
         }
-        unreachable!()
+        Err(format!(
+            "failed to write ai-chat status for {node_id} after {MAX_WRITE_ATTEMPTS} attempts"
+        ))
     }
 
     /// Append an assistant message to `properties['ai-chat']['messages']`.
-    /// Retries up to 5 times on version conflict. `reasoning` is the model's captured
+    ///
+    /// Retries the full read-modify-write on version conflict for the same
+    /// reason as `write_ai_chat_status` — losing this write loses the reply.
+    /// `reasoning` is the model's captured
     /// chain-of-thought, persisted alongside the answer when present.
     ///
     /// `completed_writes` records the graph writes this turn performed. The agent
@@ -772,7 +806,7 @@ impl LocalAgentServiceImpl {
         completed_writes: Vec<AiChatCompletedWrite>,
         clarify: Option<&ClarifyPrompt>,
     ) -> Result<(), String> {
-        for attempt in 0..5 {
+        for attempt in 0..MAX_WRITE_ATTEMPTS {
             let node = self
                 .inner
                 .node_service
@@ -814,17 +848,22 @@ impl LocalAgentServiceImpl {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(e) if attempt == 0 => {
+                // Retry only a lost race — see write_ai_chat_status.
+                Err(NodeServiceError::VersionConflict { .. })
+                    if attempt + 1 < MAX_WRITE_ATTEMPTS =>
+                {
                     tracing::debug!(
                         node_id,
-                        error = %e,
+                        attempt,
                         "version conflict appending assistant message, retrying"
                     );
                 }
                 Err(e) => return Err(e.to_string()),
             }
         }
-        unreachable!()
+        Err(format!(
+            "failed to append assistant message to {node_id} after {MAX_WRITE_ATTEMPTS} attempts"
+        ))
     }
 }
 
@@ -2647,6 +2686,50 @@ mod tests {
         assert!(
             svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
             "no lingering turn token after completion"
+        );
+    }
+
+    /// A write against a node that no longer exists must return `Err` on the
+    /// first attempt, not retry.
+    ///
+    /// This became meaningful with the retry narrowing: `update_node`
+    /// disambiguates a failed version-gated write into `NodeNotFound` (the row
+    /// is gone) versus `VersionConflict` (the version moved), so a concurrent
+    /// delete now fails fast instead of burning the whole budget. Both helpers
+    /// also bail at their opening `get_node` in this case, which is the path
+    /// this test drives.
+    ///
+    /// Note what this does NOT cover: the retry-exhaustion arm. Reaching that
+    /// needs a writer interleaved into the read/write gap of these `&self`
+    /// helpers, which is not reachable without adding a seam to production
+    /// code. The exhaustion arm returning `Err` rather than the `unreachable!()`
+    /// it replaced is therefore still unpinned by any test.
+    #[tokio::test]
+    async fn ai_chat_writes_on_a_missing_node_return_err() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        let node_id = create_processing_node_with_user_message(&node_service, "Hello").await;
+
+        let node = node_service
+            .get_node(&node_id)
+            .await
+            .expect("get node")
+            .expect("node exists");
+        node_service
+            .delete_node(&node_id, node.version)
+            .await
+            .expect("delete node");
+
+        assert!(
+            svc.write_ai_chat_status(&node_id, "idle", None)
+                .await
+                .is_err(),
+            "a status write to a missing node must return Err"
+        );
+        assert!(
+            svc.append_assistant_message(&node_id, "Reply.", None, Vec::new(), None)
+                .await
+                .is_err(),
+            "an append to a missing node must return Err"
         );
     }
 

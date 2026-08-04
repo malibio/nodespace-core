@@ -1407,8 +1407,39 @@ export class SharedNodeStore {
                   // Clear queued operations to prevent stale-version retries
                   PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
-                  const currentNode = occError.conflictData.current_node;
-                  if (currentNode) {
+                  // Normalize before hydrating: this payload crosses the same
+                  // sync boundary as a `database`-sourced broadcast, so it gets
+                  // the same typed-field promotion. Without it a type-specific
+                  // node (ai-chat, task) would land in the store with its
+                  // fields still buried under `properties[<type>]` — e.g. an
+                  // ai-chat node with no top-level `status`/`messages`, which
+                  // strands the viewer's typing indicator after a conflict.
+                  const currentNode = occError.conflictData.current_node
+                    ? normalizeNodeData(occError.conflictData.current_node)
+                    : null;
+                  // Route the hydration through the same staleness policy a
+                  // daemon broadcast gets. This path writes via `nodesSet`
+                  // rather than `setNode`, so without this check the two
+                  // writers into this store apply different policies and can
+                  // disagree about which snapshot wins — the conflict payload
+                  // could install a snapshot an already-applied broadcast had
+                  // superseded. `current_node` is normally the newest state
+                  // (the daemon fetches it at conflict time), so this skips
+                  // only in the genuine out-of-order case.
+                  const hydrationIsStale =
+                    currentNode !== null &&
+                    shouldSkipStaleAiChatUpdate(currentNode, this.nodes.get(nodeId), {
+                      type: 'database',
+                      reason: 'occ-resync'
+                    });
+                  if (hydrationIsStale) {
+                    log.debug(
+                      `OCC hydration for ${nodeId} is older than local state — ` +
+                        `keeping local and resyncing`
+                    );
+                  }
+
+                  if (currentNode && !hydrationIsStale) {
                     // Hydrate directly from the authoritative node returned by daemon
                     this.nodesSet(nodeId, currentNode);
                     this.versions.set(nodeId, currentNode.version ?? 1);
@@ -1880,8 +1911,10 @@ export class SharedNodeStore {
     for (const node of normalizedNodes) {
       const existingNode = this.nodes.get(node.id);
 
-      // Same guard as setNode: never overwrite an ai-chat node with a snapshot
-      // that has fewer messages than what's already in the store.
+      // Same guard as setNode: never overwrite an ai-chat node with a stale
+      // snapshot (older version, or same version with fewer messages). These
+      // nodes come from a fresh tree load, so they carry current server
+      // versions — which is exactly what the guard compares on.
       if (shouldSkipStaleAiChatUpdate(node, existingNode, source)) {
         log.debug(`batchSetNodes: skipping ai-chat stale snapshot`, { nodeId: node.id });
         continue;
@@ -2150,7 +2183,12 @@ export class SharedNodeStore {
             );
             PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
-            const currentNode = occError.conflictData.current_node;
+            // Normalized for the same reason as the generic update path above:
+            // the conflict payload is a sync-boundary node and must get the
+            // same typed-field promotion a broadcast would.
+            const currentNode = occError.conflictData.current_node
+              ? normalizeNodeData(occError.conflictData.current_node)
+              : null;
             if (currentNode) {
               this.nodesSet(nodeId, currentNode);
               this.versions.set(nodeId, currentNode.version ?? 1);
