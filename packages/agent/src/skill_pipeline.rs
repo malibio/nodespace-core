@@ -839,6 +839,41 @@ mod tests {
         );
     }
 
+    /// `UNIQUE_FIELD_FLAGS` is interpolated into `schema_creation_guidance()`
+    /// via a format-string placeholder — a future edit to that format string
+    /// could silently drop the `{unique_field_flags}` slot (or the worked
+    /// EXAMPLE block) with no compiler error, since the value is still a
+    /// valid `String` either way. The `SCHEMA_RULES` structural tests
+    /// (`no_rule_text_is_empty` etc.) only check the constant in isolation,
+    /// not that it actually reaches the seeded markdown a model sees — this
+    /// pins the advisory-only claim specifically, since a model that thinks
+    /// `unique` is an enforced constraint could tell a user it will block
+    /// duplicates, which is false (see `NodeService::find_duplicate_for`).
+    #[test]
+    fn schema_creation_guidance_covers_unique_field_flags() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        let md = &schema_skill.markdown_content;
+
+        assert!(
+            md.contains("unique_case_insensitive"),
+            "Schema Creation guidance must mention unique_case_insensitive"
+        );
+        assert!(
+            md.to_lowercase().contains("advisory only"),
+            "Schema Creation guidance must state the unique flag is advisory only, \
+             not an enforced constraint"
+        );
+        assert!(
+            md.contains("EXAMPLE — Customer schema"),
+            "Schema Creation guidance must keep a worked example demonstrating \
+             a unique-flagged field"
+        );
+    }
+
     /// Schema Creation's description must lead with the natural phrasing users
     /// actually use for wanting a new kind of thing tracked, not only technical
     /// schema vocabulary.
