@@ -213,6 +213,8 @@ export default defineConfig({
         'src/lib/services/app-initialization.ts', // Bootstrap code with Tauri dependencies
         'src/lib/services/index.ts', // Re-export barrel file
         'src/lib/utils.ts', // SvelteKit generated utils
+        'src/lib/plugins/extension-outlet.svelte', // Svelte component - tested via browser-mode tests
+        'src/lib/utils/is-vitest.ts', // Env-detection flag - false branch unreachable from inside a Vitest run
         // Type-only files (no executable code)
         'src/lib/types/sse-events.ts',
         'src/lib/types/tree.ts',
