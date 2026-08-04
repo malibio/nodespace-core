@@ -220,6 +220,13 @@ describe('Database Store', () => {
       expect(forgetLocallyCreated.mock.invocationCallOrder[0]).toBeLessThan(
         loadCollections.mock.invocationCallOrder[0]
       );
+      // switchTo wraps its whole body in a try/catch that only records the
+      // failure on `this.error`, so anything that throws mid-switch — an
+      // incomplete mock being the usual culprit — is otherwise swallowed and
+      // shows up as a confusing "spy not called" rather than the real cause.
+      // Asserting the switch left no error catches that wherever it happens,
+      // including after the last side effect asserted above.
+      expect(databaseStore.error).toBeNull();
     });
 
     it('completes the switch even if the Pro sync re-target fails', async () => {
