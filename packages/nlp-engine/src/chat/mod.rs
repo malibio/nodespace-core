@@ -19,6 +19,7 @@
 /// collisions between concurrent requests.
 pub mod error;
 pub mod parser;
+pub mod prompt_dump;
 pub mod types;
 
 pub use error::{ChatError, Result};
@@ -377,6 +378,13 @@ impl ChatEngine {
             prompt.len(),
             &prompt[..prompt.len().min(200)]
         );
+        // Dev-only full-text dump (NODESPACE_PROMPT_DUMP) — see prompt_dump's
+        // module doc. This is the single chokepoint every native-path caller
+        // (Stage 1 routing, Stage 2 ReAct turns, resolve_query, the routing
+        // probe) passes through, so capturing here covers all of them without
+        // per-caller wiring. `dump_seq` correlates this prompt with its
+        // response below.
+        let dump_seq = prompt_dump::dump_prompt(prompt);
 
         // --- Tokenize ---
         // AddBos::Never -- the OAI-compat Jinja template above already injects
@@ -548,6 +556,11 @@ impl ChatEngine {
         let mut n_cur = tokens.len();
         let mut context_overflowed = false;
         let mut oai_parser_errors: u32 = 0;
+        // Accumulates the raw, pre-normalization token stream for
+        // NODESPACE_PROMPT_DUMP — see prompt_dump's module doc. `push_str`
+        // is a no-op cost when dumping is disabled (dump_prompt already
+        // returned a seq either way; this just also captures the response).
+        let mut raw_response_accum = String::new();
 
         loop {
             if completion_tokens >= max_tokens {
@@ -610,6 +623,10 @@ impl ChatEngine {
             if additional_stops.iter().any(|s| piece.contains(s.as_str())) {
                 tracing::debug!("Stop sequence detected in piece: {:?}", piece);
                 break;
+            }
+
+            if prompt_dump::enabled() {
+                raw_response_accum.push_str(&piece);
             }
 
             // Feed each token piece to the OAI-compat parser incrementally.
@@ -694,6 +711,8 @@ impl ChatEngine {
         }
 
         on_chunk(ChatChunk::Done);
+
+        prompt_dump::dump_response(dump_seq, &raw_response_accum);
 
         let usage = ChatUsage {
             prompt_tokens,

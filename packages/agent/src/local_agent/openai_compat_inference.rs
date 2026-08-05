@@ -262,6 +262,19 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                 tracing::debug!(base_url = %self.base_url, payload = %json, "OpenAI-compat request");
             }
         }
+        // Dev-only full-fidelity dump (NODESPACE_PROMPT_DUMP) — see
+        // openai_compat_prompt_dump's module doc. Complements the debug-log
+        // line above: that line requires RUST_LOG=debug and is not persisted
+        // beyond the log; this is a durable, structured record correlated
+        // with its response via `dump_seq`.
+        let dump_seq = crate::local_agent::openai_compat_prompt_dump::enabled().then(|| {
+            let request_json =
+                serde_json::to_value(&openai_request).unwrap_or(serde_json::Value::Null);
+            crate::local_agent::openai_compat_prompt_dump::dump_request(
+                &self.base_url,
+                &request_json,
+            )
+        });
         tracing::info!(
             base_url = %self.base_url,
             message_count = openai_request.messages.len(),
@@ -303,6 +316,9 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
             // Accumulates streamed tool-call fragments by index, since the
             // SSE delta format sends id/name once and arguments incrementally.
             let mut tool_call_ids: Vec<Option<String>> = Vec::new();
+            // Raw SSE payload for NODESPACE_PROMPT_DUMP -- see the request-side
+            // dump above for why this exists alongside the debug-log line.
+            let mut raw_response_accum = String::new();
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| InferenceError::Engine(e.to_string()))?;
@@ -316,8 +332,20 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                     };
                     let data = data.trim();
                     if data == "[DONE]" {
+                        if let Some(seq) = dump_seq {
+                            crate::local_agent::openai_compat_prompt_dump::dump_response(
+                                seq,
+                                &raw_response_accum,
+                            );
+                        }
                         on_chunk(StreamingChunk::Done { usage: final_usage });
                         return Ok(final_usage);
+                    }
+                    if dump_seq.is_some() {
+                        if !raw_response_accum.is_empty() {
+                            raw_response_accum.push('\n');
+                        }
+                        raw_response_accum.push_str(data);
                     }
 
                     match serde_json::from_str::<OpenAiChatResponse>(data) {
@@ -372,12 +400,22 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                 }
             }
             // Stream ended without an explicit [DONE] sentinel.
+            if let Some(seq) = dump_seq {
+                crate::local_agent::openai_compat_prompt_dump::dump_response(
+                    seq,
+                    &raw_response_accum,
+                );
+            }
             on_chunk(StreamingChunk::Done { usage: final_usage });
         } else {
             let body = response
                 .text()
                 .await
                 .map_err(|e| InferenceError::Engine(e.to_string()))?;
+
+            if let Some(seq) = dump_seq {
+                crate::local_agent::openai_compat_prompt_dump::dump_response(seq, &body);
+            }
 
             match serde_json::from_str::<OpenAiChatResponse>(&body) {
                 Ok(resp) => {

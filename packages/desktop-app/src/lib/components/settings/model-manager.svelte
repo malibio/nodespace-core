@@ -24,14 +24,22 @@
   const downloadProgress = $derived(modelStore.downloadProgress);
   const isLoading = $derived(modelStore.isLoading);
   const systemRamGb = $derived(modelStore.systemRamGb);
-  const MIN_RAM_GB = 16;
-  const ramTooLow = $derived(systemRamGb > 0 && systemRamGb < MIN_RAM_GB);
 
   // Settings shows the curated set already filtered at the Tauri layer
   // (see EXPOSED_GGUF_MODEL_IDS in chat_models.rs); families listed here must
   // match whatever that allowlist currently exposes.
   const LOCAL_FAMILIES: ModelFamily[] = ['gemma4'];
   const localModels = $derived(models.filter((m) => LOCAL_FAMILIES.includes(m.family)));
+
+  // The global notice fires when NOTHING fits (the smallest exposed model's
+  // own requirement), not a flat constant -- otherwise a machine that clears
+  // one model's floor but not another's (e.g. E4B's 16GB but not 26B-A4B's
+  // 32GB) would see every card dimmed by a bar that doesn't apply to all of
+  // them. Per-card dimming below uses each model's own min_memory_gb.
+  const minRequiredGb = $derived(
+    localModels.length > 0 ? Math.min(...localModels.map((m) => m.min_memory_gb)) : 0
+  );
+  const ramTooLow = $derived(systemRamGb > 0 && systemRamGb < minRequiredGb);
 
   // --- Models discovered at configured OpenAI-compatible endpoints ---
   // The daemon queries each endpoint's /models and returns one row per model,
@@ -266,7 +274,7 @@
 
     {#if ramTooLow}
       <p class="mm-notice mm-notice--warn">
-        Your machine has {systemRamGb} GB RAM. Local models require at least {MIN_RAM_GB} GB.
+        Your machine has {systemRamGb} GB RAM. Local models require at least {minRequiredGb} GB.
         Use a remote endpoint instead.
       </p>
     {/if}
@@ -276,7 +284,8 @@
     {:else}
       {#each localModels as m (m.id)}
         {@const progress = downloadProgress[m.id]}
-        <div class="model-card" class:model-card--dim={ramTooLow}>
+        {@const modelRamTooLow = systemRamGb > 0 && systemRamGb < m.min_memory_gb}
+        <div class="model-card" class:model-card--dim={modelRamTooLow}>
           <div class="model-card-top">
             <div class="model-card-info">
               <span class="model-name">{m.name}</span>
@@ -299,7 +308,7 @@
 
           <div class="model-card-actions">
             {#if m.status.status === 'not_downloaded'}
-              <button class="btn btn--primary" disabled={ramTooLow} onclick={() => modelStore.downloadModel(m.id)}>Download</button>
+              <button class="btn btn--primary" disabled={modelRamTooLow} onclick={() => modelStore.downloadModel(m.id)}>Download</button>
             {:else if m.status.status === 'downloading'}
               <button class="btn" onclick={() => modelStore.cancelDownload(m.id)}>Cancel</button>
             {:else if m.status.status === 'ready'}

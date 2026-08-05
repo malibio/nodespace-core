@@ -1307,46 +1307,6 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 serde_json::to_string(&messages_json).unwrap_or_default(),
             ));
 
-            // Dev-only file dump (NODESPACE_PROMPT_DUMP): record the EXACT prompt
-            // sent to the model on THIS iteration — full system prompt + the
-            // complete (untruncated) message list, which on later iterations
-            // includes the accumulated tool results fed back in. Tools are dumped
-            // once (iteration 0). Reliable local-disk view of exactly what
-            // reaches the model at every step of the loop.
-            if crate::local_agent::prompt_dump::enabled() {
-                let full_messages: Vec<serde_json::Value> = messages
-                    .iter()
-                    .map(|m| {
-                        serde_json::json!({
-                            "role": format!("{:?}", m.role).to_lowercase(),
-                            "content": m.content,
-                        })
-                    })
-                    .collect();
-                let tools_full: Vec<serde_json::Value> = if iteration == 0 {
-                    tools
-                        .iter()
-                        .map(|t| {
-                            serde_json::json!({
-                                "name": t.name,
-                                "description": t.description,
-                                "parameters": t.parameters_schema,
-                            })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                crate::local_agent::prompt_dump::dump_turn_iteration(
-                    &session.id,
-                    iteration,
-                    user_message,
-                    &system_content,
-                    &full_messages,
-                    &tools_full,
-                );
-            }
-
             // Status: Thinking
             on_status(LocalAgentStatus::Thinking);
             session.status = LocalAgentStatus::Thinking;
@@ -1425,17 +1385,6 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 "tool_calls_parsed",
                 serde_json::to_string(&tool_calls_json).unwrap_or_default(),
             ));
-
-            // Dev-only file dump (NODESPACE_PROMPT_DUMP): the RAW model response
-            // (pre-normalization) and parsed tool calls for THIS iteration. One
-            // record per ReAct iteration, so multi-iteration tool loops are fully
-            // captured in order.
-            crate::local_agent::prompt_dump::dump_response(
-                &session.id,
-                iteration,
-                &response_text,
-                &tool_calls_json,
-            );
 
             iter_span.set_attribute(KeyValue::new("prompt_tokens", usage.prompt_tokens as i64));
             iter_span.set_attribute(KeyValue::new(
