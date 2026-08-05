@@ -476,27 +476,38 @@ describe('SharedNodeStore', () => {
       expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(metrics.avgUpdateTime);
     });
 
-    it('keeps the average finite when an update is skipped before it counts', () => {
-      // `recordMetric` runs from `updateNode`'s `finally`, but `updateCount` is
-      // incremented further down that method. Updating a node that isn't in the
-      // store returns early, so the metric is recorded against a count that was
-      // never incremented — zero on a fresh store. Dividing by it yielded
-      // Infinity, and because each average is computed from the previous one,
-      // that poisoned every subsequent reading for the life of the store.
+    it('ignores updates that were skipped before they counted', () => {
+      // An update for a node that is not in the store returns early, having
+      // done no work. It must contribute nothing to the timing metrics: the
+      // incremental mean is only valid for a sample whose increment it already
+      // includes, so folding in a skipped call displaces the average rather
+      // than extending it — and divides by zero when it is the first call.
       store.updateNode('no-such-node', { content: 'x' }, viewerSource);
 
       const afterSkip = store.getMetrics();
-      expect(Number.isFinite(afterSkip.avgUpdateTime)).toBe(true);
+      expect(afterSkip.updateCount).toBe(0);
+      expect(afterSkip.avgUpdateTime).toBe(0);
+      expect(afterSkip.maxUpdateTime).toBe(0);
 
-      // A real update afterwards must still produce a usable average, not
-      // inherit a poisoned one.
       store.setNode(mockNode, viewerSource);
       store.updateNode(mockNode.id, { content: 'Update' }, viewerSource);
 
       const afterReal = store.getMetrics();
-      expect(Number.isFinite(afterReal.avgUpdateTime)).toBe(true);
-      expect(afterReal.avgUpdateTime).toBeGreaterThanOrEqual(0);
-      expect(afterReal.maxUpdateTime).toBeGreaterThanOrEqual(afterReal.avgUpdateTime);
+      const realAvg = afterReal.avgUpdateTime;
+      expect(afterReal.updateCount).toBe(1);
+      expect(Number.isFinite(realAvg)).toBe(true);
+      expect(afterReal.maxUpdateTime).toBeGreaterThanOrEqual(realAvg);
+
+      // A burst of misses is the shape that skews an average worst. None of
+      // them counted, so the recorded average must not move at all.
+      for (let i = 0; i < 50; i++) {
+        store.updateNode('no-such-node', { content: 'x' }, viewerSource);
+      }
+
+      const afterMisses = store.getMetrics();
+      expect(afterMisses.updateCount).toBe(1);
+      expect(afterMisses.avgUpdateTime).toBe(realAvg);
+      expect(afterMisses.maxUpdateTime).toBe(afterReal.maxUpdateTime);
     });
 
     it('should reset metrics correctly', () => {
