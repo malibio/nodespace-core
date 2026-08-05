@@ -39,4 +39,21 @@ declare global {
   };
 }
 
+/**
+ * Values published by `global-setup.ts` via `provide()` and read in tests with
+ * `inject()`. Declaring them here is what makes both ends type-safe — without
+ * it the key is inferred as `never` and neither call compiles.
+ */
+declare module 'vitest' {
+  interface ProvidedContext {
+    /**
+     * True when this run is collecting coverage. Tests asserting on elapsed
+     * time use it to select a budget matching how the code is executing:
+     * V8 instrumentation adds substantial per-call overhead, so a bound
+     * calibrated on an uninstrumented run is not valid for an instrumented one.
+     */
+    coverageEnabled: boolean;
+  }
+}
+
 export {};

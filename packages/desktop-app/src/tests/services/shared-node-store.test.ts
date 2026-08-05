@@ -463,12 +463,17 @@ describe('SharedNodeStore', () => {
       // Non-negative and finite, not strictly positive: these are
       // `performance.now()` deltas over an in-memory update and legitimately
       // measure 0 when the work fits inside the clock's resolution. The
-      // property under test is that the store records timings at all.
+      // property under test is that the store records timings at all — and
+      // `Number.isFinite` additionally catches NaN/Infinity from broken
+      // averaging, which a `> 0` check would have passed straight through.
       const metrics = store.getMetrics();
       expect(metrics.avgUpdateTime).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(metrics.avgUpdateTime)).toBe(true);
       expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(metrics.maxUpdateTime)).toBe(true);
+      // The invariant that survives a zero-resolution clock: the slowest single
+      // update is never faster than the average of all of them.
+      expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(metrics.avgUpdateTime);
     });
 
     it('should reset metrics correctly', () => {

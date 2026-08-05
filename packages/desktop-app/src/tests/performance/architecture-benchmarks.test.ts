@@ -22,7 +22,7 @@
 // CRITICAL: Import setup BEFORE anything else to ensure Svelte mocks are applied
 import '../setup-svelte-mocks';
 
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, inject } from 'vitest';
 import {
   createReactiveNodeService,
   ReactiveNodeService as NodeManager
@@ -42,9 +42,14 @@ const FULL_PERFORMANCE = process.env.TEST_FULL_PERFORMANCE === '1';
 // Scale the budget rather than inflate it: an uninstrumented run keeps the
 // tight bound that makes this test worth having, and an instrumented run is
 // still held to a bound, just one that measures the code plus its
-// instrumentation. Set by the `test:coverage` script and forwarded to workers
-// via `env` in vitest.config.ts.
-const UNDER_COVERAGE = process.env.NODESPACE_TEST_COVERAGE === '1';
+// instrumentation.
+//
+// Sourced from the resolved vitest config via `global-setup.ts`, NOT from an
+// environment variable set by a package.json script: this is derived from the
+// run itself, so it stays correct for `bunx vitest run --coverage` invoked
+// directly — which a script-level variable would silently miss, leaving the
+// tight budget applied to an instrumented run.
+const UNDER_COVERAGE = inject('coverageEnabled');
 const COVERAGE_OVERHEAD_FACTOR = 2;
 const budget = (ms: number): number => (UNDER_COVERAGE ? ms * COVERAGE_OVERHEAD_FACTOR : ms);
 
