@@ -8,21 +8,21 @@
 //! (pre-normalization) model response to that file as line-delimited JSON.
 //! When the env var is unset this is a zero-cost no-op.
 //!
-//! This is the same env var `agent::local_agent::prompt_dump` uses for its
-//! own (Stage-2-only, message-list-shaped) dump — the two are complementary
-//! views of the same turns, not a replacement for each other. This one is
-//! the literal string sent to `llama_decode`, correlated by nothing but call
-//! order; the agent-crate one is per-session, per-ReAct-iteration, and
-//! structured as a message list. Reach for this one when the agent-crate
-//! dump is silent for a call (Stage 1, `resolve_query`) or when you need the
-//! exact rendered text rather than a reconstructed message list.
+//! This is the same env var and output file
+//! `agent::local_agent::openai_compat_prompt_dump` uses for the separate
+//! OpenAI-compatible HTTP path (that engine never touches `nlp-engine` at
+//! all, so it needs its own capture point) — the two are complementary
+//! views covering the two disjoint inference engines, not a replacement for
+//! each other. Every record from this module carries `"engine": "native"`;
+//! the OpenAI-compat module's records carry `"engine": "openai_compat"`, so
+//! a merged dump file can always tell the two apart.
 //!
 //! Usage:
 //! ```sh
 //! NODESPACE_PROMPT_DUMP=/tmp/dump.jsonl <run the daemon>
 //! # then inspect /tmp/dump.jsonl — one JSON object per line:
-//! #   {"kind":"prompt","seq":0,"prompt":"<full rendered text>"}
-//! #   {"kind":"response","seq":0,"raw_response":"<full>"}
+//! #   {"kind":"prompt","engine":"native","seq":0,"prompt":"<full rendered text>"}
+//! #   {"kind":"response","engine":"native","seq":0,"raw_response":"<full>"}
 //! ```
 
 use std::io::Write;
@@ -80,6 +80,7 @@ pub fn dump_prompt(prompt: &str) -> u64 {
     if enabled() {
         append(&serde_json::json!({
             "kind": "prompt",
+            "engine": "native",
             "seq": seq,
             "prompt": prompt,
             "prompt_len": prompt.len(),
@@ -96,6 +97,7 @@ pub fn dump_response(seq: u64, raw_response: &str) {
     }
     append(&serde_json::json!({
         "kind": "response",
+        "engine": "native",
         "seq": seq,
         "raw_response": raw_response,
         "raw_response_len": raw_response.len(),

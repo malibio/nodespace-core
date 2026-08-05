@@ -561,6 +561,12 @@ impl ChatEngine {
         // is a no-op cost when dumping is disabled (dump_prompt already
         // returned a seq either way; this just also captures the response).
         let mut raw_response_accum = String::new();
+        // Hoisted out of the per-token loop below: `enabled()` reads
+        // NODESPACE_PROMPT_DUMP via std::env::var(), so checking it once per
+        // generated token (rather than once per generation) pays an env
+        // lookup on every token even when dumping is disabled, the common
+        // case.
+        let dump_enabled = prompt_dump::enabled();
 
         loop {
             if completion_tokens >= max_tokens {
@@ -625,7 +631,7 @@ impl ChatEngine {
                 break;
             }
 
-            if prompt_dump::enabled() {
+            if dump_enabled {
                 raw_response_accum.push_str(&piece);
             }
 

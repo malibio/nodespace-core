@@ -16,10 +16,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const ENV_DUMP_PATH: &str = "NODESPACE_PROMPT_DUMP";
 
-/// Shared with `nlp_engine::chat::prompt_dump`'s own counter only in name, not
-/// value -- each engine implementation has its own process-wide sequence, so
-/// a `seq` alone does not disambiguate which engine produced a record. Every
-/// record from this module also carries `"engine": "openai_compat"`.
+/// A parallel, independently-numbered counter from
+/// `nlp_engine::chat::prompt_dump`'s own `SEQ` -- each engine implementation
+/// has its own process-wide sequence, so a `seq` alone does not disambiguate
+/// which engine produced a record. Every record from this module also
+/// carries `"engine": "openai_compat"` for that reason.
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn dump_path() -> Option<String> {
