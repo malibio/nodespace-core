@@ -3062,8 +3062,19 @@ export class SharedNodeStore {
    */
   private recordMetric(duration: number): void {
     const count = this.metrics.updateCount;
-    const currentAvg = this.metrics.avgUpdateTime;
-    this.metrics.avgUpdateTime = (currentAvg * (count - 1) + duration) / count;
+    // `recordMetric` runs from `updateNode`'s `finally`, but the increment of
+    // `updateCount` lives further down that method — so an early return (an
+    // update for a node that isn't in the store) still reaches here with the
+    // count unchanged. On a fresh store that means dividing by zero, which
+    // yields Infinity and then poisons every later average, since each one is
+    // computed from the previous.
+    //
+    // Nothing was recorded, so there is no timing to fold in: leave the
+    // running average alone.
+    if (count > 0) {
+      const currentAvg = this.metrics.avgUpdateTime;
+      this.metrics.avgUpdateTime = (currentAvg * (count - 1) + duration) / count;
+    }
     this.metrics.maxUpdateTime = Math.max(this.metrics.maxUpdateTime, duration);
   }
 

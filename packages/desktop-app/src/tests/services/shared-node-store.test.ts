@@ -476,6 +476,29 @@ describe('SharedNodeStore', () => {
       expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(metrics.avgUpdateTime);
     });
 
+    it('keeps the average finite when an update is skipped before it counts', () => {
+      // `recordMetric` runs from `updateNode`'s `finally`, but `updateCount` is
+      // incremented further down that method. Updating a node that isn't in the
+      // store returns early, so the metric is recorded against a count that was
+      // never incremented — zero on a fresh store. Dividing by it yielded
+      // Infinity, and because each average is computed from the previous one,
+      // that poisoned every subsequent reading for the life of the store.
+      store.updateNode('no-such-node', { content: 'x' }, viewerSource);
+
+      const afterSkip = store.getMetrics();
+      expect(Number.isFinite(afterSkip.avgUpdateTime)).toBe(true);
+
+      // A real update afterwards must still produce a usable average, not
+      // inherit a poisoned one.
+      store.setNode(mockNode, viewerSource);
+      store.updateNode(mockNode.id, { content: 'Update' }, viewerSource);
+
+      const afterReal = store.getMetrics();
+      expect(Number.isFinite(afterReal.avgUpdateTime)).toBe(true);
+      expect(afterReal.avgUpdateTime).toBeGreaterThanOrEqual(0);
+      expect(afterReal.maxUpdateTime).toBeGreaterThanOrEqual(afterReal.avgUpdateTime);
+    });
+
     it('should reset metrics correctly', () => {
       store.setNode(mockNode, viewerSource);
       store.updateNode(mockNode.id, { content: 'Update' }, viewerSource);
