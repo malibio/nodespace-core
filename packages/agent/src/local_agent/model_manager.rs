@@ -306,7 +306,10 @@ const RAM_THRESHOLD_MEDIUM: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
 const RAM_THRESHOLD_GEMMA4_MEDIUM: u64 = 24 * 1024 * 1024 * 1024; // 24 GB
 
 /// RAM threshold (in bytes) at or above which the large recommended model
-/// (Gemma 4 31B) is selected instead of the mid-tier one (Gemma 4 12B).
+/// (Gemma 4 26B-A4B) is selected instead of the mid-tier one (Gemma 4 12B).
+/// Matches `GEMMA_4_26B_A4B.min_memory_gb`. Not Gemma 4 31B -- see
+/// `recommended_model_id_for`'s doc comment for why the large tier
+/// recommends 26B-A4B instead.
 const RAM_THRESHOLD_LARGE: u64 = 32 * 1024 * 1024 * 1024; // 32 GB
 
 // ---------------------------------------------------------------------------
@@ -407,16 +410,21 @@ impl GgufModelManager {
     ///
     /// Returns Gemma 4 E4B as the primary llama.cpp default, per ADR-056.
     /// Unlike [`Self::recommended_model_id_for`]'s general three-tier Gemma4
-    /// behavior, this always recommends E4B regardless of RAM: the 12B and
-    /// 31B tiers remain parked per ADR-046 (unresolved tool-call defects)
-    /// and must not become the default recommendation
-    /// on higher-RAM machines. Callers that want the full RAM-tiered
-    /// within-family recommendation should use
+    /// behavior, this always recommends E4B regardless of RAM: the mid tier
+    /// of that ladder is 12B, which remains parked per ADR-046 (unresolved
+    /// tool-call defects, reconfirmed via issue #1956's re-evaluation) and
+    /// must not become the default recommendation on higher-RAM machines.
+    /// (The large tier, 26B-A4B, is not parked -- it was validated and
+    /// exposed by issue #1956 -- but the ladder is still bypassed here
+    /// wholesale rather than partially, since this function's contract is a
+    /// single fixed default, not a RAM-tiered one.) Callers that want the
+    /// full RAM-tiered within-family recommendation should use
     /// [`Self::recommended_model_id_for`] directly.
     fn recommended_model_id() -> &'static str {
         // NOT recommended_model_id_for(ModelFamily::Gemma4) -- that RAM-tiers
-        // into 12B/31B, which are parked per ADR-046/ADR-056. Do not "simplify"
-        // this to the _for() call without re-checking that parking status.
+        // into 12B/26B-A4B, and 12B is parked per ADR-046/ADR-056. Do not
+        // "simplify" this to the _for() call without re-checking 12B's
+        // parking status.
         GEMMA_4_E4B.id
     }
 
