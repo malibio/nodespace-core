@@ -23,7 +23,7 @@ use crate::skill_rules::{
     ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
     SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
     SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
-    TITLE_TEMPLATE_PLACEHOLDERS,
+    TITLE_TEMPLATE_PLACEHOLDERS, UNIQUE_FIELD_FLAGS,
 };
 use nodespace_core::markdown::{NodeTemplate, SeedTier};
 
@@ -61,6 +61,20 @@ FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholde
 - Customer with fields [first_name, last_name]: title_template = "{{first_name}} {{last_name}}"
 - Invoice with fields [invoice_number, ...]: title_template = "Invoice #{{invoice_number}}"
 - Project with fields [name, status, ...]: title_template = "{{name}} ({{status}})"
+
+{unique_field_flags}
+
+EXAMPLE — Customer schema (email flagged unique_case_insensitive):
+{{
+  "name": "Customer",
+  "description": "A customer contact",
+  "title_template": "{{first_name}} {{last_name}}",
+  "fields": [
+    {{"name": "first_name", "type": "text", "required": true}},
+    {{"name": "last_name", "type": "text", "required": true}},
+    {{"name": "email", "type": "text", "required": true, "unique_case_insensitive": true}}
+  ]
+}}
 
 EXAMPLE — Invoice schema (references existing 'customer' type):
 
@@ -123,6 +137,7 @@ EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.imperative,
         title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.imperative,
+        unique_field_flags = UNIQUE_FIELD_FLAGS.imperative,
     )
 }
 
@@ -886,6 +901,41 @@ mod tests {
         assert!(
             tmpl_tool_whitelist(schema_skill).contains(&"update_schema".to_string()),
             "update_schema must be in Schema Creation tool_whitelist so the model can reach it"
+        );
+    }
+
+    /// `UNIQUE_FIELD_FLAGS` is interpolated into `schema_creation_guidance()`
+    /// via a format-string placeholder — a future edit to that format string
+    /// could silently drop the `{unique_field_flags}` slot (or the worked
+    /// EXAMPLE block) with no compiler error, since the value is still a
+    /// valid `String` either way. The `SCHEMA_RULES` structural tests
+    /// (`no_rule_text_is_empty` etc.) only check the constant in isolation,
+    /// not that it actually reaches the seeded markdown a model sees — this
+    /// pins the advisory-only claim specifically, since a model that thinks
+    /// `unique` is an enforced constraint could tell a user it will block
+    /// duplicates, which is false (see `NodeService::find_duplicate_for`).
+    #[test]
+    fn schema_creation_guidance_covers_unique_field_flags() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        let md = &schema_skill.markdown_content;
+
+        assert!(
+            md.contains("unique_case_insensitive"),
+            "Schema Creation guidance must mention unique_case_insensitive"
+        );
+        assert!(
+            md.to_lowercase().contains("advisory only"),
+            "Schema Creation guidance must state the unique flag is advisory only, \
+             not an enforced constraint"
+        );
+        assert!(
+            md.contains("EXAMPLE — Customer schema"),
+            "Schema Creation guidance must keep a worked example demonstrating \
+             a unique-flagged field"
         );
     }
 

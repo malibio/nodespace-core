@@ -788,6 +788,8 @@ fn def_create_schema() -> ToolDefinition {
                             "required": { "type": "boolean", "description": "Whether this field is required" },
                             "indexed": { "type": "boolean", "description": "Whether to index for search/filter" },
                             "description": { "type": "string", "description": "Field description" },
+                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
+                            "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
                                 "type": "array",
                                 "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.",
@@ -856,6 +858,8 @@ fn def_update_schema() -> ToolDefinition {
                             "name": { "type": "string" },
                             "type": { "type": "string", "description": "text, number, date, enum, boolean" },
                             "description": { "type": "string" },
+                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
+                            "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
                                 "type": "array",
                                 "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.",
@@ -2875,6 +2879,53 @@ mod tests {
             embedding_service: Arc::new(RwLock::new(None)),
             inference_engine: None,
         }
+    }
+
+    // -- unique / unique_case_insensitive advisory-only wording --
+
+    /// `create_schema`/`update_schema`'s field-schema descriptions for
+    /// `unique`/`unique_case_insensitive` are hand-written literals, separate
+    /// from `skill_rules::UNIQUE_FIELD_FLAGS` (the source for the seeded
+    /// skill guidance and SKILL.md). A model that reads only the tool schema
+    /// — which happens on every turn, independent of whether skill retrieval
+    /// surfaces the schema-creation skill — must still learn these flags
+    /// never block or reject a write; getting this wrong risks the model
+    /// telling a user a unique flag "will prevent duplicates," which is
+    /// false (see `NodeService::find_duplicate_for`'s doc comment). This
+    /// guards against the two copies drifying apart on that specific claim.
+    #[test]
+    fn unique_field_tool_descriptions_state_advisory_only_semantics() {
+        for tool in [Tool::CreateSchema, Tool::UpdateSchema] {
+            let schema = tool.definition().parameters_schema;
+            let fields_key = if tool == Tool::CreateSchema {
+                "fields"
+            } else {
+                "add_fields"
+            };
+            let items = &schema["properties"][fields_key]["items"]["properties"];
+
+            for flag in ["unique", "unique_case_insensitive"] {
+                let desc = items[flag]["description"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{tool:?} is missing a '{flag}' description"));
+                let lower = desc.to_lowercase();
+                assert!(
+                    lower.contains("advisory"),
+                    "{tool:?}'s '{flag}' description no longer says it's advisory-only: {desc:?}"
+                );
+                assert!(
+                    lower.contains("does not block") || lower.contains("does not reject"),
+                    "{tool:?}'s '{flag}' description no longer states it does not block/reject \
+                     writes: {desc:?}"
+                );
+            }
+        }
+
+        let imperative = crate::skill_rules::UNIQUE_FIELD_FLAGS
+            .imperative
+            .to_lowercase();
+        assert!(imperative.contains("advisory only"));
+        assert!(imperative.contains("does not") && imperative.contains("prevent duplicates"));
     }
 
     // -- Tool::requires_routed_guidance --

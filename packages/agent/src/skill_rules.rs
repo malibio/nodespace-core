@@ -120,6 +120,12 @@ pub const TITLE_TEMPLATE_PLACEHOLDERS: SchemaRule = SchemaRule {
     prose: "**Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.",
 };
 
+pub const UNIQUE_FIELD_FLAGS: SchemaRule = SchemaRule {
+    id: "unique-field-flags",
+    imperative: "UNIQUE FIELDS: Set \"unique\": true on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each customer should have a unique email\" -> flag email unique). Use \"unique_case_insensitive\": true instead of \"unique\" when case shouldn't matter (e.g. email, username). ADVISORY ONLY: this does NOT prevent duplicates from being created — it only lets the system suggest a likely existing match (e.g. surface the existing node) when a new value collides. Never tell the user a unique flag will block or reject a duplicate; describe it as a duplicate warning/suggestion, not an enforced constraint. Example: {\"name\": \"email\", \"type\": \"text\", \"unique_case_insensitive\": true}.",
+    prose: "**Unique fields:** set `\"unique\": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each customer should have a unique email\" → flag `email` unique). Use `\"unique_case_insensitive\": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{\"name\":\"email\",\"type\":\"text\",\"unique_case_insensitive\":true}`.",
+};
+
 /// All schema-authoring rules, in the order they should be rendered.
 pub const SCHEMA_RULES: &[SchemaRule] = &[
     ONE_SCHEMA_PER_REQUEST,
@@ -133,6 +139,7 @@ pub const SCHEMA_RULES: &[SchemaRule] = &[
     RELATIONSHIP_VS_FIELD,
     TARGET_TYPE_MUST_EXIST,
     TITLE_TEMPLATE_PLACEHOLDERS,
+    UNIQUE_FIELD_FLAGS,
 ];
 
 pub const FIND_THEN_ACT: InteractionRule = InteractionRule {
