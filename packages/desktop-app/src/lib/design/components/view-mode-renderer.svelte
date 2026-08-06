@@ -29,6 +29,8 @@
 <script lang="ts">
   import { marked } from 'marked';
   import type { Token, Tokens } from 'marked';
+  import { splitTextIntoRefSegments } from './wikilink-refs';
+  import NodeRefInline from './node-ref-inline.svelte';
 
   // Props using Svelte 5 $props() rune
   interface Props {
@@ -50,6 +52,8 @@
     | { type: 'code'; content: string }
     | { type: 'bold-italic'; children: ViewNode[] }
     | { type: 'link'; href: string; children: ViewNode[] }
+    // Bare `[[node-id]]` wikilink resolved to a clickable node reference
+    | { type: 'noderef'; id: string }
     // Block-level elements (enabled via enableBlockElements prop)
     | { type: 'heading'; level: number; children: ViewNode[] }
     | { type: 'list'; ordered: boolean; items: ViewNode[][] }
@@ -107,6 +111,23 @@
   }
 
   /**
+   * Convert a single plain-text run into ViewNodes, splitting out any bare
+   * `[[node-id]]` wikilinks (valid UUID/date ids) into `noderef` nodes while
+   * leaving everything else — including invalid `[[...]]` tokens — as text.
+   */
+  function textRunToNodes(text: string): ViewNode[] {
+    const nodes: ViewNode[] = [];
+    for (const segment of splitTextIntoRefSegments(text)) {
+      if (segment.kind === 'ref') {
+        nodes.push({ type: 'noderef', id: segment.id });
+      } else if (segment.value) {
+        nodes.push({ type: 'text', content: segment.value });
+      }
+    }
+    return nodes;
+  }
+
+  /**
    * Parse raw text (disableMarkdown mode)
    */
   function parseRawText(text: string): ViewNode[] {
@@ -118,7 +139,7 @@
         nodes.push({ type: 'br' });
       }
       if (lines[i]) {
-        nodes.push({ type: 'text', content: lines[i] });
+        nodes.push(...textRunToNodes(lines[i]));
       }
     }
 
@@ -360,7 +381,13 @@
   function flattenToText(nodes: ViewNode[]): ViewNode[] {
     const result: ViewNode[] = [];
     for (const node of nodes) {
-      if (node.type === 'text' || node.type === 'br' || node.type === 'code' || node.type === 'strikethrough') {
+      if (
+        node.type === 'text' ||
+        node.type === 'br' ||
+        node.type === 'code' ||
+        node.type === 'strikethrough' ||
+        node.type === 'noderef'
+      ) {
         result.push(node);
       } else if ('children' in node) {
         result.push(...flattenToText(node.children));
@@ -393,7 +420,7 @@
             nodes.push({ type: 'br' });
           }
           if (lines[j]) {
-            nodes.push({ type: 'text', content: lines[j] });
+            nodes.push(...textRunToNodes(lines[j]));
           }
         }
       }
@@ -427,6 +454,8 @@
     <code class="markdown-code-inline">{node.content}</code>
   {:else if node.type === 'link'}
     <a href={node.href} class="ns-noderef">{#each node.children as child}{@render renderNode(child)}{/each}</a>
+  {:else if node.type === 'noderef'}
+    <NodeRefInline id={node.id} />
   {:else if node.type === 'heading'}
     {#if node.level === 1}
       <h1 class="quote-heading">{#each node.children as child}{@render renderNode(child)}{/each}</h1>
