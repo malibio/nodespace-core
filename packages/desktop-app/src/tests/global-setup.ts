@@ -1,3 +1,5 @@
+import type { GlobalSetupContext } from 'vitest/node';
+
 /**
  * Global setup for Vitest
  * This runs once before all test files
@@ -63,7 +65,19 @@ if (typeof global !== 'undefined') {
 
 console.log('✅ Svelte 5 runes mocked at module parse time');
 
-export default async function setup() {
+export default async function setup({ provide, config }: GlobalSetupContext) {
+  // Publish whether this run is collecting coverage, so tests that assert on
+  // elapsed time can pick a budget matching how the code is actually executing.
+  // V8 coverage instrumentation adds meaningful per-call overhead (~1.7x on the
+  // structural benchmarks), so a budget calibrated on an uninstrumented run is
+  // not a valid bound for an instrumented one.
+  //
+  // Read from the resolved vitest config rather than an environment variable
+  // set by a package.json script: this is derived from the run itself, so it
+  // stays correct for `bunx vitest run --coverage` invoked directly, which no
+  // script-level variable would cover.
+  provide('coverageEnabled', config.coverage?.enabled === true);
+
   // CRITICAL: Validate test environment FIRST
   // Ensure we're running with vitest, not bun test
   if (!process.env.VITEST) {

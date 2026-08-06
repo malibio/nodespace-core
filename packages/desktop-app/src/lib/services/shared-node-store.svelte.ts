@@ -997,6 +997,11 @@ export class SharedNodeStore {
     // Normal Update Flow (No Batching)
     // ========================================================================
 
+    // Whether this call actually performed an update. The `finally` below
+    // records timing metrics, but a call that returns early performed no work
+    // and must not contribute a sample — see `recordMetric`.
+    let didUpdate = false;
+
     try {
       // Get existing node
       const existingNode = this.nodes.get(nodeId);
@@ -1054,6 +1059,7 @@ export class SharedNodeStore {
 
       // Update metrics
       this.metrics.updateCount++;
+      didUpdate = true;
 
       // Phase 2.4: Persist to database (unless skipped)
       // IMPORTANT: For viewer-sourced updates:
@@ -1499,8 +1505,11 @@ export class SharedNodeStore {
       log.error(`Error updating node ${nodeId}:`, error);
       throw error;
     } finally {
-      const duration = performance.now() - startTime;
-      this.recordMetric(duration);
+      // Only time work that happened. Recording a skipped call would time a
+      // failed `Map` lookup and fold it into the average of real updates.
+      if (didUpdate) {
+        this.recordMetric(performance.now() - startTime);
+      }
     }
   }
 
@@ -3061,6 +3070,11 @@ export class SharedNodeStore {
    * Record operation timing
    */
   private recordMetric(duration: number): void {
+    // Call this ONLY for a call that incremented `updateCount`, and exactly
+    // once per increment. The incremental mean below is valid only when the
+    // count already includes the sample being folded in; called without that,
+    // the sample displaces the mean instead of extending it (and divides by
+    // zero on the very first such call).
     const count = this.metrics.updateCount;
     const currentAvg = this.metrics.avgUpdateTime;
     this.metrics.avgUpdateTime = (currentAvg * (count - 1) + duration) / count;

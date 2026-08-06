@@ -282,9 +282,17 @@ describe('Phase 3: MCP Integration (Simulated)', () => {
 
       const finalMetrics = store.getMetrics();
 
-      // Should have tracked the updates
+      // Should have tracked the updates.
+      //
+      // `avgUpdateTime` is asserted non-negative and finite, NOT strictly
+      // positive: it is a `performance.now()` delta over an in-memory update,
+      // which legitimately measures 0 when the work completes inside the
+      // clock's resolution. Requiring > 0 asserted that the timer ticked, not
+      // that the store recorded anything, and failed accordingly on a fast or
+      // loaded machine.
       expect(finalMetrics.updateCount).toBe(initialMetrics.updateCount + 5);
-      expect(finalMetrics.avgUpdateTime).toBeGreaterThan(0);
+      expect(finalMetrics.avgUpdateTime).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(finalMetrics.avgUpdateTime)).toBe(true);
     });
   });
 

@@ -460,9 +460,54 @@ describe('SharedNodeStore', () => {
 
       store.updateNode(mockNode.id, { content: 'Update 1' }, viewerSource);
 
+      // Non-negative and finite, not strictly positive: these are
+      // `performance.now()` deltas over an in-memory update and legitimately
+      // measure 0 when the work fits inside the clock's resolution. The
+      // property under test is that the store records timings at all — and
+      // `Number.isFinite` additionally catches NaN/Infinity from broken
+      // averaging, which a `> 0` check would have passed straight through.
       const metrics = store.getMetrics();
-      expect(metrics.avgUpdateTime).toBeGreaterThan(0);
-      expect(metrics.maxUpdateTime).toBeGreaterThan(0);
+      expect(metrics.avgUpdateTime).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(metrics.avgUpdateTime)).toBe(true);
+      expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(metrics.maxUpdateTime)).toBe(true);
+      // The invariant that survives a zero-resolution clock: the slowest single
+      // update is never faster than the average of all of them.
+      expect(metrics.maxUpdateTime).toBeGreaterThanOrEqual(metrics.avgUpdateTime);
+    });
+
+    it('ignores updates that were skipped before they counted', () => {
+      // An update for a node that is not in the store returns early, having
+      // done no work. It must contribute nothing to the timing metrics: the
+      // incremental mean is only valid for a sample whose increment it already
+      // includes, so folding in a skipped call displaces the average rather
+      // than extending it — and divides by zero when it is the first call.
+      store.updateNode('no-such-node', { content: 'x' }, viewerSource);
+
+      const afterSkip = store.getMetrics();
+      expect(afterSkip.updateCount).toBe(0);
+      expect(afterSkip.avgUpdateTime).toBe(0);
+      expect(afterSkip.maxUpdateTime).toBe(0);
+
+      store.setNode(mockNode, viewerSource);
+      store.updateNode(mockNode.id, { content: 'Update' }, viewerSource);
+
+      const afterReal = store.getMetrics();
+      const realAvg = afterReal.avgUpdateTime;
+      expect(afterReal.updateCount).toBe(1);
+      expect(Number.isFinite(realAvg)).toBe(true);
+      expect(afterReal.maxUpdateTime).toBeGreaterThanOrEqual(realAvg);
+
+      // A burst of misses is the shape that skews an average worst. None of
+      // them counted, so the recorded average must not move at all.
+      for (let i = 0; i < 50; i++) {
+        store.updateNode('no-such-node', { content: 'x' }, viewerSource);
+      }
+
+      const afterMisses = store.getMetrics();
+      expect(afterMisses.updateCount).toBe(1);
+      expect(afterMisses.avgUpdateTime).toBe(realAvg);
+      expect(afterMisses.maxUpdateTime).toBe(afterReal.maxUpdateTime);
     });
 
     it('should reset metrics correctly', () => {
