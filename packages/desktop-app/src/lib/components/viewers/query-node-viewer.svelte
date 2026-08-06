@@ -42,12 +42,20 @@
     mergeViewConfig,
     buildMaterializedProperties,
     executeQueryDefinition,
+    unevaluableFilters,
     type QueryViewKind,
     type QueryViewConfigState,
     type ViewerMode
   } from '$lib/components/query/query-node-model';
 
   const log = createLogger('QueryNodeViewer');
+
+  // Upper bound on the candidate set fetched before client-side filtering.
+  // queryNodes only filters by nodeType, so a saved query must fetch its type's
+  // nodes and filter them here; without an explicit limit the daemon caps at 100,
+  // which would filter an arbitrary first-100 slice. This bounds the fetch while
+  // covering realistic type sizes; larger sets surface a "capped" caveat.
+  const FETCH_LIMIT = 1000;
 
   let {
     nodeId,
@@ -101,6 +109,13 @@
   // Title editing state
   let isEditingTitle = $state(false);
   let titleDraft = $state('');
+  // Set when the user presses Escape so the input's blur-triggered commit is a
+  // no-op rather than an unwanted rename/materialize.
+  let titleEditCancelled = $state(false);
+
+  // True when the type's node set was capped by FETCH_LIMIT — client-side
+  // filtering then ran over a partial set, so the viewer says so.
+  let fetchCapped = $state(false);
 
   const hasResults = $derived(loadedNodeIds.length > 0);
 
@@ -122,6 +137,23 @@
     lastView: activeView,
     ...(kanbanGroupBy ? { kanban: { groupBy: kanbanGroupBy } } : {})
   }));
+
+  /**
+   * A visible note when client-side execution can't be fully faithful — the
+   * fetch was capped, or the saved definition has filters that can't be
+   * evaluated here (parent/children relationships need graph traversal). Keeps
+   * the result honest rather than silently under- or over-returning.
+   */
+  const executionCaveat = $derived.by((): string | null => {
+    const notes: string[] = [];
+    if (fetchCapped) notes.push(`showing the first ${FETCH_LIMIT} nodes of this type`);
+    if (mode === 'saved' && unevaluableFilters(currentDefinition.filters).length > 0) {
+      notes.push(
+        'relationship filters (parent/children) can’t be applied here, so results may be broader than the saved query'
+      );
+    }
+    return notes.length > 0 ? notes.join('; ') : null;
+  });
 
   // Load the backing node and execute the query on mount. pane-content remounts
   // this viewer via {#key ...nodeId} when the tab's nodeId changes, so this is a
@@ -151,6 +183,7 @@
     schemaNode = null;
     queryNode = null;
     loadedNodeIds = [];
+    fetchCapped = false;
 
     try {
       // Load the raw node and branch on what it actually is — the tab's
@@ -174,9 +207,10 @@
         schemaNode = await safeGetSchema(targetType);
         if (loadId !== currentLoadId) return;
 
-        const nodes = await backendAdapter.queryNodes({ nodeType: targetType });
+        const nodes = await backendAdapter.queryNodes({ nodeType: targetType, limit: FETCH_LIMIT });
         if (loadId !== currentLoadId) return;
         if (sharedNodeStore.currentEpoch() !== epoch) return;
+        fetchCapped = nodes.length >= FETCH_LIMIT;
         const databaseSource = { type: 'database' as const, reason: 'query-node-viewer saved query' };
         // Hydrate the fetched (unfiltered-by-property) set, then execute the
         // definition client-side — queryNodes only filters by nodeType.
@@ -198,9 +232,10 @@
       targetType = schema.id;
       log.debug('Loaded schema node (default view)', { schemaId: id, content: schema.content });
 
-      const nodes = await backendAdapter.queryNodes({ nodeType: schema.id });
+      const nodes = await backendAdapter.queryNodes({ nodeType: schema.id, limit: FETCH_LIMIT });
       if (loadId !== currentLoadId) return;
       if (sharedNodeStore.currentEpoch() !== epoch) return;
+      fetchCapped = nodes.length >= FETCH_LIMIT;
       const databaseSource = { type: 'database' as const, reason: 'query-node-viewer default view' };
       for (const node of nodes) sharedNodeStore.setNode(node, databaseSource);
       loadedNodeIds = nodes.map((n) => n.id);
@@ -296,10 +331,15 @@
       // ADR-053: a database switch mid-create must not re-route the now-active tab.
       if (sharedNodeStore.currentEpoch() !== epoch) return;
       const created = await backendAdapter.getNode(newId);
-      if (!created || sharedNodeStore.currentEpoch() !== epoch) return;
-      // Seed the store so the tab title resolves and pane-content sees the node
-      // as hydrated before the remount.
-      sharedNodeStore.setNode(created, { type: 'database', reason: 'query-node-viewer materialize' });
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
+      // Seed the store if we could read it back (so the tab title resolves before
+      // the remount). The node was created regardless, so re-route even if the
+      // read momentarily returns null — the remount's loadAndQuery(newId) reloads
+      // it, and NOT re-routing here would leave an orphan and let the next
+      // divergence materialize a duplicate.
+      if (created) {
+        sharedNodeStore.setNode(created, { type: 'database', reason: 'query-node-viewer materialize' });
+      }
       log.debug('Materialized query node from default view', { newId, targetType });
       rerouteTab(newId);
     } catch (e) {
@@ -403,10 +443,18 @@
   function startEditTitle(): void {
     // The default's placeholder "Default" is not a real name — start from empty.
     titleDraft = mode === 'saved' ? (queryNode?.content ?? '') : '';
+    titleEditCancelled = false;
     isEditingTitle = true;
   }
 
   async function commitTitle(): Promise<void> {
+    // Escape cancels the edit; the input's blur still fires commitTitle, so this
+    // guard keeps a cancelled edit from renaming/materializing with the draft.
+    if (titleEditCancelled) {
+      titleEditCancelled = false;
+      isEditingTitle = false;
+      return;
+    }
     const name = titleDraft.trim();
     isEditingTitle = false;
     saveError = null;
@@ -439,6 +487,7 @@
       (e.currentTarget as HTMLInputElement).blur();
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      titleEditCancelled = true;
       isEditingTitle = false;
     }
   }
@@ -562,6 +611,10 @@
     <p class="create-error" role="alert">{saveError}</p>
   {/if}
 
+  {#if queryState === 'success' && executionCaveat}
+    <p class="query-caveat" role="status">{executionCaveat}</p>
+  {/if}
+
   {#if isEditMode}
     <div class="edit-mode-wrapper">
       {#if saveError}
@@ -588,7 +641,7 @@
       </div>
     {:else if queryState === 'success' && !hasResults}
       <div class="empty-state">
-        <p>No nodes of this type yet.</p>
+        <p>{mode === 'saved' ? 'No results match this query.' : 'No nodes of this type yet.'}</p>
       </div>
     {:else if queryState === 'success' && activeView === 'list'}
       <ListView nodeIds={loadedNodeIds} onRowClick={handleRowClick} />
@@ -758,6 +811,15 @@
     color: hsl(var(--destructive));
     background: hsl(var(--destructive) / 0.1);
     border-bottom: 1px solid hsl(var(--destructive) / 0.3);
+  }
+
+  .query-caveat {
+    margin: 0;
+    padding: 0.375rem 2rem;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.5);
+    border-bottom: 1px solid hsl(var(--border));
   }
 
   .edit-mode-wrapper {

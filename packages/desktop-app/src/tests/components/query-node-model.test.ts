@@ -23,6 +23,7 @@ import {
   matchesFilter,
   applyFilters,
   applySorting,
+  unevaluableFilters,
   executeQueryDefinition,
 } from '$lib/components/query/query-node-model';
 
@@ -293,5 +294,40 @@ describe('title constants', () => {
   it('exposes the default and materialized titles', () => {
     expect(DEFAULT_QUERY_TITLE).toBe('Default');
     expect(MATERIALIZED_QUERY_TITLE).toBe('Untitled Query');
+  });
+});
+
+describe('unevaluableFilters', () => {
+  const mentions: QueryFilter = {
+    type: 'relationship',
+    operator: 'equals',
+    relationshipType: 'mentions',
+    nodeId: 'n1'
+  };
+  const child: QueryFilter = {
+    type: 'relationship',
+    operator: 'equals',
+    relationshipType: 'children',
+    nodeId: 'n1'
+  };
+  const parent: QueryFilter = {
+    type: 'relationship',
+    operator: 'equals',
+    relationshipType: 'parent',
+    nodeId: 'n1'
+  };
+  const prop: QueryFilter = { type: 'property', operator: 'equals', property: 'status', value: 'open' };
+
+  it('flags only parent/children relationship filters (graph traversal not on the node)', () => {
+    expect(unevaluableFilters([parent, child]).length).toBe(2);
+  });
+
+  it('treats mentions / mentioned_by and property/content filters as evaluable', () => {
+    expect(unevaluableFilters([mentions, prop])).toEqual([]);
+  });
+
+  it('returns [] for no filters', () => {
+    expect(unevaluableFilters(undefined)).toEqual([]);
+    expect(unevaluableFilters([])).toEqual([]);
   });
 });

@@ -229,6 +229,22 @@ export function matchesFilter(node: Node, filter: QueryFilter): boolean {
   }
 }
 
+/**
+ * Filters the client-side executor cannot faithfully evaluate from a single
+ * node — `parent`/`children` relationship filters need graph traversal not
+ * present on the node, so `matchesFilter` lets them pass through. The viewer
+ * surfaces these so a saved query doesn't silently render wider than its
+ * definition. (`mentions`/`mentioned_by` and all property/content/metadata
+ * operators ARE evaluable.)
+ */
+export function unevaluableFilters(filters: QueryFilter[] | undefined): QueryFilter[] {
+  return (filters ?? []).filter(
+    (f) =>
+      f.type === 'relationship' &&
+      (f.relationshipType === 'parent' || f.relationshipType === 'children')
+  );
+}
+
 /** Keep only the nodes matching every filter (AND semantics). */
 export function applyFilters(nodes: Node[], filters: QueryFilter[]): Node[] {
   if (!filters || filters.length === 0) return nodes;
