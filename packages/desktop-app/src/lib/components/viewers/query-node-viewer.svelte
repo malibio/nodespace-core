@@ -15,7 +15,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { backendAdapter } from '$lib/services/backend-adapter';
-  import { createSchemaInstance } from '$lib/services/schema-authoring';
+  import { createSchemaInstance, shouldIntegrateInstance } from '$lib/services/schema-authoring';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
@@ -219,10 +219,22 @@
   async function handleCreateInstance(): Promise<void> {
     if (!schemaNode || isCreating) return;
     const typeId = schemaNode.id;
+    // Capture the load generation + database epoch so a mid-flight database
+    // switch or re-query drops the new node instead of injecting it into a
+    // now-stale view — the same ADR-053 discipline loadAndQuery applies.
+    const captured = { loadId: currentLoadId, epoch: sharedNodeStore.currentEpoch() };
     isCreating = true;
     createError = null;
     try {
       const created = await createSchemaInstance(typeId);
+      const current = { loadId: currentLoadId, epoch: sharedNodeStore.currentEpoch() };
+      if (!shouldIntegrateInstance(captured, current)) {
+        log.debug('QueryNodeViewer: discarding new instance — view changed mid-create', {
+          typeId,
+          newId: created.id,
+        });
+        return;
+      }
       // Hydrate the new node into the shared store so the TableView row lookup
       // resolves it, then append its id so it shows without a full re-query.
       sharedNodeStore.setNode(created, {
@@ -269,7 +281,7 @@
         aria-pressed={activeView === 'kanban'}
       >Kanban</button>
     </nav>
-    {#if schemaNode && !isEditMode}
+    {#if schemaNode && queryState === 'success' && !isEditMode}
       <button
         class="new-instance-button"
         onclick={handleCreateInstance}

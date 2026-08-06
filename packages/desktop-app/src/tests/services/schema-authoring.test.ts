@@ -11,7 +11,7 @@ vi.mock('$lib/services/backend-adapter', () => ({
 }));
 
 import { backendAdapter } from '$lib/services/backend-adapter';
-import { createSchemaInstance } from '$lib/services/schema-authoring';
+import { createSchemaInstance, shouldIntegrateInstance } from '$lib/services/schema-authoring';
 
 const createNodeMock = vi.mocked(backendAdapter.createNode);
 const getNodeMock = vi.mocked(backendAdapter.getNode);
@@ -81,5 +81,23 @@ describe('createSchemaInstance', () => {
   it('throws if the newly created node cannot be loaded back', async () => {
     getNodeMock.mockResolvedValueOnce(null);
     await expect(createSchemaInstance('invoice')).rejects.toThrow(/could not be loaded/);
+  });
+});
+
+describe('shouldIntegrateInstance', () => {
+  it('integrates when both the load generation and epoch are unchanged', () => {
+    expect(shouldIntegrateInstance({ loadId: 3, epoch: 7 }, { loadId: 3, epoch: 7 })).toBe(true);
+  });
+
+  it('discards when the load generation changed mid-create (re-query)', () => {
+    expect(shouldIntegrateInstance({ loadId: 3, epoch: 7 }, { loadId: 4, epoch: 7 })).toBe(false);
+  });
+
+  it('discards when the database epoch changed mid-create (db switch)', () => {
+    expect(shouldIntegrateInstance({ loadId: 3, epoch: 7 }, { loadId: 3, epoch: 8 })).toBe(false);
+  });
+
+  it('discards when both changed', () => {
+    expect(shouldIntegrateInstance({ loadId: 3, epoch: 7 }, { loadId: 4, epoch: 8 })).toBe(false);
   });
 });

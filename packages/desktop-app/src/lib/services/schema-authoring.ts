@@ -31,9 +31,27 @@ export async function createSchemaInstance(typeId: string): Promise<Node> {
     mentions: [],
     parentId: null,
   });
+  // Deliberate second round-trip: createNode returns only the id, but the caller
+  // needs the full hydrated Node to seed the shared store — so load it back.
   const created = await backendAdapter.getNode(newId);
   if (!created) {
     throw new Error(`Newly created node ${newId} could not be loaded`);
   }
   return created;
+}
+
+/**
+ * Decide whether a just-created instance should still be integrated into a
+ * viewer's current results.
+ *
+ * Returns `false` when the active query generation (`loadId`) or database epoch
+ * changed while the create was in flight — the node is still persisted, it just
+ * must not be injected into a now-stale or switched-away view (ADR-053, the same
+ * discipline the viewer's load path applies to its own writes).
+ */
+export function shouldIntegrateInstance(
+  captured: { loadId: number; epoch: number },
+  current: { loadId: number; epoch: number }
+): boolean {
+  return captured.loadId === current.loadId && captured.epoch === current.epoch;
 }
