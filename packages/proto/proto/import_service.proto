@@ -44,6 +44,22 @@ message ImportOptions {
   // links/mentions to the doc root survive and nothing is duplicated. When
   // false (default), an already-imported document is left untouched (skipped).
   bool replace = 6;
+  // Folder-walk filters (fields 7-9). These are applied at the file-collection
+  // point (CLI/Tauri walk), never in the daemon — the daemon only ever receives
+  // an explicit, already-filtered file list. Each field is named as the
+  // *opt-out* of its default-on filter so the proto3 zero value (false) is the
+  // default-on behavior: leaving a field unset keeps the filter active.
+  //
+  // When true, include CLAUDE.md / AGENTS.md files. Matched by basename,
+  // case-insensitive, at any depth. Default (false) excludes them.
+  bool include_agent_files = 7;
+  // When true, include hidden files and folders — any path component starting
+  // with '.' (e.g. .git/, .claude/, dotfiles). Default (false) skips them.
+  bool include_hidden = 8;
+  // When true, import only the top-level directory and do not descend into
+  // sub-folders. Default (false) recurses into sub-folders (the historic
+  // behavior). This is the inverse of the "include sub-folders" option.
+  bool no_recursion = 9;
 }
 
 // ---------------------------------------------------------------------------

@@ -110,6 +110,9 @@ async fn import_markdown_single_file_streams_progress_and_succeeds() {
                 exclude_patterns: vec![],
                 base_directory: String::new(),
                 replace: false,
+                include_agent_files: false,
+                include_hidden: false,
+                no_recursion: false,
             }),
         })
         .await
@@ -176,6 +179,9 @@ async fn import_markdown_files_batch_reports_all_results() {
                 exclude_patterns: vec![],
                 base_directory: tempdir.path().to_str().unwrap().to_string(),
                 replace: false,
+                include_agent_files: false,
+                include_hidden: false,
+                no_recursion: false,
             }),
         })
         .await
