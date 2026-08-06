@@ -29,6 +29,10 @@ pub struct DatabaseEntry {
     /// The cloud tenant schema this database is bound to (ADR-053); `None` when
     /// the database is local-only (not bound to any tenant).
     pub bound_tenant_schema: Option<String>,
+    /// The default (landing) collection id within the bound tenant (ADR-053 /
+    /// sync#297 per-install root); `None` on the public/legacy tenant, where the
+    /// frontend falls back to the well-known root id for tree filtering.
+    pub bound_tenant_collection: Option<String>,
 }
 
 /// The full registry listing plus the daemon-wide default id.
@@ -61,6 +65,7 @@ fn to_entry(info: DatabaseInfo) -> DatabaseEntry {
         created_at: info.created_at,
         last_opened_at: info.last_opened_at,
         bound_tenant_schema: info.bound_tenant_schema,
+        bound_tenant_collection: info.bound_tenant_collection,
     }
 }
 
