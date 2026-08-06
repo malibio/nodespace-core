@@ -510,6 +510,7 @@ pub fn run() {
             commands::nodes::get_outgoing_mentions,
             commands::nodes::get_incoming_mentions,
             commands::nodes::get_mentioning_roots,
+            commands::nodes::get_node_relationships,
             commands::nodes::delete_node_mention,
             commands::nodes::update_task_node,
             // Collection commands (browsing and management UI)

@@ -1139,6 +1139,46 @@ impl SqliteStore {
         Ok(nodes)
     }
 
+    /// Like [`get_nodes_by_relationship`](Self::get_nodes_by_relationship), but
+    /// returns each edge's stored `properties` JSON alongside the related node.
+    ///
+    /// The plain `get_nodes_by_relationship` selects only node columns (`SELECT
+    /// n.*`) and drops the edge data on the `relationship` row. The relationship
+    /// viewer (issue #1918) needs the edge attributes — a Task→Person
+    /// `assigned_to` edge might carry `role`/`assigned_at` — so this also selects
+    /// `r.properties`. `n.*` expands to the ten `node` columns (indices 0-9,
+    /// matching [`row_to_node`](Self::row_to_node)); the trailing `r.properties`
+    /// is column 10. Returns `(node, edge_properties)` pairs.
+    pub async fn get_related_nodes_with_edges(
+        &self,
+        node_id: &str,
+        rel_type: &str,
+        direction: &str,
+    ) -> Result<Vec<(Node, serde_json::Value)>> {
+        let sql = match direction {
+            "out" => "SELECT n.*, r.properties FROM node n JOIN relationship r ON r.out_node = n.id WHERE r.in_node = ?1 AND r.relationship_type = ?2",
+            "in" => "SELECT n.*, r.properties FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = ?2",
+            _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
+        };
+        let mut rows = self
+            .db
+            .query(
+                sql,
+                libsql::params![node_id.to_string(), rel_type.to_string()],
+            )
+            .await
+            .context("Failed to get related nodes with edges")?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let node = Self::row_to_node(&row)?;
+            let props_str: String = row.get(10)?;
+            let properties: serde_json::Value =
+                serde_json::from_str(&props_str).unwrap_or_else(|_| serde_json::json!({}));
+            out.push((node, properties));
+        }
+        Ok(out)
+    }
+
     pub async fn get_relationship_orders(
         &self,
         node_id: &str,

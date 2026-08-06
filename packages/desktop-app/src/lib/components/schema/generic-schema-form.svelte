@@ -30,8 +30,16 @@
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
+  import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   const log = createLogger('GenericSchemaForm');
+
+  // Read-only relationship viewer entry point (issue #1918, first slice). This is
+  // the properties area for custom schema types — where typed relationships are
+  // conceptual siblings of fields. Task/date nodes use their own plugin schema
+  // forms and do not yet expose this trigger (follow-up).
+  let showRelationships = $state(false);
 
   let { nodeId, schema, autoOpen = false }: { nodeId: string; schema: SchemaNode; autoOpen?: boolean } = $props();
 
@@ -114,8 +122,9 @@
   }
 </script>
 
-{#if node && schema.fields.length > 0}
+{#if node}
   <div class="schema-form-wrapper">
+    {#if schema.fields.length > 0}
     <Collapsible.Root bind:open={isOpen}>
       <Collapsible.Trigger
         class="flex w-full items-center justify-between py-3 font-medium transition-all hover:opacity-80"
@@ -230,7 +239,20 @@
         </div>
       </Collapsible.Content>
     </Collapsible.Root>
+    {/if}
+
+    <!-- Relationships entry point (read-only viewer, issue #1918) -->
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 py-3 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
+      onclick={() => (showRelationships = true)}
+    >
+      <WaypointsIcon class="h-4 w-4" />
+      <span>Relationships</span>
+    </button>
   </div>
+
+  <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
 {/if}
 
 <style>

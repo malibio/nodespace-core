@@ -882,6 +882,37 @@ impl NodeService {
             })
     }
 
+    /// Get related nodes together with each connecting edge's stored properties.
+    ///
+    /// Same traversal as [`get_related_nodes`](Self::get_related_nodes) but also
+    /// returns the `relationship.properties` JSON for each edge, so callers can
+    /// display edge attributes (e.g. a `role`/`assigned_at` carried on an
+    /// `assigned_to` edge). Used by the relationship viewer aggregation
+    /// (`rel_ops::get_node_relationships`, issue #1918). Returns `(node,
+    /// edge_properties)` pairs.
+    pub async fn get_related_nodes_with_edges(
+        &self,
+        node_id: &str,
+        relationship_name: &str,
+        direction: &str,
+    ) -> Result<Vec<(Node, serde_json::Value)>, NodeServiceError> {
+        if direction != "out" && direction != "in" {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid direction '{}', must be 'out' or 'in'",
+                direction
+            )));
+        }
+        self.store
+            .get_related_nodes_with_edges(node_id, relationship_name, direction)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to get related nodes with edges: {}",
+                    e
+                ))
+            })
+    }
+
     /// Get inbound relationships for a node type
     ///
     /// Returns all relationships from other schemas that point TO this node type.

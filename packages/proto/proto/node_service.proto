@@ -67,6 +67,9 @@ service NodeService {
   // Typed relationships (distinct from mentions)
   rpc CreateRelationship(CreateRelationshipRequest) returns (CreateRelationshipResponse);
   rpc GetRelatedNodes(GetRelatedNodesRequest) returns (GetRelatedNodesResponse);
+  // Relationship viewer (issue #1918): list a node's schema-declared typed
+  // relationships, grouped by name across BOTH directions, with edge properties.
+  rpc GetNodeRelationships(GetNodeRelationshipsRequest) returns (GetNodeRelationshipsResponse);
 
   // Collections
   rpc GetAllCollections(GetAllCollectionsRequest) returns (CollectionListResponse);
@@ -440,6 +443,19 @@ message GetRelatedNodesResponse {
   // JSON-encoded array of related node payloads (rel_ops::GetRelatedOutput.related_nodes).
   string related_nodes_json = 4;
   int32 count = 5;
+}
+
+message GetNodeRelationshipsRequest {
+  string node_id = 1;
+}
+
+message GetNodeRelationshipsResponse {
+  // JSON-encoded rel_ops::NodeRelationshipsOutput: the node's typed
+  // relationships grouped by (name, direction), each group carrying its related
+  // nodes and their edge properties. A single JSON blob keeps the wire simple
+  // and lets the aggregate shape evolve without a proto change (matching
+  // GetRelatedNodesResponse.related_nodes_json).
+  string relationships_json = 1;
 }
 
 // ---------------------------------------------------------------------------
