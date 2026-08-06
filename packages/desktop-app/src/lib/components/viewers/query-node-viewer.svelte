@@ -15,6 +15,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { backendAdapter } from '$lib/services/backend-adapter';
+  import { createSchemaInstance } from '$lib/services/schema-authoring';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
@@ -54,6 +55,10 @@
   let rawNode = $state<Node | null>(null);
   /** Error message shown to user when save fails */
   let saveError = $state<string | null>(null);
+  /** Error message shown to user when creating a new instance fails */
+  let createError = $state<string | null>(null);
+  /** True while a new-instance create is in flight (disables the button) */
+  let isCreating = $state(false);
 
   // View state — persisted per query node via QueryPreferencesService
   let activeView = $state<QueryPreferences['lastView']>('table');
@@ -206,6 +211,36 @@
     }
     getNavigationService().navigateToNodeInOtherPane(clickedNodeId, paneId);
   }
+
+  // Create a fresh instance of the viewed schema type. The list is populated by
+  // queryNodes({ nodeType: schemaNode.id }), so the new node is minted with that
+  // same nodeType to appear in the current results; content/fields are left empty
+  // for the schema-driven form UI to fill in once the node is opened.
+  async function handleCreateInstance(): Promise<void> {
+    if (!schemaNode || isCreating) return;
+    const typeId = schemaNode.id;
+    isCreating = true;
+    createError = null;
+    try {
+      const created = await createSchemaInstance(typeId);
+      // Hydrate the new node into the shared store so the TableView row lookup
+      // resolves it, then append its id so it shows without a full re-query.
+      sharedNodeStore.setNode(created, {
+        type: 'database',
+        reason: 'query-node-viewer new instance',
+      });
+      loadedNodeIds = [...loadedNodeIds, created.id];
+      log.debug('QueryNodeViewer: created new instance', { typeId, newId: created.id });
+      // Open the new instance immediately for editing, reusing row-open behaviour.
+      handleRowClick(created.id);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log.error('QueryNodeViewer: failed to create new instance', { typeId, error: message });
+      createError = `Failed to create new ${schemaNode?.content ?? 'instance'}: ${message}`;
+    } finally {
+      isCreating = false;
+    }
+  }
 </script>
 
 <div class="query-node-viewer">
@@ -234,10 +269,21 @@
         aria-pressed={activeView === 'kanban'}
       >Kanban</button>
     </nav>
+    {#if schemaNode && !isEditMode}
+      <button
+        class="new-instance-button"
+        onclick={handleCreateInstance}
+        disabled={isCreating}
+      >+ New</button>
+    {/if}
     {#if rawNode && !isEditMode}
       <button class="edit-query-button" onclick={() => { isEditMode = true; }}>Edit Query</button>
     {/if}
   </header>
+
+  {#if createError}
+    <p class="create-error" role="alert">{createError}</p>
+  {/if}
 
   {#if isEditMode}
     <div class="edit-mode-wrapper">
@@ -369,6 +415,37 @@
 
   .edit-query-button:hover {
     background: hsl(var(--muted));
+  }
+
+  .new-instance-button {
+    padding: 0.25rem 0.625rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    border: 1px solid hsl(var(--primary));
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .new-instance-button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .new-instance-button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .create-error {
+    margin: 0;
+    padding: 0.5rem 2rem;
+    font-size: 0.8125rem;
+    color: hsl(var(--destructive));
+    background: hsl(var(--destructive) / 0.1);
+    border-bottom: 1px solid hsl(var(--destructive) / 0.3);
   }
 
   .edit-mode-wrapper {
