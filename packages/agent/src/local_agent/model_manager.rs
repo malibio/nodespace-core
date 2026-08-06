@@ -190,10 +190,48 @@ const GEMMA_4_31B: CatalogEntry = CatalogEntry {
     min_memory_gb: 24,
 };
 
-/// Gemma 4 12B -- Google's mid-tier dense model; stronger reasoning than E4B,
-/// viable on 16GB Apple Silicon with Q8_0 KV cache quantization.
-/// Q4_K_M quantization; Q8_0 KV cache cuts 32K KV from ~5GB (F16) to ~2.5GB,
-/// making it fit alongside ~7.4GB weights on a 16GB device.
+/// Gemma 4 26B-A4B -- Google's MoE tier (25.2B total / 3.8B active experts).
+/// Optional high-RAM tier, not the default: the agent-matrix eval (issue
+/// #1956) scored it 12.3/16 mean across 3 reps, below Gemma 4 E4B's 13.7/16
+/// -- it under-calls `search_nodes` on query-style follow-ups more often
+/// than E4B. Its failure mode is qualitatively different from dense Gemma 4
+/// 12B's, though: across all 3 reps and every tool call attempted, argument
+/// JSON was never malformed (no corrupted field names, no truncated nested
+/// structures) -- MoE's ~3.8B active-parameter footprint per token appears
+/// to avoid the JSON-generation failures dense 12B/Q4_K_M exhibits on
+/// complex nested payloads like `create_schema`. Q8_0 (not Q4) to keep
+/// quantization precision loss out of that comparison. Exposed as an
+/// additional selectable tier for users with RAM to spare, not a
+/// replacement for the E4B default (`recommended_model_id()` is unchanged).
+const GEMMA_4_26B_A4B: CatalogEntry = CatalogEntry {
+    id: "gemma-4-26b-a4b-q8",
+    family: ModelFamily::Gemma4,
+    name: "Gemma 4 26B-A4B Instruct Q8_0",
+    filename: "gemma-4-26B-A4B-it-Q8_0.gguf",
+    size_bytes: 26_859_860_992,
+    quantization: "Q8_0",
+    url: "https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF/resolve/bb4531cda34d1ea09d9814959ed4d5833cf2a4c8/gemma-4-26B-A4B-it-Q8_0.gguf",
+    sha256: "b5108fd13147d1c866bb595295bc9d56f5fe744d7209f18421031d0cc47009c6",
+    context_window: 32_768,
+    default_temperature: 0.3,
+    type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
+    min_memory_gb: 32,
+};
+
+/// Gemma 4 12B -- Google's mid-tier dense model. Parked, not exposed: the
+/// agent-matrix eval (issue #1956) found it repeatedly emits malformed
+/// tool-call JSON (escaped underscores, garbled/truncated nested structures)
+/// on complex payloads like `create_schema`, across both this ggml-org GGUF
+/// and the Unsloth re-upload below -- confirmed identical template/tokenizer
+/// metadata between the two sources (byte-for-byte matching embedded Jinja
+/// template, `eos_token_id`, and `<turn|>` token-type flag), so the failure
+/// is a model-capability property of dense 12B at this quantization, not a
+/// GGUF-source defect. See `GEMMA_4_26B_A4B` for a Gemma 4 tier that avoids
+/// this failure mode. `min_memory_gb: 24` (not the 16 an earlier revision
+/// claimed) reflects repeated hard GPU OOM on a 16GB machine documented in
+/// issue #1348 -- the Q8_0 KV-cache quantization here reduces but does not
+/// eliminate that headroom problem.
 const GEMMA_4_12B: CatalogEntry = CatalogEntry {
     id: "gemma-4-12b-q4km",
     family: ModelFamily::Gemma4,
@@ -205,16 +243,22 @@ const GEMMA_4_12B: CatalogEntry = CatalogEntry {
     sha256: "1278394b693672ac2799eadc9a83fd98259a6a88a40acfb1dcaa6c6fc895a606",
     context_window: 32_768,
     default_temperature: 0.3,
-    // Q8_0 cuts the 32K KV cache from ~5GB (F16) to ~2.5GB, leaving enough
-    // headroom alongside the ~7.4GB weights on a 16GB device.
+    // Q8_0 cuts the 32K KV cache from ~5GB (F16) to ~2.5GB, but this alone
+    // does not make 16GB viable -- see the doc comment above.
     type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
     type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
-    min_memory_gb: 16,
+    min_memory_gb: 24,
 };
 
-/// Gemma 4 12B (Unsloth) -- April 11 updated GGUF with corrected chat template.
-/// The ggml-org GGUF has `<turn|>` not marked as EOG, causing generation to
-/// never stop after tool calls. Unsloth's re-upload fixes this. Trial only.
+/// Gemma 4 12B (Unsloth) -- April 11 re-upload. Parked, not exposed: fails
+/// identically to `GEMMA_4_12B` above (same malformed-JSON failure on
+/// `create_schema`, confirmed via the agent-matrix eval for issue #1956).
+/// The two GGUF sources have byte-for-byte identical embedded chat template
+/// and tokenizer EOG metadata (verified against both files directly), so
+/// there is no template-level difference between them -- whatever Unsloth's
+/// re-upload changes, if anything, is not visible at this metadata layer.
+/// `min_memory_gb: 24` for the same reason as `GEMMA_4_12B` (issue #1348's
+/// repeated 16GB OOM reproductions apply equally to this file).
 const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
     id: "gemma-4-12b-unsloth-q4km",
     family: ModelFamily::Gemma4,
@@ -228,7 +272,7 @@ const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
     default_temperature: 0.3,
     type_k: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
     type_v: Some(nodespace_nlp_engine::KvCacheQuantType::Q8_0),
-    min_memory_gb: 16,
+    min_memory_gb: 24,
 };
 
 /// All catalog entries, in preference order.
@@ -242,14 +286,30 @@ const CATALOG: &[&CatalogEntry] = &[
     &GEMMA_4_12B,
     &GEMMA_4_12B_UNSLOTH,
     &GEMMA_4_31B,
+    &GEMMA_4_26B_A4B,
 ];
 
-/// RAM threshold (in bytes) at or above which the mid-tier model (Gemma 4 12B)
-/// is selected instead of the small one (Gemma 4 E4B).
+/// RAM threshold (in bytes) at or above which the mid-tier Ministral model
+/// (Ministral 8B) is selected instead of the small one (Ministral 3B).
+/// Matches `MINISTRAL_8B.min_memory_gb`. NOT used for Gemma4's medium tier --
+/// see [`RAM_THRESHOLD_GEMMA4_MEDIUM`], which tracks a different value
+/// (`GEMMA_4_12B.min_memory_gb`, corrected to 24GB per issue #1348's OOM
+/// evidence) and would silently drift from that catalog value again if the
+/// two families shared one constant.
 const RAM_THRESHOLD_MEDIUM: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
 
+/// RAM threshold (in bytes) at or above which Gemma4's mid-tier model
+/// (Gemma 4 12B) is selected instead of the small one (Gemma 4 E4B). Matches
+/// `GEMMA_4_12B.min_memory_gb` -- kept as its own constant (not shared with
+/// [`RAM_THRESHOLD_MEDIUM`]) because 12B's real memory floor is 24GB, not
+/// 16GB like Ministral 8B's.
+const RAM_THRESHOLD_GEMMA4_MEDIUM: u64 = 24 * 1024 * 1024 * 1024; // 24 GB
+
 /// RAM threshold (in bytes) at or above which the large recommended model
-/// (Gemma 4 31B) is selected instead of the mid-tier one (Gemma 4 12B).
+/// (Gemma 4 26B-A4B) is selected instead of the mid-tier one (Gemma 4 12B).
+/// Matches `GEMMA_4_26B_A4B.min_memory_gb`. Not Gemma 4 31B -- see
+/// `recommended_model_id_for`'s doc comment for why the large tier
+/// recommends 26B-A4B instead.
 const RAM_THRESHOLD_LARGE: u64 = 32 * 1024 * 1024 * 1024; // 32 GB
 
 // ---------------------------------------------------------------------------
@@ -350,16 +410,21 @@ impl GgufModelManager {
     ///
     /// Returns Gemma 4 E4B as the primary llama.cpp default, per ADR-056.
     /// Unlike [`Self::recommended_model_id_for`]'s general three-tier Gemma4
-    /// behavior, this always recommends E4B regardless of RAM: the 12B and
-    /// 31B tiers remain parked per ADR-046 (unresolved tool-call defects)
-    /// and must not become the default recommendation
-    /// on higher-RAM machines. Callers that want the full RAM-tiered
-    /// within-family recommendation should use
+    /// behavior, this always recommends E4B regardless of RAM: the mid tier
+    /// of that ladder is 12B, which remains parked per ADR-046 (unresolved
+    /// tool-call defects, reconfirmed via issue #1956's re-evaluation) and
+    /// must not become the default recommendation on higher-RAM machines.
+    /// (The large tier, 26B-A4B, is not parked -- it was validated and
+    /// exposed by issue #1956 -- but the ladder is still bypassed here
+    /// wholesale rather than partially, since this function's contract is a
+    /// single fixed default, not a RAM-tiered one.) Callers that want the
+    /// full RAM-tiered within-family recommendation should use
     /// [`Self::recommended_model_id_for`] directly.
     fn recommended_model_id() -> &'static str {
         // NOT recommended_model_id_for(ModelFamily::Gemma4) -- that RAM-tiers
-        // into 12B/31B, which are parked per ADR-046/ADR-056. Do not "simplify"
-        // this to the _for() call without re-checking that parking status.
+        // into 12B/26B-A4B, and 12B is parked per ADR-046/ADR-056. Do not
+        // "simplify" this to the _for() call without re-checking 12B's
+        // parking status.
         GEMMA_4_E4B.id
     }
 
@@ -367,14 +432,21 @@ impl GgufModelManager {
     /// current system's RAM.
     ///
     /// - `Ministral`: 8B at or above [`RAM_THRESHOLD_MEDIUM`] (16 GB), otherwise 3B.
-    /// - `Gemma4`:    three-tier — 31B at or above [`RAM_THRESHOLD_LARGE`],
-    ///   12B at or above [`RAM_THRESHOLD_MEDIUM`], otherwise E4B.
+    /// - `Gemma4`:    three-tier — 26B-A4B at or above [`RAM_THRESHOLD_LARGE`],
+    ///   12B at or above [`RAM_THRESHOLD_GEMMA4_MEDIUM`] (24 GB), otherwise E4B.
+    ///   Recommends 26B-A4B rather than 31B at the large tier: 31B is parked
+    ///   (unevaluated by issue #1956) while 26B-A4B is the tier this project
+    ///   actually validated and exposed. Neither 12B tier is recommended by
+    ///   this function's Gemma4 branch reaching production, though -- see
+    ///   [`Self::recommended_model_id`], which pins the real default to E4B
+    ///   regardless of RAM for exactly that parked-model reason.
     /// - `OpenAiCompat`: has no GGUF catalog entries; falls back to the default
     ///   Ministral recommendation.
     pub fn recommended_model_id_for(family: ModelFamily) -> &'static str {
         let total_ram = detect_system_ram();
         let large = total_ram >= RAM_THRESHOLD_LARGE;
         let medium = total_ram >= RAM_THRESHOLD_MEDIUM;
+        let gemma4_medium = total_ram >= RAM_THRESHOLD_GEMMA4_MEDIUM;
         match family {
             ModelFamily::Ministral => {
                 if medium {
@@ -385,8 +457,8 @@ impl GgufModelManager {
             }
             ModelFamily::Gemma4 => {
                 if large {
-                    GEMMA_4_31B.id
-                } else if medium {
+                    GEMMA_4_26B_A4B.id
+                } else if gemma4_medium {
                     GEMMA_4_12B.id
                 } else {
                     GEMMA_4_E4B.id
@@ -1352,12 +1424,13 @@ mod tests {
     async fn list_returns_all_catalog_models() {
         let (mgr, _tmp) = test_manager();
         let models = mgr.list().await.unwrap();
-        assert_eq!(models.len(), 9);
+        assert_eq!(models.len(), 10);
         assert!(models.iter().any(|m| m.id == "ministral-3b-q4km"));
         assert!(models.iter().any(|m| m.id == "ministral-8b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-e4b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-12b-q4km"));
         assert!(models.iter().any(|m| m.id == "gemma-4-31b-q4km"));
+        assert!(models.iter().any(|m| m.id == "gemma-4-26b-a4b-q8"));
     }
 
     #[tokio::test]
@@ -1384,6 +1457,28 @@ mod tests {
             .as_ref()
             .is_some_and(|u| u.contains("ggml-org/gemma-4-31B-it-GGUF")));
         assert_eq!(g31.min_memory_gb, 24);
+
+        let g12 = models.iter().find(|m| m.id == "gemma-4-12b-q4km").unwrap();
+        assert_eq!(g12.min_memory_gb, 24);
+
+        let g12_unsloth = models
+            .iter()
+            .find(|m| m.id == "gemma-4-12b-unsloth-q4km")
+            .unwrap();
+        assert_eq!(g12_unsloth.min_memory_gb, 24);
+
+        let g26 = models
+            .iter()
+            .find(|m| m.id == "gemma-4-26b-a4b-q8")
+            .unwrap();
+        assert_eq!(g26.family, ModelFamily::Gemma4);
+        assert_eq!(g26.quantization, "Q8_0");
+        assert!(g26.size_bytes > 26_000_000_000); // ~26.9 GB
+        assert!(g26
+            .url
+            .as_ref()
+            .is_some_and(|u| u.contains("ggml-org/gemma-4-26B-A4B-it-GGUF")));
+        assert_eq!(g26.min_memory_gb, 32);
     }
 
     #[tokio::test]
@@ -1586,7 +1681,8 @@ mod tests {
         assert_eq!(spec.context_window, 32_768);
         assert!(spec.type_k.is_none());
 
-        // 12B uses Q8_0 KV compression to fit alongside the ~7.4GB weights on 16GB RAM.
+        // 12B uses Q8_0 KV compression to reduce (not eliminate) memory pressure
+        // from the ~7.4GB weights -- min_memory_gb is 24, not 16 (issue #1348).
         let spec = mgr.model_spec_for("gemma-4-12b-q4km").unwrap();
         assert_eq!(spec.model_id, "gemma-4-12b-q4km");
         assert_eq!(spec.family, ModelFamily::Gemma4);
@@ -1628,6 +1724,34 @@ mod tests {
 
         // The two should never accidentally collide.
         assert_ne!(ministral_rec, gemma_rec);
+    }
+
+    #[test]
+    fn ram_thresholds_agree_with_the_catalog_entries_they_gate() {
+        // recommended_model_id_for's RAM tiering constants must match the
+        // min_memory_gb of the catalog entry each threshold gates -- a
+        // catalog correction (e.g. issue #1348's 12B min_memory_gb: 16 -> 24)
+        // that isn't mirrored here silently recommends a model to machines
+        // that don't meet its own declared memory floor. Asserted directly
+        // against the constants rather than by RAM-mocking
+        // recommended_model_id_for, since detect_system_ram() reads the real
+        // host and cannot be faked from a unit test.
+        assert_eq!(
+            RAM_THRESHOLD_MEDIUM,
+            MINISTRAL_8B.min_memory_gb as u64 * 1024 * 1024 * 1024,
+            "RAM_THRESHOLD_MEDIUM must match MINISTRAL_8B.min_memory_gb"
+        );
+        assert_eq!(
+            RAM_THRESHOLD_GEMMA4_MEDIUM,
+            GEMMA_4_12B.min_memory_gb as u64 * 1024 * 1024 * 1024,
+            "RAM_THRESHOLD_GEMMA4_MEDIUM must match GEMMA_4_12B.min_memory_gb"
+        );
+        assert_eq!(
+            RAM_THRESHOLD_LARGE,
+            GEMMA_4_26B_A4B.min_memory_gb as u64 * 1024 * 1024 * 1024,
+            "RAM_THRESHOLD_LARGE must match GEMMA_4_26B_A4B.min_memory_gb -- \
+             the large Gemma4 tier recommends 26B-A4B, not the parked 31B"
+        );
     }
 
     #[test]

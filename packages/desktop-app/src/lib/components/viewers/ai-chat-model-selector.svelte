@@ -40,8 +40,6 @@
 
   const log = createLogger('AiChatModelSelector');
 
-  const MIN_RAM_GB = 16;
-
   // Sentinel values used in the <select> value attribute.
   const SETUP_SENTINEL = '__setup__';
   const HEADER_SENTINEL_PREFIX = '__header__';
@@ -77,7 +75,6 @@
   // /v1, LM Studio, vLLM, ...). The daemon returns one row per discovered
   // model, already carrying the full "openai-compat:<config>:<model>" id.
   const remoteModels = $derived(models.filter((m) => m.backend === 'openai-compat'));
-  const ramTooLow = $derived(ramGb > 0 && ramGb < MIN_RAM_GB);
 
   // PTY agents (Claude Code, Gemini CLI, Codex, ...) — excludes agentStore's
   // "local:" entries, which are in-process llama.cpp models already surfaced
@@ -276,14 +273,14 @@
         {#each nativeModels as m (m.id)}
           {@const ready = isReady(m)}
           {@const downloading = isDownloading(m)}
-          {@const tooLow = ramTooLow}
+          {@const tooLow = ramGb > 0 && ramGb < m.minMemoryGb}
           <option
             value={nativeValue(m)}
             disabled={tooLow}
-            title={tooLow ? `Requires ${MIN_RAM_GB} GB RAM (system has ${ramGb} GB)` : undefined}
+            title={tooLow ? `Requires ${m.minMemoryGb} GB RAM (system has ${ramGb} GB)` : undefined}
           >
             {m.name}{tooLow
-              ? ` (requires ${MIN_RAM_GB} GB RAM)`
+              ? ` (requires ${m.minMemoryGb} GB RAM)`
               : !ready && !downloading
                 ? ' (download needed)'
                 : downloading
