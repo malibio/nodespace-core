@@ -27,6 +27,22 @@ export interface ImportOptions {
   exclude_patterns?: string[];
   /** Base directory for relative path calculation in auto-routing */
   base_directory?: string;
+  /**
+   * Opt-out: include CLAUDE.md / AGENTS.md agent files.
+   * Defaults false on the Rust side = agent files filtered OUT.
+   * snake_case must match the Rust serde field exactly (no rename).
+   */
+  include_agent_files?: boolean;
+  /**
+   * Opt-out: include hidden files/folders (leading `.`).
+   * Defaults false on the Rust side = hidden entries filtered OUT.
+   */
+  include_hidden?: boolean;
+  /**
+   * Opt-out: disable recursion into sub-folders.
+   * Defaults false on the Rust side = recursion ON.
+   */
+  no_recursion?: boolean;
 }
 
 export interface FileImportResult {
