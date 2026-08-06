@@ -252,6 +252,10 @@
       setActiveTab(existingTab.id, existingTab.paneId);
     } else {
       const targetPaneId = getTargetPaneId();
+      // `nodeType: 'query'` routes the tab to QueryNodeViewer; the viewer itself
+      // branches on the loaded node (schema id → default type view, query id →
+      // saved query) rather than trusting this decorative flag (issue #1919).
+      // TODO(#1919 follow-up): nest materialized saved queries under their type here.
       addTab(
         {
           id: uuidv4(),
