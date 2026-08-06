@@ -3,6 +3,7 @@ import type { Node } from '$lib/types';
 import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
 import { stripMarkdown } from '$lib/services/markdown-utils';
+import { databaseStore } from '$lib/stores/database.svelte';
 
 const log = createLogger('CollectionsStore');
 
@@ -148,10 +149,22 @@ class CollectionsDataStore {
    * no member nodes visible to the current user.
    */
   get collectionsTree(): CollectionItem[] {
+    // Resolve the workspace-root collection to hide from the tree. After
+    // sync#297 a fresh install mints a PER-INSTALL root (random uuid, "My
+    // Workspace") persisted as the active database's `bound_tenant_collection`,
+    // so the hardcoded legacy id no longer matches and the root would wrongly
+    // render as a top-level collection. Read it at runtime and fall back to the
+    // well-known legacy id when unset — the public/legacy tenant has no
+    // per-install bound collection, and the fallback also covers the brief
+    // window before the database listing loads (reading the `$state`-backed
+    // `activeDatabase` makes this getter re-derive once it does).
+    const boundRoot = databaseStore.activeDatabase?.boundTenantCollection;
+    const rootCollectionId = boundRoot || ROOT_COLLECTION_ID;
     return buildCollectionsTree(
       this.state.collections,
       this.state.locallyCreatedIds,
-      this.state.pendingIds
+      this.state.pendingIds,
+      rootCollectionId
     );
   }
 
@@ -533,13 +546,20 @@ function pruneEmptyCollections(
 }
 
 /**
- * The workspace root/default collection (ADR-053). Every node — including every
- * other collection — is made `member_of` it for RLS visibility, so it is NOT a
- * display parent: a collection whose only parent is the root is a TOP-LEVEL
- * collection, not a sub-collection nested inside "Default Collection". Sub-
- * collections (member_of a non-root collection) still nest normally.
+ * The well-known legacy workspace root/default collection (ADR-053). Every node
+ * — including every other collection — is made `member_of` it for RLS
+ * visibility, so it is NOT a display parent: a collection whose only parent is
+ * the root is a TOP-LEVEL collection, not a sub-collection nested inside
+ * "Default Collection". Sub-collections (member_of a non-root collection) still
+ * nest normally.
+ *
+ * This constant is only the FALLBACK root. A fresh install (sync#297) mints a
+ * per-install root with a random uuid, exposed as the active database's
+ * `bound_tenant_collection`; `collectionsTree` resolves that dynamically and
+ * passes it to `buildCollectionsTree`, using this constant only when no bound
+ * collection is set (the public/legacy tenant, which genuinely uses this id).
  */
-const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
+export const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
 
 /**
  * Transform flat collections into tree structure for UI display.
@@ -548,11 +568,19 @@ const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
  * `locallyCreatedIds` are exempt from the hide-empty filter (see
  * `pruneEmptyCollections`); `pendingIds` additionally mark entries whose
  * backend create is still in flight, so the sidebar can style them as pending.
+ *
+ * `rootCollectionId` is the workspace-root collection to treat as non-display
+ * (every collection is `member_of` it for visibility, so it must not nest them):
+ * a collection whose only parent is the root renders as a top-level peer. It
+ * defaults to the legacy `ROOT_COLLECTION_ID`, but callers pass the active
+ * database's per-install bound root (sync#297) so the dynamically-minted root is
+ * hidden too. Exported for unit testing of the pure tree logic.
  */
-function buildCollectionsTree(
+export function buildCollectionsTree(
   collections: CollectionInfo[],
   locallyCreatedIds: ReadonlySet<string> = new Set(),
-  pendingIds: ReadonlySet<string> = new Set()
+  pendingIds: ReadonlySet<string> = new Set(),
+  rootCollectionId: string = ROOT_COLLECTION_ID
 ): CollectionItem[] {
   // Build a map of id -> CollectionItem for quick lookup
   const itemMap = new Map<string, CollectionItem>();
@@ -576,7 +604,7 @@ function buildCollectionsTree(
     // Ignore the root/default collection as a parent — every collection is
     // member_of it for visibility, so counting it would nest all collections
     // under "Default Collection" instead of showing them as top-level peers.
-    const parentIds = (c.parentCollectionIds || []).filter((p) => p !== ROOT_COLLECTION_ID);
+    const parentIds = (c.parentCollectionIds || []).filter((p) => p !== rootCollectionId);
     if (parentIds.length > 0) {
       // Add to first parent only (to avoid showing same collection multiple times)
       const firstParentId = parentIds[0];
@@ -597,9 +625,15 @@ function buildCollectionsTree(
     }
   }
 
-  // Return only top-level collections (those without parents)
+  // Return only top-level collections (those without parents), and NEVER the
+  // workspace root itself. The root is the container every collection is
+  // member_of for visibility — filtering it as a parent (above) un-nests its
+  // children, and dropping it here hides the root node, which otherwise renders
+  // as a visible top-level collection whenever it has direct content members
+  // (the #1967 symptom on the per-install minted "My Workspace" root; the legacy
+  // default root was hidden the same way).
   const topLevel = collections
-    .filter((c) => !childIds.has(c.id))
+    .filter((c) => c.id !== rootCollectionId && !childIds.has(c.id))
     .map((c) => itemMap.get(c.id)!)
     .sort((a, b) => a.name.localeCompare(b.name));
 

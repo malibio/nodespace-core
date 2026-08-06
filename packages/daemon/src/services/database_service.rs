@@ -66,6 +66,7 @@ fn listing_to_info(listing: &DatabaseListing) -> DatabaseInfo {
         is_default: listing.is_default,
         status: proto_status(listing.status) as i32,
         bound_tenant_schema: entry.bound_tenant_schema.clone(),
+        bound_tenant_collection: entry.bound_tenant_collection.clone(),
     }
 }
 

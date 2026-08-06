@@ -7,6 +7,8 @@ import {
   collectionsState,
   collectionsData,
   findCollectionById,
+  buildCollectionsTree,
+  ROOT_COLLECTION_ID,
   NON_CONTENT_NODE_TYPES,
   type CollectionsState,
   type CollectionItem,
@@ -515,6 +517,116 @@ describe('Collections Store', () => {
       collectionsData._setTestData(collections, new Map());
 
       expect(collectionsData.collectionsTree).toEqual([]);
+    });
+  });
+
+  describe('buildCollectionsTree dynamic bound-root filtering (#1967)', () => {
+    // A per-install workspace root (sync#297): a random uuid minted per install,
+    // NOT the well-known legacy id. Its member_of edge must be hidden the same
+    // way the legacy root's is, or the user's top-level collections wrongly nest
+    // under it in the sidebar.
+    const PER_INSTALL_ROOT = 'a1b2c3d4-1111-2222-3333-444455556666';
+
+    // Two user collections whose only parent is the per-install root.
+    const underPerInstallRoot: CollectionInfo[] = [
+      {
+        ...createTestCollectionInfo({ id: 'engineering', name: 'Engineering', memberCount: 3 }),
+        parentCollectionIds: [PER_INSTALL_ROOT]
+      },
+      {
+        ...createTestCollectionInfo({ id: 'design', name: 'Design', memberCount: 2 }),
+        parentCollectionIds: [PER_INSTALL_ROOT]
+      }
+    ];
+
+    it('renders collections member_of the per-install root as top-level peers when that root is passed', () => {
+      const tree = buildCollectionsTree(underPerInstallRoot, new Set(), new Set(), PER_INSTALL_ROOT);
+
+      // Peers, not nested: neither has children, and both are top-level.
+      expect(tree.map((c) => c.id)).toEqual(['design', 'engineering']); // sorted by name
+      expect(tree.every((c) => (c.children?.length ?? 0) === 0)).toBe(true);
+    });
+
+    it('excludes the workspace root NODE from top-level even when it has content members (#1967 symptom)', () => {
+      // get_all_collections returns the root node itself; with content member_of
+      // edges (memberCount > 0) it survives pruning, so filtering it only as a
+      // parent would still leave it visible as a top-level peer — the exact bug.
+      const withRootNode: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: PER_INSTALL_ROOT, name: 'My Workspace', memberCount: 5 }),
+          parentCollectionIds: []
+        },
+        ...underPerInstallRoot
+      ];
+
+      const tree = buildCollectionsTree(withRootNode, new Set(), new Set(), PER_INSTALL_ROOT);
+
+      // The root node is gone; its children are the top-level peers.
+      expect(tree.find((c) => c.id === PER_INSTALL_ROOT)).toBeUndefined();
+      expect(tree.map((c) => c.id)).toEqual(['design', 'engineering']);
+    });
+
+    it('would WRONGLY nest them under the root when the stale legacy constant is used (the #1967 bug)', () => {
+      // get_all_collections returns the per-install root node itself, so with the
+      // wrong root id it is treated as a real display parent that swallows the
+      // user's collections — exactly the regression this issue fixes.
+      const withRootNode: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({
+            id: PER_INSTALL_ROOT,
+            name: 'My Workspace',
+            memberCount: 5
+          }),
+          parentCollectionIds: []
+        },
+        ...underPerInstallRoot
+      ];
+
+      const tree = buildCollectionsTree(withRootNode, new Set(), new Set(), ROOT_COLLECTION_ID);
+
+      // Legacy constant does not match the per-install root → root nests everything.
+      expect(tree.map((c) => c.id)).toEqual([PER_INSTALL_ROOT]);
+      expect(tree[0].children?.map((c) => c.id)).toEqual(['design', 'engineering']);
+    });
+
+    it('falls back to the legacy ROOT_COLLECTION_ID when no root id is given (public/legacy tenant)', () => {
+      const underLegacyRoot: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: 'hr', name: 'HR', memberCount: 1 }),
+          parentCollectionIds: [ROOT_COLLECTION_ID]
+        },
+        {
+          ...createTestCollectionInfo({ id: 'finance', name: 'Finance', memberCount: 1 }),
+          parentCollectionIds: [ROOT_COLLECTION_ID]
+        }
+      ];
+
+      // No 4th arg → the default (ROOT_COLLECTION_ID) is applied, so legacy-rooted
+      // collections still render as peers, unchanged from before the fix.
+      const tree = buildCollectionsTree(underLegacyRoot);
+
+      expect(tree.map((c) => c.id)).toEqual(['finance', 'hr']); // sorted by name
+      expect(tree.every((c) => (c.children?.length ?? 0) === 0)).toBe(true);
+    });
+
+    it('still nests genuine sub-collections under their real (non-root) parent', () => {
+      const nested: CollectionInfo[] = [
+        {
+          ...createTestCollectionInfo({ id: 'engineering', name: 'Engineering', memberCount: 2 }),
+          parentCollectionIds: [PER_INSTALL_ROOT]
+        },
+        {
+          ...createTestCollectionInfo({ id: 'backend', name: 'Backend', memberCount: 1 }),
+          // Real parent (a normal sub-collection edge), not the workspace root.
+          parentCollectionIds: ['engineering']
+        }
+      ];
+
+      const tree = buildCollectionsTree(nested, new Set(), new Set(), PER_INSTALL_ROOT);
+
+      // engineering is a top-level peer (its root edge is filtered); backend nests.
+      expect(tree.map((c) => c.id)).toEqual(['engineering']);
+      expect(tree[0].children?.map((c) => c.id)).toEqual(['backend']);
     });
   });
 

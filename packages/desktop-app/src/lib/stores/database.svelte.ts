@@ -34,6 +34,12 @@ export interface DatabaseInfo {
   /** Cloud tenant schema this database syncs to (ADR-053); null/empty when the
    * database is local-only (not bound to any tenant). */
   boundTenantSchema: string | null;
+  /** The bound tenant's default (landing) collection id (ADR-053 / sync#297
+   * per-install root). Used as the tree root to hide from the sidebar so
+   * top-level collections render as peers rather than nested under the root.
+   * null on the public/legacy tenant, where the collections store falls back to
+   * the well-known root id. */
+  boundTenantCollection: string | null;
 }
 
 interface DatabaseListing {
@@ -67,7 +73,8 @@ const IMPLICIT_BROWSER_DATABASE: DatabaseInfo = {
   status: 'open',
   createdAt: '',
   lastOpenedAt: null,
-  boundTenantSchema: null
+  boundTenantSchema: null,
+  boundTenantCollection: null
 };
 
 /**
