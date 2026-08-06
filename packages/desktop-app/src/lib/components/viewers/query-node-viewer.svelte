@@ -20,6 +20,8 @@
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
   import TableView from '$lib/components/query/table-view.svelte';
+  import ListView from '$lib/components/query/list-view.svelte';
+  import KanbanView from '$lib/components/query/kanban-view.svelte';
   import QueryEditor from '$lib/components/query/query-editor.svelte';
   import type { QueryDefinition } from '$lib/types/query';
   import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
@@ -62,8 +64,6 @@
 
   // View state — persisted per query node via QueryPreferencesService
   let activeView = $state<QueryPreferences['lastView']>('table');
-  // Shown when a non-implemented view tab is clicked
-  let viewComingSoon = $state(false);
 
   const hasResults = $derived(loadedNodeIds.length > 0);
 
@@ -83,7 +83,6 @@
     error = null;
     schemaNode = null;
     loadedNodeIds = [];
-    viewComingSoon = false;
 
     // Restore persisted view preference for this query node (synchronous)
     const prefs = queryPreferencesService.getPreferences(schemaId);
@@ -197,7 +196,6 @@
 
   function handleViewChange(view: QueryPreferences['lastView']): void {
     activeView = view;
-    viewComingSoon = view !== 'table';
     queryPreferencesService.saveViewConfig(nodeId, view);
   }
 
@@ -321,14 +319,14 @@
         <span>{error}</span>
         <button class="retry-button" onclick={() => loadAndQuery(nodeId)}>Retry</button>
       </div>
-    {:else if queryState === 'success' && viewComingSoon}
-      <div class="coming-soon-state">
-        <p>The <strong>{activeView}</strong> view is coming soon.</p>
-      </div>
     {:else if queryState === 'success' && !hasResults}
       <div class="empty-state">
         <p>No nodes of this type yet.</p>
       </div>
+    {:else if queryState === 'success' && activeView === 'list'}
+      <ListView nodeIds={loadedNodeIds} onRowClick={handleRowClick} />
+    {:else if queryState === 'success' && activeView === 'kanban'}
+      <KanbanView nodeIds={loadedNodeIds} schema={schemaNode} {nodeId} onRowClick={handleRowClick} />
     {:else if queryState === 'success'}
       <TableView nodeIds={loadedNodeIds} schema={schemaNode} {fieldSchemaMap} onRowClick={handleRowClick} />
     {/if}
@@ -508,24 +506,4 @@
     box-shadow: 0 1px 2px hsl(var(--border) / 0.5);
   }
 
-  .coming-soon-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 3rem;
-    text-align: center;
-    color: hsl(var(--muted-foreground));
-    gap: 1rem;
-  }
-
-  .coming-soon-state p {
-    margin: 0;
-    font-size: 1rem;
-  }
-
-  .coming-soon-state strong {
-    color: hsl(var(--foreground));
-    text-transform: capitalize;
-  }
 </style>
