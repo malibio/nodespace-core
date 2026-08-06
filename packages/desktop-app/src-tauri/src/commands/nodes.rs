@@ -11,10 +11,11 @@ use crate::types::{
 use chrono::{DateTime, Utc};
 use nodespace_proto::nodespace::{
     ChildMove, CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
-    GetChildrenRequest, GetChildrenTreeRequest, GetNodeRequest, GetSchemaDefinitionRequest,
-    MentionAutocompleteRequest, MentionTargetRequest, MoveChildrenToParentRequest, MoveNodeRequest,
-    NodeData, NodeResponse, OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
-    ReorderNodeRequest, UpdateNodeRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+    GetChildrenRequest, GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
+    GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionTargetRequest,
+    MoveChildrenToParentRequest, MoveNodeRequest, NodeData, NodeResponse, OptionalStringClear,
+    OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest, UpdateNodeRequest,
+    UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -861,6 +862,36 @@ pub async fn update_task_node(
 
     let node = proto_node_response_to_node(resp.into_inner())?;
     node_to_typed_value(node)
+}
+
+/// List a node's schema-declared typed relationships (issue #1918, read-only).
+///
+/// Returns the aggregate assembled by `rel_ops::get_node_relationships`: the
+/// node's typed relationships grouped by (name, direction) across BOTH
+/// directions (outbound declared on the node's own schema + inbound resolved via
+/// the relationship cache), each related node carrying its connecting edge's
+/// properties. The daemon serializes the well-typed Rust struct to JSON; this
+/// command parses it back into a `serde_json::Value` for the frontend (matching
+/// `get_children_tree`). Built-in structural relationships (`has_child`,
+/// `mentions`, `member_of`, `has_role`) are excluded by the aggregation.
+#[tauri::command]
+pub async fn get_node_relationships(
+    client: State<'_, GrpcClient>,
+    node_id: String,
+) -> Result<Value, CommandError> {
+    let mut c = client.client().await;
+    let resp = c
+        .get_node_relationships(Request::new(GetNodeRelationshipsRequest { node_id }))
+        .await
+        .map_err(status_to_command_error)?;
+
+    let json = resp.into_inner().relationships_json;
+    serde_json::from_str(&json).map_err(|e| CommandError {
+        message: format!("Failed to parse relationships JSON: {}", e),
+        code: "PARSE_ERROR".to_string(),
+        details: Some(json),
+        conflict_data: None,
+    })
 }
 
 /// Delete a mention relationship between two nodes

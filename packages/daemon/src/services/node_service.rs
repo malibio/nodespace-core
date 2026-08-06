@@ -47,9 +47,10 @@ use crate::nodespace::{
     DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
     ExecuteQueryRequest, ExportMarkdownRequest, ExportMarkdownResponse,
     FindCollectionByPathRequest, FindDuplicateRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
-    GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRequest,
-    GetNodesBatchRequest, GetNodesBatchResponse, GetRelatedNodesRequest, GetRelatedNodesResponse,
-    GetRootsRequest, GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
+    GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest,
+    GetNodeRelationshipsRequest, GetNodeRelationshipsResponse, GetNodeRequest, GetNodesBatchRequest,
+    GetNodesBatchResponse, GetRelatedNodesRequest, GetRelatedNodesResponse, GetRootsRequest,
+    GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
     MentionResponse, MentionTargetRequest, MoveChildrenToParentRequest,
     MoveChildrenToParentResponse, MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted,
     NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse, NodeResponse,
@@ -870,6 +871,25 @@ impl GrpcNodeService for NodeServiceImpl {
             direction: output.direction,
             related_nodes_json,
             count: output.count as i32,
+        }))
+    }
+
+    async fn get_node_relationships(
+        &self,
+        request: Request<GetNodeRelationshipsRequest>,
+    ) -> Result<Response<GetNodeRelationshipsResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let output = rel_ops::get_node_relationships(&this.node_service, &req.node_id)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        let relationships_json = serde_json::to_string(&output)
+            .map_err(|e| Status::internal(format!("failed to serialize relationships: {e}")))?;
+
+        Ok(Response::new(GetNodeRelationshipsResponse {
+            relationships_json,
         }))
     }
 

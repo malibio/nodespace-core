@@ -4724,6 +4724,226 @@ mod tests {
         assert_eq!(edge.properties["status"], "active");
     }
 
+    /// Relationship viewer aggregation (issue #1918): an outbound relationship
+    /// (with edge_fields + edge properties) and its inbound reverse must both
+    /// surface, carrying the edge data, from opposite ends of the SAME edge.
+    #[tokio::test]
+    async fn test_get_node_relationships_outbound_inbound_with_edges() {
+        let (service, _temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+        let store = service.store();
+
+        // Target schema (no relationships).
+        store
+            .create_node(
+                Node::new_with_id(
+                    "widget".to_string(),
+                    "schema".to_string(),
+                    "Widget".to_string(),
+                    serde_json::json!({ "fields": [], "relationships": [] }),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Source schema: gadget --assigned_to--> widget, with a `role` edge field.
+        store
+            .create_node(
+                Node::new_with_id(
+                    "gadget".to_string(),
+                    "schema".to_string(),
+                    "Gadget".to_string(),
+                    serde_json::json!({
+                        "fields": [],
+                        "relationships": [{
+                            "name": "assigned_to",
+                            "targetType": "widget",
+                            "direction": "out",
+                            "cardinality": "many",
+                            "reverseName": "gadgets",
+                            "reverseCardinality": "many",
+                            "edgeFields": [{ "name": "role", "type": "string" }]
+                        }]
+                    }),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Instances + a single edge carrying `role`.
+        store
+            .create_node(
+                Node::new_with_id(
+                    "g1".to_string(),
+                    "gadget".to_string(),
+                    "Gadget One".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .create_node(
+                Node::new_with_id(
+                    "w1".to_string(),
+                    "widget".to_string(),
+                    "Widget One".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .create_generic_relationship("g1", "w1", "assigned_to", &serde_json::json!({"role":"lead"}))
+            .await
+            .unwrap();
+
+        // Outbound (from the source): assigned_to → widget, edge role=lead.
+        let out = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = out
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .expect("outbound assigned_to group present");
+        assert_eq!(group.target_type.as_deref(), Some("widget"));
+        assert_eq!(group.count, 1);
+        assert_eq!(group.related[0].id, "w1");
+        assert_eq!(group.related[0].edge_properties["role"], "lead");
+        assert!(group.edge_fields.is_some(), "edge_fields carried through");
+
+        // Inbound (from the target): the SAME edge, labeled by reverse_name.
+        let inb = crate::ops::rel_ops::get_node_relationships(&service, "w1")
+            .await
+            .unwrap();
+        let group = inb
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "in")
+            .expect("inbound assigned_to group present");
+        assert_eq!(group.reverse_name.as_deref(), Some("gadgets"));
+        assert_eq!(group.source_type, "gadget");
+        assert_eq!(group.target_type.as_deref(), Some("gadget"));
+        assert_eq!(group.count, 1);
+        assert_eq!(group.related[0].id, "g1");
+        assert_eq!(group.related[0].edge_properties["role"], "lead");
+
+        // Built-in structural relationships are excluded from both views.
+        assert!(
+            out.groups
+                .iter()
+                .all(|g| g.relationship_name != "has_child" && g.relationship_name != "mentions"),
+            "built-in relationships must not appear"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_node_relationships_inbound_multiple_sources_not_duplicated() {
+        // Regression (#1918): the inbound query keys only on relationship_type,
+        // so two schemas declaring the SAME relationship name targeting the same
+        // type must land in SEPARATE groups, each restricted to its own source
+        // type — never doubled or cross-attributed.
+        let (service, _temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+        let store = service.store();
+
+        store
+            .create_node(
+                Node::new_with_id(
+                    "widget".to_string(),
+                    "schema".to_string(),
+                    "Widget".to_string(),
+                    serde_json::json!({ "fields": [], "relationships": [] }),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Two source schemas, both declaring assigned_to -> widget.
+        for (id, name, reverse) in [
+            ("gadget", "Gadget", "gadgets"),
+            ("sprocket", "Sprocket", "sprockets"),
+        ] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        "schema".to_string(),
+                        name.to_string(),
+                        serde_json::json!({
+                            "fields": [],
+                            "relationships": [{
+                                "name": "assigned_to",
+                                "targetType": "widget",
+                                "direction": "out",
+                                "cardinality": "many",
+                                "reverseName": reverse,
+                                "reverseCardinality": "many"
+                            }]
+                        }),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        for (id, ty) in [("g1", "gadget"), ("s1", "sprocket"), ("w1", "widget")] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        ty.to_string(),
+                        id.to_uppercase(),
+                        serde_json::json!({}),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .create_generic_relationship("g1", "w1", "assigned_to", &serde_json::json!({}))
+            .await
+            .unwrap();
+        store
+            .create_generic_relationship("s1", "w1", "assigned_to", &serde_json::json!({}))
+            .await
+            .unwrap();
+
+        let inb = crate::ops::rel_ops::get_node_relationships(&service, "w1")
+            .await
+            .unwrap();
+        let inbound: Vec<_> = inb.groups.iter().filter(|g| g.direction == "in").collect();
+
+        assert_eq!(inbound.len(), 2, "one inbound group per declaring source type");
+        let gadget = inbound
+            .iter()
+            .find(|g| g.source_type == "gadget")
+            .expect("gadget inbound group");
+        assert_eq!(gadget.count, 1);
+        assert_eq!(gadget.related[0].id, "g1");
+        let sprocket = inbound
+            .iter()
+            .find(|g| g.source_type == "sprocket")
+            .expect("sprocket inbound group");
+        assert_eq!(sprocket.count, 1);
+        assert_eq!(sprocket.related[0].id, "s1");
+    }
+
     #[tokio::test]
     async fn test_get_set_bound_tenant_roundtrip() {
         let (service, _temp) = create_test_service().await;
