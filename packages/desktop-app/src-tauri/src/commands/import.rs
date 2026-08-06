@@ -15,7 +15,14 @@ use tonic::Request;
 
 use crate::services::GrpcClient;
 
-/// Options for file import (mirrors proto ImportOptions)
+/// Options for file import (mirrors proto ImportOptions).
+///
+/// The three folder-walk fields (`include_agent_files`, `include_hidden`,
+/// `no_recursion`) name the *opt-out* of a default-on filter, matching the proto
+/// polarity: their `bool` default (`false`, via `#[serde(default)]` and
+/// `Default`) is the default-on behavior, so an absent or partial options object
+/// from the frontend still excludes agent files, skips hidden entries, and
+/// recurses into sub-folders.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ImportOptions {
     pub collection: Option<String>,
@@ -28,6 +35,12 @@ pub struct ImportOptions {
     pub base_directory: Option<String>,
     #[serde(default)]
     pub replace: bool,
+    #[serde(default)]
+    pub include_agent_files: bool,
+    #[serde(default)]
+    pub include_hidden: bool,
+    #[serde(default)]
+    pub no_recursion: bool,
 }
 
 impl ImportOptions {
@@ -39,8 +52,52 @@ impl ImportOptions {
             exclude_patterns: self.exclude_patterns,
             base_directory: self.base_directory.unwrap_or_default(),
             replace: self.replace,
+            include_agent_files: self.include_agent_files,
+            include_hidden: self.include_hidden,
+            no_recursion: self.no_recursion,
         }
     }
+}
+
+/// Folder-walk filters, in active/default-on sense (true = filter applied).
+/// Derived from `ImportOptions` opt-out fields at the collection call site.
+#[derive(Clone, Copy)]
+struct WalkFilters {
+    /// Skip files whose basename is CLAUDE.md / AGENTS.md (case-insensitive).
+    exclude_agent_files: bool,
+    /// Skip any entry (file or dir) whose name starts with '.'.
+    skip_hidden: bool,
+    /// Descend into sub-folders. When false, only the top-level dir is scanned.
+    recursive: bool,
+}
+
+impl WalkFilters {
+    fn from_options(opts: &ImportOptions) -> Self {
+        Self {
+            exclude_agent_files: !opts.include_agent_files,
+            skip_hidden: !opts.include_hidden,
+            recursive: !opts.no_recursion,
+        }
+    }
+}
+
+/// Basenames dropped by the "exclude agent files" filter — matched
+/// case-insensitively against the file's basename at any depth.
+fn is_agent_file(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case("CLAUDE.md") || n.eq_ignore_ascii_case("AGENTS.md"))
+        .unwrap_or(false)
+}
+
+/// A hidden entry is one whose own name starts with '.'. The walk visits every
+/// path component as an entry, so testing the immediate name at each level is
+/// equivalent to "any path component starting with '.'".
+fn is_hidden(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with('.'))
+        .unwrap_or(false)
 }
 
 /// Result of importing a single file
@@ -242,6 +299,7 @@ pub async fn import_markdown_directory(
 
     let mut opts = options.unwrap_or_default();
     let exclude_patterns = opts.exclude_patterns.clone();
+    let filters = WalkFilters::from_options(&opts);
 
     // Set base_directory if not provided
     if opts.base_directory.is_none() {
@@ -249,7 +307,7 @@ pub async fn import_markdown_directory(
     }
 
     let mut md_files: Vec<String> = Vec::new();
-    collect_markdown_files_with_exclusions(&dir, &mut md_files, &exclude_patterns)?;
+    collect_markdown_files_with_exclusions(&dir, &mut md_files, &exclude_patterns, filters)?;
     md_files.sort();
 
     tracing::info!(
@@ -289,6 +347,7 @@ fn collect_markdown_files_with_exclusions(
     dir: &std::path::Path,
     files: &mut Vec<String>,
     exclude_patterns: &[String],
+    filters: WalkFilters,
 ) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
 
@@ -311,6 +370,13 @@ fn collect_markdown_files_with_exclusions(
             continue;
         }
 
+        // Skip hidden entries (files and dirs) whose name starts with '.'
+        // (e.g. .git/, .claude/, dotfiles) before any descent or push.
+        if filters.skip_hidden && is_hidden(&path) {
+            tracing::debug!("Skipping hidden entry: {}", path_str);
+            continue;
+        }
+
         // Use symlink_metadata (lstat semantics) rather than path.is_dir()/is_file(),
         // which follow symlinks: a symlink inside the confined root could otherwise
         // point outside the allowed base and bypass check_within_allowed_base.
@@ -324,8 +390,14 @@ fn collect_markdown_files_with_exclusions(
         }
 
         if metadata.is_dir() {
-            collect_markdown_files_with_exclusions(&path, files, exclude_patterns)?;
+            if filters.recursive {
+                collect_markdown_files_with_exclusions(&path, files, exclude_patterns, filters)?;
+            }
         } else if metadata.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+            if filters.exclude_agent_files && is_agent_file(&path) {
+                tracing::debug!("Skipping agent file: {}", path_str);
+                continue;
+            }
             if let Some(s) = path.to_str() {
                 files.push(s.to_string());
             }
@@ -338,6 +410,13 @@ fn collect_markdown_files_with_exclusions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    const ALL_ON: WalkFilters = WalkFilters {
+        exclude_agent_files: true,
+        skip_hidden: true,
+        recursive: true,
+    };
 
     #[test]
     fn accepts_home_directory_itself() {
@@ -399,7 +478,7 @@ mod tests {
         std::os::windows::fs::symlink_dir(&outside, &link).unwrap();
 
         let mut files = Vec::new();
-        collect_markdown_files_with_exclusions(&import_root, &mut files, &[]).unwrap();
+        collect_markdown_files_with_exclusions(&import_root, &mut files, &[], ALL_ON).unwrap();
 
         assert!(
             files.is_empty(),
@@ -408,5 +487,141 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// Build a fixture tree covering every filter axis. Mirrors the CLI test
+    /// fixture; this collection path additionally skips symlinks.
+    ///   top.md            top-level plain doc
+    ///   CLAUDE.md         top-level agent file (mixed case)
+    ///   AGENTS.md         top-level agent file
+    ///   .dotfile.md       top-level hidden dotfile doc
+    ///   sub/nested.md     doc in a sub-folder
+    ///   sub/claude.md     nested, lowercase agent file (case-insensitive + depth)
+    ///   .hidden/hidden.md doc under a hidden directory
+    fn fixture() -> tempfile::TempDir {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("top.md"), "# top").unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# claude").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "# agents").unwrap();
+        std::fs::write(root.join(".dotfile.md"), "# dotfile").unwrap();
+
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("nested.md"), "# nested").unwrap();
+        std::fs::write(sub.join("claude.md"), "# nested claude").unwrap();
+
+        let hidden = root.join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("hidden.md"), "# hidden").unwrap();
+
+        tmp
+    }
+
+    fn names(tmp: &tempfile::TempDir, exclude: &[String], filters: WalkFilters) -> BTreeSet<String> {
+        let mut files = Vec::new();
+        collect_markdown_files_with_exclusions(tmp.path(), &mut files, exclude, filters).unwrap();
+        files
+            .into_iter()
+            .map(|p| {
+                std::path::Path::new(&p)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn set(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn defaults_exclude_agent_and_hidden_but_recurse() {
+        let tmp = fixture();
+        assert_eq!(names(&tmp, &[], ALL_ON), set(&["top.md", "nested.md"]));
+    }
+
+    #[test]
+    fn including_agent_files_keeps_claude_and_agents_at_any_depth() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            exclude_agent_files: false,
+            ..ALL_ON
+        };
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&["top.md", "nested.md", "CLAUDE.md", "AGENTS.md", "claude.md"])
+        );
+    }
+
+    #[test]
+    fn including_hidden_keeps_dotfiles_and_dot_dirs() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            skip_hidden: false,
+            ..ALL_ON
+        };
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&["top.md", "nested.md", ".dotfile.md", "hidden.md"])
+        );
+    }
+
+    #[test]
+    fn non_recursive_scans_only_top_level() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            recursive: false,
+            ..ALL_ON
+        };
+        assert_eq!(names(&tmp, &[], filters), set(&["top.md"]));
+    }
+
+    #[test]
+    fn all_filters_off_collects_everything() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            exclude_agent_files: false,
+            skip_hidden: false,
+            recursive: true,
+        };
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&[
+                "top.md",
+                "nested.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "claude.md",
+                ".dotfile.md",
+                "hidden.md",
+            ])
+        );
+    }
+
+    #[test]
+    fn filters_compose_with_exclude_patterns() {
+        let tmp = fixture();
+        assert_eq!(names(&tmp, &["sub".to_string()], ALL_ON), set(&["top.md"]));
+    }
+
+    #[test]
+    fn walk_filters_from_options_inverts_opt_out_fields() {
+        // Default options (all opt-out fields false) => every filter on.
+        let f = WalkFilters::from_options(&ImportOptions::default());
+        assert!(f.exclude_agent_files && f.skip_hidden && f.recursive);
+
+        // Setting the opt-out fields disables each filter.
+        let opts = ImportOptions {
+            include_agent_files: true,
+            include_hidden: true,
+            no_recursion: true,
+            ..ImportOptions::default()
+        };
+        let f = WalkFilters::from_options(&opts);
+        assert!(!f.exclude_agent_files && !f.skip_hidden && !f.recursive);
     }
 }

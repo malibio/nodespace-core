@@ -14,7 +14,8 @@ use crate::ImportClient;
 pub enum ImportAction {
     /// Import a single markdown file.
     File(ImportFileArgs),
-    /// Import all markdown files from a directory (recursive).
+    /// Import all markdown files from a directory (recurses into sub-folders by
+    /// default; see --no-recursive).
     Dir(ImportDirArgs),
 }
 
@@ -63,6 +64,21 @@ pub struct ImportDirArgs {
     #[arg(long = "exclude")]
     pub exclude_patterns: Vec<String>,
 
+    /// Include CLAUDE.md / AGENTS.md files (default: excluded). Matched by
+    /// basename, case-insensitive, at any depth.
+    #[arg(long)]
+    pub include_agent_files: bool,
+
+    /// Include hidden files and folders — any path component starting with '.',
+    /// e.g. .git/, .claude/, dotfiles (default: skipped).
+    #[arg(long)]
+    pub include_hidden: bool,
+
+    /// Import only the top-level directory; do not descend into sub-folders
+    /// (default: recurses into sub-folders).
+    #[arg(long)]
+    pub no_recursive: bool,
+
     /// Refresh already-imported documents in place: replace each existing
     /// document's child subtree from the fresh parse, keeping its root node so
     /// inbound links survive. Without this, already-imported documents are
@@ -105,6 +121,11 @@ async fn run_file(client: &mut ImportClient, args: ImportFileArgs, json: bool) -
         exclude_patterns: vec![],
         base_directory: String::new(),
         replace: args.replace,
+        // A single explicit file is never walked, so the folder-walk filters
+        // are inert here; carry their proto defaults for a uniform option surface.
+        include_agent_files: false,
+        include_hidden: false,
+        no_recursion: false,
     };
 
     let mut stream = client
@@ -151,7 +172,15 @@ async fn run_file(client: &mut ImportClient, args: ImportFileArgs, json: bool) -
 }
 
 async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> Result<()> {
-    let file_paths = collect_markdown_files(&args.directory, &args.exclude_patterns)?;
+    // The three folder-walk filters default ON; each CLI flag opts out of one,
+    // so the option (recorded in ImportOptions with the inverse polarity) is the
+    // flag itself. See WalkFilters for the applied semantics.
+    let filters = WalkFilters {
+        exclude_agent_files: !args.include_agent_files,
+        skip_hidden: !args.include_hidden,
+        recursive: !args.no_recursive,
+    };
+    let file_paths = collect_markdown_files(&args.directory, &args.exclude_patterns, filters)?;
 
     if file_paths.is_empty() {
         if !json {
@@ -167,6 +196,9 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
         exclude_patterns: args.exclude_patterns,
         base_directory: args.directory,
         replace: args.replace,
+        include_agent_files: args.include_agent_files,
+        include_hidden: args.include_hidden,
+        no_recursion: args.no_recursive,
     };
 
     let mut stream = client
@@ -204,9 +236,50 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
     Ok(())
 }
 
-fn collect_markdown_files(dir: &str, exclude_patterns: &[String]) -> Result<Vec<String>> {
+/// Filters applied while walking a directory for import. Each field is stated
+/// in its active/default-on sense (the folder-import options all default ON),
+/// so the fields are true when the corresponding filter is applied.
+#[derive(Clone, Copy)]
+struct WalkFilters {
+    /// Skip files whose basename is CLAUDE.md / AGENTS.md (case-insensitive).
+    exclude_agent_files: bool,
+    /// Skip any entry (file or dir) whose name starts with '.'.
+    skip_hidden: bool,
+    /// Descend into sub-folders. When false, only the top-level dir is scanned.
+    recursive: bool,
+}
+
+/// Basenames dropped by the "exclude agent files" filter — matched
+/// case-insensitively against the file's basename at any depth.
+fn is_agent_file(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case("CLAUDE.md") || n.eq_ignore_ascii_case("AGENTS.md"))
+        .unwrap_or(false)
+}
+
+/// A hidden entry is one whose own name starts with '.'. The walk visits every
+/// path component as an entry, so testing the immediate name at each level is
+/// equivalent to "any path component starting with '.'".
+fn is_hidden(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with('.'))
+        .unwrap_or(false)
+}
+
+fn collect_markdown_files(
+    dir: &str,
+    exclude_patterns: &[String],
+    filters: WalkFilters,
+) -> Result<Vec<String>> {
     let mut files = Vec::new();
-    collect_recursive(std::path::Path::new(dir), &mut files, exclude_patterns)?;
+    collect_recursive(
+        std::path::Path::new(dir),
+        &mut files,
+        exclude_patterns,
+        filters,
+    )?;
     files.sort();
     Ok(files)
 }
@@ -215,12 +288,15 @@ fn collect_recursive(
     dir: &std::path::Path,
     files: &mut Vec<String>,
     exclude_patterns: &[String],
+    filters: WalkFilters,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let path_str = path.to_string_lossy();
 
+        // User-supplied --exclude patterns (component name or path substring),
+        // preserved and composed with the new default-on filters below.
         let excluded = exclude_patterns.iter().any(|p| {
             path.components().any(|c| {
                 c.as_os_str()
@@ -234,13 +310,183 @@ fn collect_recursive(
             continue;
         }
 
+        // Skip hidden entries (files and dirs) before any descent or push.
+        if filters.skip_hidden && is_hidden(&path) {
+            continue;
+        }
+
         if path.is_dir() {
-            collect_recursive(&path, files, exclude_patterns)?;
+            if filters.recursive {
+                collect_recursive(&path, files, exclude_patterns, filters)?;
+            }
         } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+            if filters.exclude_agent_files && is_agent_file(&path) {
+                continue;
+            }
             if let Some(s) = path.to_str() {
                 files.push(s.to_string());
             }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a fixture tree covering every filter axis:
+    ///   top.md            top-level plain doc
+    ///   CLAUDE.md         top-level agent file (mixed case)
+    ///   AGENTS.md         top-level agent file
+    ///   .dotfile.md       top-level hidden dotfile doc
+    ///   sub/nested.md     doc in a sub-folder
+    ///   sub/claude.md     nested, lowercase agent file (case-insensitive + depth)
+    ///   .hidden/hidden.md doc under a hidden directory
+    fn fixture() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("top.md"), "# top").unwrap();
+        fs::write(root.join("CLAUDE.md"), "# claude").unwrap();
+        fs::write(root.join("AGENTS.md"), "# agents").unwrap();
+        fs::write(root.join(".dotfile.md"), "# dotfile").unwrap();
+
+        let sub = root.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("nested.md"), "# nested").unwrap();
+        fs::write(sub.join("claude.md"), "# nested claude").unwrap();
+
+        let hidden = root.join(".hidden");
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("hidden.md"), "# hidden").unwrap();
+
+        tmp
+    }
+
+    /// Sorted set of basenames from the collected absolute paths.
+    fn names(tmp: &TempDir, exclude: &[String], filters: WalkFilters) -> BTreeSet<String> {
+        collect_markdown_files(tmp.path().to_str().unwrap(), exclude, filters)
+            .unwrap()
+            .into_iter()
+            .map(|p| {
+                std::path::Path::new(&p)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn set(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    const ALL_ON: WalkFilters = WalkFilters {
+        exclude_agent_files: true,
+        skip_hidden: true,
+        recursive: true,
+    };
+
+    #[test]
+    fn defaults_exclude_agent_and_hidden_but_recurse() {
+        let tmp = fixture();
+        // Agent files (any depth, any case) and hidden entries are dropped;
+        // sub-folders are still walked.
+        assert_eq!(names(&tmp, &[], ALL_ON), set(&["top.md", "nested.md"]));
+    }
+
+    #[test]
+    fn including_agent_files_keeps_claude_and_agents_at_any_depth() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            exclude_agent_files: false,
+            ..ALL_ON
+        };
+        // Top-level CLAUDE.md/AGENTS.md and the nested lowercase claude.md return;
+        // hidden entries stay excluded.
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&["top.md", "nested.md", "CLAUDE.md", "AGENTS.md", "claude.md"])
+        );
+    }
+
+    #[test]
+    fn including_hidden_keeps_dotfiles_and_dot_dirs() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            skip_hidden: false,
+            ..ALL_ON
+        };
+        // The dotfile doc and the doc under .hidden/ appear; agent files still drop.
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&["top.md", "nested.md", ".dotfile.md", "hidden.md"])
+        );
+    }
+
+    #[test]
+    fn non_recursive_scans_only_top_level() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            recursive: false,
+            ..ALL_ON
+        };
+        // Only the top-level plain doc; sub/ is not descended into, agent +
+        // hidden top-level entries still filtered.
+        assert_eq!(names(&tmp, &[], filters), set(&["top.md"]));
+    }
+
+    #[test]
+    fn all_filters_off_collects_everything() {
+        let tmp = fixture();
+        let filters = WalkFilters {
+            exclude_agent_files: false,
+            skip_hidden: false,
+            recursive: true,
+        };
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&[
+                "top.md",
+                "nested.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "claude.md",
+                ".dotfile.md",
+                "hidden.md",
+            ])
+        );
+    }
+
+    #[test]
+    fn filters_compose_with_exclude_patterns() {
+        let tmp = fixture();
+        // --exclude sub removes the whole sub-folder; default filters still drop
+        // agent + hidden entries, leaving only the top-level plain doc.
+        assert_eq!(
+            names(&tmp, &["sub".to_string()], ALL_ON),
+            set(&["top.md"])
+        );
+    }
+
+    #[test]
+    fn non_recursive_still_excludes_top_level_agent_and_hidden() {
+        let tmp = fixture();
+        // Turn every filter off except recursion to prove the non-recursive mode
+        // is orthogonal: at top level it keeps agent + hidden entries too.
+        let filters = WalkFilters {
+            exclude_agent_files: false,
+            skip_hidden: false,
+            recursive: false,
+        };
+        assert_eq!(
+            names(&tmp, &[], filters),
+            set(&["top.md", "CLAUDE.md", "AGENTS.md", ".dotfile.md"])
+        );
+    }
 }
