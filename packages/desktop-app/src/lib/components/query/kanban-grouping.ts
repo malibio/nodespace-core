@@ -67,12 +67,16 @@ export function readGroupValue(node: Node, field: string): string | null {
 
 /**
  * Build the `updateNode` change-set that moves a node into the column identified
- * by `value`.
+ * by `value`, writing the value back to wherever it is *read* from (see
+ * `readGroupValue`) so the card re-groups consistently after the store update.
  *
- * The value is written back to wherever it is *read* from (see `readGroupValue`)
- * so the card re-groups consistently after the store update: a typed core field
- * stays a top-level field, and a user-defined schema field — the common Kanban
- * case — is written under `properties[field]`, matching `generic-schema-form`.
+ * Both shapes this produces persist through the store's viewer-write rule: a
+ * user-defined schema field — the common Kanban case — is written under
+ * `properties[field]` (property changes always persist, matching
+ * `generic-schema-form`), and a typed core field stays a top-level field, which
+ * persists via that type's registered updater for the mutable core enums
+ * (`status`/`priority`/…). Grouping a core type by a non-standard top-level enum
+ * field is out of scope — its board would move cards but not persist them.
  */
 export function resolveFieldWrite(node: Node, field: string, value: string): Partial<Node> {
   const rec = node as unknown as Record<string, unknown>;

@@ -44,7 +44,6 @@
   // The user's explicit picker choice this session; null means "use the default
   // resolved from stored prefs / first eligible field".
   let picked = $state<string | null>(null);
-  let moveError = $state<string | null>(null);
   let draggingId = $state<string | null>(null);
   let dragOverColumn = $state<string | null>(null);
 
@@ -92,7 +91,6 @@
 
   function onPickGroupBy(name: string): void {
     picked = name;
-    moveError = null;
     queryPreferencesService.saveViewConfig(nodeId, 'kanban', { groupBy: name });
   }
 
@@ -103,18 +101,14 @@
     const from = readGroupValue(node, activeGroupBy);
     const target = toColumn === UNASSIGNED ? null : toColumn;
     if (from === target) return; // dropping into its own column is a no-op — no write
-    moveError = null;
-    try {
-      // Optimistic store write: the card moves as soon as the value changes, and
-      // the store rolls the value back (returning the card to its column) if the
-      // persisted write is rejected.
-      const changes = resolveFieldWrite(node, activeGroupBy, target ?? '');
-      sharedNodeStore.updateNode(id, changes, { type: 'viewer', viewerId: 'kanban-view' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      log.error('KanbanView: failed to move card', { id, toColumn, error: msg });
-      moveError = `Couldn't move "${titleOf(node)}": ${msg}`;
-    }
+    // Optimistic store write: the card moves as soon as the value changes. If the
+    // persisted write is later rejected, the store rolls the value back — returning
+    // the card to its original column — and raises its global conflict notification.
+    // This is the same fire-and-forget path generic-schema-form uses; error
+    // surfacing is the store's responsibility, not a per-view banner.
+    const changes = resolveFieldWrite(node, activeGroupBy, target ?? '');
+    log.debug('KanbanView: moving card', { id, field: activeGroupBy, toColumn });
+    sharedNodeStore.updateNode(id, changes, { type: 'viewer', viewerId: 'kanban-view' });
   }
 
   function onDragStart(e: DragEvent, id: string): void {
@@ -165,10 +159,6 @@
         </select>
       </label>
     </div>
-
-    {#if moveError}
-      <p class="kanban-error" role="alert">{moveError}</p>
-    {/if}
 
     <div class="kanban-board">
       {#each displayColumns as col (col.value)}
@@ -251,16 +241,6 @@
     border-radius: 0.375rem;
     background: hsl(var(--background));
     color: hsl(var(--foreground));
-  }
-
-  .kanban-error {
-    margin: 0;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
-    color: hsl(var(--destructive));
-    background: hsl(var(--destructive) / 0.1);
-    border: 1px solid hsl(var(--destructive) / 0.3);
-    border-radius: 0.375rem;
   }
 
   .kanban-board {
