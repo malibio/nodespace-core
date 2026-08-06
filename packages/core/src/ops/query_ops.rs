@@ -158,7 +158,16 @@ impl AgentFilterItem {
         if self.relationship_type.is_some() || self.node_id.is_some() {
             return Ok("relationship");
         }
-        if self.property.is_some() {
+        if let Some(prop) = self.property.as_deref() {
+            // A filter naming the top-level `content` column must route to content
+            // search (LOWER(content) LIKE …), NOT the property/json_extract path: node
+            // content lives in the SQL `content` column, not the `properties` JSON, so
+            // inferring "property" here builds json_extract(properties,'$.<type>.content')
+            // which is always NULL — a silent false-negative zero-result. Route it to
+            // the content category instead.
+            if prop.eq_ignore_ascii_case("content") {
+                return Ok("content");
+            }
             return Ok("property");
         }
         Err(OpsError::InvalidParams(
@@ -378,6 +387,27 @@ mod tests {
         let qf = to_query_filter(item).unwrap();
         assert_eq!(qf.filter_type, FilterType::Property);
         assert_eq!(qf.property.as_deref(), Some("replacement_cost"));
+    }
+
+    /// A filter naming `property: "content"` (no explicit `type`) must route to
+    /// CONTENT search, not the property/json_extract path. Node content lives in the
+    /// top-level SQL `content` column, so inferring "property" here builds
+    /// json_extract(properties,'$.<type>.content') — always NULL — and returns a
+    /// silent false-negative zero-result (the bug). Content is matched via the
+    /// `content` column + the filter's value, so `property` is carried but unused.
+    #[test]
+    fn content_property_infers_content_category_not_property() {
+        let item: AgentFilterItem = serde_json::from_value(json!({
+            "operator": "contains",
+            "property": "content",
+            "value": "cereal"
+        }))
+        .expect("`type` must be optional on the wire");
+        assert_eq!(item.category().unwrap(), "content");
+        let qf = to_query_filter(item).unwrap();
+        assert_eq!(qf.filter_type, FilterType::Content);
+        assert_eq!(qf.operator, FilterOperator::Contains);
+        assert_eq!(qf.value, Some(json!("cereal")));
     }
 
     /// Relationship filters carry their own distinguishing fields, so they are
