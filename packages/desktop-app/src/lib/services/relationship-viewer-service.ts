@@ -96,3 +96,38 @@ export async function updateEdgeProperties(
 export async function searchTargets(targetType: string | null, query: string): Promise<Node[]> {
   return await backendAdapter.searchNodesByTitle(targetType, query, 10);
 }
+
+/**
+ * Field names declared on the target type's schema — the candidate set for
+ * offering target-node columns in the modal's per-group view settings. Values
+ * for those columns come from the related node's own properties (see
+ * `fetchNodesProperties`). Returns `[]` when the schema has no fields.
+ */
+export async function fetchTargetSchemaFields(targetType: string): Promise<string[]> {
+  const schema = await backendAdapter.getSchema(targetType);
+  return (schema.fields ?? []).map((field) => field.name);
+}
+
+/**
+ * Fetch the `properties` bag of each given node, keyed by id, so target-schema
+ * -field columns can read the related node's own values. Missing/unreadable
+ * nodes resolve to an empty bag rather than rejecting the whole batch, so one
+ * bad id never blanks the others.
+ */
+export async function fetchNodesProperties(
+  ids: string[]
+): Promise<Record<string, Record<string, unknown>>> {
+  const result: Record<string, Record<string, unknown>> = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const node = await backendAdapter.getNode(id);
+        result[id] = node?.properties ?? {};
+      } catch (error) {
+        log.warn('Failed to fetch target node properties', { id, error });
+        result[id] = {};
+      }
+    })
+  );
+  return result;
+}

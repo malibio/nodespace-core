@@ -28,13 +28,17 @@
   import XIcon from '@lucide/svelte/icons/x';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import CheckIcon from '@lucide/svelte/icons/check';
+  import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
+  import * as Popover from '$lib/components/ui/popover';
   import { createLogger } from '$lib/utils/logger';
   import {
     loadNodeRelationshipsView,
     addEdge,
     removeEdge,
     updateEdgeProperties,
-    searchTargets
+    searchTargets,
+    fetchTargetSchemaFields,
+    fetchNodesProperties
   } from '$lib/services/relationship-viewer-service';
   import type {
     NodeRelationshipsView,
@@ -42,6 +46,21 @@
     RelationshipRowView,
     RawEdgeField
   } from '$lib/services/relationship-grouping';
+  import {
+    LABEL_COLUMN,
+    applyViewSettings,
+    cellValue,
+    defaultColumnTokens,
+    defaultViewSettings,
+    parseColumnToken,
+    resolveColumnCandidates,
+    resolveDisplayedColumns,
+    type ColumnCandidate,
+    type RelationshipViewRow,
+    type RelationshipViewSettings,
+    type SortDirection
+  } from '$lib/services/relationship-view-settings';
+  import { RelationshipViewSettingsService } from '$lib/services/relationship-view-settings-service';
   import type { Node } from '$lib/types';
 
   const log = createLogger('RelationshipViewerModal');
@@ -71,6 +90,24 @@
   // fields the user has touched are stored; the merge on save layers them over
   // the row's stored edge values.
   let edgeDrafts = $state<Record<string, Record<string, unknown>>>({});
+
+  // --- View settings (issue #1918 slice d) -----------------------------------
+  // Per-group presentation prefs (columns/sort/filter), keyed by group.key and
+  // loaded from / persisted to localStorage per (nodeType, relationshipName,
+  // direction). The stored view-model is never mutated — displayed columns/rows
+  // are derived from these settings.
+  let viewSettings = $state<Record<string, RelationshipViewSettings>>({});
+  // Which group's settings popover is open, keyed by group.key.
+  let settingsOpen = $state<Record<string, boolean>>({});
+  // Target node field names per target type, lazily fetched when a settings
+  // popover opens, to offer target-schema-field columns.
+  let targetFieldNames = $state<Record<string, string[]>>({});
+  // Related-node property bags keyed by node id, lazily fetched when a group has
+  // a `field:` column selected (values for target-schema-field columns).
+  let targetProps = $state<Record<string, Record<string, unknown>>>({});
+  // Non-reactive guard tracking which node ids have been requested, so the
+  // property-fetch effect never double-fetches or loops.
+  let requestedPropIds = new Set<string>();
 
   // Target picker (one group open at a time).
   let addGroup = $state<RelationshipGroupView | null>(null);
@@ -116,6 +153,168 @@
     addStaged = null;
     addEdgeDraft = {};
     mutationError = null;
+    settingsOpen = {};
+    targetProps = {};
+    requestedPropIds = new Set();
+  }
+
+  // --- View settings: load / persist ----------------------------------------
+
+  // Load each table group's persisted settings when the view (re)loads. Settings
+  // are persisted on every change, so re-reading storage after a mutation reload
+  // restores exactly what the user configured.
+  $effect(() => {
+    if (!view) return;
+    const nodeType = view.nodeType;
+    const next: Record<string, RelationshipViewSettings> = {};
+    for (const group of view.groups) {
+      if (group.layout !== 'table') continue;
+      next[group.key] = RelationshipViewSettingsService.get(
+        nodeType,
+        group.relationshipName,
+        group.direction,
+        group.targetType
+      );
+    }
+    viewSettings = next;
+  });
+
+  // Fetch target-node property bags for rows in groups that show a `field:`
+  // column. Guarded by requestedPropIds so it fetches each id once and never
+  // loops (it does not read the reactive targetProps map).
+  $effect(() => {
+    if (!view) return;
+    const needed = new Set<string>();
+    for (const group of view.groups) {
+      if (group.layout !== 'table') continue;
+      const tokens = (viewSettings[group.key] ?? defaultViewSettings()).columns ?? [];
+      if (!tokens.some((token) => parseColumnToken(token).source === 'field')) continue;
+      for (const row of group.rows) needed.add(row.id);
+    }
+    const missing = [...needed].filter((id) => !requestedPropIds.has(id));
+    if (missing.length === 0) return;
+    for (const id of missing) requestedPropIds.add(id);
+    void loadTargetProps(missing);
+  });
+
+  async function loadTargetProps(ids: string[]) {
+    try {
+      const fetched = await fetchNodesProperties(ids);
+      targetProps = { ...targetProps, ...fetched };
+    } catch (error) {
+      log.error('Failed to load target properties', error);
+    }
+  }
+
+  function settingsFor(group: RelationshipGroupView): RelationshipViewSettings {
+    return viewSettings[group.key] ?? defaultViewSettings();
+  }
+
+  function candidatesFor(group: RelationshipGroupView): ColumnCandidate[] {
+    return resolveColumnCandidates({
+      edgeColumns: group.edgeColumns,
+      targetFieldNames: group.targetType ? targetFieldNames[group.targetType] : null
+    });
+  }
+
+  function displayedColumnsFor(group: RelationshipGroupView): ColumnCandidate[] {
+    return resolveDisplayedColumns(settingsFor(group), candidatesFor(group));
+  }
+
+  function displayedRowsFor(group: RelationshipGroupView): RelationshipViewRow[] {
+    const rows: RelationshipViewRow[] = group.rows.map((row) => ({
+      id: row.id,
+      nodeType: row.nodeType,
+      label: row.label,
+      edgeValues: row.edgeValues,
+      targetProperties: targetProps[row.id]
+    }));
+    return applyViewSettings(rows, settingsFor(group));
+  }
+
+  function isColumnShown(
+    group: RelationshipGroupView,
+    token: string,
+    candidates: ColumnCandidate[]
+  ): boolean {
+    if (token === LABEL_COLUMN) return true;
+    const tokens = settingsFor(group).columns ?? defaultColumnTokens(candidates);
+    return tokens.includes(token);
+  }
+
+  function saveSettings(group: RelationshipGroupView, next: RelationshipViewSettings) {
+    viewSettings = { ...viewSettings, [group.key]: next };
+    if (view) {
+      RelationshipViewSettingsService.set(
+        view.nodeType,
+        group.relationshipName,
+        group.direction,
+        group.targetType,
+        next
+      );
+    }
+  }
+
+  function onSettingsOpenChange(group: RelationshipGroupView, open: boolean) {
+    settingsOpen = { ...settingsOpen, [group.key]: open };
+    if (open) void ensureTargetSchema(group.targetType);
+  }
+
+  async function ensureTargetSchema(targetType: string | null) {
+    if (!targetType || targetType in targetFieldNames) return;
+    try {
+      const names = await fetchTargetSchemaFields(targetType);
+      targetFieldNames = { ...targetFieldNames, [targetType]: names };
+    } catch (error) {
+      log.error('Failed to load target schema fields', error);
+      targetFieldNames = { ...targetFieldNames, [targetType]: [] };
+    }
+  }
+
+  function toggleColumn(group: RelationshipGroupView, token: string, checked: boolean) {
+    const current = settingsFor(group);
+    const base = current.columns ?? defaultColumnTokens(candidatesFor(group));
+    const columns = checked
+      ? base.includes(token)
+        ? base
+        : [...base, token]
+      : base.filter((t) => t !== token);
+    // Hiding a column that drives the sort/filter would leave those controls
+    // pointing at a column the user can no longer see (and a select value with
+    // no matching option). Clear them when their column is hidden.
+    const sort = !checked && current.sort?.column === token ? null : current.sort;
+    const filter = !checked && current.filter?.column === token ? null : current.filter;
+    saveSettings(group, { ...current, columns, sort, filter });
+  }
+
+  function setSortColumn(group: RelationshipGroupView, token: string) {
+    const current = settingsFor(group);
+    const sort =
+      token === '' ? null : { column: token, direction: current.sort?.direction ?? 'asc' };
+    saveSettings(group, { ...current, sort });
+  }
+
+  function setSortDirection(group: RelationshipGroupView, direction: SortDirection) {
+    const current = settingsFor(group);
+    if (!current.sort) return;
+    saveSettings(group, { ...current, sort: { ...current.sort, direction } });
+  }
+
+  function setFilterColumn(group: RelationshipGroupView, token: string) {
+    const current = settingsFor(group);
+    const filter =
+      token === '' ? null : { column: token, value: current.filter?.value ?? '' };
+    saveSettings(group, { ...current, filter });
+  }
+
+  function setFilterValue(group: RelationshipGroupView, value: string) {
+    const current = settingsFor(group);
+    const filter = { column: current.filter?.column ?? LABEL_COLUMN, value };
+    saveSettings(group, { ...current, filter });
+  }
+
+  function resetGroupSettings(group: RelationshipGroupView) {
+    saveSettings(group, defaultViewSettings());
   }
 
   async function load(id: string) {
@@ -469,17 +668,108 @@
                   {group.count}
                   {group.count === 1 ? 'item' : 'items'}
                 </span>
+                {#if group.layout === 'table'}
+                  {@const candidates = candidatesFor(group)}
+                  {@const settings = settingsFor(group)}
+                  {@const sortableColumns = displayedColumnsFor(group)}
+                  <Popover.Root
+                    open={!!settingsOpen[group.key]}
+                    onOpenChange={(o) => onSettingsOpenChange(group, o)}
+                  >
+                    <Popover.Trigger
+                      class="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex size-7 shrink-0 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-1"
+                      aria-label="View settings"
+                    >
+                      <SlidersIcon class="size-4" />
+                    </Popover.Trigger>
+                    <Popover.Content class="w-72" align="end">
+                      <div class="grid gap-3 text-sm">
+                        <div class="grid gap-1.5">
+                          <span class="text-xs font-medium">Columns</span>
+                          {#each candidates as candidate (candidate.token)}
+                            <label class="flex items-center gap-2">
+                              <Checkbox
+                                checked={isColumnShown(group, candidate.token, candidates)}
+                                disabled={candidate.pinned}
+                                onCheckedChange={(v) =>
+                                  toggleColumn(group, candidate.token, v === true)}
+                              />
+                              <span>{candidate.label}</span>
+                            </label>
+                          {/each}
+                        </div>
+
+                        <div class="grid gap-1.5">
+                          <span class="text-xs font-medium">Sort</span>
+                          <div class="flex items-center gap-2">
+                            <select
+                              class="border-input bg-background h-8 flex-1 rounded-md border px-2 text-sm"
+                              value={settings.sort?.column ?? ''}
+                              onchange={(e) => setSortColumn(group, e.currentTarget.value)}
+                            >
+                              <option value="">None</option>
+                              {#each sortableColumns as col (col.token)}
+                                <option value={col.token}>{col.label}</option>
+                              {/each}
+                            </select>
+                            <select
+                              class="border-input bg-background h-8 rounded-md border px-2 text-sm disabled:opacity-50"
+                              value={settings.sort?.direction ?? 'asc'}
+                              disabled={!settings.sort}
+                              onchange={(e) =>
+                                setSortDirection(group, e.currentTarget.value === 'desc' ? 'desc' : 'asc')}
+                            >
+                              <option value="asc">Asc</option>
+                              <option value="desc">Desc</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div class="grid gap-1.5">
+                          <span class="text-xs font-medium">Filter</span>
+                          <div class="flex items-center gap-2">
+                            <select
+                              class="border-input bg-background h-8 flex-1 rounded-md border px-2 text-sm"
+                              value={settings.filter?.column ?? ''}
+                              onchange={(e) => setFilterColumn(group, e.currentTarget.value)}
+                            >
+                              <option value="">No filter</option>
+                              {#each sortableColumns as col (col.token)}
+                                <option value={col.token}>{col.label}</option>
+                              {/each}
+                            </select>
+                            <Input
+                              type="text"
+                              class="h-8 flex-1"
+                              placeholder="Value"
+                              value={settings.filter?.value ?? ''}
+                              disabled={!settings.filter}
+                              oninput={(e) => setFilterValue(group, e.currentTarget.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <Button variant="ghost" size="sm" onclick={() => resetGroupSettings(group)}>
+                            Reset
+                          </Button>
+                        </div>
+                      </div>
+                    </Popover.Content>
+                  </Popover.Root>
+                {/if}
               </header>
 
               {#if group.layout === 'table'}
+                {@const cols = displayedColumnsFor(group)}
+                {@const displayRows = displayedRowsFor(group)}
                 <div class="overflow-x-auto rounded-md border">
                   <table class="w-full border-collapse text-sm">
                     <thead>
                       <tr class="border-b">
-                        <th class="text-muted-foreground px-3 py-2 text-left font-medium">Target</th>
-                        {#each group.edgeColumns as column (column)}
-                          <th class="text-muted-foreground px-3 py-2 text-left font-medium capitalize">
-                            {formatColumn(column)}
+                        {#each cols as col (col.token)}
+                          <th class="text-muted-foreground px-3 py-2 text-left font-medium">
+                            {col.label}
                           </th>
                         {/each}
                         {#if editMode}
@@ -488,54 +778,59 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each group.rows as row (row.id)}
+                      {#each displayRows as row (row.id)}
                         <tr class="border-b last:border-b-0">
-                          <td class="px-3 py-2 align-top">
-                            <div class="font-medium">{row.label}</div>
-                            <div class="text-muted-foreground text-xs">{row.nodeType}</div>
-                          </td>
-                          {#each group.edgeColumns as column (column)}
-                            {@const field = group.edgeFields.find((f) => f.name === column)}
+                          {#each cols as col (col.token)}
                             <td class="px-3 py-2 align-top">
-                              {#if editMode && field}
-                                {@const kind = edgeInputKind(field)}
-                                {#if kind === 'boolean'}
-                                  <Checkbox
-                                    checked={Boolean(currentEdgeValue(group, row, column))}
-                                    onCheckedChange={(v) =>
-                                      setEdgeDraft(group, row, column, v === true)}
-                                  />
-                                {:else if kind === 'number'}
+                              {#if col.token === LABEL_COLUMN}
+                                <div class="font-medium">{row.label}</div>
+                                <div class="text-muted-foreground text-xs">{row.nodeType}</div>
+                              {:else if col.source === 'edge'}
+                                {@const column = col.key}
+                                {@const field = group.edgeFields.find((f) => f.name === column)}
+                                {#if editMode && field}
+                                  {@const kind = edgeInputKind(field)}
+                                  {#if kind === 'boolean'}
+                                    <Checkbox
+                                      checked={Boolean(currentEdgeValue(group, row, column))}
+                                      onCheckedChange={(v) =>
+                                        setEdgeDraft(group, row, column, v === true)}
+                                    />
+                                  {:else if kind === 'number'}
+                                    <Input
+                                      type="number"
+                                      class="h-8"
+                                      value={toInputString(currentEdgeValue(group, row, column))}
+                                      oninput={(e) =>
+                                        setEdgeDraft(
+                                          group,
+                                          row,
+                                          column,
+                                          coerceNumber(e.currentTarget.value)
+                                        )}
+                                    />
+                                  {:else}
+                                    <Input
+                                      type={edgeInputType(kind)}
+                                      class="h-8"
+                                      value={edgeInputValue(kind, currentEdgeValue(group, row, column))}
+                                      oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
+                                    />
+                                  {/if}
+                                {:else if editMode}
+                                  <!-- Undeclared edge key: editable as free text. -->
                                   <Input
-                                    type="number"
+                                    type="text"
                                     class="h-8"
                                     value={toInputString(currentEdgeValue(group, row, column))}
-                                    oninput={(e) =>
-                                      setEdgeDraft(
-                                        group,
-                                        row,
-                                        column,
-                                        coerceNumber(e.currentTarget.value)
-                                      )}
-                                  />
-                                {:else}
-                                  <Input
-                                    type={edgeInputType(kind)}
-                                    class="h-8"
-                                    value={edgeInputValue(kind, currentEdgeValue(group, row, column))}
                                     oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
                                   />
+                                {:else}
+                                  {formatValue(row.edgeValues[column])}
                                 {/if}
-                              {:else if editMode}
-                                <!-- Undeclared edge key: editable as free text. -->
-                                <Input
-                                  type="text"
-                                  class="h-8"
-                                  value={toInputString(currentEdgeValue(group, row, column))}
-                                  oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
-                                />
                               {:else}
-                                {formatValue(row.edgeValues[column])}
+                                <!-- Intrinsic (target type) or target-schema-field column: read-only. -->
+                                {formatValue(cellValue(row, col.token))}
                               {/if}
                             </td>
                           {/each}
@@ -566,13 +861,17 @@
                           {/if}
                         </tr>
                       {/each}
-                      {#if group.rows.length === 0}
+                      {#if displayRows.length === 0}
                         <tr>
                           <td
                             class="text-muted-foreground px-3 py-3 text-sm"
-                            colspan={group.edgeColumns.length + (editMode ? 2 : 1)}
+                            colspan={cols.length + (editMode ? 1 : 0)}
                           >
-                            No relationships yet — use Add below to create the first one.
+                            {#if group.rows.length === 0}
+                              No relationships yet — use Add below to create the first one.
+                            {:else}
+                              No relationships match the current filter.
+                            {/if}
                           </td>
                         </tr>
                       {/if}
