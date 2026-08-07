@@ -204,7 +204,9 @@ pub struct RelationshipGroup {
 }
 
 /// A node's typed relationships, grouped by (name, direction). Excludes the
-/// built-in structural relationships and includes only groups with ≥1 edge.
+/// built-in structural relationships. Declared outbound groups are always
+/// included (even with no edges yet, so the viewer can offer to add the first
+/// one); inbound groups appear only when they have at least one edge.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeRelationshipsOutput {
@@ -264,8 +266,9 @@ async fn collect_related(
 ///
 /// Each related node carries its connecting edge's `properties` so the viewer can
 /// render edge attributes. Built-in structural relationships (`has_child`,
-/// `mentions`, `member_of`, `has_role`) are excluded, and only groups with at
-/// least one edge are returned.
+/// `mentions`, `member_of`, `has_role`) are excluded. Declared outbound groups are
+/// always returned (even when empty, so the viewer can add the first edge);
+/// inbound groups are returned only when they have at least one edge.
 pub async fn get_node_relationships(
     node_service: &Arc<NodeService>,
     node_id: &str,
@@ -302,10 +305,10 @@ pub async fn get_node_relationships(
                 if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
                     continue;
                 }
+                // Emit the group even when it has no edges yet: an empty declared
+                // outbound relationship still needs to render so the viewer can add
+                // its first edge. (Inbound groups below keep skipping empties.)
                 let related = collect_related(node_service, node_id, &rel.name, "out").await?;
-                if related.is_empty() {
-                    continue;
-                }
                 let count = related.len();
                 groups.push(RelationshipGroup {
                     relationship_name: rel.name.clone(),

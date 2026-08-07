@@ -162,6 +162,10 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     const assigned = view.groups.find((g) => g.key === 'out:assigned_to:person');
     expect(assigned?.layout).toBe('table');
     expect(assigned?.edgeColumns).toEqual(['role']);
+    // Mutation-driving fields carried onto the view model.
+    expect(assigned?.relationshipName).toBe('assigned_to');
+    expect(assigned?.required).toBe(false);
+    expect(assigned?.edgeFields).toEqual([{ name: 'role', type: 'string' }]);
     expect(assigned?.rows[0]).toEqual({
       id: 'p1',
       nodeType: 'person',
@@ -174,15 +178,103 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     expect(belongs?.edgeColumns).toEqual([]);
   });
 
-  it('drops groups with no related nodes and reports isEmpty', () => {
+  it('retains a group with no related nodes but reports isEmpty', () => {
     const raw: RawNodeRelationships = {
       nodeId: 'task-1',
       nodeType: 'task',
       groups: [makeGroup({ related: [], count: 0 })]
     };
     const view = buildRelationshipsView(raw);
-    expect(view.groups).toHaveLength(0);
+    // The empty declared group is kept so the editable modal can add the first
+    // edge, but nothing is populated so the read-only view still counts as empty.
+    expect(view.groups).toHaveLength(1);
+    expect(view.groups[0].rows).toHaveLength(0);
     expect(view.isEmpty).toBe(true);
+  });
+
+  it('retains empty declared groups alongside populated ones and is not empty', () => {
+    const raw: RawNodeRelationships = {
+      nodeId: 'task-1',
+      nodeType: 'task',
+      groups: [
+        makeGroup({
+          relationshipName: 'assigned_to',
+          direction: 'out',
+          targetType: 'person',
+          edgeFields: [{ name: 'role', type: 'string' }],
+          count: 0,
+          related: []
+        }),
+        makeGroup({
+          relationshipName: 'belongs_to',
+          direction: 'out',
+          targetType: 'project',
+          count: 1,
+          related: [
+            { id: 'pr1', nodeType: 'project', title: 'Apollo', contentPreview: '', edgeProperties: {} }
+          ]
+        })
+      ]
+    };
+    const view = buildRelationshipsView(raw);
+    expect(view.groups).toHaveLength(2);
+    expect(view.isEmpty).toBe(false);
+    const assigned = view.groups.find((g) => g.key === 'out:assigned_to:person');
+    expect(assigned?.rows).toHaveLength(0);
+    // Declared edge fields still classify the empty group as a table.
+    expect(assigned?.layout).toBe('table');
+  });
+
+  it('carries relationshipName, required, and edgeFields onto the group view', () => {
+    const raw: RawNodeRelationships = {
+      nodeId: 'task-1',
+      nodeType: 'task',
+      groups: [
+        makeGroup({
+          relationshipName: 'assigned_to',
+          direction: 'out',
+          targetType: 'person',
+          required: true,
+          edgeFields: [
+            { name: 'role', type: 'string' },
+            { name: 'weight', type: 'number' }
+          ],
+          count: 1,
+          related: [
+            { id: 'p1', nodeType: 'person', title: 'Sarah', contentPreview: '', edgeProperties: { role: 'lead' } }
+          ]
+        })
+      ]
+    };
+    const view = buildRelationshipsView(raw);
+    const group = view.groups[0];
+    expect(group.relationshipName).toBe('assigned_to');
+    expect(group.required).toBe(true);
+    expect(group.edgeFields).toEqual([
+      { name: 'role', type: 'string' },
+      { name: 'weight', type: 'number' }
+    ]);
+  });
+
+  it('defaults required to false and edgeFields to [] when the group omits them', () => {
+    const raw: RawNodeRelationships = {
+      nodeId: 'task-1',
+      nodeType: 'task',
+      groups: [
+        makeGroup({
+          relationshipName: 'belongs_to',
+          required: null,
+          edgeFields: null,
+          count: 1,
+          related: [
+            { id: 'pr1', nodeType: 'project', title: 'Apollo', contentPreview: '', edgeProperties: {} }
+          ]
+        })
+      ]
+    };
+    const view = buildRelationshipsView(raw);
+    expect(view.groups[0].required).toBe(false);
+    expect(view.groups[0].edgeFields).toEqual([]);
   });
 
   it('labels an inbound group by reverseName and falls back to the row id when a target has no title', () => {

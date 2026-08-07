@@ -26,6 +26,7 @@
 
 import type { Node, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
+import type { RawNodeRelationships } from './relationship-grouping';
 import { createLogger } from '$lib/utils/logger';
 import { withDiagnosticLogging } from './diagnostic-logger';
 import { invoke } from '@tauri-apps/api/core';
@@ -256,6 +257,64 @@ class TauriAdapter implements BackendAdapter {
       [schemaId]
     );
   }
+
+  async searchNodesByTitle(nodeType: string | null, titleContains: string, limit?: number): Promise<Node[]> {
+    return this.queryNodes({ nodeType: nodeType ?? undefined, titleContains, limit });
+  }
+
+  async getNodeRelationships(nodeId: string): Promise<RawNodeRelationships> {
+    // The get_node_relationships command already parses relationships_json into
+    // a serde_json::Value and returns it; its shape matches RawNodeRelationships.
+    return withDiagnosticLogging(
+      'getNodeRelationships',
+      () => invoke<RawNodeRelationships>('get_node_relationships', { nodeId }),
+      [nodeId]
+    );
+  }
+
+  async createRelationship(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    edgeData?: Record<string, unknown>
+  ): Promise<void> {
+    return withDiagnosticLogging(
+      'createRelationship',
+      () => invoke<void>('create_relationship', {
+        sourceId,
+        relationshipName,
+        targetId,
+        edgeData: edgeData ?? null
+      }),
+      [sourceId, relationshipName, targetId]
+    );
+  }
+
+  async deleteRelationship(sourceId: string, relationshipName: string, targetId: string): Promise<void> {
+    return withDiagnosticLogging(
+      'deleteRelationship',
+      () => invoke<void>('delete_relationship', { sourceId, relationshipName, targetId }),
+      [sourceId, relationshipName, targetId]
+    );
+  }
+
+  async updateRelationshipProperties(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    properties: Record<string, unknown>
+  ): Promise<void> {
+    return withDiagnosticLogging(
+      'updateRelationshipProperties',
+      () => invoke<void>('update_relationship_properties', {
+        sourceId,
+        relationshipName,
+        targetId,
+        properties
+      }),
+      [sourceId, relationshipName, targetId]
+    );
+  }
 }
 
 // ============================================================================
@@ -454,6 +513,52 @@ export class HttpAdapter implements BackendAdapter {
     const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getSchema(schemaId)}`);
     return this.handleResponse<SchemaNode>(response);
   }
+
+  async searchNodesByTitle(nodeType: string | null, titleContains: string, limit?: number): Promise<Node[]> {
+    return this.queryNodes({ nodeType: nodeType ?? undefined, titleContains, limit });
+  }
+
+  async getNodeRelationships(nodeId: string): Promise<RawNodeRelationships> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getNodeRelationships(nodeId)}`);
+    return this.handleResponse<RawNodeRelationships>(response);
+  }
+
+  async createRelationship(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    edgeData?: Record<string, unknown>
+  ): Promise<void> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.createRelationship()}`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ sourceId, relationshipName, targetId, edgeData: edgeData ?? null })
+    });
+    await this.handleResponse<void>(response);
+  }
+
+  async deleteRelationship(sourceId: string, relationshipName: string, targetId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.deleteRelationship()}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ sourceId, relationshipName, targetId })
+    });
+    await this.handleResponse<void>(response);
+  }
+
+  async updateRelationshipProperties(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    properties: Record<string, unknown>
+  ): Promise<void> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.updateRelationshipProperties()}`, {
+      method: 'PATCH',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ sourceId, relationshipName, targetId, properties })
+    });
+    await this.handleResponse<void>(response);
+  }
 }
 
 // ============================================================================
@@ -564,6 +669,25 @@ class MockAdapter implements BackendAdapter {
       fields: []
     };
   }
+  async searchNodesByTitle(_nodeType: string | null, _titleContains: string, _limit?: number): Promise<Node[]> {
+    return [];
+  }
+  async getNodeRelationships(nodeId: string): Promise<RawNodeRelationships> {
+    return { nodeId, nodeType: '', groups: [] };
+  }
+  async createRelationship(
+    _sourceId: string,
+    _relationshipName: string,
+    _targetId: string,
+    _edgeData?: Record<string, unknown>
+  ): Promise<void> {}
+  async deleteRelationship(_sourceId: string, _relationshipName: string, _targetId: string): Promise<void> {}
+  async updateRelationshipProperties(
+    _sourceId: string,
+    _relationshipName: string,
+    _targetId: string,
+    _properties: Record<string, unknown>
+  ): Promise<void> {}
 }
 
 // ============================================================================
