@@ -11,8 +11,14 @@
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { createLogger } from '$lib/utils/logger';
+  import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   const log = createLogger('PersonSchemaForm');
+
+  // Relationships viewer entry point (issue #1918) — inbound relationships (e.g.
+  // tasks assigned to this person) surface here.
+  let showRelationships = $state(false);
 
   let { nodeId }: { nodeId: string } = $props();
 
@@ -74,7 +80,19 @@
       onblur={handleEmailBlur}
     />
   </div>
+
+  <!-- Relationships entry point (issue #1918) -->
+  <button
+    type="button"
+    class="flex w-full items-center gap-2 py-2 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
+    onclick={() => (showRelationships = true)}
+  >
+    <WaypointsIcon class="h-4 w-4" />
+    <span>Relationships</span>
+  </button>
 </div>
+
+<RelationshipViewerModal bind:open={showRelationships} {nodeId} />
 
 <style>
   .person-schema-form {

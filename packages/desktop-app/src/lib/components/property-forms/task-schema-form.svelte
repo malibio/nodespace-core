@@ -28,9 +28,15 @@
   import { nodeToTaskNode } from '$lib/types/task-node';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
+  import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   // Logger instance for TaskSchemaForm component
   const log = createLogger('TaskSchemaForm');
+
+  // Relationships viewer entry point (issue #1918) — a task's typed
+  // relationships (e.g. assigned_to → person) surface here, as on other forms.
+  let showRelationships = $state(false);
 
   // Props - only nodeId needed since we know it's a task
   let { nodeId }: { nodeId: string } = $props();
@@ -716,7 +722,19 @@
         </div>
       </Collapsible.Content>
     </Collapsible.Root>
+
+    <!-- Relationships entry point (issue #1918) -->
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 py-3 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
+      onclick={() => (showRelationships = true)}
+    >
+      <WaypointsIcon class="h-4 w-4" />
+      <span>Relationships</span>
+    </button>
   </div>
+
+  <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
 {/if}
 
 <style>
