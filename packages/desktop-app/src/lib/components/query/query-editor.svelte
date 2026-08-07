@@ -1,15 +1,31 @@
 <!--
-  QueryEditor - JSON textarea editor for QueryDefinition objects
+  QueryEditor - structured filter builder for a QueryDefinition (issue #1920)
 
-  Allows users to create or edit a query by writing JSON directly.
-  Validates that targetType exists and filters is an array before saving.
-  Includes collapsible template examples for common query patterns.
-  Optional preview shows estimated result count before saving.
+  Replaces the raw-JSON textarea with property/operator/value rows built from the
+  target type's schema fields:
+  - `targetType` is inherited from the view context and is never an input here.
+  - Property is chosen from the schema's declared fields (no free-typed names).
+  - Operator is narrowed to the selected field's type.
+  - Value renders a typed control (enum select, number, boolean, text). `exists`
+    takes no value; `in` accepts a comma-separated list.
+
+  Emits a validated QueryDefinition on save; targetType/sorting/limit from the
+  incoming query are preserved untouched.
 -->
 
 <script lang="ts">
   import type { QueryDefinition } from '$lib/types/query';
-  import { DEFAULT_QUERY, QUERY_TEMPLATE_EXAMPLES } from '$lib/types/query';
+  import type { SchemaField } from '$lib/types/schema-node';
+  import {
+    type FilterRow,
+    type Operator,
+    OPERATOR_LABELS,
+    buildDefinition,
+    enumOptions,
+    labelForField,
+    operatorsForType,
+    rowsFromDefinition,
+  } from './query-editor-model';
   import { untrack } from 'svelte';
   import { createLogger } from '$lib/utils/logger';
 
@@ -17,78 +33,83 @@
 
   let {
     query = null,
+    fields = [],
+    targetType,
     onSave,
     onCancel,
     onPreview,
   }: {
     query?: QueryDefinition | null;
+    /** The target type's schema fields — drive the property/operator/value controls. */
+    fields?: SchemaField[];
+    /** Inherited from the view context; preserved, never edited here. */
+    targetType: string;
     onSave: (_query: QueryDefinition) => void;
     onCancel?: () => void;
-    /** Optional callback to get preview count. Returns the number of matching nodes. */
+    /** Optional callback to get the live matching-node count for a definition. */
     onPreview?: (_query: QueryDefinition) => Promise<number>;
   } = $props();
 
-  // Capture the prop value once at component init rather than tracking it reactively,
-  // so parent re-derivations don't overwrite in-progress edits. The $state initializer
-  // runs once with the initial `query` prop — no $effect syncing prop→state (ADR-049).
-  let jsonText = $state(untrack(() => JSON.stringify(query ?? DEFAULT_QUERY, null, 2)));
+  function fieldByName(name: string): SchemaField | undefined {
+    return fields.find((f) => f.name === name);
+  }
+
+  function operatorsFor(field: SchemaField | undefined): Operator[] {
+    return operatorsForType(field?.type);
+  }
+
+  // Capture once at init (ADR-049 — no prop→state $effect syncing).
+  let rows = $state<FilterRow[]>(untrack(() => rowsFromDefinition(query)));
   let errorMessage = $state<string | null>(null);
   let previewCount = $state<number | null>(null);
   let previewLoading = $state(false);
 
-  function validateAndSave(): void {
-    errorMessage = null;
+  const canAdd = $derived(fields.length > 0);
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      errorMessage = `Invalid JSON: ${message}`;
-      log.warn('QueryEditor: invalid JSON', { error: message });
-      return;
-    }
+  function addRow(): void {
+    const first = fields[0];
+    if (!first) return;
+    rows = [...rows, { property: first.name, operator: operatorsFor(first)[0], value: '' }];
+    previewCount = null;
+  }
 
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      errorMessage = 'Query must be a JSON object.';
-      return;
-    }
+  function removeRow(i: number): void {
+    rows = rows.filter((_, idx) => idx !== i);
+    previewCount = null;
+  }
 
-    const candidate = parsed as Record<string, unknown>;
-
-    if (!candidate.targetType || typeof candidate.targetType !== 'string') {
-      errorMessage = 'Missing required field: targetType (must be a non-empty string).';
-      return;
-    }
-
-    if (!Array.isArray(candidate.filters)) {
-      errorMessage = 'Missing required field: filters (must be an array).';
-      return;
-    }
-
-    const definition: QueryDefinition = {
-      targetType: candidate.targetType,
-      filters: candidate.filters as QueryDefinition['filters'],
+  /** Keep the operator valid when the property (and thus its type) changes. */
+  function onPropertyChange(i: number, property: string): void {
+    const allowed = operatorsFor(fieldByName(property));
+    const current = rows[i].operator;
+    rows[i] = {
+      property,
+      operator: allowed.includes(current) ? current : allowed[0],
+      value: '',
     };
+    previewCount = null;
+  }
 
-    if (candidate.sorting !== undefined) {
-      if (!Array.isArray(candidate.sorting)) {
-        errorMessage = 'Optional field sorting must be an array.';
-        return;
-      }
-      definition.sorting = candidate.sorting as QueryDefinition['sorting'];
+  /** Build a validated definition from the rows, preserving inherited fields. */
+  function build(): QueryDefinition | null {
+    const result = buildDefinition(rows, fields, {
+      targetType: query?.targetType ?? targetType,
+      sorting: query?.sorting,
+      limit: query?.limit,
+    });
+    if (!result.ok) {
+      errorMessage = result.error;
+      return null;
     }
+    errorMessage = null;
+    return result.definition;
+  }
 
-    if (candidate.limit !== undefined) {
-      if (typeof candidate.limit !== 'number') {
-        errorMessage = 'Optional field limit must be a number.';
-        return;
-      }
-      definition.limit = candidate.limit;
-    }
-
-    log.debug('QueryEditor: saving query', { targetType: definition.targetType });
-    onSave(definition);
+  function handleSave(): void {
+    const def = build();
+    if (!def) return;
+    log.debug('QueryEditor: saving structured query', { targetType: def.targetType, filters: def.filters.length });
+    onSave(def);
   }
 
   function handleCancel(): void {
@@ -96,46 +117,13 @@
     onCancel?.();
   }
 
-  function applyTemplate(template: QueryDefinition): void {
-    jsonText = JSON.stringify(template, null, 2);
-    errorMessage = null;
-    previewCount = null;
-  }
-
   async function handlePreview(): Promise<void> {
     if (!onPreview) return;
-    errorMessage = null;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      errorMessage = `Invalid JSON: ${message}`;
-      return;
-    }
-
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      errorMessage = 'Query must be a JSON object.';
-      return;
-    }
-
-    const candidate = parsed as Record<string, unknown>;
-    if (!candidate.targetType || typeof candidate.targetType !== 'string' || !Array.isArray(candidate.filters)) {
-      errorMessage = 'Fix targetType and filters before previewing.';
-      return;
-    }
-
-    const definition: QueryDefinition = {
-      targetType: candidate.targetType,
-      filters: candidate.filters as QueryDefinition['filters'],
-      sorting: Array.isArray(candidate.sorting) ? candidate.sorting as QueryDefinition['sorting'] : undefined,
-      limit: typeof candidate.limit === 'number' ? candidate.limit : undefined,
-    };
-
+    const def = build();
+    if (!def) return;
     previewLoading = true;
     try {
-      previewCount = await onPreview(definition);
+      previewCount = await onPreview(def);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       log.warn('QueryEditor: preview failed', { error: message });
@@ -149,21 +137,71 @@
 
 <div class="query-editor">
   <div class="editor-body">
-    <label class="editor-label" for="query-json">Query Definition (JSON)</label>
-    <textarea
-      id="query-json"
-      class="json-textarea"
-      bind:value={jsonText}
-      rows={14}
-      spellcheck={false}
-    ></textarea>
+    <div class="filter-header">
+      <span class="editor-label">Filters</span>
+      <span class="target-chip" title="The type this view targets (inherited)">{targetType || query?.targetType || '—'}</span>
+    </div>
+
+    {#if rows.length === 0}
+      <p class="empty-hint">No filters — this view shows every {targetType || 'node'}. Add a filter to narrow it.</p>
+    {/if}
+
+    {#each rows as row, i (i)}
+      {@const field = fieldByName(row.property)}
+      <div class="filter-row">
+        <select
+          class="row-control property"
+          value={row.property}
+          onchange={(e) => onPropertyChange(i, (e.currentTarget as { value: string }).value)}
+          aria-label="Filter property"
+        >
+          {#each fields as f (f.name)}
+            <option value={f.name}>{labelForField(f)}</option>
+          {/each}
+        </select>
+
+        <select class="row-control operator" bind:value={row.operator} aria-label="Filter operator">
+          {#each operatorsFor(field) as op (op)}
+            <option value={op}>{OPERATOR_LABELS[op]}</option>
+          {/each}
+        </select>
+
+        {#if row.operator === 'exists'}
+          <span class="row-control value-placeholder">(no value)</span>
+        {:else if field?.type === 'enum' && row.operator !== 'in'}
+          <select class="row-control value" bind:value={row.value} aria-label="Filter value">
+            <option value="" disabled>Choose…</option>
+            {#each enumOptions(field) as v (v.value)}
+              <option value={v.value}>{v.label}</option>
+            {/each}
+          </select>
+        {:else if field?.type === 'boolean'}
+          <select class="row-control value" bind:value={row.value} aria-label="Filter value">
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+        {:else}
+          <input
+            class="row-control value"
+            type={field?.type === 'number' && row.operator !== 'in' ? 'number' : 'text'}
+            bind:value={row.value}
+            placeholder={row.operator === 'in' ? 'a, b, c' : 'value'}
+            aria-label="Filter value"
+          />
+        {/if}
+
+        <button class="btn-remove" onclick={() => removeRow(i)} aria-label="Remove filter" title="Remove filter">✕</button>
+      </div>
+    {/each}
+
+    <button class="btn-add" onclick={addRow} disabled={!canAdd}>+ Add filter</button>
 
     {#if errorMessage}
       <p class="error-message" role="alert">{errorMessage}</p>
     {/if}
 
     <div class="editor-actions">
-      <button class="btn-save" onclick={validateAndSave}>Save</button>
+      <button class="btn-save" onclick={handleSave}>Save</button>
       {#if onPreview}
         <button class="btn-preview" onclick={handlePreview} disabled={previewLoading}>
           {#if previewLoading}
@@ -180,24 +218,6 @@
       {/if}
     </div>
   </div>
-
-  <details class="templates">
-    <summary class="templates-summary">Query template examples</summary>
-    <div class="templates-list">
-      {#each QUERY_TEMPLATE_EXAMPLES as template (template.label)}
-        <div class="template-item">
-          <span class="template-label">{template.label}</span>
-          <button
-            class="btn-use-template"
-            onclick={() => applyTemplate(template.definition)}
-          >
-            Use
-          </button>
-        </div>
-        <pre class="template-preview">{JSON.stringify(template.definition, null, 2)}</pre>
-      {/each}
-    </div>
-  </details>
 </div>
 
 <style>
@@ -217,6 +237,13 @@
     gap: 0.5rem;
   }
 
+  .filter-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
   .editor-label {
     font-size: 0.8125rem;
     font-weight: 500;
@@ -224,24 +251,103 @@
     letter-spacing: 0.02em;
   }
 
-  .json-textarea {
-    width: 100%;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.8125rem;
-    line-height: 1.6;
-    padding: 0.75rem;
+  .target-chip {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
     background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .empty-hint {
+    margin: 0 0 0.25rem;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .row-control {
+    font-size: 0.8125rem;
+    padding: 0.375rem 0.5rem;
+    background: hsl(var(--background));
     color: hsl(var(--foreground));
     border: 1px solid hsl(var(--border));
     border-radius: 0.375rem;
-    resize: vertical;
-    box-sizing: border-box;
     outline: none;
-    transition: border-color 0.15s ease;
   }
 
-  .json-textarea:focus {
+  .row-control:focus {
     border-color: hsl(var(--primary));
+  }
+
+  .row-control.property {
+    flex: 0 0 34%;
+  }
+
+  .row-control.operator {
+    flex: 0 0 22%;
+  }
+
+  .row-control.value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .value-placeholder {
+    flex: 1 1 auto;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+    font-style: italic;
+  }
+
+  .btn-remove {
+    flex: 0 0 auto;
+    width: 1.75rem;
+    height: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    background: transparent;
+    color: hsl(var(--muted-foreground));
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .btn-remove:hover {
+    color: hsl(var(--destructive));
+    border-color: hsl(var(--destructive) / 0.5);
+  }
+
+  .btn-add {
+    align-self: flex-start;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: transparent;
+    color: hsl(var(--primary));
+    border: 1px dashed hsl(var(--border));
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-add:hover:not(:disabled) {
+    background: hsl(var(--muted));
+  }
+
+  .btn-add:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .error-message {
@@ -257,6 +363,7 @@
   .editor-actions {
     display: flex;
     gap: 0.5rem;
+    margin-top: 0.25rem;
   }
 
   .btn-save {
@@ -275,27 +382,7 @@
     opacity: 0.9;
   }
 
-  .btn-preview {
-    padding: 0.4375rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    background: hsl(var(--secondary));
-    color: hsl(var(--secondary-foreground));
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.375rem;
-    cursor: pointer;
-    transition: background-color 0.15s ease;
-  }
-
-  .btn-preview:hover:not(:disabled) {
-    background: hsl(var(--muted));
-  }
-
-  .btn-preview:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
+  .btn-preview,
   .btn-cancel {
     padding: 0.4375rem 1rem;
     font-size: 0.875rem;
@@ -308,91 +395,13 @@
     transition: background-color 0.15s ease;
   }
 
+  .btn-preview:hover:not(:disabled),
   .btn-cancel:hover {
     background: hsl(var(--muted));
   }
 
-  .templates {
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.375rem;
-    overflow: hidden;
-  }
-
-  .templates-summary {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: hsl(var(--muted-foreground));
-    cursor: pointer;
-    background: hsl(var(--muted));
-    user-select: none;
-    list-style: none;
-  }
-
-  .templates-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .templates-summary::before {
-    content: '▶';
-    display: inline-block;
-    margin-right: 0.375rem;
-    font-size: 0.625rem;
-    transition: transform 0.15s ease;
-  }
-
-  details[open] .templates-summary::before {
-    transform: rotate(90deg);
-  }
-
-  .templates-list {
-    padding: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    background: hsl(var(--background));
-  }
-
-  .template-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .template-label {
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: hsl(var(--foreground));
-  }
-
-  .btn-use-template {
-    padding: 0.25rem 0.625rem;
-    font-size: 0.75rem;
-    background: hsl(var(--secondary));
-    color: hsl(var(--secondary-foreground));
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.25rem;
-    cursor: pointer;
-    transition: background-color 0.15s ease;
-    flex-shrink: 0;
-  }
-
-  .btn-use-template:hover {
-    background: hsl(var(--muted));
-  }
-
-  .template-preview {
-    margin: 0;
-    padding: 0.5rem 0.75rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.75rem;
-    line-height: 1.5;
-    color: hsl(var(--muted-foreground));
-    background: hsl(var(--muted));
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.25rem;
-    overflow-x: auto;
-    white-space: pre;
+  .btn-preview:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 </style>

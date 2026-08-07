@@ -405,8 +405,14 @@
   }
 
   async function handleQueryPreview(definition: QueryDefinition): Promise<number> {
-    const nodes = await backendAdapter.queryNodes({ nodeType: definition.targetType });
-    return nodes.length;
+    // queryNodes only filters by nodeType, so apply the definition's filters
+    // (and sort/limit) client-side — the same path the saved query executes —
+    // otherwise the preview reports the whole-type count regardless of filters.
+    const nodes = await backendAdapter.queryNodes({
+      nodeType: definition.targetType,
+      limit: FETCH_LIMIT,
+    });
+    return executeQueryDefinition(nodes, definition).length;
   }
 
   function handleQueryCancel(): void {
@@ -622,6 +628,8 @@
       {/if}
       <QueryEditor
         query={currentDefinition}
+        fields={schemaNode?.fields ?? []}
+        {targetType}
         onSave={handleQuerySave}
         onCancel={handleQueryCancel}
         onPreview={handleQueryPreview}
