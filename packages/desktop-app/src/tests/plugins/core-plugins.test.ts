@@ -166,7 +166,7 @@ describe('Core Plugins Integration', () => {
       // Note: Logger output is intentionally silenced during tests
       const stats = registry.getStats();
       expect(stats.pluginsCount).toBe(14); // text, header, task, checkbox, date, code-block, quote-block, ordered-list, horizontal-line, table, query, collection, ai-chat, person
-      expect(stats.slashCommandsCount).toBe(14); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 1, ai-chat: 1, person: 1, collection: 0, date: 0
+      expect(stats.slashCommandsCount).toBe(13); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, ai-chat: 1, person: 1, query: 0 (removed #1919), collection: 0, date: 0
       expect(stats.viewersCount).toBe(5); // date, task, collection, query, and ai-chat have custom viewers
       expect(stats.referencesCount).toBe(14); // all plugins have references
     });
@@ -176,8 +176,8 @@ describe('Core Plugins Integration', () => {
 
       const stats = registry.getStats();
 
-      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 1, ai-chat: 1, person: 1, date: 0, collection: 0 = 14 total
-      expect(stats.slashCommandsCount).toBe(14);
+      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, ai-chat: 1, person: 1, query: 0 (removed #1919), date: 0, collection: 0 = 13 total
+      expect(stats.slashCommandsCount).toBe(13);
     });
 
     it('should provide all slash commands with proper inheritance', () => {
@@ -185,7 +185,7 @@ describe('Core Plugins Integration', () => {
 
       const commands = registry.getAllSlashCommands();
 
-      expect(commands).toHaveLength(14); // text, header1-3, task, checkbox, code, quote, ordered-list, hr, table, query, ai-chat, person
+      expect(commands).toHaveLength(13); // text, header1-3, task, checkbox, code, quote, ordered-list, hr, table, ai-chat, person (query slash command removed #1919)
 
       // Verify text node commands from BasicNodeTypeRegistry work
       const textCommands = commands.filter((cmd) =>
@@ -361,7 +361,7 @@ describe('Core Plugins Integration', () => {
       registerExternalPlugin(registry, externalPlugin);
 
       expect(registry.getAllPlugins()).toHaveLength(initialCount + 1);
-      expect(registry.getAllSlashCommands()).toHaveLength(15); // 14 core + 1 external
+      expect(registry.getAllSlashCommands()).toHaveLength(14); // 13 core + 1 external (query slash command removed #1919)
     });
   });
 

@@ -1,24 +1,30 @@
 <!--
-  QueryNodeViewer - Page-level viewer for displaying query results
+  QueryNodeViewer - Page-level viewer for a type's default view and saved queries
 
-  Loads a schema node by nodeId, derives column definitions from its fields,
-  executes a query for all nodes matching the schema's targetType, and renders
-  results in a TableView. Row clicks open the node in another panel.
+  Serves two shapes from one component, branching on the node it was handed
+  (issue #1919):
 
-  This is the target for Schema Types sidenav navigation — clicking a schema
-  type passes the schema's nodeId directly (every schema is itself a node).
+  - schema node → the DEFAULT type view: all nodes of the type, unfiltered,
+    nothing persisted. The first divergence — a filter edit, a view/group-by
+    change, or a title rename — MATERIALIZES a real `nodeType: 'query'` node and
+    re-routes the tab to it, so subsequent edits persist.
+  - query node → a SAVED query: reads the stored QueryDefinition + view config,
+    executes with filters (client-side — queryNodes only filters by nodeType),
+    and persists edits back onto the node.
 
-  Follows the *NodeViewer pattern but does NOT wrap BaseNodeViewer because
-  it shows flat query results rather than a hierarchical node collection.
+  Row clicks open the node in another panel. Follows the *NodeViewer pattern but
+  does NOT wrap BaseNodeViewer because it shows flat query results rather than a
+  hierarchical node collection.
 -->
 
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import { v4 as uuidv4 } from 'uuid';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { createSchemaInstance, shouldIntegrateInstance } from '$lib/services/schema-authoring';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
+  import { navigationStore, setActiveTab, updateTabContent } from '$lib/stores/navigation.svelte';
   import TableView from '$lib/components/query/table-view.svelte';
   import ListView from '$lib/components/query/list-view.svelte';
   import KanbanView from '$lib/components/query/kanban-view.svelte';
@@ -27,21 +33,53 @@
   import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { createLogger } from '$lib/utils/logger';
-  import { queryPreferencesService } from '$lib/services/query-preferences-service';
-  import type { QueryPreferences } from '$lib/types/query-preferences';
+  import {
+    DEFAULT_QUERY_TITLE,
+    MATERIALIZED_QUERY_TITLE,
+    resolveViewerMode,
+    parseQueryDefinition,
+    parseViewConfig,
+    mergeViewConfig,
+    buildMaterializedProperties,
+    executeQueryDefinition,
+    unevaluableFilters,
+    type QueryViewKind,
+    type QueryViewConfigState,
+    type ViewerMode
+  } from '$lib/components/query/query-node-model';
 
   const log = createLogger('QueryNodeViewer');
 
+  // Upper bound on the candidate set fetched before client-side filtering.
+  // queryNodes only filters by nodeType, so a saved query must fetch its type's
+  // nodes and filter them here; without an explicit limit the daemon caps at 100,
+  // which would filter an arbitrary first-100 slice. This bounds the fetch while
+  // covering realistic type sizes; larger sets surface a "capped" caveat.
+  const FETCH_LIMIT = 1000;
+
   let {
     nodeId,
-    paneId
+    paneId,
+    onNodeIdChange
   }: {
     nodeId: string;
     paneId?: string;
+    /** Re-point this tab at a new node id (used after materialization). Supplied
+     *  by pane-content; a navigation-store fallback covers its absence. */
+    onNodeIdChange?: (_newNodeId: string) => void;
   } = $props();
 
+  /** Which shape we're serving; set once the backing node is loaded. */
+  let mode = $state<ViewerMode>('default');
+  /** The saved query node (SAVED branch only); null on the default type view. */
+  let queryNode = $state<Node | null>(null);
+  /** The schema whose fields drive columns / Kanban grouping. */
   let schemaNode = $state<SchemaNode | null>(null);
-  // IDs of nodes loaded for this schema type.
+  /** The node type the query targets — schema id (default) or the query's
+   *  stored targetType (saved). Inherited, never asked for. */
+  let targetType = $state('');
+
+  // IDs of nodes loaded for this view.
   // TableView calls sharedNodeStore.getNode(id) per row inside its reactive template,
   // which is how task-node.svelte achieves live reactivity — the lookup happens inside
   // the Svelte component's tracked context, not in a pre-computed $derived array.
@@ -53,78 +91,168 @@
 
   // Edit mode state
   let isEditMode = $state(false);
-  /** Raw node used for version tracking during property updates */
-  let rawNode = $state<Node | null>(null);
-  /** Error message shown to user when save fails */
+  /** Error message shown to user when save/materialize fails */
   let saveError = $state<string | null>(null);
   /** Error message shown to user when creating a new instance fails */
   let createError = $state<string | null>(null);
   /** True while a new-instance create is in flight (disables the button) */
   let isCreating = $state(false);
+  /** Guards against a second materialize firing before the tab re-routes. */
+  let materializing = $state(false);
 
-  // View state — persisted per query node via QueryPreferencesService
-  let activeView = $state<QueryPreferences['lastView']>('table');
+  // View state. On the SAVED branch these are restored from the query node's
+  // viewConfig; on the DEFAULT branch they are in-memory only — changing either
+  // is a divergence that materializes a node.
+  let activeView = $state<QueryViewKind>('table');
+  let kanbanGroupBy = $state<string | undefined>(undefined);
+
+  // Title editing state
+  let isEditingTitle = $state(false);
+  let titleDraft = $state('');
+  // Set when the user presses Escape so the input's blur-triggered commit is a
+  // no-op rather than an unwanted rename/materialize.
+  let titleEditCancelled = $state(false);
+
+  // True when the type's node set was capped by FETCH_LIMIT — client-side
+  // filtering then ran over a partial set, so the viewer says so.
+  let fetchCapped = $state(false);
 
   const hasResults = $derived(loadedNodeIds.length > 0);
 
-  // Load schema and execute the query on mount. pane-content remounts this viewer via
-  // {#key ...nodeId} when the tab's nodeId changes, so this is a discrete per-node
-  // lifecycle load — not a reactive-state watch (ADR-049).
+  /** Header title: "Default" for the type view, the query's name when saved. */
+  const displayTitle = $derived(
+    mode === 'saved'
+      ? queryNode?.content?.trim() || MATERIALIZED_QUERY_TITLE
+      : DEFAULT_QUERY_TITLE
+  );
+
+  /** The definition seeding the filter editor / a materialize. */
+  const currentDefinition = $derived.by((): QueryDefinition => {
+    if (mode === 'saved' && queryNode) return parseQueryDefinition(queryNode);
+    return { targetType, filters: [] };
+  });
+
+  /** The view config reflecting the current in-memory selection. */
+  const currentViewConfig = $derived.by((): QueryViewConfigState => ({
+    lastView: activeView,
+    ...(kanbanGroupBy ? { kanban: { groupBy: kanbanGroupBy } } : {})
+  }));
+
+  /**
+   * A visible note when client-side execution can't be fully faithful — the
+   * fetch was capped, or the saved definition has filters that can't be
+   * evaluated here (parent/children relationships need graph traversal). Keeps
+   * the result honest rather than silently under- or over-returning.
+   */
+  const executionCaveat = $derived.by((): string | null => {
+    const notes: string[] = [];
+    if (fetchCapped) notes.push(`showing the first ${FETCH_LIMIT} nodes of this type`);
+    if (mode === 'saved' && unevaluableFilters(currentDefinition.filters).length > 0) {
+      notes.push(
+        'relationship filters (parent/children) can’t be applied here, so results may be broader than the saved query'
+      );
+    }
+    return notes.length > 0 ? notes.join('; ') : null;
+  });
+
+  // Load the backing node and execute the query on mount. pane-content remounts
+  // this viewer via {#key ...nodeId} when the tab's nodeId changes, so this is a
+  // discrete per-node lifecycle load — not a reactive-state watch (ADR-049).
   onMount(() => {
     loadAndQuery(nodeId);
   });
 
-  async function loadAndQuery(schemaId: string) {
+  async function safeGetSchema(typeId: string): Promise<SchemaNode | null> {
+    try {
+      return await backendAdapter.getSchema(typeId);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (isSchemaNotFound(message)) return null;
+      throw e;
+    }
+  }
+
+  async function loadAndQuery(id: string) {
     const loadId = ++currentLoadId;
     // ADR-053: capture the database generation so a switch mid-load drops these
     // rows instead of writing the previous database's nodes into the now-active store.
     const epoch = sharedNodeStore.currentEpoch();
     queryState = 'loading';
     error = null;
+    saveError = null;
     schemaNode = null;
+    queryNode = null;
     loadedNodeIds = [];
-
-    // Restore persisted view preference for this query node (synchronous)
-    const prefs = queryPreferencesService.getPreferences(schemaId);
-    activeView = prefs.lastView;
+    fetchCapped = false;
 
     try {
-      // Load raw node for property editing (version tracking)
-      const raw = await backendAdapter.getNode(schemaId);
+      // Load the raw node and branch on what it actually is — the tab's
+      // decorative `nodeType: 'query'` is not trusted (issue #1919).
+      const raw = await backendAdapter.getNode(id);
       if (loadId !== currentLoadId) return;
-      rawNode = raw;
+      mode = resolveViewerMode(raw);
 
-      const schema = await backendAdapter.getSchema(schemaId);
+      if (mode === 'saved' && raw) {
+        // SAVED branch: read the stored definition + view config off the node.
+        queryNode = raw;
+        const definition = parseQueryDefinition(raw);
+        targetType = definition.targetType;
+        const viewConfig = parseViewConfig(raw);
+        activeView = viewConfig.lastView;
+        kanbanGroupBy = viewConfig.kanban?.groupBy;
+
+        // Load the target type's schema for column / Kanban derivation. Tolerate
+        // a missing schema (e.g. an AI query with targetType '*') — columns then
+        // fall back to generic rendering.
+        schemaNode = await safeGetSchema(targetType);
+        if (loadId !== currentLoadId) return;
+
+        const nodes = await backendAdapter.queryNodes({ nodeType: targetType, limit: FETCH_LIMIT });
+        if (loadId !== currentLoadId) return;
+        if (sharedNodeStore.currentEpoch() !== epoch) return;
+        fetchCapped = nodes.length >= FETCH_LIMIT;
+        const databaseSource = { type: 'database' as const, reason: 'query-node-viewer saved query' };
+        // Hydrate the fetched (unfiltered-by-property) set, then execute the
+        // definition client-side — queryNodes only filters by nodeType.
+        for (const node of nodes) sharedNodeStore.setNode(node, databaseSource);
+        loadedNodeIds = executeQueryDefinition(nodes, definition).map((n) => n.id);
+        queryState = 'success';
+        log.debug('Saved query executed', { nodeId: id, targetType, count: loadedNodeIds.length });
+        return;
+      }
+
+      // DEFAULT branch: unfiltered fetch of all nodes of the schema's type, no
+      // persistence. View state resets to defaults (the default view has no node
+      // to restore config from).
+      activeView = 'table';
+      kanbanGroupBy = undefined;
+      const schema = await backendAdapter.getSchema(id);
       if (loadId !== currentLoadId) return;
       schemaNode = schema;
-      log.debug('Loaded schema node', { schemaId, content: schema.content });
+      targetType = schema.id;
+      log.debug('Loaded schema node (default view)', { schemaId: id, content: schema.content });
 
-      // Fetch all nodes of this type and load them into the shared store.
-      // TableRow components use $derived(sharedNodeStore.getNode(id)) per row,
-      // so updates from other panes propagate reactively without re-querying.
-      const nodes = await backendAdapter.queryNodes({ nodeType: schema.id });
+      const nodes = await backendAdapter.queryNodes({ nodeType: schema.id, limit: FETCH_LIMIT });
       if (loadId !== currentLoadId) return;
-      // Drop the write if the active database switched while the query was in flight.
       if (sharedNodeStore.currentEpoch() !== epoch) return;
-      const databaseSource = { type: 'database' as const, reason: 'query-node-viewer initial load' };
-      for (const node of nodes) {
-        sharedNodeStore.setNode(node, databaseSource);
-      }
+      fetchCapped = nodes.length >= FETCH_LIMIT;
+      const databaseSource = { type: 'database' as const, reason: 'query-node-viewer default view' };
+      for (const node of nodes) sharedNodeStore.setNode(node, databaseSource);
       loadedNodeIds = nodes.map((n) => n.id);
       queryState = 'success';
-      log.debug('Query loaded into store', { schemaId: schema.id, count: nodes.length });
+      log.debug('Default view loaded', { schemaId: schema.id, count: nodes.length });
     } catch (e) {
       if (loadId !== currentLoadId) return;
       const message = e instanceof Error ? e.message : String(e);
 
       // Schema not found on a fresh database is expected — show empty state, not error
       if (isSchemaNotFound(message)) {
-        log.debug('Schema not yet created, showing empty state', { schemaId });
+        log.debug('Schema not yet created, showing empty state', { id });
         queryState = 'success';
         return;
       }
 
-      log.error('Failed to load schema node', { schemaId, error: message });
+      log.error('Failed to load query view', { id, error: message });
       error = message;
       queryState = 'error';
     }
@@ -145,44 +273,135 @@
     return map;
   });
 
-  /** Extract the current QueryDefinition from the raw node's properties */
-  const currentQueryDefinition = $derived.by((): QueryDefinition | null => {
-    const props = rawNode?.properties;
-    if (!props || typeof props.targetType !== 'string') return null;
-    return {
-      targetType: props.targetType,
-      filters: Array.isArray(props.filters) ? (props.filters as QueryDefinition['filters']) : [],
-      sorting: Array.isArray(props.sorting) ? (props.sorting as QueryDefinition['sorting']) : undefined,
-      limit: typeof props.limit === 'number' ? props.limit : undefined,
-    };
-  });
-
-  async function handleQuerySave(definition: QueryDefinition): Promise<void> {
-    if (!rawNode) {
-      log.warn('QueryNodeViewer: cannot save — raw node not loaded');
+  /**
+   * Re-point the current tab at a freshly materialized query node. Prefers the
+   * pane-supplied callback (which preserves the tab's nodeType) and falls back to
+   * the navigation store, matching the tab by this viewer's nodeId + pane.
+   */
+  function rerouteTab(newNodeId: string): void {
+    if (onNodeIdChange) {
+      onNodeIdChange(newNodeId);
       return;
     }
+    const tab = navigationStore.state.tabs.find(
+      (t) => t.content?.nodeId === nodeId && (paneId ? t.paneId === paneId : true)
+    );
+    if (tab) {
+      updateTabContent(tab.id, { nodeId: newNodeId, nodeType: 'query' });
+    } else {
+      log.warn('materialize: could not find tab to re-route', { nodeId });
+    }
+  }
+
+  /**
+   * Materialize a `nodeType: 'query'` node from the current DEFAULT view and
+   * re-route the tab to it. Called on the first divergence (filter edit, view /
+   * group-by change, or title rename). `targetType` and `generatedBy: 'user'`
+   * are fixed by the model; `content` defaults to "Untitled Query".
+   */
+  async function materializeQuery(opts: {
+    content?: string;
+    definition?: QueryDefinition;
+    viewConfig?: QueryViewConfigState;
+  }): Promise<void> {
+    if (materializing) return;
+    if (!schemaNode) {
+      log.warn('QueryNodeViewer: cannot materialize — schema not loaded');
+      return;
+    }
+    materializing = true;
     saveError = null;
+    const epoch = sharedNodeStore.currentEpoch();
     try {
-      const updated = await backendAdapter.updateNode(rawNode.id, rawNode.version, {
-        properties: {
-          ...rawNode.properties,
-          targetType: definition.targetType,
-          filters: definition.filters,
-          sorting: definition.sorting,
-          limit: definition.limit,
-        },
+      const properties = buildMaterializedProperties({
+        targetType,
+        definition: opts.definition ?? currentDefinition,
+        viewConfig: opts.viewConfig ?? currentViewConfig
       });
-      rawNode = updated;
-      isEditMode = false;
-      log.debug('QueryNodeViewer: query definition saved', { nodeId: rawNode.id });
-      // Re-execute the query with the updated definition
-      untrack(() => loadAndQuery(nodeId));
+      const newId = uuidv4();
+      const content = opts.content ?? MATERIALIZED_QUERY_TITLE;
+      await backendAdapter.createNode({
+        id: newId,
+        nodeType: 'query',
+        content,
+        properties,
+        mentions: [],
+        parentId: null
+      });
+      // ADR-053: a database switch mid-create must not re-route the now-active tab.
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
+      const created = await backendAdapter.getNode(newId);
+      if (sharedNodeStore.currentEpoch() !== epoch) return;
+      // Seed the store if we could read it back (so the tab title resolves before
+      // the remount). The node was created regardless, so re-route even if the
+      // read momentarily returns null — the remount's loadAndQuery(newId) reloads
+      // it, and NOT re-routing here would leave an orphan and let the next
+      // divergence materialize a duplicate.
+      if (created) {
+        sharedNodeStore.setNode(created, { type: 'database', reason: 'query-node-viewer materialize' });
+      }
+      log.debug('Materialized query node from default view', { newId, targetType });
+      rerouteTab(newId);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      log.error('QueryNodeViewer: failed to save query definition', { error: message });
+      log.error('QueryNodeViewer: failed to materialize query node', { targetType, error: message });
       saveError = `Failed to save query: ${message}`;
+    } finally {
+      materializing = false;
     }
+  }
+
+  /** Persist a view-config change onto the saved query node. */
+  async function persistViewConfig(partial: Partial<QueryViewConfigState>): Promise<void> {
+    if (!queryNode) return;
+    saveError = null;
+    const merged = mergeViewConfig(parseViewConfig(queryNode), partial);
+    try {
+      const updated = await backendAdapter.updateNode(queryNode.id, queryNode.version, {
+        properties: { ...queryNode.properties, viewConfig: merged }
+      });
+      queryNode = updated;
+      sharedNodeStore.setNode(updated, { type: 'database', reason: 'query-node-viewer view config' });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log.error('QueryNodeViewer: failed to persist view config', { error: message });
+      saveError = `Failed to save view: ${message}`;
+    }
+  }
+
+  async function handleQuerySave(definition: QueryDefinition): Promise<void> {
+    saveError = null;
+    // targetType is inherited from the schema and never changed by the editor.
+    const filters = definition.filters;
+    const sorting = definition.sorting;
+    const limit = definition.limit;
+
+    if (mode === 'saved') {
+      if (!queryNode) {
+        log.warn('QueryNodeViewer: cannot save — query node not loaded');
+        return;
+      }
+      try {
+        const updated = await backendAdapter.updateNode(queryNode.id, queryNode.version, {
+          properties: { ...queryNode.properties, targetType, filters, sorting, limit }
+        });
+        queryNode = updated;
+        sharedNodeStore.setNode(updated, { type: 'database', reason: 'query-node-viewer save' });
+        isEditMode = false;
+        log.debug('QueryNodeViewer: query definition saved', { nodeId: updated.id });
+        // Re-execute with the updated definition.
+        untrack(() => loadAndQuery(nodeId));
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log.error('QueryNodeViewer: failed to save query definition', { error: message });
+        saveError = `Failed to save query: ${message}`;
+      }
+      return;
+    }
+
+    // DEFAULT branch: a filter edit is a divergence — materialize (the remount
+    // leaves edit mode behind). On failure the editor stays open with saveError.
+    await materializeQuery({ definition: { targetType, filters, sorting, limit } });
   }
 
   async function handleQueryPreview(definition: QueryDefinition): Promise<number> {
@@ -194,9 +413,83 @@
     isEditMode = false;
   }
 
-  function handleViewChange(view: QueryPreferences['lastView']): void {
+  function handleViewChange(view: QueryViewKind): void {
+    if (view === activeView) return; // clicking the active view is not a divergence
     activeView = view;
-    queryPreferencesService.saveViewConfig(nodeId, view);
+    if (mode === 'saved') {
+      persistViewConfig({ lastView: view });
+    } else {
+      materializeQuery({
+        viewConfig: { lastView: view, ...(kanbanGroupBy ? { kanban: { groupBy: kanbanGroupBy } } : {}) }
+      });
+    }
+  }
+
+  function handleKanbanGroupByChange(groupBy: string): void {
+    if (groupBy === kanbanGroupBy) return;
+    kanbanGroupBy = groupBy;
+    if (mode === 'saved') {
+      persistViewConfig({ kanban: { groupBy } });
+    } else {
+      materializeQuery({ viewConfig: { lastView: activeView, kanban: { groupBy } } });
+    }
+  }
+
+  function focusOnMount(el: HTMLInputElement): void {
+    el.focus();
+    el.select();
+  }
+
+  function startEditTitle(): void {
+    // The default's placeholder "Default" is not a real name — start from empty.
+    titleDraft = mode === 'saved' ? (queryNode?.content ?? '') : '';
+    titleEditCancelled = false;
+    isEditingTitle = true;
+  }
+
+  async function commitTitle(): Promise<void> {
+    // Escape cancels the edit; the input's blur still fires commitTitle, so this
+    // guard keeps a cancelled edit from renaming/materializing with the draft.
+    if (titleEditCancelled) {
+      titleEditCancelled = false;
+      isEditingTitle = false;
+      return;
+    }
+    const name = titleDraft.trim();
+    isEditingTitle = false;
+    saveError = null;
+
+    if (mode === 'saved') {
+      if (!queryNode || !name || name === queryNode.content) return;
+      try {
+        const updated = await backendAdapter.updateNode(queryNode.id, queryNode.version, {
+          content: name
+        });
+        queryNode = updated;
+        sharedNodeStore.setNode(updated, { type: 'database', reason: 'query-node-viewer rename' });
+        log.debug('QueryNodeViewer: query renamed', { nodeId: updated.id });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        log.error('QueryNodeViewer: failed to rename query', { error: message });
+        saveError = `Failed to rename query: ${message}`;
+      }
+      return;
+    }
+
+    // DEFAULT branch: naming the default is a divergence — materialize with the
+    // typed name. An empty name leaves the default in place (no materialize).
+    if (name) await materializeQuery({ content: name });
+  }
+
+  function handleTitleKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      (e.currentTarget as HTMLInputElement).blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      titleEditCancelled = true;
+      isEditingTitle = false;
+    }
   }
 
   function handleRowClick(clickedNodeId: string) {
@@ -255,7 +548,24 @@
 
 <div class="query-node-viewer">
   <header class="query-header">
-    <h1>{schemaNode?.content ?? 'Query'}</h1>
+    {#if isEditingTitle}
+      <input
+        class="query-title-input"
+        bind:value={titleDraft}
+        onkeydown={handleTitleKeydown}
+        onblur={commitTitle}
+        placeholder={displayTitle}
+        aria-label="Query name"
+        use:focusOnMount
+      />
+    {:else}
+      <button
+        class="query-title"
+        onclick={startEditTitle}
+        title="Rename query"
+        aria-label={`Query name: ${displayTitle}. Click to rename.`}
+      >{displayTitle}</button>
+    {/if}
     {#if queryState === 'success'}
       <span class="result-count">{loadedNodeIds.length} {loadedNodeIds.length === 1 ? 'item' : 'items'}</span>
     {/if}
@@ -286,7 +596,7 @@
         disabled={isCreating}
       >+ New</button>
     {/if}
-    {#if rawNode && !isEditMode}
+    {#if schemaNode && queryState === 'success' && !isEditMode}
       <button class="edit-query-button" onclick={() => { isEditMode = true; }}>Edit Query</button>
     {/if}
   </header>
@@ -295,13 +605,23 @@
     <p class="create-error" role="alert">{createError}</p>
   {/if}
 
+  {#if saveError && !isEditMode}
+    <!-- Surface materialize/rename/view-change failures outside the filter editor,
+         where the in-editor save-error banner (below) is not visible. -->
+    <p class="create-error" role="alert">{saveError}</p>
+  {/if}
+
+  {#if queryState === 'success' && executionCaveat}
+    <p class="query-caveat" role="status">{executionCaveat}</p>
+  {/if}
+
   {#if isEditMode}
     <div class="edit-mode-wrapper">
       {#if saveError}
         <p class="save-error" role="alert">{saveError}</p>
       {/if}
       <QueryEditor
-        query={currentQueryDefinition}
+        query={currentDefinition}
         onSave={handleQuerySave}
         onCancel={handleQueryCancel}
         onPreview={handleQueryPreview}
@@ -321,12 +641,18 @@
       </div>
     {:else if queryState === 'success' && !hasResults}
       <div class="empty-state">
-        <p>No nodes of this type yet.</p>
+        <p>{mode === 'saved' ? 'No results match this query.' : 'No nodes of this type yet.'}</p>
       </div>
     {:else if queryState === 'success' && activeView === 'list'}
       <ListView nodeIds={loadedNodeIds} onRowClick={handleRowClick} />
     {:else if queryState === 'success' && activeView === 'kanban'}
-      <KanbanView nodeIds={loadedNodeIds} schema={schemaNode} {nodeId} onRowClick={handleRowClick} />
+      <KanbanView
+        nodeIds={loadedNodeIds}
+        schema={schemaNode}
+        groupBy={kanbanGroupBy}
+        onGroupByChange={handleKanbanGroupByChange}
+        onRowClick={handleRowClick}
+      />
     {:else if queryState === 'success'}
       <TableView nodeIds={loadedNodeIds} schema={schemaNode} {fieldSchemaMap} onRowClick={handleRowClick} />
     {/if}
@@ -351,12 +677,41 @@
     flex-shrink: 0;
   }
 
-  .query-header h1 {
+  .query-title {
     font-size: 1.5rem;
     font-weight: 600;
     margin: 0;
     color: hsl(var(--foreground));
     flex: 1;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.375rem;
+    padding: 0.125rem 0.375rem;
+    cursor: text;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .query-title:hover {
+    background: hsl(var(--muted) / 0.6);
+  }
+
+  .query-title-input {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0;
+    color: hsl(var(--foreground));
+    flex: 1;
+    min-width: 0;
+    background: hsl(var(--background));
+    border: 1px solid hsl(var(--primary));
+    border-radius: 0.375rem;
+    padding: 0.125rem 0.375rem;
+    outline: none;
   }
 
   .result-count {
@@ -456,6 +811,15 @@
     color: hsl(var(--destructive));
     background: hsl(var(--destructive) / 0.1);
     border-bottom: 1px solid hsl(var(--destructive) / 0.3);
+  }
+
+  .query-caveat {
+    margin: 0;
+    padding: 0.375rem 2rem;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.5);
+    border-bottom: 1px solid hsl(var(--border));
   }
 
   .edit-mode-wrapper {

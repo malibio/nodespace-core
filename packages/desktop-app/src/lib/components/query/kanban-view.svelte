@@ -12,7 +12,6 @@
 
 <script lang="ts">
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { queryPreferencesService } from '$lib/services/query-preferences-service';
   import { createLogger } from '$lib/utils/logger';
   import type { Node } from '$lib/types';
   import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
@@ -31,27 +30,35 @@
   let {
     nodeIds,
     schema,
-    nodeId,
+    groupBy,
+    onGroupByChange,
     onRowClick
   }: {
     nodeIds: string[];
     schema: SchemaNode | null;
-    /** Query node id this board belongs to — the key its group-by is persisted under. */
-    nodeId: string;
+    /**
+     * The group-by field for this board, sourced from the query node's
+     * `viewConfig.kanban.groupBy` (issue #1919). `undefined` means "not chosen
+     * yet — fall back to the first eligible enum field".
+     */
+    groupBy: string | undefined;
+    /**
+     * Persist a group-by choice. For a saved query this writes the query node's
+     * view config; for the default type view it materializes a query node. The
+     * viewer owns which — KanbanView only reports the choice.
+     */
+    onGroupByChange: (_groupBy: string) => void;
     onRowClick: (_nodeId: string) => void;
   } = $props();
 
   // The user's explicit picker choice this session; null means "use the default
-  // resolved from stored prefs / first eligible field".
+  // resolved from the query node's stored group-by / first eligible field".
   let picked = $state<string | null>(null);
   let draggingId = $state<string | null>(null);
   let dragOverColumn = $state<string | null>(null);
 
   const eligible = $derived(eligibleGroupByFields(schema));
-  const storedGroupBy = $derived(
-    queryPreferencesService.getPreferences(nodeId).viewConfigs.kanban?.groupBy
-  );
-  const activeGroupBy = $derived(picked ?? resolveActiveGroupBy(eligible, storedGroupBy));
+  const activeGroupBy = $derived(picked ?? resolveActiveGroupBy(eligible, groupBy));
   const activeField = $derived(eligible.find((f) => f.name === activeGroupBy) ?? null);
 
   // Columns from the enum's values, plus a trailing Unassigned bucket.
@@ -91,7 +98,7 @@
 
   function onPickGroupBy(name: string): void {
     picked = name;
-    queryPreferencesService.saveViewConfig(nodeId, 'kanban', { groupBy: name });
+    onGroupByChange(name);
   }
 
   /** Move a card into the column identified by `toColumn` (UNASSIGNED clears it). */
