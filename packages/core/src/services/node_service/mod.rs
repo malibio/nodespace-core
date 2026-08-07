@@ -1382,7 +1382,11 @@ impl NodeService {
             .collect();
 
         // Universal Graph Architecture: Properties stored in node.properties.
-        // Schema nodes go through the normal create path.
+        // Schema nodes go through the normal create path. Relationship
+        // declarations are relationship-table rows, written after the node so
+        // both FK endpoints (declaring + target schema) exist — core schemas
+        // are seeded as a batch, so a declaration may target a schema created
+        // later in the same loop.
         {
             for schema in &missing_schemas {
                 let schema_id = schema.id.clone();
@@ -1394,6 +1398,21 @@ impl NodeService {
                         schema_id, e
                     ))
                 })?;
+            }
+
+            for schema in &missing_schemas {
+                if schema.relationships.is_empty() {
+                    continue;
+                }
+                store
+                    .set_schema_declarations(&schema.id, &schema.relationships)
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::SerializationError(format!(
+                            "Failed to seed relationship declarations for schema '{}': {}",
+                            schema.id, e
+                        ))
+                    })?;
             }
         } // ← Arc clone dropped here, enabling Arc::get_mut() below
 
@@ -2111,7 +2130,10 @@ mod tests {
         .await
         .unwrap();
         svc.store()
-            .add_to_collection("11111111-1111-1111-1111-1111111111c2", "11111111-1111-1111-1111-1111111111c1")
+            .add_to_collection(
+                "11111111-1111-1111-1111-1111111111c2",
+                "11111111-1111-1111-1111-1111111111c1",
+            )
             .await
             .expect("a ROOT node may be filed into a restricted collection");
 
@@ -2139,7 +2161,11 @@ mod tests {
 
         // (1) The open root's aggregate includes its own has_child subtree, and
         // NEVER the restricted collection's member_of content.
-        let root = svc.get_node("11111111-1111-1111-1111-1111111111c3").await.unwrap().unwrap();
+        let root = svc
+            .get_node("11111111-1111-1111-1111-1111111111c3")
+            .await
+            .unwrap()
+            .unwrap();
         let aggregated = TextNodeBehavior
             .get_aggregated_content(&root, &svc)
             .await
@@ -2165,7 +2191,13 @@ mod tests {
         })
         .await
         .unwrap();
-        let err = svc.store().add_to_collection("11111111-1111-1111-1111-1111111111c5", "11111111-1111-1111-1111-1111111111c1").await;
+        let err = svc
+            .store()
+            .add_to_collection(
+                "11111111-1111-1111-1111-1111111111c5",
+                "11111111-1111-1111-1111-1111111111c1",
+            )
+            .await;
         assert!(
             err.is_err(),
             "ADR-059 §2: a has_child descendant must be rejected from direct collection membership (member_of is root-only)"
@@ -4755,22 +4787,26 @@ mod tests {
                     "gadget".to_string(),
                     "schema".to_string(),
                     "Gadget".to_string(),
-                    serde_json::json!({
-                        "fields": [],
-                        "relationships": [{
-                            "name": "assigned_to",
-                            "targetType": "widget",
-                            "direction": "out",
-                            "cardinality": "many",
-                            "reverseName": "gadgets",
-                            "reverseCardinality": "many",
-                            "edgeFields": [{ "name": "role", "type": "string" }]
-                        }]
-                    }),
+                    serde_json::json!({ "fields": [] }),
                 ),
                 None,
                 None,
             )
+            .await
+            .unwrap();
+        let declarations: Vec<crate::models::schema::SchemaRelationship> =
+            serde_json::from_value(serde_json::json!([{
+                "name": "assigned_to",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "gadgets",
+                "reverseCardinality": "many",
+                "edgeFields": [{ "name": "role", "type": "string" }]
+            }]))
+            .unwrap();
+        service
+            .set_schema_relationships("gadget", &declarations)
             .await
             .unwrap();
 
@@ -4802,7 +4838,12 @@ mod tests {
             .await
             .unwrap();
         store
-            .create_generic_relationship("g1", "w1", "assigned_to", &serde_json::json!({"role":"lead"}))
+            .create_generic_relationship(
+                "g1",
+                "w1",
+                "assigned_to",
+                &serde_json::json!({"role":"lead"}),
+            )
             .await
             .unwrap();
 
@@ -4881,21 +4922,25 @@ mod tests {
                         id.to_string(),
                         "schema".to_string(),
                         name.to_string(),
-                        serde_json::json!({
-                            "fields": [],
-                            "relationships": [{
-                                "name": "assigned_to",
-                                "targetType": "widget",
-                                "direction": "out",
-                                "cardinality": "many",
-                                "reverseName": reverse,
-                                "reverseCardinality": "many"
-                            }]
-                        }),
+                        serde_json::json!({ "fields": [] }),
                     ),
                     None,
                     None,
                 )
+                .await
+                .unwrap();
+            let declarations: Vec<crate::models::schema::SchemaRelationship> =
+                serde_json::from_value(serde_json::json!([{
+                    "name": "assigned_to",
+                    "targetType": "widget",
+                    "direction": "out",
+                    "cardinality": "many",
+                    "reverseName": reverse,
+                    "reverseCardinality": "many"
+                }]))
+                .unwrap();
+            service
+                .set_schema_relationships(id, &declarations)
                 .await
                 .unwrap();
         }
@@ -4929,7 +4974,11 @@ mod tests {
             .unwrap();
         let inbound: Vec<_> = inb.groups.iter().filter(|g| g.direction == "in").collect();
 
-        assert_eq!(inbound.len(), 2, "one inbound group per declaring source type");
+        assert_eq!(
+            inbound.len(),
+            2,
+            "one inbound group per declaring source type"
+        );
         let gadget = inbound
             .iter()
             .find(|g| g.source_type == "gadget")

@@ -1450,43 +1450,6 @@ async fn test_create_schema_rejects_additional_constraints_as_unknown_field() {
     );
 }
 
-// The schema-relationship structs below share this module's `Value`
-// deserialization boundary but aren't currently wired to any agent tool
-// (see their doc comments in `schema/mod.rs`); covered anyway for the same
-// reason `deny_unknown_fields` was added to them.
-
-#[test]
-fn add_schema_relationship_params_rejects_unknown_field() {
-    let args = json!({
-        "schema_id": "invoice",
-        "relationship": {
-            "name": "billedTo",
-            "direction": "out",
-            "cardinality": "one"
-        },
-        "schemaId": "invoice"
-    });
-    let err = serde_json::from_value::<AddSchemaRelationshipParams>(args).unwrap_err();
-    assert!(
-        err.to_string().contains("schemaId"),
-        "expected error naming `schemaId`, got: {err}"
-    );
-}
-
-#[test]
-fn remove_schema_relationship_params_rejects_unknown_field() {
-    let args = json!({
-        "schema_id": "invoice",
-        "relationship_name": "billedTo",
-        "relationshipName": "billedTo"
-    });
-    let err = serde_json::from_value::<RemoveSchemaRelationshipParams>(args).unwrap_err();
-    assert!(
-        err.to_string().contains("relationshipName"),
-        "expected error naming `relationshipName`, got: {err}"
-    );
-}
-
 // ============================================================================
 // relationship targetType existence validation (#1905)
 // ============================================================================
@@ -1628,35 +1591,6 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
         result.is_ok(),
         "add_relationships targeting an existing schema should succeed: {:?}",
         result
-    );
-}
-
-#[tokio::test]
-async fn test_add_schema_relationship_rejects_nonexistent_target_type() {
-    let (svc, _tmp) = create_test_service().await;
-
-    let invoice_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
-
-    let result = handle_add_schema_relationship(
-        &svc,
-        json!({
-            "schema_id": invoice_id,
-            "relationship": {
-                "name": "billed_to",
-                "targetType": "customer",
-                "direction": "out",
-                "cardinality": "one"
-            }
-        }),
-    )
-    .await;
-
-    let err =
-        result.expect_err("add_schema_relationship targeting a nonexistent type must be rejected");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("customer"),
-        "error should name the missing target type: {msg}"
     );
 }
 

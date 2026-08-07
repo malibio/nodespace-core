@@ -217,6 +217,11 @@ fn related_one_hop_schemas(
 
 /// Parse semantic search results into [`SchemaNode`]s, excluding core types.
 ///
+/// The results are raw storage nodes, so the parsed schemas carry NO
+/// relationships (declarations are relationship-table rows, not a properties
+/// key) — callers that need them re-resolve each hit from the hydrated corpus
+/// returned by `get_all_schemas` (see `build_workspace_context`).
+///
 /// Retrieval is scoped only by `node_type == "schema"`, and `text`/`task`/
 /// `date` are stored schema nodes with embeddable content, so an unfiltered
 /// pass-through can surface them. Excluding `is_core` here mirrors the guard
@@ -311,7 +316,7 @@ pub async fn build_workspace_context(
 
     // Semantic schema retrieval: find schemas relevant to the query.
     // Only runs when both an embedding service and a non-empty query are present.
-    let relevant_schemas = match (embedding_service, query.filter(|q| !q.trim().is_empty())) {
+    let retrieved_hits = match (embedding_service, query.filter(|q| !q.trim().is_empty())) {
         (Some(emb), Some(q)) => {
             match emb
                 .semantic_search_nodes_of_type(
@@ -340,18 +345,27 @@ pub async fn build_workspace_context(
         _ => vec![],
     };
 
-    // One-hop related schemas: reachable via a relationship from a
-    // directly-retrieved schema, even though they never matched the query
-    // themselves. Requires the full schema corpus since incoming
-    // reachability depends on schemas outside `relevant_schemas`.
-    let related_schemas = if relevant_schemas.is_empty() {
-        vec![]
+    // Search results are raw storage nodes, and relationship declarations are
+    // relationship-table rows rather than a `properties` key — so the parsed
+    // hits carry no relationships. Re-resolve each hit (preserving relevance
+    // order) from the hydrated schema corpus, which the one-hop traversal below
+    // needs in full anyway (incoming reachability depends on schemas outside
+    // the retrieved set).
+    let (relevant_schemas, related_schemas) = if retrieved_hits.is_empty() {
+        (vec![], vec![])
     } else {
         match node_service.get_all_schemas().await {
-            Ok(all_schemas) => related_one_hop_schemas(&relevant_schemas, &all_schemas),
+            Ok(all_schemas) => {
+                let relevant: Vec<SchemaNode> = retrieved_hits
+                    .iter()
+                    .filter_map(|hit| all_schemas.iter().find(|s| s.id == hit.id).cloned())
+                    .collect();
+                let related = related_one_hop_schemas(&relevant, &all_schemas);
+                (relevant, related)
+            }
             Err(e) => {
-                tracing::warn!(error = %e, "workspace_context: fetching all schemas for related-schema traversal failed, omitting related schemas");
-                vec![]
+                tracing::warn!(error = %e, "workspace_context: fetching schema corpus failed; using unhydrated retrieval hits and omitting related schemas");
+                (retrieved_hits, vec![])
             }
         }
     };
@@ -561,7 +575,6 @@ mod tests {
             required: None,
             reverse_name: None,
             reverse_cardinality: None,
-            edge_table: None,
             edge_fields: None,
             description: None,
         }

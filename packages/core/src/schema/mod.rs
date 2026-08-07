@@ -177,6 +177,31 @@ async fn validate_relationship_targets_exist(
     Ok(())
 }
 
+/// Reject relationship declarations named after a built-in structural
+/// relationship (`has_child`, `mentions`, `member_of`, `has_role`).
+///
+/// Declarations and the built-in primitives share the one `relationship`
+/// table's `relationship_type` column, so a name collision would make every
+/// type-keyed relationship query ambiguous — a correctness hazard, not just a
+/// display glitch. Checked here so the error surfaces before any write, and
+/// re-checked in `NodeService::set_schema_relationships` (the write path) via
+/// the same shared predicate.
+fn reject_reserved_relationship_names(
+    relationships: &[crate::models::schema::SchemaRelationship],
+) -> Result<(), MarkdownError> {
+    for rel in relationships {
+        if crate::models::schema::is_builtin_relationship(&rel.name) {
+            return Err(MarkdownError::invalid_params(format!(
+                "Relationship name '{}' is reserved for a built-in structural relationship \
+                 ({}). Choose a different name.",
+                rel.name,
+                crate::models::schema::BUILTIN_RELATIONSHIP_NAMES.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Name of a JSON value's type, for error messages.
 fn json_type_name(v: &Value) -> &'static str {
     match v {
@@ -299,8 +324,11 @@ pub async fn handle_create_schema(
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
 
-    // Reject a relationship whose targetType doesn't exist yet, before
-    // creating the node — see validate_relationship_targets_exist.
+    // Reject reserved relationship names and dangling targetTypes BEFORE the
+    // schema node exists, so a bad declaration can't leave a half-created
+    // schema behind. (`set_schema_relationships` re-checks reserved names —
+    // via the same shared predicate — as the write-path invariant.)
+    reject_reserved_relationship_names(&relationships)?;
     validate_relationship_targets_exist(node_service, &relationships).await?;
 
     // Generate schema ID
@@ -315,7 +343,9 @@ pub async fn handle_create_schema(
         )));
     }
 
-    // Schema properties (description is stored as child node subtree, not in properties)
+    // Schema properties (description is stored as a child node subtree, and
+    // relationship declarations as relationship-table rows — neither lives in
+    // properties)
     let description_text = params
         .description
         .clone()
@@ -324,7 +354,6 @@ pub async fn handle_create_schema(
         "isCore": false,
         "schemaVersion": 1,
         "fields": &stored_fields,
-        "relationships": &relationships
     });
     if let Some(ref template) = params.title_template {
         properties["titleTemplate"] = serde_json::Value::String(template.clone());
@@ -354,6 +383,21 @@ pub async fn handle_create_schema(
             ))
         })?;
 
+    // Write relationship declarations as relationship-table rows. Runs after
+    // the node create so the declaring-schema FK endpoint exists (targets were
+    // validated to exist above).
+    if !relationships.is_empty() {
+        node_service
+            .set_schema_relationships(&created_schema_id, &relationships)
+            .await
+            .map_err(|e| {
+                MarkdownError::internal_error(format!(
+                    "Failed to store relationship declarations for '{}': {}",
+                    created_schema_id, e
+                ))
+            })?;
+    }
+
     // Store the description as a child node subtree so it is included in the
     // schema's embedding and enables synonym-based semantic discovery.
     create_description_subtree(node_service, &created_schema_id, &description_text).await?;
@@ -374,36 +418,6 @@ pub async fn handle_create_schema(
 
     serde_json::to_value(&output)
         .map_err(|e| MarkdownError::internal_error(format!("Failed to serialize output: {}", e)))
-}
-
-// ============================================================================
-// Schema Relationship Operations
-// ============================================================================
-
-/// Parameters for add_schema_relationship.
-///
-/// Not currently wired to any agent tool (no `add_schema_relationship` entry
-/// in `Tool::ALL`) — `deny_unknown_fields` is added anyway since this sits on
-/// the same `Value`-deserialization boundary as the tool-reachable structs in
-/// this module, and stays a no-op until/unless a tool is wired to it.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AddSchemaRelationshipParams {
-    /// Schema ID to add the relationship to
-    pub schema_id: String,
-    /// Relationship definition to add
-    pub relationship: crate::models::schema::SchemaRelationship,
-}
-
-/// Parameters for remove_schema_relationship. Not currently tool-reachable —
-/// see [`AddSchemaRelationshipParams`].
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoveSchemaRelationshipParams {
-    /// Schema ID to remove the relationship from
-    pub schema_id: String,
-    /// Name of the relationship to remove
-    pub relationship_name: String,
 }
 
 /// A single field rename operation within update_schema
@@ -478,157 +492,14 @@ pub struct SchemaUpdateOutput {
     pub affected_playbooks: Option<Vec<String>>,
 }
 
-/// Add a relationship definition to an existing schema
-///
-/// # Tool: add_schema_relationship
-///
-/// Adds a new relationship type to a schema. This creates the edge table DDL
-/// but doesn't create any actual edges - use `create_relationship` for that.
-///
-/// # Parameters
-/// - `schema_id`: ID of the schema to modify
-/// - `relationship`: The relationship definition to add
-pub async fn handle_add_schema_relationship(
-    node_service: &Arc<NodeService>,
-    params: Value,
-) -> Result<Value, MarkdownError> {
-    let params: AddSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
-
-    // Get existing schema
-    let schema = node_service
-        .get_schema_node(&params.schema_id)
-        .await
-        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
-        .ok_or_else(|| {
-            MarkdownError::invalid_params(format!("Schema '{}' not found", params.schema_id))
-        })?;
-
-    // Check if relationship already exists
-    if schema
-        .relationships
-        .iter()
-        .any(|r| r.name == params.relationship.name)
-    {
-        return Err(MarkdownError::invalid_params(format!(
-            "Relationship '{}' already exists in schema '{}'",
-            params.relationship.name, params.schema_id
-        )));
-    }
-
-    // Reject a targetType that doesn't exist yet — see
-    // validate_relationship_targets_exist.
-    validate_relationship_targets_exist(node_service, std::slice::from_ref(&params.relationship))
-        .await?;
-
-    // Build updated relationships
-    let mut relationships = schema.relationships.clone();
-    relationships.push(params.relationship.clone());
-
-    // Update schema node
-    let properties = serde_json::json!({
-        "isCore": schema.is_core,
-        "version": schema.schema_version,
-        "fields": schema.fields,
-        "relationships": relationships
-    });
-
-    let update = NodeUpdate {
-        properties: Some(properties),
-        ..Default::default()
-    };
-
-    node_service
-        .update_node_unchecked(&params.schema_id, update)
-        .await
-        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
-
-    Ok(serde_json::json!({
-        "success": true,
-        "schemaId": params.schema_id,
-        "relationshipAdded": params.relationship.name
-    }))
-}
-
-/// Remove a relationship definition from a schema (soft-delete)
-///
-/// # Tool: remove_schema_relationship
-///
-/// Removes a relationship from the schema definition. The edge table and any
-/// existing edges are preserved (soft-delete) - they're just hidden from the
-/// active schema. Re-adding the relationship will restore access to existing data.
-///
-/// # Parameters
-/// - `schema_id`: ID of the schema to modify
-/// - `relationship_name`: Name of the relationship to remove
-pub async fn handle_remove_schema_relationship(
-    node_service: &Arc<NodeService>,
-    params: Value,
-) -> Result<Value, MarkdownError> {
-    let params: RemoveSchemaRelationshipParams = serde_json::from_value(params)
-        .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
-
-    // Get existing schema
-    let schema = node_service
-        .get_schema_node(&params.schema_id)
-        .await
-        .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
-        .ok_or_else(|| {
-            MarkdownError::invalid_params(format!("Schema '{}' not found", params.schema_id))
-        })?;
-
-    // Check if relationship exists
-    if !schema
-        .relationships
-        .iter()
-        .any(|r| r.name == params.relationship_name)
-    {
-        return Err(MarkdownError::invalid_params(format!(
-            "Relationship '{}' not found in schema '{}'",
-            params.relationship_name, params.schema_id
-        )));
-    }
-
-    // Build updated relationships (remove the one specified)
-    let relationships: Vec<_> = schema
-        .relationships
-        .into_iter()
-        .filter(|r| r.name != params.relationship_name)
-        .collect();
-
-    // Update schema node
-    let properties = serde_json::json!({
-        "isCore": schema.is_core,
-        "version": schema.schema_version,
-        "fields": schema.fields,
-        "relationships": relationships
-    });
-
-    let update = NodeUpdate {
-        properties: Some(properties),
-        ..Default::default()
-    };
-
-    node_service
-        .update_node_unchecked(&params.schema_id, update)
-        .await
-        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
-
-    Ok(serde_json::json!({
-        "success": true,
-        "schemaId": params.schema_id,
-        "relationshipRemoved": params.relationship_name,
-        "note": "Edge table and existing edges preserved (soft-delete)"
-    }))
-}
-
 /// Update a schema with multiple changes
 ///
 /// # Tool: update_schema
 ///
 /// Batch update a schema's fields and relationships. Useful when making
-/// multiple changes at once. For single operations, prefer the specific
-/// `add_schema_relationship` or `remove_schema_relationship` tools.
+/// multiple changes at once. Relationship changes are persisted as
+/// relationship-table declaration edges (see `crate::models::schema`);
+/// removing a declaration that live instance edges depend on is rejected.
 ///
 /// # Parameters
 /// - `schema_id`: ID of the schema to update
@@ -809,7 +680,9 @@ pub async fn handle_update_schema(
         fields.extend(add_fields.clone());
     }
 
-    // Process relationships
+    // Process relationships (`schema.relationships` arrives hydrated from the
+    // relationship table; the final set is persisted back through
+    // `set_schema_relationships` below)
     let mut relationships = schema.relationships.clone();
     let mut relationships_added = 0;
     let mut relationships_removed = 0;
@@ -830,6 +703,7 @@ pub async fn handle_update_schema(
                 )));
             }
         }
+        reject_reserved_relationship_names(add_rels)?;
         // Reject a targetType that doesn't exist yet — see
         // validate_relationship_targets_exist.
         validate_relationship_targets_exist(node_service, add_rels).await?;
@@ -845,12 +719,13 @@ pub async fn handle_update_schema(
         .properties_header_summary_template
         .or(schema.properties_header_summary_template);
 
-    // Build updated properties (description is stored as child subtree, not in properties)
+    // Build updated properties (description is stored as a child subtree and
+    // relationship declarations as relationship-table rows — neither lives in
+    // properties)
     let mut properties = serde_json::json!({
         "isCore": schema.is_core,
         "schemaVersion": schema.schema_version,
         "fields": fields,
-        "relationships": relationships
     });
     if let Some(ref template) = title_template {
         properties["titleTemplate"] = serde_json::Value::String(template.clone());
@@ -866,12 +741,34 @@ pub async fn handle_update_schema(
         schema.content.clone(),
         properties.clone(),
     );
-    let updated_schema = SchemaNode::from_node(temp_node).map_err(|e| {
+    let mut updated_schema = SchemaNode::from_node(temp_node).map_err(|e| {
         MarkdownError::invalid_params(format!("Failed to build schema for validation: {}", e))
     })?;
+    // from_node never populates relationships (they aren't in properties);
+    // hand the validator the final declaration set explicitly.
+    updated_schema.relationships = relationships.clone();
     SchemaNodeBehavior
         .validate_schema_node(&updated_schema)
         .map_err(|e| MarkdownError::invalid_params(format!("Schema validation failed: {}", e)))?;
+
+    // Persist declarations FIRST: this is where the live-instance-edge guard
+    // runs (removing/retargeting a declaration with edges under it is
+    // rejected), and a rejection must leave the schema fully untouched —
+    // fields included.
+    if relationships_added > 0 || relationships_removed > 0 {
+        node_service
+            .set_schema_relationships(&params.schema_id, &relationships)
+            .await
+            .map_err(|e| match e {
+                crate::services::NodeServiceError::InvalidUpdate(_) => {
+                    MarkdownError::invalid_params(e.to_string())
+                }
+                other => MarkdownError::internal_error(format!(
+                    "Failed to update relationship declarations: {}",
+                    other
+                )),
+            })?;
+    }
 
     let update = NodeUpdate {
         properties: Some(properties),

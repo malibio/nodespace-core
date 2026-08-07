@@ -1179,8 +1179,14 @@ mod tests {
 
         /// Helper: create a minimal schema node in the database.
         ///
+        /// Relationship declarations route through the REAL write path
+        /// (`set_schema_relationships` → relationship-table rows) — hand-writing
+        /// a `relationships` JSON key into properties would bypass storage and
+        /// silently read back as an empty declaration list.
+        ///
         /// Note: schemas with relationships that reference target types require
-        /// those target schemas to exist first (for edge table DDL).
+        /// those target schemas to exist first (declaration edges are
+        /// FK-constrained to the target schema node).
         async fn create_schema(
             node_service: &NodeService,
             type_name: &str,
@@ -1197,14 +1203,25 @@ mod tests {
                     "description": format!("{} schema", type_name),
                     "fields": [
                         {"name": "status", "type": "string"}
-                    ],
-                    "relationships": relationships
+                    ]
                 }),
             );
             node_service
                 .create_node(schema_node)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to create schema '{}'", type_name));
+
+            let declarations: Vec<crate::models::schema::SchemaRelationship> =
+                serde_json::from_value(relationships)
+                    .unwrap_or_else(|e| panic!("Invalid relationships fixture: {e}"));
+            if !declarations.is_empty() {
+                node_service
+                    .set_schema_relationships(type_name, &declarations)
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to declare relationships on '{}': {e}", type_name)
+                    });
+            }
         }
 
         // Use custom type names (prefixed "vt_") to avoid collisions

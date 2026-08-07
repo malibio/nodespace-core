@@ -2,7 +2,7 @@
 //!
 //! Typed orchestration for relationship CRUD. Extracted from MCP handlers.
 
-use crate::models::schema::{EdgeField, RelationshipCardinality, SchemaRelationship};
+use crate::models::schema::{EdgeField, RelationshipCardinality, BUILTIN_RELATIONSHIP_NAMES};
 use crate::ops::OpsError;
 use crate::services::NodeService;
 use serde::Serialize;
@@ -149,11 +149,6 @@ pub async fn get_related_nodes(
 // Relationship viewer aggregation (issue #1918 — read-only LIST)
 // ============================================================================
 
-/// Built-in structural relationship types that are NOT schema-declared typed
-/// relationships and are excluded from the relationship viewer (they have their
-/// own UI affordances: hierarchy, mentions, collection membership, roles).
-const BUILTIN_RELATIONSHIP_NAMES: [&str; 4] = ["member_of", "has_child", "mentions", "has_role"];
-
 /// A single related node on one end of a typed relationship, carrying enough
 /// identity to be recognizable plus the connecting edge's stored properties.
 #[derive(Debug, Serialize)]
@@ -286,44 +281,37 @@ pub async fn get_node_relationships(
 
     // ---- Outbound: relationships declared on this node's own schema ----
     // Schema nodes have id == node_type. A node whose type has no schema (e.g.
-    // plain text) simply has no outbound typed relationships. Relationships are
-    // parsed straight from the schema node's `properties` (mirrors
-    // NodeService::create_relationship) to avoid a SchemaNode round-trip.
+    // plain text) simply has no outbound typed relationships. Declarations
+    // arrive hydrated from the relationship table — the same consolidated read
+    // path `NodeService::create_relationship` validates against, so the viewer
+    // and the write path can never see different declaration sets.
     if let Some(schema_node) = node_service
-        .get_node(&node_type)
+        .get_schema_node(&node_type)
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to load schema node: {}", e)))?
     {
-        if schema_node.node_type == "schema" {
-            let relationships: Vec<SchemaRelationship> = schema_node
-                .properties
-                .get("relationships")
-                .and_then(|r| serde_json::from_value(r.clone()).ok())
-                .unwrap_or_default();
-
-            for rel in relationships {
-                if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
-                    continue;
-                }
-                // Emit the group even when it has no edges yet: an empty declared
-                // outbound relationship still needs to render so the viewer can add
-                // its first edge. (Inbound groups below keep skipping empties.)
-                let related = collect_related(node_service, node_id, &rel.name, "out").await?;
-                let count = related.len();
-                groups.push(RelationshipGroup {
-                    relationship_name: rel.name.clone(),
-                    direction: "out".to_string(),
-                    target_type: rel.target_type.clone(),
-                    reverse_name: rel.reverse_name.clone(),
-                    source_type: node_type.clone(),
-                    cardinality: Some(rel.cardinality.clone()),
-                    required: rel.required,
-                    edge_fields: rel.edge_fields.clone(),
-                    description: rel.description.clone(),
-                    related,
-                    count,
-                });
+        for rel in schema_node.relationships {
+            if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
+                continue;
             }
+            // Emit the group even when it has no edges yet: an empty declared
+            // outbound relationship still needs to render so the viewer can add
+            // its first edge. (Inbound groups below keep skipping empties.)
+            let related = collect_related(node_service, node_id, &rel.name, "out").await?;
+            let count = related.len();
+            groups.push(RelationshipGroup {
+                relationship_name: rel.name.clone(),
+                direction: "out".to_string(),
+                target_type: rel.target_type.clone(),
+                reverse_name: rel.reverse_name.clone(),
+                source_type: node_type.clone(),
+                cardinality: Some(rel.cardinality.clone()),
+                required: rel.required,
+                edge_fields: rel.edge_fields.clone(),
+                description: rel.description.clone(),
+                related,
+                count,
+            });
         }
     }
 

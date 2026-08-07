@@ -1,8 +1,10 @@
 //! Schema Management Types
 //!
 //! This module contains data structures for managing user-defined entity schemas
-//! in NodeSpace. Schemas are stored as regular nodes with `node_type = 'schema'`
-//! and follow the Pure JSON schema-as-node pattern.
+//! in NodeSpace. Schemas are stored as regular nodes with `node_type = 'schema'`.
+//! Field definitions live in the schema node's `properties.fields` JSON;
+//! relationship declarations are NOT stored in properties — each one is a row in
+//! the `relationship` table between the declaring and target schema nodes.
 //!
 //! ## Schema Protection Levels
 //!
@@ -10,62 +12,25 @@
 //! - `User`: Fully modifiable/deletable by users
 //! - `System`: Auto-managed internal fields, read-only
 //!
-//! ## Example Schema Node
-//!
-//! ```json
-//! {
-//!   "id": "task",
-//!   "nodeType": "schema",
-//!   "content": "Task",
-//!   "isCore": true,
-//!   "schemaVersion": 2,
-//!   "description": "Task tracking schema",
-//!   "fields": [
-//!     {
-//!       "name": "status",
-//!       "type": "enum",
-//!       "protection": "core",
-//!       "coreValues": [
-//!         { "value": "open", "label": "Open" },
-//!         { "value": "in_progress", "label": "In Progress" },
-//!         { "value": "done", "label": "Done" }
-//!       ],
-//!       "userValues": [
-//!         { "value": "blocked", "label": "Blocked" }
-//!       ],
-//!       "extensible": true,
-//!       "indexed": true,
-//!       "required": true,
-//!       "default": "open"
-//!     }
-//!   ],
-//!   "relationships": [
-//!     {
-//!       "name": "assigned_to",
-//!       "targetType": "person",
-//!       "direction": "out",
-//!       "cardinality": "many",
-//!       "reverseName": "tasks",
-//!       "reverseCardinality": "many",
-//!       "edgeFields": [
-//!         { "name": "role", "type": "string" }
-//!       ]
-//!     }
-//!   ]
-//! }
-//! ```
-//!
 //! ## Relationships
 //!
-//! Schemas can define relationships to other node types. Relationships are stored
-//! in edge tables and support:
+//! Schemas can define typed relationships to other node types. A declaration is
+//! stored as a `relationship` table row: `in_node` = the declaring schema node,
+//! `out_node` = the target schema node (or the declaring schema itself when
+//! `target_type` is `None` — an untyped relationship accepting any target),
+//! `relationship_type` = the declared name, and the full [`SchemaRelationship`]
+//! serialized into the row's `properties` JSON. Instance-level edges reuse the
+//! same table with the same `relationship_type`; the two are distinguished by
+//! their endpoints (declaration edges connect schema nodes, instance edges
+//! connect instance nodes).
 //!
-//! - **Edge table storage**: Edge table is single source of truth
-//! - **Bidirectional querying**: Both directions query the same edge table
-//! - **Edge fields**: Custom properties on the relationship itself
+//! Reads are consolidated in `SqliteStore::get_schema_declarations` /
+//! `get_all_schema_declarations`, which hydrate `SchemaNode.relationships`;
+//! writes go through `SqliteStore::set_schema_declarations`.
+//!
+//! - **Bidirectional querying**: both directions query the same edge rows
+//! - **Edge fields**: custom properties on the relationship itself
 //! - **Cardinality**: "one" or "many" constraints (enforced at application level)
-//!
-//! See [`../nodespace-docs/archived/architecture/data/schema-relational-fields.md`] for complete details.
 //!
 //! ## Source of truth
 //!
@@ -79,3 +44,18 @@ pub use nodespace_types::{
     EdgeField, EnumValue, RelationshipCardinality, RelationshipDirection, SchemaField,
     SchemaProtectionLevel, SchemaRelationship,
 };
+
+/// Built-in structural relationship types. These are not schema-declared: they
+/// have hardcoded semantics (hierarchy, mentions, collection membership, roles)
+/// and their own UI affordances.
+///
+/// Because schema relationship declarations and these primitives share the one
+/// `relationship` table's `relationship_type` column, a declared relationship
+/// must never take one of these names — schema creation/update rejects them.
+pub const BUILTIN_RELATIONSHIP_NAMES: [&str; 4] =
+    ["member_of", "has_child", "mentions", "has_role"];
+
+/// Whether `name` is one of the built-in structural relationship types.
+pub fn is_builtin_relationship(name: &str) -> bool {
+    BUILTIN_RELATIONSHIP_NAMES.contains(&name)
+}

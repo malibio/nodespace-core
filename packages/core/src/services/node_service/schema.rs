@@ -354,11 +354,12 @@ impl NodeService {
             })
             .collect();
 
+        // Declarations live in the relationship table, not in properties — the
+        // rebuilt properties carry fields only.
         let mut properties = serde_json::json!({
             "isCore": schema.is_core,
             "schemaVersion": schema.schema_version,
             "fields": updated_fields,
-            "relationships": schema.relationships,
         });
         if let Some(ref t) = schema.title_template {
             properties["titleTemplate"] = serde_json::Value::String(t.clone());
@@ -382,6 +383,101 @@ impl NodeService {
             }))?;
 
         Ok(affected)
+    }
+
+    /// Replace a schema's relationship declarations (the single write path for
+    /// declaration edges — `create_schema`/`update_schema` and core-schema
+    /// seeding all route through here).
+    ///
+    /// Enforces, in order:
+    /// 1. **Reserved names** — a declaration may not take a built-in structural
+    ///    relationship name (`has_child`, `mentions`, `member_of`, `has_role`):
+    ///    declarations and primitives share the one `relationship` table, so a
+    ///    collision would corrupt every type-keyed query.
+    /// 2. **Live-edge protection** — removing or retargeting a declaration that
+    ///    already has instance edges is rejected (block by default, no cascade,
+    ///    no detach), naming the number of affected edges.
+    ///
+    /// Emits one relationship domain event per actual change so declaration
+    /// edges replicate exactly like instance edges.
+    pub async fn set_schema_relationships(
+        &self,
+        schema_id: &str,
+        relationships: &[crate::models::schema::SchemaRelationship],
+    ) -> Result<(), NodeServiceError> {
+        for rel in relationships {
+            if crate::models::schema::is_builtin_relationship(&rel.name) {
+                return Err(NodeServiceError::invalid_update(format!(
+                    "Relationship name '{}' is reserved for a built-in structural relationship \
+                     ({}); choose a different name",
+                    rel.name,
+                    crate::models::schema::BUILTIN_RELATIONSHIP_NAMES.join(", ")
+                )));
+            }
+        }
+
+        // Block removing/retargeting a declaration that live instance edges
+        // depend on. A rename arrives as remove+add, so it is covered by the
+        // removal check; a retarget keeps the name but changes target_type.
+        let existing = self
+            .store
+            .get_schema_declarations(schema_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        for old in &existing {
+            let replacement = relationships.iter().find(|r| r.name == old.name);
+            let removed = replacement.is_none();
+            let retargeted = replacement.is_some_and(|r| r.target_type != old.target_type);
+            if !(removed || retargeted) {
+                continue;
+            }
+            let live = self
+                .store
+                .count_instance_edges_for_declaration(schema_id, &old.name)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            if live > 0 {
+                let action = if removed { "remove" } else { "retarget" };
+                return Err(NodeServiceError::invalid_update(format!(
+                    "Cannot {} relationship '{}' on schema '{}': {} instance edge(s) exist \
+                     under it. Delete those relationships first.",
+                    action, old.name, schema_id, live
+                )));
+            }
+        }
+
+        let changes = self
+            .store
+            .set_schema_declarations(schema_id, relationships)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        for (rel_id, out_node, rel) in changes.created {
+            let props = serde_json::to_value(&rel).unwrap_or_else(|_| serde_json::json!({}));
+            self.emit_event(DomainEvent::RelationshipCreated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id, schema_id, &out_node, &rel.name, props,
+                ),
+            });
+        }
+        for (rel_id, out_node, rel) in changes.updated {
+            let props = serde_json::to_value(&rel).unwrap_or_else(|_| serde_json::json!({}));
+            self.emit_event(DomainEvent::RelationshipUpdated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id, schema_id, &out_node, &rel.name, props,
+                ),
+            });
+        }
+        for (rel_id, out_node, name) in changes.deleted {
+            self.emit_event(DomainEvent::RelationshipDeleted {
+                id: rel_id,
+                from_id: crate::db::events::node_thing(schema_id),
+                to_id: crate::db::events::node_thing(&out_node),
+                relationship_type: name,
+            });
+        }
+
+        Ok(())
     }
 
     /// Get all schema nodes with their relationships

@@ -1207,17 +1207,20 @@ impl GrpcNodeService for NodeServiceImpl {
         request: Request<GetAllSchemasRequest>,
     ) -> Result<Response<NodeListResponse>, Status> {
         let this = self.route(&request).await?;
-        let query = NodeQuery {
-            node_type: Some("schema".to_string()),
-            ..Default::default()
-        };
-        let nodes = this
+        // Hydrated fetch: relationship declarations are relationship-table rows,
+        // not a `properties` key, so the wire node is assembled via
+        // `into_wire_node` (which embeds `relationships` back into the
+        // properties JSON the desktop client parses).
+        let schemas = this
             .node_service
-            .query_nodes_simple(query)
+            .get_all_schemas()
             .await
             .map_err(service_error_to_status)?;
 
-        let proto_nodes: Vec<NodeData> = nodes.into_iter().map(node_to_proto).collect();
+        let proto_nodes: Vec<NodeData> = schemas
+            .into_iter()
+            .map(|schema| node_to_proto(schema.into_wire_node()))
+            .collect();
         let count = proto_nodes.len() as i32;
 
         Ok(Response::new(NodeListResponse {
@@ -1233,18 +1236,26 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<NodeResponse>, Status> {
         let this = self.route(&request).await?;
         let req = request.into_inner();
-        let node = fetch_node(&this.node_service, &req.schema_id).await?;
-        if node.node_type != "schema" {
-            return Err(Status::failed_precondition(format!(
-                "Node '{}' is not a schema (type={})",
-                req.schema_id, node.node_type
-            )));
-        }
-        let node_type = node.node_type.clone();
+        // Distinguish "not a schema" from "absent" for accurate statuses.
+        let schema = match this
+            .node_service
+            .get_schema_node(&req.schema_id)
+            .await
+            .map_err(service_error_to_status)?
+        {
+            Some(schema) => schema,
+            None => {
+                let node = fetch_node(&this.node_service, &req.schema_id).await?;
+                return Err(Status::failed_precondition(format!(
+                    "Node '{}' is not a schema (type={})",
+                    req.schema_id, node.node_type
+                )));
+            }
+        };
         Ok(Response::new(NodeResponse {
             node_id: req.schema_id,
-            node_type,
-            node_data: Some(node_to_proto(node)),
+            node_type: "schema".to_string(),
+            node_data: Some(node_to_proto(schema.into_wire_node())),
         }))
     }
 

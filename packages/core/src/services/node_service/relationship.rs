@@ -526,20 +526,26 @@ impl NodeService {
                 .await?
                 .ok_or_else(|| NodeServiceError::node_not_found(source_id))?;
 
+            // Declarations connect SCHEMA nodes and are written exclusively by
+            // `set_schema_relationships` — an instance-level write must never
+            // produce a declaration-shaped edge (schema node on either end).
+            if source.node_type == "schema" {
+                return Err(NodeServiceError::invalid_update(format!(
+                    "'{}' is a schema node; typed relationships between schemas are declarations \
+                     — declare them via update_schema, not create_relationship",
+                    source_id
+                )));
+            }
+
             let schema_id = &source.node_type;
-            let schema_node = self.get_node(schema_id).await?.ok_or_else(|| {
+            // Hydrated fetch: declarations come from the relationship table via
+            // the one shared store query path (`get_schema_declarations`).
+            let schema_node = self.get_schema_node(schema_id).await?.ok_or_else(|| {
                 NodeServiceError::query_failed(format!("Schema '{}' not found", schema_id))
             })?;
 
-            let relationships: Vec<crate::models::schema::SchemaRelationship> = schema_node
-                .properties
-                .get("relationships")
-                .and_then(|r| serde_json::from_value(r.clone()).ok())
-                .unwrap_or_default();
-
-            let relationship = relationships
-                .iter()
-                .find(|r| r.name == relationship_name)
+            let relationship = schema_node
+                .get_relationship(relationship_name)
                 .ok_or_else(|| {
                     NodeServiceError::invalid_update(format!(
                         "Relationship '{}' not defined in schema '{}'. Built-in relationships (member_of, has_child, mentions, has_role) are universal.",
@@ -547,13 +553,21 @@ impl NodeService {
                     ))
                 })?;
 
+            let target = self
+                .get_node(target_id)
+                .await?
+                .ok_or_else(|| NodeServiceError::node_not_found(target_id))?;
+
+            if target.node_type == "schema" {
+                return Err(NodeServiceError::invalid_update(format!(
+                    "'{}' is a schema node; typed relationships between schemas are declarations \
+                     — declare them via update_schema, not create_relationship",
+                    target_id
+                )));
+            }
+
             // Validate target node type (skip when target_type is None — accepts any type)
             if let Some(expected_type) = &relationship.target_type {
-                let target = self
-                    .get_node(target_id)
-                    .await?
-                    .ok_or_else(|| NodeServiceError::node_not_found(target_id))?;
-
                 if target.node_type != *expected_type {
                     return Err(NodeServiceError::invalid_update(format!(
                         "Target node type '{}' doesn't match expected type '{}' for relationship '{}'",
@@ -806,26 +820,17 @@ impl NodeService {
         );
         if !is_builtin {
             if let Some(source) = self.get_node(source_id).await? {
-                if let Some(schema_node) = self.get_node(&source.node_type).await? {
-                    // A present-but-malformed `relationships` array must not
-                    // silently disable the guard — that would fail open on the
-                    // exact invariant this protects. Warn if parsing fails.
-                    let relationships: Vec<crate::models::schema::SchemaRelationship> =
-                        match schema_node.properties.get("relationships") {
-                            Some(raw) => serde_json::from_value(raw.clone()).unwrap_or_else(|e| {
-                                tracing::warn!(
-                                    schema = %source.node_type,
-                                    error = %e,
-                                    "could not parse schema relationships while checking required last-edge protection; treating as none"
-                                );
-                                Vec::new()
-                            }),
-                            None => Vec::new(),
-                        };
+                if let Some(schema_node) = self.get_schema_node(&source.node_type).await? {
+                    // Declarations come hydrated from the relationship table —
+                    // the same consolidated read path as creation-side
+                    // validation, so the two guards can never see different
+                    // declaration sets.
+                    //
                     // `required` is an outbound-declaration property; only enforce
                     // it for a forward (`direction: out`) relationship so an
                     // inbound-declared one never counts the wrong edge set.
-                    let is_required = relationships
+                    let is_required = schema_node
+                        .relationships
                         .iter()
                         .find(|r| r.name == relationship_name)
                         .map(|r| {
@@ -1051,9 +1056,8 @@ impl NodeService {
 
     /// Get inbound relationships for a node type
     ///
-    /// Returns all relationships from other schemas that point TO this node type.
-    /// This is a computed lookup (not cached) - for frequently accessed data,
-    /// use `InboundRelationshipCache` instead.
+    /// Returns all relationships from other schemas that point TO this node
+    /// type, resolved from the table-hydrated schema set (`get_all_schemas`).
     ///
     /// # Arguments
     ///

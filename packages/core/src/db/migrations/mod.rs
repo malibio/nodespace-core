@@ -15,12 +15,13 @@
 mod v001_initial_schema;
 mod v002_embedding_origin;
 mod v003_property_indexes;
+mod v004_schema_relationship_edges;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Highest migration version known to this build. Bump when adding a migration.
-pub const LATEST_VERSION: i64 = 3;
+pub const LATEST_VERSION: i64 = 4;
 
 /// Pre-migration backups retained per database. A new release that ships schema
 /// changes writes one snapshot before touching the existing data; older ones are
@@ -32,6 +33,7 @@ async fn apply_migration(tx: &libsql::Transaction, version: i64) -> Result<()> {
         1 => v001_initial_schema::apply(tx).await,
         2 => v002_embedding_origin::apply(tx).await,
         3 => v003_property_indexes::apply(tx).await,
+        4 => v004_schema_relationship_edges::apply(tx).await,
         _ => unreachable!("no migration defined for version {version}"),
     }
 }
@@ -41,6 +43,7 @@ fn migration_name(version: i64) -> &'static str {
         1 => "initial_schema",
         2 => "embedding_origin",
         3 => "property_indexes",
+        4 => "schema_relationship_edges",
         _ => "unknown",
     }
 }
@@ -278,7 +281,11 @@ mod tests {
             LATEST_VERSION - 1,
             "backup must capture the pre-migration schema version"
         );
-        assert_eq!(node_count(&restored).await, 1, "backup must preserve the data");
+        assert_eq!(
+            node_count(&restored).await,
+            1,
+            "backup must preserve the data"
+        );
     }
 
     #[tokio::test]
@@ -326,6 +333,77 @@ mod tests {
         assert!(!dir.path().join("backups").exists());
     }
 
+    /// v004: JSON relationship declarations move to relationship-table rows and
+    /// the `relationships` key is stripped from schema node properties.
+    #[tokio::test]
+    async fn v004_moves_json_declarations_to_relationship_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("declarations.db");
+        let conn = open(&db_path).await;
+        run_up_to(&conn, 3).await.unwrap();
+
+        // A pre-v004 database: schemas with declarations in properties JSON.
+        for (id, props) in [
+            (
+                "widget",
+                r#"{"isCore":false,"fields":[],"relationships":[]}"#,
+            ),
+            (
+                "assembly",
+                r#"{"isCore":false,"fields":[],"relationships":[{"name":"widgets","targetType":"widget","direction":"out","cardinality":"many"},{"name":"related","direction":"out","cardinality":"many"}]}"#,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO node (id, node_type, content, properties, created_at, modified_at) \
+                 VALUES (?1, 'schema', ?1, ?2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                libsql::params![id.to_string(), props.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+
+        run_up_to(&conn, 4).await.unwrap();
+
+        // Typed declaration → edge to the target schema.
+        let mut rows = conn
+            .query(
+                "SELECT out_node, properties FROM relationship \
+                 WHERE in_node = 'assembly' AND relationship_type = 'widgets'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("widgets declaration row");
+        assert_eq!(row.get::<String>(0).unwrap(), "widget");
+        let props: serde_json::Value =
+            serde_json::from_str(&row.get::<String>(1).unwrap()).unwrap();
+        assert_eq!(props["targetType"], "widget");
+
+        // Untyped declaration → self-edge.
+        let mut rows = conn
+            .query(
+                "SELECT out_node FROM relationship \
+                 WHERE in_node = 'assembly' AND relationship_type = 'related'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("related declaration row");
+        assert_eq!(row.get::<String>(0).unwrap(), "assembly");
+
+        // The properties key is stripped from every schema node, empty arrays included.
+        let mut rows = conn
+            .query(
+                "SELECT count(*) FROM node WHERE node_type = 'schema' \
+                 AND json_type(properties, '$.relationships') IS NOT NULL",
+                (),
+            )
+            .await
+            .unwrap();
+        let remaining: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(remaining, 0, "no schema node may keep a relationships key");
+    }
+
     #[tokio::test]
     async fn no_backup_for_a_brand_new_db() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -334,6 +412,9 @@ mod tests {
         let backup = backup_before_pending_migrations(&conn, &db_path)
             .await
             .unwrap();
-        assert!(backup.is_none(), "a brand-new database has nothing to back up");
+        assert!(
+            backup.is_none(),
+            "a brand-new database has nothing to back up"
+        );
     }
 }

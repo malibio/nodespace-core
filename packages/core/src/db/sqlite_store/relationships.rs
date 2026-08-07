@@ -1,5 +1,32 @@
 //! `SqliteStore` methods — relationships concern (split from the god-object per ADR-053 prep).
 use super::*;
+use crate::models::schema::{SchemaRelationship, BUILTIN_RELATIONSHIP_NAMES};
+
+/// SQL fragment excluding the built-in structural relationship types, for
+/// queries that must see only schema-declared relationships. One definition so
+/// every declaration query scopes identically.
+fn builtin_exclusion_sql(column: &str) -> String {
+    let quoted: Vec<String> = BUILTIN_RELATIONSHIP_NAMES
+        .iter()
+        .map(|n| format!("'{}'", n))
+        .collect();
+    format!("{} NOT IN ({})", column, quoted.join(", "))
+}
+
+/// The outcome of replacing a schema's relationship declarations, itemized so
+/// the service layer can emit one domain event per actual change (created /
+/// updated / deleted edge). Unchanged declarations keep their row and id and
+/// appear in none of the lists.
+#[derive(Debug, Default)]
+pub struct SchemaDeclarationChanges {
+    /// (relationship row id, out_node, declaration) for newly inserted edges.
+    pub created: Vec<(String, String, SchemaRelationship)>,
+    /// (relationship row id, out_node, declaration) for edges whose stored
+    /// declaration (properties and/or target endpoint) was rewritten in place.
+    pub updated: Vec<(String, String, SchemaRelationship)>,
+    /// (relationship row id, out_node, relationship name) for removed edges.
+    pub deleted: Vec<(String, String, String)>,
+}
 
 impl SqliteStore {
     pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
@@ -1273,5 +1300,272 @@ impl SqliteStore {
             .await?
             .ok_or_else(|| anyhow::anyhow!("No count result"))?;
         Ok(row.get::<i64>(0).unwrap_or(0) as usize)
+    }
+
+    // ========================================================================
+    // Schema relationship declarations (issue: table-backed declarations)
+    //
+    // A declaration is a `relationship` row between two SCHEMA nodes:
+    // in_node = declaring schema, out_node = target schema (or the declaring
+    // schema itself when the declaration is untyped, `target_type: None`),
+    // relationship_type = the declared name, and the full `SchemaRelationship`
+    // serialized in the row's `properties`. The `properties` JSON is the
+    // authoritative declaration; the endpoints exist for FK integrity and
+    // indexed lookup. These four methods are the ONLY paths that read or write
+    // declaration rows — every consumer goes through them (usually indirectly,
+    // via the hydrated `SchemaNode.relationships`).
+    // ========================================================================
+
+    /// Parse a declaration row's stored `properties` into a `SchemaRelationship`.
+    ///
+    /// A malformed row is a bug (only `set_schema_declarations` writes these),
+    /// so it is surfaced loudly via `tracing::warn` and skipped rather than
+    /// silently defaulted — the historical `.ok()`-swallowing on the JSON read
+    /// path is exactly what this storage model replaces.
+    fn parse_declaration_row(schema_id: &str, props_json: &str) -> Option<SchemaRelationship> {
+        match serde_json::from_str::<SchemaRelationship>(props_json) {
+            Ok(rel) => Some(rel),
+            Err(e) => {
+                tracing::warn!(
+                    schema = %schema_id,
+                    error = %e,
+                    "skipping malformed schema relationship declaration row"
+                );
+                None
+            }
+        }
+    }
+
+    /// All relationship declarations made BY `schema_id`, in declaration order.
+    pub async fn get_schema_declarations(
+        &self,
+        schema_id: &str,
+    ) -> Result<Vec<SchemaRelationship>> {
+        let sql = format!(
+            "SELECT properties FROM relationship \
+             WHERE in_node = ?1 AND {} ORDER BY rowid",
+            builtin_exclusion_sql("relationship_type")
+        );
+        let mut rows = self
+            .db
+            .query(&sql, libsql::params![schema_id.to_string()])
+            .await
+            .context("Failed to query schema relationship declarations")?;
+
+        let mut declarations = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let props: String = row.get(0)?;
+            if let Some(rel) = Self::parse_declaration_row(schema_id, &props) {
+                declarations.push(rel);
+            }
+        }
+        Ok(declarations)
+    }
+
+    /// All relationship declarations in the database, keyed by declaring schema
+    /// id. One query; used to hydrate `get_all_schemas` without an N+1.
+    ///
+    /// The join restricts to rows whose `in_node` is a schema node — combined
+    /// with the builtin-name exclusion this is the declaration invariant (see
+    /// module docs on `crate::models::schema`).
+    pub async fn get_all_schema_declarations(
+        &self,
+    ) -> Result<HashMap<String, Vec<SchemaRelationship>>> {
+        let sql = format!(
+            "SELECT r.in_node, r.properties FROM relationship r \
+             JOIN node s ON s.id = r.in_node \
+             WHERE s.node_type = 'schema' AND {} ORDER BY r.rowid",
+            builtin_exclusion_sql("r.relationship_type")
+        );
+        let mut rows = self
+            .db
+            .query(&sql, ())
+            .await
+            .context("Failed to query all schema relationship declarations")?;
+
+        let mut by_schema: HashMap<String, Vec<SchemaRelationship>> = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let schema_id: String = row.get(0)?;
+            let props: String = row.get(1)?;
+            if let Some(rel) = Self::parse_declaration_row(&schema_id, &props) {
+                by_schema.entry(schema_id).or_default().push(rel);
+            }
+        }
+        Ok(by_schema)
+    }
+
+    /// Replace the relationship declarations of `schema_id` with `relationships`,
+    /// atomically, diffing by name so unchanged declarations keep their row (no
+    /// delete/reinsert churn, stable edge ids, no spurious events).
+    ///
+    /// Callers validate before this point (reserved names, target existence,
+    /// live-instance-edge protection) — this method only persists.
+    pub async fn set_schema_declarations(
+        &self,
+        schema_id: &str,
+        relationships: &[SchemaRelationship],
+    ) -> Result<SchemaDeclarationChanges> {
+        let now = Utc::now().to_rfc3339();
+        let tx = self
+            .db
+            .transaction()
+            .await
+            .context("Failed to begin schema declaration transaction")?;
+
+        // Existing declaration rows, keyed by declared name.
+        let select_sql = format!(
+            "SELECT id, out_node, relationship_type, properties FROM relationship \
+             WHERE in_node = ?1 AND {}",
+            builtin_exclusion_sql("relationship_type")
+        );
+        let mut rows = tx
+            .query(&select_sql, libsql::params![schema_id.to_string()])
+            .await
+            .context("Failed to read existing schema declarations")?;
+        let mut existing: HashMap<String, (String, String, String)> = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            let out_node: String = row.get(1)?;
+            let rel_type: String = row.get(2)?;
+            let props: String = row.get(3)?;
+            existing.insert(rel_type, (id, out_node, props));
+        }
+
+        let mut changes = SchemaDeclarationChanges::default();
+
+        // Upsert the new set.
+        for rel in relationships {
+            let out_node = rel.target_type.as_deref().unwrap_or(schema_id).to_string();
+            let props_json = serde_json::to_string(rel)
+                .context("Failed to serialize schema relationship declaration")?;
+
+            match existing.remove(&rel.name) {
+                Some((_, ref old_out, ref old_props))
+                    if *old_out == out_node && *old_props == props_json =>
+                {
+                    // Unchanged — keep the row as-is.
+                }
+                Some((id, _, _)) => {
+                    tx.execute(
+                        "UPDATE relationship SET out_node = ?1, properties = ?2, \
+                         version = version + 1, modified_at = ?3 WHERE id = ?4",
+                        libsql::params![out_node.clone(), props_json, now.clone(), id.clone()],
+                    )
+                    .await
+                    .context("Failed to update schema declaration edge")?;
+                    changes.updated.push((id, out_node, rel.clone()));
+                }
+                None => {
+                    let rel_id = uuid::Uuid::new_v4().to_string();
+                    tx.execute(
+                        "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
+                        libsql::params![
+                            rel_id.clone(),
+                            schema_id.to_string(),
+                            out_node.clone(),
+                            rel.name.clone(),
+                            props_json,
+                            now.clone(),
+                            now.clone()
+                        ],
+                    )
+                    .await
+                    .context("Failed to insert schema declaration edge")?;
+                    changes.created.push((rel_id, out_node, rel.clone()));
+                }
+            }
+        }
+
+        // Whatever remains in `existing` is no longer declared — delete.
+        for (name, (id, out_node, _)) in existing {
+            tx.execute(
+                "DELETE FROM relationship WHERE id = ?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .context("Failed to delete schema declaration edge")?;
+            changes.deleted.push((id, out_node, name));
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit schema declaration transaction")?;
+        Ok(changes)
+    }
+
+    /// Count the INSTANCE-level edges written under a declaration: edges whose
+    /// `relationship_type` is the declared name and whose source node is an
+    /// instance of the declaring type. The declaring schema node itself has
+    /// `node_type = 'schema'`, so declaration edges never match — this is the
+    /// shared scoping rule (endpoint type, not name) that keeps declarations
+    /// and instance edges apart in the one table.
+    pub async fn count_instance_edges_for_declaration(
+        &self,
+        declaring_type: &str,
+        relationship_name: &str,
+    ) -> Result<i64> {
+        let mut rows = self
+            .db
+            .query(
+                "SELECT COUNT(*) FROM relationship r \
+                 JOIN node s ON s.id = r.in_node \
+                 WHERE r.relationship_type = ?1 AND s.node_type = ?2",
+                libsql::params![relationship_name.to_string(), declaring_type.to_string()],
+            )
+            .await
+            .context("Failed to count instance edges for declaration")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No count result"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+
+    /// Refuse to delete a schema node that still has relationship declarations
+    /// pointing at or from it. `relationship.in_node`/`out_node` carry
+    /// `ON DELETE CASCADE`, so an unguarded delete would silently destroy the
+    /// declarations (and strand any instance edges written under them). A
+    /// non-schema node passes without a query.
+    pub(super) async fn assert_schema_deletable(&self, node: &Node) -> Result<()> {
+        if node.node_type != "schema" {
+            return Ok(());
+        }
+        let count = self.count_schema_declaration_edges(&node.id).await?;
+        if count > 0 {
+            return Err(anyhow::anyhow!(
+                "schema_has_declarations: schema '{}' has {} relationship declaration(s) \
+                 pointing at or from it; remove them via update_schema before deleting the schema",
+                node.id,
+                count
+            ));
+        }
+        Ok(())
+    }
+
+    /// Count declaration edges touching `schema_id` on either end (declared BY
+    /// it or targeting it). Used to block deleting a schema node out from under
+    /// its declarations — `relationship.in_node`/`out_node` carry `ON DELETE
+    /// CASCADE`, so an unguarded node delete would silently destroy them.
+    pub async fn count_schema_declaration_edges(&self, schema_id: &str) -> Result<i64> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM relationship r \
+             JOIN node a ON a.id = r.in_node \
+             JOIN node b ON b.id = r.out_node \
+             WHERE (r.in_node = ?1 OR r.out_node = ?1) \
+               AND a.node_type = 'schema' AND b.node_type = 'schema' \
+               AND {}",
+            builtin_exclusion_sql("r.relationship_type")
+        );
+        let mut rows = self
+            .db
+            .query(&sql, libsql::params![schema_id.to_string()])
+            .await
+            .context("Failed to count schema declaration edges")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No count result"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
     }
 }

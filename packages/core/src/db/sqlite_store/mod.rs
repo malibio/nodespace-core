@@ -158,7 +158,8 @@ impl SqliteStore {
         // pending migration runs, so a new release's migration can never lose the
         // user's prior data irrecoverably. Best-effort — a backup failure is logged
         // and must not block startup.
-        if let Err(e) = crate::db::migrations::backup_before_pending_migrations(&conn, &db_path).await
+        if let Err(e) =
+            crate::db::migrations::backup_before_pending_migrations(&conn, &db_path).await
         {
             tracing::warn!(error = %e, "pre-migration database backup failed; proceeding");
         }
@@ -447,13 +448,22 @@ mod tests {
 
         let backups = temp_dir.path().join("backups");
         let has_backup = std::fs::read_dir(&backups)
-            .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().ends_with(".bak")))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            })
             .unwrap_or(false);
-        assert!(has_backup, "opening a pre-migration db must leave a backup snapshot");
+        assert!(
+            has_backup,
+            "opening a pre-migration db must leave a backup snapshot"
+        );
 
         let mut rows = store.db.query("PRAGMA user_version", ()).await?;
         let version: i64 = rows.next().await?.unwrap().get(0)?;
-        assert_eq!(version, LATEST_VERSION, "the live db must be migrated to LATEST");
+        assert_eq!(
+            version, LATEST_VERSION,
+            "the live db must be migrated to LATEST"
+        );
         Ok(())
     }
 
@@ -824,10 +834,7 @@ mod tests {
         let d_id = d.id.clone();
         store.create_node(d, None, None).await?;
         let both = store
-            .bulk_add_to_collections(&[
-                (c_id.clone(), d_id.clone()),
-                (d_id.clone(), c_id.clone()),
-            ])
+            .bulk_add_to_collections(&[(c_id.clone(), d_id.clone()), (d_id.clone(), c_id.clone())])
             .await?;
         assert_eq!(
             both.len(),

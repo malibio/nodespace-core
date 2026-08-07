@@ -7,7 +7,6 @@
 //! - `EmbeddingProcessor` - Background task for processing stale root embeddings (`nlp` feature)
 //! - `NodeAccessor` - Read-only trait for behavior-driven node access
 //! - `MigrationRegistry` - Schema migration infrastructure (for future use)
-//! - `InboundRelationshipCache` - Fast NLP discovery of inbound relationships
 //! - `QueryService` - Query execution with SQL translation
 //! - `CollectionService` - Collection path parsing and membership management
 //!
@@ -30,7 +29,6 @@ pub mod migration_registry;
 pub mod migrations;
 pub mod node_service;
 pub mod query_service;
-pub mod relationship_cache;
 
 /// Read-only node accessor for behavior-driven content extraction
 ///
@@ -196,7 +194,6 @@ pub use query_service::{
     FilterOperator, FilterType, QueryDefinition, QueryFilter, QueryService, RelationshipType,
     SortConfig, SortDirection,
 };
-pub use relationship_cache::{CacheStats, InboundRelationship, InboundRelationshipCache};
 
 #[cfg(test)]
 mod tests {

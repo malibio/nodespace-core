@@ -1,0 +1,438 @@
+//! Integration tests for table-backed schema relationship declarations.
+//!
+//! A `SchemaRelationship` declaration is stored as a `relationship` table row
+//! between the declaring and target SCHEMA nodes (self-edge when untyped),
+//! never as JSON in the schema node's `properties`. These tests cover:
+//!
+//! - storage shape: declarations land as relationship rows; `properties`
+//!   carries no `relationships` key
+//! - read-path agreement: every consolidated reader (`get_schema_node`,
+//!   `get_all_schemas`, `get_inbound_relationships`, the relationship viewer
+//!   aggregation, and `create_relationship`'s validation) sees the same
+//!   declaration set — the highest-value regression, since the pre-table JSON
+//!   parses could silently drift apart
+//! - reserved-name rejection (built-in structural relationship names)
+//! - block-by-default protection: removing/retargeting a declaration with live
+//!   instance edges, and deleting a schema node with declarations, are refused
+//! - instance/declaration scoping: `create_relationship` refuses schema-node
+//!   endpoints; declaration edges never leak into instance queries
+
+use anyhow::Result;
+use nodespace_core::{
+    db::SqliteStore,
+    models::Node,
+    ops::rel_ops,
+    schema::{handle_create_schema, handle_update_schema},
+    services::NodeService,
+};
+use serde_json::json;
+use std::sync::Arc;
+use tempfile::TempDir;
+
+async fn create_test_service() -> Result<(Arc<NodeService>, TempDir)> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("test.db");
+    let mut store = Arc::new(SqliteStore::new(db_path).await?);
+    let node_service = Arc::new(NodeService::new(&mut store).await?);
+    Ok((node_service, temp_dir))
+}
+
+/// `project`-style schema declaring `widgets → widget` plus a target schema.
+async fn create_widget_pair(svc: &Arc<NodeService>) -> Result<()> {
+    handle_create_schema(
+        svc,
+        json!({
+            "name": "Widget",
+            "fields": [{ "name": "label", "type": "string", "protection": "user", "indexed": false }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("widget schema: {e}"))?;
+
+    handle_create_schema(
+        svc,
+        json!({
+            "name": "Assembly",
+            "fields": [{ "name": "title", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [{
+                "name": "widgets",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "assemblies",
+                "reverseCardinality": "one"
+            }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("assembly schema: {e}"))?;
+    Ok(())
+}
+
+async fn make_node(svc: &NodeService, id: &str, node_type: &str) -> Result<()> {
+    svc.create_node(Node::new_with_id(
+        id.to_string(),
+        node_type.to_string(),
+        format!("{id} content"),
+        json!({}),
+    ))
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Storage shape
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn declarations_are_relationship_rows_not_properties_json() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+
+    // The schema node's stored properties must NOT carry a relationships key.
+    let raw = svc
+        .get_node("assembly")
+        .await?
+        .expect("assembly schema node exists");
+    assert!(
+        raw.properties.get("relationships").is_none(),
+        "declarations must not be stored in properties, got: {}",
+        raw.properties
+    );
+
+    // The declaration lives as a relationship-table row between schema nodes.
+    let declarations = svc.store().get_schema_declarations("assembly").await?;
+    assert_eq!(declarations.len(), 1);
+    let rel = &declarations[0];
+    assert_eq!(rel.name, "widgets");
+    assert_eq!(rel.target_type.as_deref(), Some("widget"));
+    assert_eq!(rel.reverse_name.as_deref(), Some("assemblies"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn untyped_declaration_stores_as_self_edge_and_round_trips() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Notebook",
+            "fields": [],
+            "relationships": [{ "name": "related", "direction": "out", "cardinality": "many" }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let schema = svc
+        .get_schema_node("notebook")
+        .await?
+        .expect("notebook schema");
+    assert_eq!(schema.relationships.len(), 1);
+    assert_eq!(schema.relationships[0].name, "related");
+    assert!(
+        schema.relationships[0].target_type.is_none(),
+        "untyped declaration must round-trip target_type: None"
+    );
+
+    // Untyped declarations apply to every target type via inbound resolution.
+    let inbound = svc.get_inbound_relationships("task").await?;
+    assert!(
+        inbound
+            .iter()
+            .any(|(source, rel)| source == "notebook" && rel.name == "related"),
+        "untyped declaration must surface as inbound for any type"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Read-path agreement
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn all_read_paths_agree_on_the_declaration_set() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+
+    // Path 1: single-schema fetch.
+    let single = svc
+        .get_schema_node("assembly")
+        .await?
+        .expect("assembly schema")
+        .relationships;
+
+    // Path 2: all-schemas fetch (drives get_inbound_relationships and the
+    // agent's relationship-hop context).
+    let from_all = svc
+        .get_all_schemas()
+        .await?
+        .into_iter()
+        .find(|s| s.id == "assembly")
+        .expect("assembly among all schemas")
+        .relationships;
+
+    assert_eq!(
+        single, from_all,
+        "single-schema and all-schemas reads drifted"
+    );
+    assert_eq!(single.len(), 1);
+
+    // Path 3: inbound resolution from the target's side.
+    let inbound = svc.get_inbound_relationships("widget").await?;
+    let (source, inbound_rel) = inbound
+        .iter()
+        .find(|(source, rel)| source == "assembly" && rel.name == "widgets")
+        .expect("assembly.widgets visible inbound from widget");
+    assert_eq!(source, "assembly");
+    assert_eq!(
+        *inbound_rel, single[0],
+        "inbound read drifted from outbound"
+    );
+
+    // Path 4: the relationship viewer's outbound aggregation.
+    make_node(&svc, "a1", "assembly").await?;
+    let viewer = rel_ops::get_node_relationships(&svc, "a1").await?;
+    let group = viewer
+        .groups
+        .iter()
+        .find(|g| g.relationship_name == "widgets" && g.direction == "out")
+        .expect("declared outbound group renders even with zero edges");
+    assert_eq!(group.target_type.as_deref(), Some("widget"));
+
+    // Path 5: create_relationship validates against the same declaration set.
+    make_node(&svc, "w1", "widget").await?;
+    svc.create_relationship("a1", "widgets", "w1", json!({}))
+        .await
+        .expect("declared relationship accepted on the write path");
+    let related = svc.get_related_nodes("a1", "widgets", "out").await?;
+    assert_eq!(related.len(), 1);
+    assert_eq!(related[0].id, "w1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn declaration_edges_do_not_leak_into_instance_queries() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+    make_node(&svc, "a1", "assembly").await?;
+    make_node(&svc, "w1", "widget").await?;
+    svc.create_relationship("a1", "widgets", "w1", json!({}))
+        .await?;
+
+    // The declaration edge (assembly→widget schema nodes) shares
+    // relationship_type "widgets" with the instance edge — instance traversal
+    // keyed by instance ids must see exactly the instance edge.
+    let related = svc.get_related_nodes("a1", "widgets", "out").await?;
+    assert_eq!(related.len(), 1);
+    assert_eq!(related[0].id, "w1");
+
+    // And the viewer on the instance shows a count of 1, not 2.
+    let viewer = rel_ops::get_node_relationships(&svc, "a1").await?;
+    let group = viewer
+        .groups
+        .iter()
+        .find(|g| g.relationship_name == "widgets" && g.direction == "out")
+        .expect("outbound group");
+    assert_eq!(group.count, 1);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reserved names
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reserved_builtin_names_are_rejected_at_declaration_time() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Bad",
+            "fields": [],
+            "relationships": [{ "name": "has_child", "direction": "out", "cardinality": "many" }]
+        }),
+    )
+    .await
+    .expect_err("a declaration named after a built-in structural relationship must be rejected");
+    assert!(
+        err.to_string().contains("has_child"),
+        "error should name the reserved relationship: {err}"
+    );
+    // The rejection must not leave a half-created schema behind.
+    assert!(svc.get_schema_node("bad").await?.is_none());
+
+    // Same via update_schema on an existing schema.
+    handle_create_schema(&svc, json!({ "name": "Good", "fields": [] }))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "good",
+            "add_relationships": [{ "name": "mentions", "direction": "out", "cardinality": "many" }]
+        }),
+    )
+    .await
+    .expect_err("update_schema must reject reserved relationship names");
+    assert!(err.to_string().contains("mentions"));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Block-by-default protection
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn removing_a_declaration_with_live_edges_is_blocked() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+    make_node(&svc, "a1", "assembly").await?;
+    make_node(&svc, "w1", "widget").await?;
+    svc.create_relationship("a1", "widgets", "w1", json!({}))
+        .await?;
+
+    let err = handle_update_schema(
+        &svc,
+        json!({ "schema_id": "assembly", "remove_relationships": ["widgets"] }),
+    )
+    .await
+    .expect_err("removing a declaration with live instance edges must be blocked");
+    assert!(
+        err.to_string().contains("1 instance edge"),
+        "error should name the live edge count: {err}"
+    );
+
+    // The declaration must still be intact (block, not partial apply).
+    let schema = svc.get_schema_node("assembly").await?.expect("assembly");
+    assert_eq!(schema.relationships.len(), 1);
+
+    // After the edge is deleted, removal succeeds.
+    svc.delete_relationship("a1", "widgets", "w1").await?;
+    handle_update_schema(
+        &svc,
+        json!({ "schema_id": "assembly", "remove_relationships": ["widgets"] }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("removal after clearing edges should succeed: {e}"))?;
+    let schema = svc.get_schema_node("assembly").await?.expect("assembly");
+    assert!(schema.relationships.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn retargeting_a_declaration_with_live_edges_is_blocked() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+    handle_create_schema(&svc, json!({ "name": "Gear", "fields": [] }))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    make_node(&svc, "a1", "assembly").await?;
+    make_node(&svc, "w1", "widget").await?;
+    svc.create_relationship("a1", "widgets", "w1", json!({}))
+        .await?;
+
+    // remove + re-add under the same name with a different target = retarget.
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "assembly",
+            "remove_relationships": ["widgets"],
+            "add_relationships": [{
+                "name": "widgets",
+                "targetType": "gear",
+                "direction": "out",
+                "cardinality": "many"
+            }]
+        }),
+    )
+    .await
+    .expect_err("retargeting a declaration with live instance edges must be blocked");
+    assert!(err.to_string().contains("retarget"), "got: {err}");
+
+    // Declaration unchanged.
+    let schema = svc.get_schema_node("assembly").await?.expect("assembly");
+    assert_eq!(
+        schema.relationships[0].target_type.as_deref(),
+        Some("widget")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn deleting_a_schema_with_declarations_is_blocked_on_both_ends() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+
+    // Declaring side.
+    let err = svc
+        .store()
+        .delete_node("assembly", None)
+        .await
+        .expect_err("deleting the declaring schema must be blocked");
+    assert!(
+        err.to_string().contains("schema_has_declarations"),
+        "got: {err}"
+    );
+
+    // Target side — the declaration edge points AT widget, and FK CASCADE
+    // would silently destroy it.
+    let err = svc
+        .store()
+        .delete_node("widget", None)
+        .await
+        .expect_err("deleting the target schema must be blocked");
+    assert!(
+        err.to_string().contains("schema_has_declarations"),
+        "got: {err}"
+    );
+
+    // After the declaration is removed, both delete cleanly.
+    handle_update_schema(
+        &svc,
+        json!({ "schema_id": "assembly", "remove_relationships": ["widgets"] }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    svc.store().delete_node("widget", None).await?;
+    svc.store().delete_node("assembly", None).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Instance/declaration write scoping
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_relationship_refuses_schema_node_endpoints() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+    make_node(&svc, "w1", "widget").await?;
+
+    // Schema node as source.
+    let err = svc
+        .create_relationship("assembly", "widgets", "w1", json!({}))
+        .await
+        .expect_err("schema node as relationship source must be refused");
+    assert!(err.to_string().contains("schema node"), "got: {err}");
+
+    // Schema node as target of an untyped relationship.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Board",
+            "fields": [],
+            "relationships": [{ "name": "pins", "direction": "out", "cardinality": "many" }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    make_node(&svc, "b1", "board").await?;
+    let err = svc
+        .create_relationship("b1", "pins", "widget", json!({}))
+        .await
+        .expect_err("schema node as relationship target must be refused");
+    assert!(err.to_string().contains("schema node"), "got: {err}");
+    Ok(())
+}
