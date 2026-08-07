@@ -676,6 +676,10 @@ impl SqliteStore {
     /// Uses a recursive CTE to collect all descendant IDs, then deletes them in one statement.
     /// FK CASCADE cleans relationship and embedding rows automatically.
     /// No OCC check — intended for internal system operations where version checks are unnecessary.
+    ///
+    /// Bypasses `assert_schema_deletable`: the ids reached here are `has_child`
+    /// descendants (ordinary content, e.g. a schema's description subtree) —
+    /// never schema nodes themselves. Do not route schema-node ids through this.
     pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
         self.db
             .execute(
@@ -699,6 +703,10 @@ impl SqliteStore {
     /// operations. Used to prune a document's *previous* subtree during an
     /// idempotent re-import only after the fresh subtree has been inserted, so
     /// a failed insert never destroys the old content.
+    ///
+    /// Bypasses `assert_schema_deletable`: callers pass imported-content ids,
+    /// never schema nodes. Do not route schema-node ids through this — the
+    /// FK CASCADE would silently destroy their relationship declarations.
     pub async fn delete_nodes_by_ids_unchecked(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());

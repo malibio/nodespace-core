@@ -58,6 +58,20 @@ pub async fn apply(tx: &libsql::Transaction) -> Result<()> {
                 continue;
             };
 
+            // A pre-v004 database could legally hold a declaration named after
+            // a built-in structural relationship (the reserved-name check is
+            // new). Converting it would create a REAL builtin edge between
+            // schema nodes — e.g. a `has_child` row that hierarchy traversals
+            // would follow. Drop it with a warning instead.
+            if crate::models::schema::is_builtin_relationship(&name) {
+                tracing::warn!(
+                    schema = %schema_id,
+                    relationship = %name,
+                    "dropping schema relationship declaration named after a built-in structural relationship during migration"
+                );
+                continue;
+            }
+
             let target = declaration
                 .get("targetType")
                 .and_then(|v| v.as_str())

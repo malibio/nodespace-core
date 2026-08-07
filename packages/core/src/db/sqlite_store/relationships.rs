@@ -1398,13 +1398,36 @@ impl SqliteStore {
     /// atomically, diffing by name so unchanged declarations keep their row (no
     /// delete/reinsert churn, stable edge ids, no spurious events).
     ///
-    /// Callers validate before this point (reserved names, target existence,
-    /// live-instance-edge protection) — this method only persists.
+    /// The NAME invariants are enforced here, at the lowest write layer, so no
+    /// direct caller (core-schema seeding, tests) can bypass them: a declared
+    /// name may not collide with a built-in structural relationship (the
+    /// builtin exclusion in every declaration query keys on exactly this), and
+    /// names must be unique within one schema (the diff-by-name and the
+    /// `relationship_type` addressing both assume it). Higher-level validation
+    /// with friendlier errors (target existence, live-instance-edge
+    /// protection) lives in `NodeService::set_schema_relationships`.
     pub async fn set_schema_declarations(
         &self,
         schema_id: &str,
         relationships: &[SchemaRelationship],
     ) -> Result<SchemaDeclarationChanges> {
+        let mut seen_names: HashSet<&str> = HashSet::new();
+        for rel in relationships {
+            if crate::models::schema::is_builtin_relationship(&rel.name) {
+                return Err(anyhow::anyhow!(
+                    "relationship name '{}' is reserved for a built-in structural relationship",
+                    rel.name
+                ));
+            }
+            if !seen_names.insert(rel.name.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "duplicate relationship declaration name '{}' on schema '{}'",
+                    rel.name,
+                    schema_id
+                ));
+            }
+        }
+
         let now = Utc::now().to_rfc3339();
         let tx = self
             .db

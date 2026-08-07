@@ -350,7 +350,7 @@ mod tests {
             ),
             (
                 "assembly",
-                r#"{"isCore":false,"fields":[],"relationships":[{"name":"widgets","targetType":"widget","direction":"out","cardinality":"many"},{"name":"related","direction":"out","cardinality":"many"}]}"#,
+                r#"{"isCore":false,"fields":[],"relationships":[{"name":"widgets","targetType":"widget","direction":"out","cardinality":"many"},{"name":"related","direction":"out","cardinality":"many"},{"name":"has_child","targetType":"widget","direction":"out","cardinality":"many"}]}"#,
             ),
         ] {
             conn.execute(
@@ -390,6 +390,24 @@ mod tests {
             .unwrap();
         let row = rows.next().await.unwrap().expect("related declaration row");
         assert_eq!(row.get::<String>(0).unwrap(), "assembly");
+
+        // A legacy declaration named after a built-in structural relationship
+        // is dropped, NOT converted — converting would create a real
+        // `has_child` edge between schema nodes that hierarchy traversals
+        // would follow.
+        let mut rows = conn
+            .query(
+                "SELECT count(*) FROM relationship \
+                 WHERE in_node = 'assembly' AND relationship_type = 'has_child'",
+                (),
+            )
+            .await
+            .unwrap();
+        let builtin_rows: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            builtin_rows, 0,
+            "builtin-named legacy declaration must be dropped, not converted"
+        );
 
         // The properties key is stripped from every schema node, empty arrays included.
         let mut rows = conn

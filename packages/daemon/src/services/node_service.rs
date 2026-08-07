@@ -1245,7 +1245,16 @@ impl GrpcNodeService for NodeServiceImpl {
         {
             Some(schema) => schema,
             None => {
+                // Absent id → fetch_node's NotFound; present non-schema node →
+                // failed_precondition; present schema node that failed to parse
+                // → internal (a stored-data bug, not a caller error).
                 let node = fetch_node(&this.node_service, &req.schema_id).await?;
+                if node.node_type == "schema" {
+                    return Err(Status::internal(format!(
+                        "Schema node '{}' exists but could not be parsed as a schema definition",
+                        req.schema_id
+                    )));
+                }
                 return Err(Status::failed_precondition(format!(
                     "Node '{}' is not a schema (type={})",
                     req.schema_id, node.node_type

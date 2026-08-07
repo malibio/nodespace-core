@@ -484,10 +484,7 @@ impl NodeService {
         // The relationship_type field distinguishes between different relationship types
 
         // Built-in type validation
-        let is_builtin = matches!(
-            relationship_name,
-            "member_of" | "has_child" | "mentions" | "has_role"
-        );
+        let is_builtin = crate::models::schema::is_builtin_relationship(relationship_name);
 
         if is_builtin {
             // Built-in type-specific validation
@@ -814,12 +811,20 @@ impl NodeService {
         // last remaining edge of that relationship on this source. Removing one of
         // several is fine; deleting a nonexistent edge stays a harmless no-op.
         // Built-in structural relationships are not schema-declared and are exempt.
-        let is_builtin = matches!(
-            relationship_name,
-            "member_of" | "has_child" | "mentions" | "has_role"
-        );
+        let is_builtin = crate::models::schema::is_builtin_relationship(relationship_name);
         if !is_builtin {
             if let Some(source) = self.get_node(source_id).await? {
+                // A non-builtin edge whose source is a schema node is a
+                // relationship DECLARATION — deleting it here would bypass the
+                // live-instance-edge protection `set_schema_relationships`
+                // enforces, orphaning every edge written under it.
+                if source.node_type == "schema" {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "'{}' is a schema node; '{}' is a relationship declaration — \
+                         remove it via update_schema, not delete_relationship",
+                        source_id, relationship_name
+                    )));
+                }
                 if let Some(schema_node) = self.get_schema_node(&source.node_type).await? {
                     // Declarations come hydrated from the relationship table —
                     // the same consolidated read path as creation-side
@@ -933,6 +938,26 @@ impl NodeService {
                 }
             )));
         }
+
+        // A non-builtin edge whose source is a schema node is a relationship
+        // DECLARATION, and its `properties` column holds the authoritative
+        // `SchemaRelationship` — overwriting it with edge-attribute JSON would
+        // corrupt the declaration (it then fails to parse and silently
+        // disappears from every read path). Builtin edges are exempt: e.g. a
+        // schema's description subtree legitimately carries `has_child` edges
+        // whose order attribute may be rewritten.
+        if !crate::models::schema::is_builtin_relationship(relationship_name) {
+            if let Some(source) = self.get_node(source_id).await? {
+                if source.node_type == "schema" {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "'{}' is a schema node; '{}' is a relationship declaration — \
+                         edit it via update_schema, not update_relationship_properties",
+                        source_id, relationship_name
+                    )));
+                }
+            }
+        }
+
         let rel_id = self
             .store
             .update_relationship_properties(source_id, target_id, relationship_name, &properties)

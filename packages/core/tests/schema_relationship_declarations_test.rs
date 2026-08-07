@@ -436,3 +436,50 @@ async fn create_relationship_refuses_schema_node_endpoints() -> Result<()> {
     assert!(err.to_string().contains("schema node"), "got: {err}");
     Ok(())
 }
+
+#[tokio::test]
+async fn delete_relationship_refuses_to_delete_a_declaration_edge() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+    make_node(&svc, "a1", "assembly").await?;
+    make_node(&svc, "w1", "widget").await?;
+    svc.create_relationship("a1", "widgets", "w1", json!({}))
+        .await?;
+
+    // Addressing a declaration edge with the instance-edge delete API must be
+    // refused — otherwise it would bypass the live-instance-edge protection
+    // update_schema enforces and orphan the instance edge just created.
+    let err = svc
+        .delete_relationship("assembly", "widgets", "widget")
+        .await
+        .expect_err("deleting a declaration edge via delete_relationship must be refused");
+    assert!(err.to_string().contains("declaration"), "got: {err}");
+
+    // The declaration is intact and still validates instance work.
+    let schema = svc.get_schema_node("assembly").await?.expect("assembly");
+    assert_eq!(schema.relationships.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_relationship_properties_refuses_to_corrupt_a_declaration_edge() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    create_widget_pair(&svc).await?;
+
+    // The declaration row's properties hold the authoritative
+    // SchemaRelationship; overwriting them with edge-attribute JSON would make
+    // the declaration unparseable and silently vanish from every read path.
+    let err = svc
+        .update_relationship_properties("assembly", "widgets", "widget", json!({"role": "x"}))
+        .await
+        .expect_err(
+            "editing a declaration edge via update_relationship_properties must be refused",
+        );
+    assert!(err.to_string().contains("declaration"), "got: {err}");
+
+    // Round-trip still intact.
+    let schema = svc.get_schema_node("assembly").await?.expect("assembly");
+    assert_eq!(schema.relationships.len(), 1);
+    assert_eq!(schema.relationships[0].name, "widgets");
+    Ok(())
+}
