@@ -1,35 +1,50 @@
 /**
  * Node type predicates
  *
- * Distinguishes NodeSpace's hardcoded core node types from custom, schema-driven
- * types. Custom schema node types are stored with a UUID as their `nodeType`;
- * everything in the core set ships built-in with hardcoded behavior.
+ * Answers what the UI actually needs to know about a node type: **which frontend
+ * integration does it have?** Every predicate here delegates to the plugin registry, so
+ * they stay correct as types are registered and unregistered at runtime.
  *
- * Single source of truth — shared by the viewer and the navigation service so the
- * core-type list can never drift between them.
+ * This deliberately replaces an older hand-maintained "core node types" list that was
+ * used as a proxy for "has a dedicated frontend integration". The two are unrelated:
+ * `project` is a core type with no plugin registration at all, while `person`,
+ * `document`, `user` and `ai-chat` are registered plugins that were never in the list.
+ * Ask the registry, not a list.
  */
 
-/** Core built-in node types that ship with NodeSpace — everything else is a custom schema type. */
-export const CORE_NODE_TYPES = new Set([
-  'text',
-  'task',
-  'project',
-  'date',
-  'header',
-  'code-block',
-  'quote-block',
-  'ordered-list',
-  'horizontal-line',
-  'table',
-  'checkbox',
-  'collection',
-  'query',
-  'schema'
-]);
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 
-/** True when the node type is a custom, schema-driven type rather than a core built-in. */
-export function isCustomSchemaType(nodeType: string): boolean {
-  return !CORE_NODE_TYPES.has(nodeType);
+/**
+ * True when a plugin registers an inline node component for this type.
+ *
+ * Types with one (text, task, header, query, …) are edited in place in the outline.
+ * Types without one render through the BaseNode fallback as a read-only entity row.
+ */
+export function hasInlineNodeComponent(nodeType: string): boolean {
+  return pluginRegistry.hasNodeComponent(nodeType);
+}
+
+/**
+ * True when this type renders in the outline as a read-only entity row rather than an
+ * inline-editable node — i.e. no plugin registered an inline node component for it.
+ *
+ * Entity rows get an "open in other pane" affordance, are skipped by arrow navigation
+ * (there is nothing to put a caret into), and open directly rather than resolving to a
+ * parent viewer.
+ */
+export function rendersAsEntityRow(nodeType: string): boolean {
+  return !hasInlineNodeComponent(nodeType);
+}
+
+/**
+ * True when this type needs the generic, schema-driven properties form — no plugin
+ * registered a hardcoded, type-specific schema form for it.
+ *
+ * `task` and `person` have hardcoded forms; `project` and every user-defined type fall
+ * back to the generic one.
+ */
+export function needsGenericSchemaForm(nodeType: string): boolean {
+  return !pluginRegistry.hasSchemaForm(nodeType);
 }
 
 /**

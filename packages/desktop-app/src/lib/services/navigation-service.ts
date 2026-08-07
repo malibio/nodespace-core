@@ -29,7 +29,7 @@ import type { Node } from '$lib/types';
 import { formatDateTitle } from '$lib/utils/date-formatting';
 import { formatTabTitle } from '$lib/utils/text-formatting';
 import { createLogger } from '$lib/utils/logger';
-import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
+import { rendersAsEntityRow } from '$lib/design/components/node-type-predicates';
 
 const log = createLogger('NavigationService');
 
@@ -136,11 +136,12 @@ export class NavigationService {
       return formatTabTitle(node.content, `${node.nodeType} Node`);
     }
 
-    // For custom schema types, use the plugin display name (e.g. "Customer")
-    if (isCustomSchemaType(node.nodeType)) {
-      const plugin = pluginRegistry.getPlugin(node.nodeType);
-      if (plugin?.name) return plugin.name;
-    }
+    // Untitled node: fall back to the plugin's display name (e.g. "Customer").
+    // Not gated on core/custom classification — getPlugin is already self-limiting
+    // (null for unregistered types), and a registered core type's display name is as
+    // good a title here as a user-defined one's.
+    const plugin = pluginRegistry.getPlugin(node.nodeType);
+    if (plugin?.name) return plugin.name;
 
     // Fallback to node type
     return `${node.nodeType} Node`;
@@ -167,9 +168,11 @@ export class NavigationService {
       return nodeId;
     }
 
-    // Custom schema entity nodes are root-level entities —
-    // always open them directly, not their parent (e.g. date node)
-    if (targetNode && isCustomSchemaType(targetNode.nodeType)) {
+    // Entity rows (no inline node component — they render read-only via the BaseNode
+    // fallback) are standalone entities: open them directly, not their parent (e.g. the
+    // date node they happen to sit under). Inline primitives (text, header, code-block)
+    // fall through and walk up to the nearest viewer-owning ancestor.
+    if (targetNode && rendersAsEntityRow(targetNode.nodeType)) {
       return nodeId;
     }
 

@@ -34,7 +34,7 @@
   import { SchemaFormLoader } from '$lib/design/components/schema-form-loader.svelte';
   import {
     computeHeaderDisplayValue,
-    isCustomSchemaType
+    rendersAsEntityRow
   } from '$lib/design/components/node-type-predicates';
   import { updateSchemaField } from '$lib/design/components/schema-field-update';
   import { normalizeCodeBlockContent } from '$lib/design/components/fallback-node-render';
@@ -812,10 +812,11 @@
     while (targetIndex >= 0 && targetIndex < currentVisibleNodes.length) {
       const candidateNode = currentVisibleNodes[targetIndex];
 
-      // Check if this node accepts navigation (skip if it doesn't)
-      // Custom schema entity nodes are read-only inline — skip them so arrow
-      // navigation passes through to the next editable node
-      const acceptsNavigation = !isCustomSchemaType(candidateNode.nodeType);
+      // Check if this node accepts navigation (skip if it doesn't).
+      // Entity rows (no inline node component, rendered read-only via the BaseNode
+      // fallback) have nothing to put a caret into — skip them so arrow navigation
+      // passes through to the next editable node.
+      const acceptsNavigation = !rendersAsEntityRow(candidateNode.nodeType);
 
       if (acceptsNavigation) {
         // Navigate using reactive approach (FocusManager)
@@ -1215,8 +1216,8 @@
         // Clear promotion flag after state updates complete
         isPromoting = false;
 
-        // Custom entity nodes: open in other pane + optionally create text node below
-        if (isCustomSchemaType(newNodeType)) {
+        // Entity nodes (no inline editor): open in other pane + optionally create text node below
+        if (rendersAsEntityRow(newNodeType)) {
           handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
             log.error('Custom entity slash command failed (placeholder path):', err)
           );
@@ -1240,7 +1241,7 @@
         if (!sharedNodeStore.hasNode(node.id)) return;
         focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
         sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-        if (isCustomSchemaType(newNodeType)) {
+        if (rendersAsEntityRow(newNodeType)) {
           handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
             log.error('Custom entity slash command failed (real-node path):', err)
           );
@@ -1358,7 +1359,8 @@
 
   <!-- Schema-Driven Properties Panel - fixed between header and content area -->
   <!-- Type-specific schema forms use plugin registry for smart dispatch -->
-  <!-- Core types (task, date) use hardcoded forms; user-defined types use generic SchemaPropertyForm -->
+  <!-- Types with a hardcoded form (task, person) use it; everything else falls back to the
+       generic SchemaPropertyForm — including core types with no registered form (project) -->
   <!-- Only render when a schema form is known to exist: null means "checked, none registered" -->
   {#if currentViewedNode && nodeId && schemaFormLoader.getForm(currentViewedNode.nodeType)}
     {@const TypedSchemaForm = schemaFormLoader.getForm(
@@ -1367,8 +1369,10 @@
     <div class="schema-form-container">
       <TypedSchemaForm {nodeId} />
     </div>
-  {:else if currentViewedNode && nodeId && schemaFormLoader.genericSchema && isCustomSchemaType(currentViewedNode.nodeType)}
-    <!-- Generic schema form for custom schema node types (UUID nodeType) -->
+  {:else if currentViewedNode && nodeId && schemaFormLoader.genericSchema}
+    <!-- Generic schema-driven form. No extra type check is needed: genericSchema is only
+         populated by the loader's no-hardcoded-form path, and only when the backend
+         actually returned a schema — so a type with no schema renders nothing here. -->
     <!-- autoOpen is captured once at GenericSchemaForm mount time (not reactively synced).
          Safe only because this branch doesn't render until genericSchema is loaded, so
          hasTitleTemplate is already final by the time autoOpen is read. -->

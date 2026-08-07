@@ -252,7 +252,8 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-1');
 
-    expect(target?.title).toBe('task Node');
+    // Untitled node falls back to the plugin's registered display name.
+    expect(target?.title).toBe('Task Node');
   });
 
   it('generates fallback title for node with non-string content', async () => {
@@ -269,7 +270,8 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-2');
 
-    expect(target?.title).toBe('task Node');
+    // Untitled node falls back to the plugin's registered display name.
+    expect(target?.title).toBe('Task Node');
   });
 });
 
@@ -731,6 +733,26 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
     expect(tabsInNewPane.length).toBe(1);
     expect(tabsInNewPane[0]?.content?.nodeId).toBe('task-other-pane');
     expect(tabsInNewPane[0]?.content?.nodeType).toBe('task');
+  });
+
+  it('project node under date opens as project (not parent date)', async () => {
+    // `project` is a core type with no registered viewer or node component — it renders as
+    // a read-only entity row, so it must open directly rather than resolving to its parent.
+    const dateNode = makeNode('2025-06-15', 'date', '2025-06-15');
+    const projectNode = makeNode('project-under-date', 'project', 'Website redesign');
+
+    sharedNodeStore.setNode(dateNode, { type: 'database', reason: 'test' }, true);
+    sharedNodeStore.setNode(projectNode, { type: 'database', reason: 'test' }, true);
+
+    structureTree.addChild({ parentId: '2025-06-15', childId: 'project-under-date', order: 1 });
+
+    await navService.navigateToNode('project-under-date', true);
+
+    const state = navigationStore.state;
+    const newTab = state.tabs.find((t) => t.content?.nodeId === 'project-under-date');
+
+    expect(newTab).toBeDefined();
+    expect(newTab?.content?.nodeType).toBe('project');
   });
 
   it('primitive text node under date still resolves to date ancestor', async () => {

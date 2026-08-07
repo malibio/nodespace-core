@@ -1,27 +1,62 @@
 /**
- * Node type predicates — core vs custom schema type classification.
+ * Node type predicates — frontend-integration classification.
  *
- * `project` is a built-in core node type (backend core#134), so it must be
- * treated as a core type rather than a custom, UUID-keyed schema type.
+ * These predicates answer "what frontend integration does this type have?" by asking the
+ * plugin registry, never by consulting a hardcoded core-type list. The distinction matters:
+ * `project` is a core type with no plugin registration at all, while `person` and
+ * `document` are registered plugins that a core-type list never contained.
  */
 
 import { describe, it, expect } from 'vitest';
 import {
-  CORE_NODE_TYPES,
   computeHeaderDisplayValue,
-  isCustomSchemaType
+  hasInlineNodeComponent,
+  rendersAsEntityRow,
+  needsGenericSchemaForm
 } from '$lib/design/components/node-type-predicates';
 
 describe('node-type-predicates', () => {
-  it('classifies project as a core built-in, like task', () => {
-    expect(CORE_NODE_TYPES.has('project')).toBe(true);
-    expect(CORE_NODE_TYPES.has('task')).toBe(true);
-    expect(isCustomSchemaType('project')).toBe(false);
-    expect(isCustomSchemaType('task')).toBe(false);
+  describe('hasInlineNodeComponent / rendersAsEntityRow', () => {
+    it('treats types with a registered node component as inline-editable', () => {
+      expect(hasInlineNodeComponent('text')).toBe(true);
+      expect(hasInlineNodeComponent('task')).toBe(true);
+      expect(rendersAsEntityRow('text')).toBe(false);
+      expect(rendersAsEntityRow('task')).toBe(false);
+    });
+
+    it('treats a core type with no plugin registration as an entity row', () => {
+      // `project` ships as a core type but registers no frontend plugin — it must get the
+      // entity-row treatment (open button, skipped by arrow nav), not be assumed integrated.
+      expect(hasInlineNodeComponent('project')).toBe(false);
+      expect(rendersAsEntityRow('project')).toBe(true);
+    });
+
+    it('treats a user-defined schema type as an entity row', () => {
+      expect(rendersAsEntityRow('7b1c2d3e-4f56-7890-abcd-ef1234567890')).toBe(true);
+    });
+
+    it('does not classify by core-list membership', () => {
+      // `person` is registered with a node component but was absent from the old core list;
+      // classifying by that list made it an entity row, which is wrong.
+      expect(hasInlineNodeComponent('person')).toBe(true);
+      expect(rendersAsEntityRow('person')).toBe(false);
+    });
   });
 
-  it('still treats a UUID-keyed schema type as custom', () => {
-    expect(isCustomSchemaType('7b1c2d3e-4f56-7890-abcd-ef1234567890')).toBe(true);
+  describe('needsGenericSchemaForm', () => {
+    it('is false for types with a hardcoded schema form', () => {
+      expect(needsGenericSchemaForm('task')).toBe(false);
+      expect(needsGenericSchemaForm('person')).toBe(false);
+    });
+
+    it('is true for a core type with no hardcoded form', () => {
+      // The bug this fixes: `project` was denied the generic form because it is core.
+      expect(needsGenericSchemaForm('project')).toBe(true);
+    });
+
+    it('is true for user-defined schema types', () => {
+      expect(needsGenericSchemaForm('7b1c2d3e-4f56-7890-abcd-ef1234567890')).toBe(true);
+    });
   });
 });
 

@@ -3,7 +3,7 @@
 
   Renders the chevron (for parent nodes) plus either the node's lazy-loaded plugin
   component or a plain BaseNode fallback (used while the plugin component loads, and
-  for custom schema entities that have no dedicated node component).
+  for entity types that have no dedicated node component registered).
 
   The underlying node components dispatch legacy `on:` events; NodeRow consumes those
   here and re-exposes them to the viewer as callback props (see node-row-types.ts).
@@ -15,7 +15,7 @@
   import BaseNode from '$lib/design/components/base-node.svelte';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { extractNodeMetadata } from '$lib/design/components/schema-field-update';
-  import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
+  import { rendersAsEntityRow } from '$lib/design/components/node-type-predicates';
   import {
     extractFallbackDisplayContent,
     extractFallbackMetadata
@@ -161,7 +161,7 @@
         on:deleteNode={(e: CustomEvent<DeleteNodeDetail>) => onDeleteNode(e.detail)}
       />
     {/key}
-    {#if isCustomSchemaType(node.nodeType)}
+    {#if rendersAsEntityRow(node.nodeType)}
       <button
         class="custom-entity-open-button"
         onclick={openEntity}
