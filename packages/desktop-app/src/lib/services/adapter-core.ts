@@ -137,6 +137,10 @@ export interface BackendAdapter {
   // Returns SchemaNode with typed top-level fields (isCore, schemaVersion, description, fields)
   getAllSchemas(): Promise<SchemaNode[]>;
   getSchema(schemaId: string): Promise<SchemaNode>;
+
+  // Daemon metadata
+  /** The running daemon binary's semver (its compiled CARGO_PKG_VERSION). */
+  getDaemonVersion(): Promise<string>;
 }
 
 // ============================================================================
@@ -282,6 +286,7 @@ export const HTTP_ROUTES = {
   mentionAutocomplete: () => '/api/mentions/autocomplete',
   getAllSchemas: () => '/api/schemas',
   getSchema: (schemaId: string) => `/api/schemas/${encodeURIComponent(schemaId)}`,
+  getDaemonVersion: () => '/api/daemon/version',
   getNodeRelationships: (nodeId: string) => `/api/nodes/${encodeURIComponent(nodeId)}/relationships`,
   // create (POST) / delete (DELETE) / update-properties (PATCH) share one URL,
   // differentiated by HTTP method — mirrors the /api/mentions convention.

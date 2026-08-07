@@ -686,6 +686,19 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
+  // GET /api/daemon/version
+  if (method === 'GET' && pathname === '/api/daemon/version') {
+    try {
+      const res = await call<Record<string, never>, { version: string }>(
+        (nodeClient as unknown as Record<string, Function>).getDaemonVersion,
+        {}
+      );
+      return json(res.version);
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
   // GET /api/collections
   if (method === 'GET' && pathname === '/api/collections') {
     try {

@@ -221,6 +221,8 @@ export default [
         ResizeObserver: 'readonly',
         TextEncoder: 'readonly',
         TextDecoder: 'readonly',
+        // Vite `define` compile-time constant (see vite.config.js)
+        __APP_VERSION__: 'readonly',
       }
     },
     plugins: {

@@ -315,6 +315,14 @@ class TauriAdapter implements BackendAdapter {
       [sourceId, relationshipName, targetId]
     );
   }
+
+  async getDaemonVersion(): Promise<string> {
+    return withDiagnosticLogging(
+      'getDaemonVersion',
+      () => invoke<string>('get_daemon_version'),
+      []
+    );
+  }
 }
 
 // ============================================================================
@@ -559,6 +567,11 @@ export class HttpAdapter implements BackendAdapter {
     });
     await this.handleResponse<void>(response);
   }
+
+  async getDaemonVersion(): Promise<string> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getDaemonVersion()}`);
+    return this.handleResponse<string>(response);
+  }
 }
 
 // ============================================================================
@@ -688,6 +701,9 @@ class MockAdapter implements BackendAdapter {
     _targetId: string,
     _properties: Record<string, unknown>
   ): Promise<void> {}
+  async getDaemonVersion(): Promise<string> {
+    return '0.0.0-mock';
+  }
 }
 
 // ============================================================================
