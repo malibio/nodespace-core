@@ -1216,7 +1216,9 @@
         // Clear promotion flag after state updates complete
         isPromoting = false;
 
-        // Entity nodes (no inline editor): open in other pane + optionally create text node below
+        // Entity nodes (no inline editor): open in other pane + optionally create text node
+        // below. Types with an inline editor (person, task) are typed into in place — sending
+        // focus to another pane mid-keystroke would interrupt the user.
         if (rendersAsEntityRow(newNodeType)) {
           handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
             log.error('Custom entity slash command failed (placeholder path):', err)

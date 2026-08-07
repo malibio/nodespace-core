@@ -11,8 +11,8 @@
 
   Values are read from node.properties[nodeType][field.name] when the type namespaces its
   properties (core types with backend behavior), falling back to flat
-  node.properties[field.name] (user-defined schema types). Writes go out flat; the backend
-  hoists schema-defined fields into the namespace for types that use one.
+  node.properties[field.name] (user-defined schema types). Writes use the same precedence —
+  see schema-field-resolution.ts, where both shapes are resolved and unit-tested.
 
   Props:
   - nodeId: ID of the node to display properties for
@@ -22,7 +22,7 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { resolveFieldValue } from '$lib/components/schema/schema-field-resolution';
+  import { resolveFieldValue, buildFieldWrite } from '$lib/components/schema/schema-field-resolution';
   import type { SchemaNode, SchemaField, EnumValue } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { createLogger } from '$lib/utils/logger';
@@ -107,13 +107,11 @@
 
   function updateField(fieldName: string, value: unknown) {
     if (!node) return;
-    // Written flat. For a namespaced type the backend hoists schema-defined fields into
-    // `properties[nodeType]` on write (and reads nested-first, flat-fallback either way),
-    // so a flat write round-trips correctly and getFieldValue picks it up from whichever
-    // shape it lands in.
+    // Write in whichever shape the node already stores, matching getFieldValue's precedence
+    // — a flat write into a namespaced node is silently discarded by the backend.
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: { ...node.properties, [fieldName]: value } },
+      { properties: buildFieldWrite(node, fieldName, value) },
       { type: 'viewer', viewerId: 'generic-schema-form' }
     );
   }

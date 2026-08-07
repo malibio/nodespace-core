@@ -41,6 +41,34 @@ describe('node-type-predicates', () => {
       expect(hasInlineNodeComponent('person')).toBe(true);
       expect(rendersAsEntityRow('person')).toBe(false);
     });
+
+    it('pins the full classification for every registered core type', () => {
+      // This predicate drives five behaviors — open button, arrow-nav skipping, slash-command
+      // pane navigation, and viewer routing — so a change here is a UX change. Asserted as a
+      // whole so any future registration that flips a type has to update this list knowingly.
+      const entityRows = ['project', 'collection', 'schema', 'user', 'document', 'ai-chat'];
+      const inlineEditable = [
+        'text',
+        'task',
+        'person',
+        'header',
+        'code-block',
+        'quote-block',
+        'ordered-list',
+        'horizontal-line',
+        'table',
+        'checkbox',
+        'date',
+        'query'
+      ];
+
+      for (const nodeType of entityRows) {
+        expect(rendersAsEntityRow(nodeType), `${nodeType} should be an entity row`).toBe(true);
+      }
+      for (const nodeType of inlineEditable) {
+        expect(rendersAsEntityRow(nodeType), `${nodeType} should be inline-editable`).toBe(false);
+      }
+    });
   });
 
   describe('needsGenericSchemaForm', () => {

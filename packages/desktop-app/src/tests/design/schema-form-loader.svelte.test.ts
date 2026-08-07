@@ -58,7 +58,7 @@ describe('SchemaFormLoader', () => {
     expect(loader.genericSchema).toBeNull();
   });
 
-  it('re-fetches the generic schema when revisiting a type after a reset', async () => {
+  it('repopulates the generic schema when revisiting a type after a reset', async () => {
     getSchema.mockResolvedValue(schemaFor('project'));
     const loader = new SchemaFormLoader();
 
@@ -72,6 +72,26 @@ describe('SchemaFormLoader', () => {
 
     await loader.loadForm('project');
     await vi.waitFor(() => expect(loader.genericSchema?.id).toBe('project'));
+
+    // Served from cache — schema definitions are immutable for the session.
+    expect(getSchema).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-fetch a type already known to have no schema', async () => {
+    getSchema.mockRejectedValue(new Error('schema not found'));
+    const loader = new SchemaFormLoader();
+
+    // Structural types (text, header, …) have no schema. Navigating between them must not
+    // issue a backend round trip per navigation.
+    await loader.loadForm('horizontal-line');
+    await vi.waitFor(() => expect(getSchema).toHaveBeenCalledTimes(1));
+
+    loader.resetGenericSchema();
+    await loader.loadForm('horizontal-line');
+    await loader.loadForm('horizontal-line');
+
+    expect(getSchema).toHaveBeenCalledTimes(1);
+    expect(loader.genericSchema).toBeNull();
   });
 
   it('leaves genericSchema null when the backend has no schema for the type', async () => {

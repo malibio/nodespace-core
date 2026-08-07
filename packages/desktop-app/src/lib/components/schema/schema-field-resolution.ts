@@ -8,11 +8,12 @@
  *   them there on write.
  * - **Flat** — user-defined schema types store fields directly as `properties[fieldName]`.
  *
- * The backend reads nested-first with a flat fallback; this mirrors that order so one
- * generic form renders both shapes correctly.
+ * The backend reads nested-first with a flat fallback; reads here mirror that order so one
+ * generic form renders both shapes correctly. Writes must match the shape the node already
+ * uses — a flat write into a namespaced node is silently dropped (see `buildFieldWrite`).
  *
- * Extracted from generic-schema-form.svelte so the resolution order is unit-testable
- * without rendering the component.
+ * Extracted from generic-schema-form.svelte so both are unit-testable without rendering
+ * the component.
  */
 
 export interface FieldValueSource {
@@ -31,4 +32,30 @@ export function resolveFieldValue(node: FieldValueSource, fieldName: string): un
     return (namespace as Record<string, unknown>)[fieldName] ?? null;
   }
   return node.properties?.[fieldName] ?? null;
+}
+
+/**
+ * Build the `properties` payload that writes `fieldName = value` in the shape the node
+ * already stores — mirroring `resolveFieldValue`'s precedence so a field round-trips.
+ *
+ * Writing flat into a node that already has a namespace does NOT work: the backend's
+ * hoisting step returns early when `properties[nodeType]` is already an object, so the
+ * flat key is stored as a top-level sibling, and the read path then returns only the
+ * namespace contents — silently discarding the edit. This mirrors `task-schema-form`,
+ * which re-nests for the same reason.
+ */
+export function buildFieldWrite(
+  node: FieldValueSource,
+  fieldName: string,
+  value: unknown
+): Record<string, unknown> {
+  const properties = node.properties ?? {};
+  const namespace = properties[node.nodeType];
+  if (namespace && typeof namespace === 'object') {
+    return {
+      ...properties,
+      [node.nodeType]: { ...(namespace as Record<string, unknown>), [fieldName]: value }
+    };
+  }
+  return { ...properties, [fieldName]: value };
 }

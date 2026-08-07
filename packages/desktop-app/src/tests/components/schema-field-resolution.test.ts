@@ -8,7 +8,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveFieldValue } from '$lib/components/schema/schema-field-resolution';
+import {
+  resolveFieldValue,
+  buildFieldWrite
+} from '$lib/components/schema/schema-field-resolution';
 
 describe('resolveFieldValue', () => {
   it('reads a namespaced field for a core type', () => {
@@ -65,5 +68,72 @@ describe('resolveFieldValue', () => {
     const node = { nodeType: 'project', properties: { project: 'Some project name' } };
 
     expect(resolveFieldValue(node, 'status')).toBe(null);
+  });
+});
+
+describe('buildFieldWrite', () => {
+  it('writes into the namespace for a namespaced type', () => {
+    // The critical case: a flat write here would be stored as a top-level sibling and then
+    // silently discarded on read, because the backend skips hoisting when the namespace
+    // already exists and returns only the namespace contents.
+    const node = {
+      nodeType: 'project',
+      properties: { project: { status: 'planning', priority: 'high' } }
+    };
+
+    expect(buildFieldWrite(node, 'status', 'active')).toEqual({
+      project: { status: 'active', priority: 'high' }
+    });
+  });
+
+  it('preserves sibling namespaces and unrelated keys', () => {
+    const node = {
+      nodeType: 'project',
+      properties: { project: { status: 'planning' }, task: { status: 'open' } }
+    };
+
+    expect(buildFieldWrite(node, 'status', 'active')).toEqual({
+      project: { status: 'active' },
+      task: { status: 'open' }
+    });
+  });
+
+  it('writes flat for a user-defined schema type', () => {
+    const node = {
+      nodeType: '7b1c2d3e-4f56-7890-abcd-ef1234567890',
+      properties: { capacity: 250 }
+    };
+
+    expect(buildFieldWrite(node, 'capacity', 400)).toEqual({ capacity: 400 });
+  });
+
+  it('writes flat when the node has no properties yet', () => {
+    expect(buildFieldWrite({ nodeType: 'project' }, 'status', 'active')).toEqual({
+      status: 'active'
+    });
+  });
+
+  it('does not mutate the original properties', () => {
+    const properties = { project: { status: 'planning' } };
+    const node = { nodeType: 'project', properties };
+
+    buildFieldWrite(node, 'status', 'active');
+
+    expect(properties.project.status).toBe('planning');
+  });
+
+  it('round-trips with resolveFieldValue in both shapes', () => {
+    const namespaced = { nodeType: 'project', properties: { project: { status: 'planning' } } };
+    const flat = { nodeType: 'venue-uuid', properties: { capacity: 100 } };
+
+    expect(
+      resolveFieldValue(
+        { ...namespaced, properties: buildFieldWrite(namespaced, 'status', 'active') },
+        'status'
+      )
+    ).toBe('active');
+    expect(
+      resolveFieldValue({ ...flat, properties: buildFieldWrite(flat, 'capacity', 250) }, 'capacity')
+    ).toBe(250);
   });
 });

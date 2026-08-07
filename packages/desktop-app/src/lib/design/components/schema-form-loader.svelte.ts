@@ -29,6 +29,17 @@ export class SchemaFormLoader {
   genericSchema = $state<SchemaNode | null>(null);
 
   /**
+   * Schemas already fetched from the backend, keyed by node type.
+   * `null` = fetched, this type has no schema (structural types like text/header).
+   *
+   * `genericSchema` is cleared on every navigation, but the underlying schema definition is
+   * immutable for the session, so revisiting a type reuses this instead of re-fetching.
+   * Negative entries matter most: without them, every navigation to a schema-less type
+   * would issue a backend round trip that is expected to fail.
+   */
+  private schemaCache = new Map<string, SchemaNode | null>();
+
+  /**
    * True when the current generic schema has a title_template — header should be read-only,
    * and its displayed value comes from the node's computed `title` rather than its content.
    *
@@ -102,15 +113,31 @@ export class SchemaFormLoader {
     }
   }
 
-  /** Load the generic schema definition for a node type from the backend. */
+  /**
+   * Load the generic schema definition for a node type, fetching it at most once per type.
+   *
+   * Schema definitions are immutable for the session, so a cache hit — including a negative
+   * one — is served without touching the backend.
+   */
   async loadGenericSchema(nodeType: string): Promise<void> {
+    if (this.schemaCache.has(nodeType)) {
+      this.genericSchema = this.schemaCache.get(nodeType) ?? null;
+      return;
+    }
+
     try {
       const schemaNode = await backendAdapter.getSchema(nodeType);
       if (isSchemaNode(schemaNode)) {
+        this.schemaCache.set(nodeType, schemaNode);
         this.genericSchema = schemaNode;
+        return;
       }
+      this.schemaCache.set(nodeType, null);
     } catch (error) {
-      log.warn(`Failed to load generic schema for ${nodeType}:`, error);
+      // Expected for structural types (text, header, code-block, …) that have no schema —
+      // debug, not warn, so ordinary outlining doesn't emit a stream of warnings.
+      this.schemaCache.set(nodeType, null);
+      log.debug(`No generic schema for ${nodeType}:`, error);
     }
   }
 }
