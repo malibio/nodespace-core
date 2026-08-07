@@ -793,6 +793,62 @@ impl NodeService {
         // Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
+        // Required-relationship last-edge protection (issue #1918): a schema
+        // relationship declared `required: true` must always retain at least one
+        // edge — deleting its final edge would leave the node violating its own
+        // schema. Reject only when the targeted edge actually exists AND it is the
+        // last remaining edge of that relationship on this source. Removing one of
+        // several is fine; deleting a nonexistent edge stays a harmless no-op.
+        // Built-in structural relationships are not schema-declared and are exempt.
+        let is_builtin = matches!(
+            relationship_name,
+            "member_of" | "has_child" | "mentions" | "has_role"
+        );
+        if !is_builtin {
+            if let Some(source) = self.get_node(source_id).await? {
+                if let Some(schema_node) = self.get_node(&source.node_type).await? {
+                    let relationships: Vec<crate::models::schema::SchemaRelationship> = schema_node
+                        .properties
+                        .get("relationships")
+                        .and_then(|r| serde_json::from_value(r.clone()).ok())
+                        .unwrap_or_default();
+                    let is_required = relationships
+                        .iter()
+                        .find(|r| r.name == relationship_name)
+                        .map(|r| r.required == Some(true))
+                        .unwrap_or(false);
+                    if is_required {
+                        let edge_exists = self
+                            .store
+                            .relationship_exists(source_id, target_id, relationship_name)
+                            .await
+                            .map_err(|e| {
+                                NodeServiceError::query_failed(format!(
+                                    "Failed to check relationship existence: {}",
+                                    e
+                                ))
+                            })?;
+                        let total = self
+                            .store
+                            .check_relationship_exists(source_id, relationship_name)
+                            .await
+                            .map_err(|e| {
+                                NodeServiceError::query_failed(format!(
+                                    "Failed to count relationship edges: {}",
+                                    e
+                                ))
+                            })?;
+                        if edge_exists && total <= 1 {
+                            return Err(NodeServiceError::invalid_update(format!(
+                                "Relationship '{}' is required and this is its last edge; add another target before removing this one",
+                                relationship_name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
         let rel_id = self
             .store
             .get_relationship_id(source_id, target_id, relationship_name)
@@ -819,6 +875,53 @@ impl NodeService {
                 relationship_type: relationship_name.to_string(),
             });
         }
+
+        Ok(())
+    }
+
+    /// Replace the stored edge attributes on an existing typed relationship.
+    ///
+    /// Overwrites the `properties` JSON of the edge (`source_id` → `target_id`,
+    /// of type `relationship_name`) wholesale with `properties`. The edge must
+    /// already exist — updating a nonexistent edge is a caller error, surfaced
+    /// as `invalid_update`, not a silent no-op. Edits values only: it neither
+    /// creates, moves, nor deletes the edge, and never changes its endpoints
+    /// (issue #1918, relationship-viewer editing). Emits `RelationshipUpdated`
+    /// so the change syncs like any other edge write.
+    pub async fn update_relationship_properties(
+        &self,
+        source_id: &str,
+        relationship_name: &str,
+        target_id: &str,
+        properties: serde_json::Value,
+    ) -> Result<(), NodeServiceError> {
+        let rel_id = self
+            .store
+            .update_relationship_properties(source_id, target_id, relationship_name, &properties)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to update relationship properties: {}",
+                    e
+                ))
+            })?;
+
+        let Some(rel_id) = rel_id else {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Relationship '{}' from '{}' to '{}' does not exist",
+                relationship_name, source_id, target_id
+            )));
+        };
+
+        self.emit_event(DomainEvent::RelationshipUpdated {
+            relationship: crate::db::events::RelationshipEvent::new(
+                rel_id,
+                source_id,
+                target_id,
+                relationship_name.to_string(),
+                properties,
+            ),
+        });
 
         Ok(())
     }

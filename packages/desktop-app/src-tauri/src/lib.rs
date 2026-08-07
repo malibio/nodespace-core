@@ -511,6 +511,9 @@ pub fn run() {
             commands::nodes::get_incoming_mentions,
             commands::nodes::get_mentioning_roots,
             commands::nodes::get_node_relationships,
+            commands::nodes::create_relationship,
+            commands::nodes::delete_relationship,
+            commands::nodes::update_relationship_properties,
             commands::nodes::delete_node_mention,
             commands::nodes::update_task_node,
             // Collection commands (browsing and management UI)

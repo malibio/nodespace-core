@@ -66,6 +66,12 @@ service NodeService {
 
   // Typed relationships (distinct from mentions)
   rpc CreateRelationship(CreateRelationshipRequest) returns (CreateRelationshipResponse);
+  // Remove a typed relationship edge. Idempotent; rejects removing the last edge
+  // of a `required` relationship (issue #1918).
+  rpc DeleteRelationship(DeleteRelationshipRequest) returns (DeleteRelationshipResponse);
+  // Replace the edge attributes on an existing typed relationship edge (edit its
+  // `edge_fields` values; issue #1918).
+  rpc UpdateRelationshipProperties(UpdateRelationshipPropertiesRequest) returns (UpdateRelationshipPropertiesResponse);
   rpc GetRelatedNodes(GetRelatedNodesRequest) returns (GetRelatedNodesResponse);
   // Relationship viewer (issue #1918): list a node's schema-declared typed
   // relationships, grouped by name across BOTH directions, with edge properties.
@@ -428,6 +434,24 @@ message CreateRelationshipResponse {
   string relationship_name = 2;
   string target_id = 3;
 }
+
+message DeleteRelationshipRequest {
+  string source_id = 1;
+  string relationship_name = 2;
+  string target_id = 3;
+}
+
+message DeleteRelationshipResponse {}
+
+message UpdateRelationshipPropertiesRequest {
+  string source_id = 1;
+  string relationship_name = 2;
+  string target_id = 3;
+  // JSON-encoded edge properties; replaces the edge's stored properties wholesale.
+  string properties_json = 4;
+}
+
+message UpdateRelationshipPropertiesResponse {}
 
 message GetRelatedNodesRequest {
   string node_id = 1;

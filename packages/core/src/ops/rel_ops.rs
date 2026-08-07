@@ -36,6 +36,15 @@ pub struct DeleteRelInput {
 }
 
 #[derive(Debug)]
+pub struct UpdateRelPropsInput {
+    pub source_id: String,
+    pub relationship_name: String,
+    pub target_id: String,
+    /// The new edge attributes; replaces the edge's stored `properties` wholesale.
+    pub properties: Value,
+}
+
+#[derive(Debug)]
 pub struct GetRelatedInput {
     pub node_id: String,
     pub relationship_name: String,
@@ -89,6 +98,26 @@ pub async fn delete_relationship(
         .delete_relationship(&input.source_id, &input.relationship_name, &input.target_id)
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to delete relationship: {}", e)))?;
+
+    Ok(())
+}
+
+/// Replace the edge attributes on an existing typed relationship edge.
+pub async fn update_relationship_properties(
+    node_service: &Arc<NodeService>,
+    input: UpdateRelPropsInput,
+) -> Result<(), OpsError> {
+    node_service
+        .update_relationship_properties(
+            &input.source_id,
+            &input.relationship_name,
+            &input.target_id,
+            input.properties,
+        )
+        .await
+        .map_err(|e| {
+            OpsError::Internal(format!("Failed to update relationship properties: {}", e))
+        })?;
 
     Ok(())
 }
@@ -165,8 +194,9 @@ pub struct RelationshipGroup {
     /// Effective cardinality for THIS side: the forward `cardinality` outbound,
     /// the `reverse_cardinality` inbound (may be absent inbound).
     pub cardinality: Option<RelationshipCardinality>,
-    /// Whether the forward relationship is required (outbound only; informational
-    /// — last-edge removal protection is a follow-up).
+    /// Whether the forward relationship is required (outbound only). The viewer
+    /// uses this to confirm-on-delete; last-edge removal is enforced server-side
+    /// in `NodeService::delete_relationship`.
     pub required: Option<bool>,
     /// Declared edge field definitions, if any (drives the edge-attribute columns).
     pub edge_fields: Option<Vec<EdgeField>>,
@@ -300,7 +330,9 @@ pub async fn get_node_relationships(
     let inbound = node_service
         .get_inbound_relationships(&node_type)
         .await
-        .map_err(|e| OpsError::Internal(format!("Failed to resolve inbound relationships: {}", e)))?;
+        .map_err(|e| {
+            OpsError::Internal(format!("Failed to resolve inbound relationships: {}", e))
+        })?;
 
     for (source_type, rel) in inbound {
         if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
