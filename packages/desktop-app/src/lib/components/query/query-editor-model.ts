@@ -71,17 +71,46 @@ export function coerceRowValue(row: FilterRow, field: SchemaField | undefined): 
   return row.value;
 }
 
-/** Seed editable rows from a query definition. Only property filters become rows;
- *  the value is stringified for the text/number/enum controls. */
-export function rowsFromDefinition(def: QueryDefinition | null): FilterRow[] {
-  const source = def?.filters ?? [];
-  return source
-    .filter((f) => f.type === 'property' && typeof f.property === 'string')
-    .map((f) => ({
+/** The initial UI value for a freshly-added row on a given field. Boolean fields
+ *  seed to a concrete `'true'` — their control is a two-option select with no
+ *  empty state, so an empty seed would show "true" yet fail the value check. */
+export function initialValueForField(field: SchemaField | undefined): string {
+  return field?.type === 'boolean' ? 'true' : '';
+}
+
+/** Split a definition's filters into the ones the builder can edit as rows and
+ *  the ones it must carry through untouched.
+ *
+ * A filter becomes an editable row only when it is a property filter whose
+ * property still exists in the current schema — those are the ones the builder's
+ * controls can faithfully represent. Everything else (content/relationship/
+ * metadata filters, or property filters referencing a field the schema no longer
+ * declares) is `preserved` verbatim so re-saving never silently drops a filter
+ * the builder can't render. A stored operator that isn't valid for the field's
+ * type is coerced to the first allowed operator so the control can't display one
+ * value while holding another.
+ */
+export function partitionFilters(
+  def: QueryDefinition | null,
+  fields: SchemaField[],
+): { rows: FilterRow[]; preserved: QueryFilter[] } {
+  const byName = new Map(fields.map((f) => [f.name, f]));
+  const rows: FilterRow[] = [];
+  const preserved: QueryFilter[] = [];
+  for (const f of def?.filters ?? []) {
+    const field = f.type === 'property' && typeof f.property === 'string' ? byName.get(f.property) : undefined;
+    if (!field) {
+      preserved.push(f);
+      continue;
+    }
+    const allowed = operatorsForType(field.type);
+    rows.push({
       property: f.property as string,
-      operator: f.operator,
+      operator: allowed.includes(f.operator) ? f.operator : allowed[0],
       value: Array.isArray(f.value) ? f.value.join(', ') : f.value == null ? '' : String(f.value),
-    }));
+    });
+  }
+  return { rows, preserved };
 }
 
 export type BuildResult =
@@ -89,15 +118,23 @@ export type BuildResult =
   | { ok: false; error: string };
 
 /** Build a validated QueryDefinition from the rows, preserving inherited fields
- *  (targetType, and any sorting/limit already on `base`). Returns an error when a
- *  row is missing its property or (for a value-bearing operator) its value. */
+ *  (targetType, sorting/limit) and any pass-through `preserved` filters the
+ *  builder can't edit. Returns an error when a row is missing its property, is
+ *  missing a value for a value-bearing operator, or coerces to `NaN` on a number
+ *  field. `preserved` filters are re-emitted ahead of the edited rows so
+ *  re-saving never drops a filter the builder couldn't render. */
 export function buildDefinition(
   rows: FilterRow[],
   fields: SchemaField[],
-  base: { targetType: string; sorting?: QueryDefinition['sorting']; limit?: number },
+  base: {
+    targetType: string;
+    sorting?: QueryDefinition['sorting'];
+    limit?: number;
+    preserved?: QueryFilter[];
+  },
 ): BuildResult {
   const byName = new Map(fields.map((f) => [f.name, f]));
-  const filters: QueryFilter[] = [];
+  const filters: QueryFilter[] = [...(base.preserved ?? [])];
   for (const row of rows) {
     if (!row.property) {
       return { ok: false, error: 'Every filter needs a property.' };
@@ -105,9 +142,20 @@ export function buildDefinition(
     if (row.operator !== 'exists' && row.value.trim() === '') {
       return { ok: false, error: `Filter on "${row.property}" needs a value.` };
     }
+    const field = byName.get(row.property);
     const filter: QueryFilter = { type: 'property', operator: row.operator, property: row.property };
-    const value = coerceRowValue(row, byName.get(row.property));
-    if (value !== undefined) filter.value = value;
+    const value = coerceRowValue(row, field);
+    if (value !== undefined) {
+      if (field?.type === 'number') {
+        const bad = Array.isArray(value)
+          ? value.some((v) => Number.isNaN(v))
+          : Number.isNaN(value as number);
+        if (bad) {
+          return { ok: false, error: `Filter on "${row.property}" needs a valid number.` };
+        }
+      }
+      filter.value = value;
+    }
     filters.push(filter);
   }
   return {

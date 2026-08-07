@@ -13,7 +13,8 @@ import {
   operatorsForType,
   enumOptions,
   coerceRowValue,
-  rowsFromDefinition,
+  initialValueForField,
+  partitionFilters,
   buildDefinition,
   type FilterRow,
 } from '$lib/components/query/query-editor-model';
@@ -86,25 +87,64 @@ describe('coerceRowValue', () => {
   });
 });
 
-describe('rowsFromDefinition', () => {
-  it('seeds rows from property filters, stringifying array values', () => {
+describe('initialValueForField', () => {
+  it('seeds a boolean field with a concrete "true" (its control has no empty state)', () => {
+    expect(initialValueForField(field({ name: 'done', type: 'boolean' }))).toBe('true');
+  });
+  it('seeds other fields empty', () => {
+    expect(initialValueForField(field({ name: 'title', type: 'string' }))).toBe('');
+    expect(initialValueForField(undefined)).toBe('');
+  });
+});
+
+describe('partitionFilters', () => {
+  const fields = [
+    field({ name: 'status', type: 'enum', coreValues: [{ value: 'open', label: 'Open' }] }),
+    field({ name: 'tags', type: 'string' }),
+    field({ name: 'points', type: 'number' }),
+  ];
+
+  it('makes editable rows only from property filters whose field exists', () => {
     const def: QueryDefinition = {
       targetType: 'task',
       filters: [
         { type: 'property', operator: 'equals', property: 'status', value: 'open' },
         { type: 'property', operator: 'in', property: 'tags', value: ['a', 'b'] },
-        { type: 'content', operator: 'contains', value: 'x' }, // dropped (not a property filter)
       ],
     };
-    const rows = rowsFromDefinition(def);
+    const { rows, preserved } = partitionFilters(def, fields);
+    expect(preserved).toEqual([]);
     expect(rows).toEqual([
       { property: 'status', operator: 'equals', value: 'open' },
       { property: 'tags', operator: 'in', value: 'a, b' },
     ]);
   });
 
-  it('returns [] for a null definition', () => {
-    expect(rowsFromDefinition(null)).toEqual([]);
+  it('preserves content/relationship/metadata filters and unknown-field property filters', () => {
+    const content = { type: 'content' as const, operator: 'contains' as const, value: 'x' };
+    const unknown = { type: 'property' as const, operator: 'equals' as const, property: 'gone', value: 'y' };
+    const def: QueryDefinition = {
+      targetType: 'task',
+      filters: [{ type: 'property', operator: 'equals', property: 'status', value: 'open' }, content, unknown],
+    };
+    const { rows, preserved } = partitionFilters(def, fields);
+    expect(rows.map((r) => r.property)).toEqual(['status']);
+    expect(preserved).toEqual([content, unknown]);
+  });
+
+  it('coerces a stored operator that is invalid for the field type', () => {
+    // `contains` is not valid for a number field → coerced to the first allowed.
+    const def: QueryDefinition = {
+      targetType: 'task',
+      filters: [{ type: 'property', operator: 'contains', property: 'points', value: '3' }],
+    };
+    const { rows } = partitionFilters(def, fields);
+    expect(operatorsForType('number')).toContain(rows[0].operator);
+    expect(rows[0].operator).not.toBe('contains');
+  });
+
+  it('returns empty for a null definition', () => {
+    expect(partitionFilters(null, fields)).toEqual({ rows: [], preserved: [] });
   });
 });
 
@@ -149,6 +189,26 @@ describe('buildDefinition', () => {
     const result = buildDefinition(rows, fields, { targetType: 'task' });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.definition.filters[0].value).toBe(5);
+  });
+
+  it('rejects a NaN number value (e.g. a bad entry in an in-list)', () => {
+    const rows: FilterRow[] = [{ property: 'points', operator: 'in', value: '1, abc' }];
+    const result = buildDefinition(rows, fields, { targetType: 'task' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('valid number');
+  });
+
+  it('re-emits preserved filters ahead of the edited rows (no data loss)', () => {
+    const preserved = [{ type: 'content' as const, operator: 'contains' as const, value: 'kw' }];
+    const rows: FilterRow[] = [{ property: 'status', operator: 'equals', value: 'open' }];
+    const result = buildDefinition(rows, fields, { targetType: 'task', preserved });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.definition.filters).toEqual([
+        { type: 'content', operator: 'contains', value: 'kw' },
+        { type: 'property', operator: 'equals', property: 'status', value: 'open' },
+      ]);
+    }
   });
 
   it('builds an empty filter list for no rows', () => {

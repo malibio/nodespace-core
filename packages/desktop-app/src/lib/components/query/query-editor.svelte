@@ -22,9 +22,10 @@
     OPERATOR_LABELS,
     buildDefinition,
     enumOptions,
+    initialValueForField,
     labelForField,
     operatorsForType,
-    rowsFromDefinition,
+    partitionFilters,
   } from './query-editor-model';
   import { untrack } from 'svelte';
   import { createLogger } from '$lib/utils/logger';
@@ -58,8 +59,14 @@
     return operatorsForType(field?.type);
   }
 
-  // Capture once at init (ADR-049 — no prop→state $effect syncing).
-  let rows = $state<FilterRow[]>(untrack(() => rowsFromDefinition(query)));
+  // Capture once at init (ADR-049 — no prop→state $effect syncing). Rows are the
+  // editable property filters; `preservedFilters` are content/relationship/
+  // metadata filters (and property filters on fields the schema no longer
+  // declares) that the builder can't represent — carried through untouched on
+  // save so re-saving never drops them.
+  const seeded = untrack(() => partitionFilters(query, fields));
+  let rows = $state<FilterRow[]>(seeded.rows);
+  const preservedFilters = seeded.preserved;
   let errorMessage = $state<string | null>(null);
   let previewCount = $state<number | null>(null);
   let previewLoading = $state(false);
@@ -69,7 +76,10 @@
   function addRow(): void {
     const first = fields[0];
     if (!first) return;
-    rows = [...rows, { property: first.name, operator: operatorsFor(first)[0], value: '' }];
+    rows = [
+      ...rows,
+      { property: first.name, operator: operatorsFor(first)[0], value: initialValueForField(first) },
+    ];
     previewCount = null;
   }
 
@@ -80,12 +90,13 @@
 
   /** Keep the operator valid when the property (and thus its type) changes. */
   function onPropertyChange(i: number, property: string): void {
-    const allowed = operatorsFor(fieldByName(property));
+    const field = fieldByName(property);
+    const allowed = operatorsFor(field);
     const current = rows[i].operator;
     rows[i] = {
       property,
       operator: allowed.includes(current) ? current : allowed[0],
-      value: '',
+      value: initialValueForField(field),
     };
     previewCount = null;
   }
@@ -96,6 +107,7 @@
       targetType: query?.targetType ?? targetType,
       sorting: query?.sorting,
       limit: query?.limit,
+      preserved: preservedFilters,
     });
     if (!result.ok) {
       errorMessage = result.error;
@@ -196,6 +208,13 @@
 
     <button class="btn-add" onclick={addRow} disabled={!canAdd}>+ Add filter</button>
 
+    {#if preservedFilters.length > 0}
+      <p class="preserved-hint">
+        {preservedFilters.length} advanced {preservedFilters.length === 1 ? 'filter' : 'filters'}
+        on this query {preservedFilters.length === 1 ? 'is' : 'are'} kept but not editable here.
+      </p>
+    {/if}
+
     {#if errorMessage}
       <p class="error-message" role="alert">{errorMessage}</p>
     {/if}
@@ -265,6 +284,13 @@
     margin: 0 0 0.25rem;
     font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
+  }
+
+  .preserved-hint {
+    margin: 0;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    font-style: italic;
   }
 
   .filter-row {
