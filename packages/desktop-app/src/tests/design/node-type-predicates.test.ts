@@ -58,6 +58,22 @@ describe('computeHeaderDisplayValue', () => {
       // matching node-row.svelte's inline rendering.
       expect(computeHeaderDisplayValue({ title: '', content: 'raw content' }, true)).toBe('');
     });
+
+    it('treats a title with no word characters as unresolved', () => {
+      // e.g. "{first_name} {last_name}" with both fields empty resolves to " ".
+      // node-row.svelte guards this with /\w/; without the same guard here the header
+      // would render a blank-looking value instead of the titleTemplate placeholder.
+      expect(computeHeaderDisplayValue({ title: ' ', content: 'raw' }, true)).toBe('');
+      expect(computeHeaderDisplayValue({ title: ' — ', content: 'raw' }, true)).toBe('');
+    });
+
+    it('does not strip markdown from a computed title', () => {
+      // A template-built title is assembled from property values; a leading '#' is a
+      // literal part of the value, not header syntax.
+      expect(computeHeaderDisplayValue({ title: '#1 Priority Account' }, true)).toBe(
+        '#1 Priority Account'
+      );
+    });
   });
 
   it('handles a missing node', () => {
