@@ -28,7 +28,17 @@ export class SchemaFormLoader {
   /** Generic schema definition for a custom schema node type (UUID nodeType). */
   genericSchema = $state<SchemaNode | null>(null);
 
-  /** True when the current generic schema has a title_template — header should be read-only. */
+  /**
+   * True when the current generic schema has a title_template — header should be read-only,
+   * and its displayed value comes from the node's computed `title` rather than its content.
+   *
+   * Scoped to custom schema types by construction: `genericSchema` is only ever loaded for
+   * `isCustomSchemaType(nodeType)`, so this is always false for core types. The backend's
+   * `compute_title()` is broader — it uses a title_template for any type whose schema has
+   * one, core or not. The two agree only because no core type ships a title_template today.
+   * Adding one, or loading `genericSchema` for core types, would need both sides updated
+   * together, or the header will display content where a computed title is expected.
+   */
   get hasTitleTemplate(): boolean {
     return this.genericSchema?.titleTemplate != null;
   }

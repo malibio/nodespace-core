@@ -31,7 +31,10 @@
   import { onDaemonReconnect } from '$lib/services/daemon-status';
   import { NodeComponentLoader } from '$lib/design/components/node-component-loader.svelte';
   import { SchemaFormLoader } from '$lib/design/components/schema-form-loader.svelte';
-  import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
+  import {
+    computeHeaderDisplayValue,
+    isCustomSchemaType
+  } from '$lib/design/components/node-type-predicates';
   import { updateSchemaField } from '$lib/design/components/schema-field-update';
   import { normalizeCodeBlockContent } from '$lib/design/components/fallback-node-render';
   import {
@@ -342,18 +345,10 @@
     };
   });
 
-  /**
-   * Compute header display value (view mode - strips markdown syntax)
-   * Similar to HeaderNode pattern: show clean title when not editing
-   */
-  let headerDisplayValue = $derived.by(() => {
-    // Prefer computed title (from title_template) over raw content when available
-    const rawContent = currentViewedNode?.title || currentViewedNode?.content || '';
-    if (!rawContent) return '';
-
-    // Strip markdown header syntax (same logic as formatTabTitle)
-    return rawContent.replace(/^#+\s*/, '');
-  });
+  /** Header value shown in view mode (not focused) — see computeHeaderDisplayValue. */
+  let headerDisplayValue = $derived(
+    computeHeaderDisplayValue(currentViewedNode, schemaFormLoader.hasTitleTemplate)
+  );
 
   /**
    * Handle header content changes (for default editable header).
