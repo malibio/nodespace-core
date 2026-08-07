@@ -48,9 +48,10 @@ use crate::nodespace::{
     DeleteRelationshipRequest, DeleteRelationshipResponse, Empty, ExecuteQueryRequest,
     ExportMarkdownRequest, ExportMarkdownResponse, FindCollectionByPathRequest,
     FindDuplicateRequest, GetAllCollectionsRequest, GetAllSchemasRequest, GetChildrenRequest,
-    GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRelationshipsRequest,
-    GetNodeRelationshipsResponse, GetNodeRequest, GetNodesBatchRequest, GetNodesBatchResponse,
-    GetRelatedNodesRequest, GetRelatedNodesResponse, GetRootsRequest, GetSchemaDefinitionRequest,
+    GetChildrenTreeRequest, GetCollectionByNameRequest, GetDaemonVersionRequest,
+    GetDaemonVersionResponse, GetNodeRelationshipsRequest, GetNodeRelationshipsResponse,
+    GetNodeRequest, GetNodesBatchRequest, GetNodesBatchResponse, GetRelatedNodesRequest,
+    GetRelatedNodesResponse, GetRootsRequest, GetSchemaDefinitionRequest,
     MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
     MoveChildrenToParentRequest, MoveChildrenToParentResponse, MoveNodeRequest,
     NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse, NodeReference,
@@ -808,6 +809,16 @@ impl GrpcNodeService for NodeServiceImpl {
             .collect();
 
         Ok(Response::new(NodeReferenceListResponse { references }))
+    }
+
+    async fn get_daemon_version(
+        &self,
+        _request: Request<GetDaemonVersionRequest>,
+    ) -> Result<Response<GetDaemonVersionResponse>, Status> {
+        // The daemon's own compiled version — not tenant-scoped, so no routing.
+        Ok(Response::new(GetDaemonVersionResponse {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }))
     }
 
     async fn create_relationship(
@@ -2301,6 +2312,18 @@ mod tests {
         });
         let resp = svc.delete_node(req).await.unwrap().into_inner();
         assert!(!resp.existed);
+    }
+
+    #[tokio::test]
+    async fn get_daemon_version_reports_the_daemon_crate_version() {
+        let (svc, _tmp) = make_service().await;
+        let resp = svc
+            .get_daemon_version(Request::new(crate::nodespace::GetDaemonVersionRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.version, env!("CARGO_PKG_VERSION"));
+        assert!(!resp.version.is_empty(), "daemon must report a version");
     }
 
     // -- Error mapping parity tests ------------------------------------------

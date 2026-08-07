@@ -9,10 +9,30 @@
 
 use crate::services::GrpcClient;
 use nodespace_proto::nodespace::{
-    CreateDatabaseRequest, DatabaseInfo, DatabaseStatus, ListDatabasesRequest,
-    RegisterDatabaseRequest, RemoveDatabaseRequest, RenameDatabaseRequest,
+    CreateDatabaseRequest, DatabaseInfo, DatabaseStatus, GetDaemonVersionRequest,
+    ListDatabasesRequest, RegisterDatabaseRequest, RemoveDatabaseRequest, RenameDatabaseRequest,
     SetDefaultDatabaseRequest,
 };
+use tonic::Request;
+
+/// Report the running daemon's version (its compiled `CARGO_PKG_VERSION`).
+///
+/// The frontend compares this against its own version on startup to detect a
+/// stale *detached* daemon left over from a previous install still bound to the
+/// socket, so it can boot out the mismatched daemon and relaunch a matching one
+/// (issue #1686). Daemon-wide, never routed.
+#[tauri::command]
+pub async fn get_daemon_version(
+    grpc_client: tauri::State<'_, GrpcClient>,
+) -> Result<String, String> {
+    let mut client = grpc_client.client().await;
+    let resp = client
+        .get_daemon_version(Request::new(GetDaemonVersionRequest {}))
+        .await
+        .map_err(|e| format!("Failed to get daemon version: {}", e))?
+        .into_inner();
+    Ok(resp.version)
+}
 
 /// A registered database as surfaced to the frontend (camelCase).
 #[derive(serde::Serialize)]

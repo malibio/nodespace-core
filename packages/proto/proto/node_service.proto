@@ -12,6 +12,11 @@ package nodespace;
 //   - version: int64 optimistic concurrency control counter
 //   - lifecycle_status: string enum ("active", "archived", "deleted")
 service NodeService {
+  // Report the running daemon's own version so the frontend can detect a stale
+  // detached daemon (a previous install still bound to the socket) and relaunch
+  // a matching build. Reads the daemon binary's compiled `CARGO_PKG_VERSION`.
+  rpc GetDaemonVersion(GetDaemonVersionRequest) returns (GetDaemonVersionResponse);
+
   // Core CRUD
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
   rpc GetNode(GetNodeRequest) returns (NodeResponse);
@@ -420,6 +425,13 @@ message ExecuteQueryRequest {
 // ---------------------------------------------------------------------------
 // Typed relationships (distinct from mentions — see rel_ops.rs)
 // ---------------------------------------------------------------------------
+
+message GetDaemonVersionRequest {}
+
+message GetDaemonVersionResponse {
+  // The daemon binary's semver (its compiled CARGO_PKG_VERSION).
+  string version = 1;
+}
 
 message CreateRelationshipRequest {
   string source_id = 1;
