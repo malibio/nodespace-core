@@ -80,7 +80,7 @@ pub async fn create_relationship(
             edge_data,
         )
         .await
-        .map_err(|e| OpsError::Internal(format!("Failed to create relationship: {}", e)))?;
+        .map_err(OpsError::from)?;
 
     Ok(CreateRelOutput {
         source_id: input.source_id,
@@ -97,7 +97,7 @@ pub async fn delete_relationship(
     node_service
         .delete_relationship(&input.source_id, &input.relationship_name, &input.target_id)
         .await
-        .map_err(|e| OpsError::Internal(format!("Failed to delete relationship: {}", e)))?;
+        .map_err(OpsError::from)?;
 
     Ok(())
 }
@@ -115,9 +115,7 @@ pub async fn update_relationship_properties(
             input.properties,
         )
         .await
-        .map_err(|e| {
-            OpsError::Internal(format!("Failed to update relationship properties: {}", e))
-        })?;
+        .map_err(OpsError::from)?;
 
     Ok(())
 }

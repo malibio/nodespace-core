@@ -10,7 +10,11 @@
 
 use anyhow::Result;
 use nodespace_core::{
-    db::SqliteStore, models::Node, schema::handle_create_schema, services::NodeService,
+    db::SqliteStore,
+    models::Node,
+    ops::{rel_ops, OpsError},
+    schema::handle_create_schema,
+    services::NodeService,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -179,5 +183,67 @@ async fn non_required_relationship_allows_deleting_its_last_edge() -> Result<()>
         .get_related_nodes_with_edges("gizmo-1", "assigned_to", "out")
         .await?;
     assert!(edges.is_empty(), "the edge is gone after deletion");
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_required_last_edge_surfaces_a_validation_error_not_internal() -> Result<()> {
+    // The rejection is user-actionable ("add another target first"), so the ops
+    // layer must classify it as a validation error — which the daemon maps to
+    // gRPC INVALID_ARGUMENT — not an opaque Internal/INTERNAL server error.
+    let (svc, _t) = service_with_gizmo_schema("many", true).await?;
+    make_node(&svc, "gizmo-1", "gizmo", "Ship it").await?;
+    make_node(&svc, "person-1", "person", "Alice").await?;
+    svc.create_relationship("gizmo-1", "assigned_to", "person-1", json!({}))
+        .await?;
+
+    let err = rel_ops::delete_relationship(
+        &svc,
+        rel_ops::DeleteRelInput {
+            source_id: "gizmo-1".to_string(),
+            relationship_name: "assigned_to".to_string(),
+            target_id: "person-1".to_string(),
+        },
+    )
+    .await
+    .expect_err("deleting a required last edge must fail");
+    assert!(
+        matches!(err, OpsError::ValidationFailed(_)),
+        "expected ValidationFailed (→ INVALID_ARGUMENT), got {err:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_rejects_non_object_properties() -> Result<()> {
+    let (svc, _t) = service_with_gizmo_schema("many", false).await?;
+    make_node(&svc, "gizmo-1", "gizmo", "Ship it").await?;
+    make_node(&svc, "person-1", "person", "Alice").await?;
+    svc.create_relationship(
+        "gizmo-1",
+        "assigned_to",
+        "person-1",
+        json!({ "role": "reviewer" }),
+    )
+    .await?;
+
+    // A scalar/array/null would replace the structured edge blob with a shape
+    // downstream readers don't expect — reject it.
+    for bad in [json!("oops"), json!(42), json!(null), json!(["a"])] {
+        let err = svc
+            .update_relationship_properties("gizmo-1", "assigned_to", "person-1", bad.clone())
+            .await;
+        assert!(err.is_err(), "non-object properties {bad} must be rejected");
+    }
+
+    // The valid edge is untouched by the rejected updates.
+    let edges = svc
+        .get_related_nodes_with_edges("gizmo-1", "assigned_to", "out")
+        .await?;
+    assert_eq!(
+        edges[0].1.get("role").and_then(|v| v.as_str()),
+        Some("reviewer"),
+        "a rejected update must not mutate the edge"
+    );
     Ok(())
 }

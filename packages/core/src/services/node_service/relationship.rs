@@ -807,15 +807,31 @@ impl NodeService {
         if !is_builtin {
             if let Some(source) = self.get_node(source_id).await? {
                 if let Some(schema_node) = self.get_node(&source.node_type).await? {
-                    let relationships: Vec<crate::models::schema::SchemaRelationship> = schema_node
-                        .properties
-                        .get("relationships")
-                        .and_then(|r| serde_json::from_value(r.clone()).ok())
-                        .unwrap_or_default();
+                    // A present-but-malformed `relationships` array must not
+                    // silently disable the guard — that would fail open on the
+                    // exact invariant this protects. Warn if parsing fails.
+                    let relationships: Vec<crate::models::schema::SchemaRelationship> =
+                        match schema_node.properties.get("relationships") {
+                            Some(raw) => serde_json::from_value(raw.clone()).unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    schema = %source.node_type,
+                                    error = %e,
+                                    "could not parse schema relationships while checking required last-edge protection; treating as none"
+                                );
+                                Vec::new()
+                            }),
+                            None => Vec::new(),
+                        };
+                    // `required` is an outbound-declaration property; only enforce
+                    // it for a forward (`direction: out`) relationship so an
+                    // inbound-declared one never counts the wrong edge set.
                     let is_required = relationships
                         .iter()
                         .find(|r| r.name == relationship_name)
-                        .map(|r| r.required == Some(true))
+                        .map(|r| {
+                            r.required == Some(true)
+                                && r.direction == crate::models::schema::RelationshipDirection::Out
+                        })
                         .unwrap_or(false);
                     if is_required {
                         let edge_exists = self
@@ -895,6 +911,23 @@ impl NodeService {
         target_id: &str,
         properties: serde_json::Value,
     ) -> Result<(), NodeServiceError> {
+        // Edge attributes are a JSON object (mirrors `edge_data` on create, which
+        // defaults to `{}`). Reject a scalar/array/null so an edit can't replace a
+        // structured edge-fields blob with a shape `get_related_nodes_with_edges`
+        // consumers don't expect.
+        if !properties.is_object() {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Relationship properties must be a JSON object, got {}",
+                match &properties {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "a boolean",
+                    serde_json::Value::Number(_) => "a number",
+                    serde_json::Value::String(_) => "a string",
+                    serde_json::Value::Array(_) => "an array",
+                    serde_json::Value::Object(_) => "an object",
+                }
+            )));
+        }
         let rel_id = self
             .store
             .update_relationship_properties(source_id, target_id, relationship_name, &properties)
