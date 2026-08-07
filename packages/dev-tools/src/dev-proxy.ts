@@ -466,6 +466,25 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
+  // GET /api/nodes/:id/relationships
+  const relationshipsMatch = pathname.match(HTTP_ROUTE_PATTERNS.getNodeRelationships);
+  if (method === 'GET' && relationshipsMatch) {
+    const nodeId = decodeURIComponent(relationshipsMatch[1]);
+    try {
+      const res = await call<{ nodeId: string }, { relationshipsJson: string }>(
+        (nodeClient as unknown as Record<string, Function>).getNodeRelationships,
+        { nodeId }
+      );
+      // relationships_json is already camelCase (the daemon serializes its typed
+      // NodeRelationshipsOutput to JSON); parse and forward the aggregate as-is,
+      // matching what the Tauri get_node_relationships command returns.
+      const aggregate = res.relationshipsJson ? JSON.parse(res.relationshipsJson) : {};
+      return json(aggregate);
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
   // POST /api/query
   if (method === 'POST' && pathname === '/api/query') {
     try {
@@ -510,6 +529,63 @@ async function handleRequest(req: Request): Promise<Response> {
       await call(
         (nodeClient as unknown as Record<string, Function>).deleteMention,
         { mentioningNodeId: body.sourceId, mentionedNodeId: body.targetId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // POST /api/relationships  (create typed relationship edge)
+  if (method === 'POST' && pathname === '/api/relationships') {
+    try {
+      const body = await req.json() as Record<string, unknown>;
+      const request: Record<string, unknown> = {
+        sourceId: body.sourceId,
+        relationshipName: body.relationshipName,
+        targetId: body.targetId
+      };
+      // edge_data_json is proto `optional string`; omit it entirely for a bare
+      // edge so the daemon defaults to "{}" rather than seeing an empty string.
+      if (body.edgeData !== undefined && body.edgeData !== null) {
+        request.edgeDataJson = JSON.stringify(body.edgeData);
+      }
+      await call(
+        (nodeClient as unknown as Record<string, Function>).createRelationship,
+        request
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // DELETE /api/relationships  (remove typed relationship edge)
+  if (method === 'DELETE' && pathname === '/api/relationships') {
+    try {
+      const body = await req.json() as Record<string, unknown>;
+      await call(
+        (nodeClient as unknown as Record<string, Function>).deleteRelationship,
+        { sourceId: body.sourceId, relationshipName: body.relationshipName, targetId: body.targetId }
+      );
+      return new Response(null, { status: 204, headers: corsHeaders });
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
+  // PATCH /api/relationships  (replace edge attributes wholesale)
+  if (method === 'PATCH' && pathname === '/api/relationships') {
+    try {
+      const body = await req.json() as Record<string, unknown>;
+      await call(
+        (nodeClient as unknown as Record<string, Function>).updateRelationshipProperties,
+        {
+          sourceId: body.sourceId,
+          relationshipName: body.relationshipName,
+          targetId: body.targetId,
+          propertiesJson: JSON.stringify(body.properties ?? {})
+        }
       );
       return new Response(null, { status: 204, headers: corsHeaders });
     } catch (err) {

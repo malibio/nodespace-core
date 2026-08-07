@@ -77,16 +77,25 @@ export interface RelationshipRowView {
 export interface RelationshipGroupView {
   /** Stable, unique key across name + direction + target type. */
   key: string;
+  /**
+   * The raw schema relationship name (e.g. `assigned_to`). Needed to drive the
+   * create/delete/update mutation calls — distinct from the humanized `label`.
+   */
+  relationshipName: string;
   /** Human-readable heading for the group. */
   label: string;
   direction: RelationshipDirection;
   targetType: string | null;
   cardinality: RelationshipCardinality | null;
+  /** Whether the relationship requires at least one edge (blocks last-edge removal). */
+  required: boolean;
   description: string | null;
   /** `table` when the group carries edge attributes, else `chips`. */
   layout: RelationshipLayout;
   /** Ordered edge-attribute column names (empty for the `chips` layout). */
   edgeColumns: string[];
+  /** Declared edge field definitions, used to render edge-attribute editors. */
+  edgeFields: RawEdgeField[];
   rows: RelationshipRowView[];
   count: number;
 }
@@ -196,31 +205,62 @@ function buildGroupView(group: RawRelationshipGroup): RelationshipGroupView {
   }));
   return {
     key: `${group.direction}:${group.relationshipName}:${group.targetType ?? '*'}`,
+    relationshipName: group.relationshipName,
     label: groupDisplayLabel(group),
     direction: group.direction,
     targetType: group.targetType,
     cardinality: group.cardinality,
+    required: group.required ?? false,
     description: group.description,
     layout,
     edgeColumns,
+    edgeFields: group.edgeFields ?? [],
     rows,
     count: group.count
   };
 }
 
+/** The stored source/target endpoints of a typed relationship edge. */
+export interface EdgeEndpoints {
+  sourceId: string;
+  targetId: string;
+}
+
 /**
- * Build the modal's view model from the command payload. Groups with no related
- * nodes are dropped (the aggregation already omits them, but this stays robust
- * to either behavior); `isEmpty` is true when nothing remains to show.
+ * Resolve the stored `source`/`target` of a typed relationship edge, given the
+ * node the modal is centered on (`nodeId`), the group's `direction`, and the
+ * related node on the other end (`otherId`).
+ *
+ * Orientation is the crux of correct mutations: an edge is always stored
+ * source→target, but a group shown on `nodeId` can face either way.
+ * - `direction: 'out'` — the edge points FROM this node: source=nodeId, target=otherId.
+ * - `direction: 'in'`  — the edge points TO this node:   source=otherId, target=nodeId.
+ *
+ * Pure and Tauri-free so it can be unit-tested in isolation.
+ */
+export function resolveEdgeEndpoints(
+  nodeId: string,
+  direction: RelationshipDirection,
+  otherId: string
+): EdgeEndpoints {
+  return direction === 'out'
+    ? { sourceId: nodeId, targetId: otherId }
+    : { sourceId: otherId, targetId: nodeId };
+}
+
+/**
+ * Build the modal's view model from the command payload. Every group returned by
+ * the command is retained — including declared groups with no related nodes yet —
+ * so the editable modal can offer to add the first edge; the read-only view
+ * filters empty groups out itself. `isEmpty` is true when no group has any rows,
+ * i.e. there is genuinely nothing populated to show.
  */
 export function buildRelationshipsView(raw: RawNodeRelationships): NodeRelationshipsView {
-  const groups = raw.groups
-    .filter((group) => group.related.length > 0)
-    .map(buildGroupView);
+  const groups = raw.groups.map(buildGroupView);
   return {
     nodeId: raw.nodeId,
     nodeType: raw.nodeType,
     groups,
-    isEmpty: groups.length === 0
+    isEmpty: groups.every((group) => group.rows.length === 0)
   };
 }

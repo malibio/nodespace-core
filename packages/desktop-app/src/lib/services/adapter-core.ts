@@ -19,6 +19,9 @@
 // value-level `$lib` import here would break dev-proxy at runtime.
 import type { Node, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
+// Type-only: relationship-grouping is a pure module (no Tauri/DOM/$lib value
+// imports), so this is erased before the dev-proxy's Bun runtime resolves it.
+import type { RawNodeRelationships } from './relationship-grouping';
 
 // ============================================================================
 // Shared types (public BackendAdapter surface)
@@ -71,6 +74,7 @@ export interface NodeQuery {
   id?: string;
   mentionedBy?: string;
   contentContains?: string;
+  titleContains?: string;
   nodeType?: string;
   limit?: number;
 }
@@ -107,6 +111,24 @@ export interface BackendAdapter {
   // Queries
   queryNodes(query: NodeQuery): Promise<Node[]>;
   mentionAutocomplete(query: string, limit?: number): Promise<Node[]>;
+  /** Title-prefix search over nodes of an optional type, for the target picker. */
+  searchNodesByTitle(nodeType: string | null, titleContains: string, limit?: number): Promise<Node[]>;
+
+  // Typed relationships (distinct from mentions)
+  getNodeRelationships(nodeId: string): Promise<RawNodeRelationships>;
+  createRelationship(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    edgeData?: Record<string, unknown>
+  ): Promise<void>;
+  deleteRelationship(sourceId: string, relationshipName: string, targetId: string): Promise<void>;
+  updateRelationshipProperties(
+    sourceId: string,
+    relationshipName: string,
+    targetId: string,
+    properties: Record<string, unknown>
+  ): Promise<void>;
 
   // Composite operations
   createContainerNode(input: CreateContainerInput): Promise<string>;
@@ -260,6 +282,12 @@ export const HTTP_ROUTES = {
   mentionAutocomplete: () => '/api/mentions/autocomplete',
   getAllSchemas: () => '/api/schemas',
   getSchema: (schemaId: string) => `/api/schemas/${encodeURIComponent(schemaId)}`,
+  getNodeRelationships: (nodeId: string) => `/api/nodes/${encodeURIComponent(nodeId)}/relationships`,
+  // create (POST) / delete (DELETE) / update-properties (PATCH) share one URL,
+  // differentiated by HTTP method — mirrors the /api/mentions convention.
+  createRelationship: () => '/api/relationships',
+  deleteRelationship: () => '/api/relationships',
+  updateRelationshipProperties: () => '/api/relationships',
 } as const;
 
 /**
@@ -281,4 +309,5 @@ export const HTTP_ROUTE_PATTERNS = {
   getIncomingMentions: /^\/api\/nodes\/([^/]+)\/mentions\/incoming$/,
   getMentioningContainers: /^\/api\/nodes\/([^/]+)\/mentions\/roots$/,
   getSchema: /^\/api\/schemas\/([^/]+)$/,
+  getNodeRelationships: /^\/api\/nodes\/([^/]+)\/relationships$/,
 } as const;
