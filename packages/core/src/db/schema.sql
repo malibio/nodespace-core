@@ -40,6 +40,14 @@ CREATE INDEX IF NOT EXISTS idx_task_assignee ON node (json_extract(properties, '
 CREATE INDEX IF NOT EXISTS idx_task_status_due_date ON node (json_extract(properties, '$.task.status'), json_extract(properties, '$.task.due_date')) WHERE node_type = 'task';
 CREATE INDEX IF NOT EXISTS idx_project_status ON node (json_extract(properties, '$.project.status')) WHERE node_type = 'project';
 
+-- Holds BOTH instance-level edges (task→person assigned_to, has_child, …) and
+-- schema relationship DECLARATIONS (v004): a declaration row connects two
+-- schema nodes (in_node = declaring schema, out_node = target schema, or a
+-- self-edge when untyped) under the declared name, with the full
+-- SchemaRelationship JSON in `properties`. The two kinds share
+-- relationship_type values and are distinguished by endpoint node_type
+-- ('schema' vs instance), never by name — which is why declared names may not
+-- collide with the built-in structural types.
 CREATE TABLE IF NOT EXISTS relationship (
     id                TEXT    PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     in_node           TEXT    NOT NULL REFERENCES node(id) ON DELETE CASCADE,

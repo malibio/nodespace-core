@@ -131,7 +131,10 @@ mod person_email_uniqueness_tests {
         let (service, _t) = service().await?;
         create_person(&service, "Alice", "alice@example.com").await?;
 
-        assert!(service.find_duplicate_for("person", "email", "").await?.is_none());
+        assert!(service
+            .find_duplicate_for("person", "email", "")
+            .await?
+            .is_none());
         assert!(service
             .find_duplicate_for("person", "email", "   ")
             .await?
@@ -145,7 +148,9 @@ mod person_email_uniqueness_tests {
         create_person(&service, "Alice", "alice@example.com").await?;
 
         // `name` is not flagged unique, so a matching name is never a duplicate.
-        let dup = service.find_duplicate_for("person", "name", "Alice").await?;
+        let dup = service
+            .find_duplicate_for("person", "name", "Alice")
+            .await?;
         assert!(
             dup.is_none(),
             "a non-unique field must never report a duplicate"

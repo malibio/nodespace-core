@@ -251,7 +251,10 @@ mod tests {
     #[test]
     fn missing_or_error_json_yields_none() {
         // A rate-limit / error document has no tag_name.
-        assert_eq!(latest_tag_from_json(r#"{"message":"API rate limit exceeded"}"#), None);
+        assert_eq!(
+            latest_tag_from_json(r#"{"message":"API rate limit exceeded"}"#),
+            None
+        );
         assert_eq!(latest_tag_from_json("not json at all"), None);
         assert_eq!(latest_tag_from_json(r#"{"tag_name":""}"#), None);
     }
@@ -262,7 +265,10 @@ mod tests {
         let body = r#"{"version":"v0.1.0","name":"NodeSpace Pro v0.1.0","published_at":"2026-08-01T12:00:00Z"}"#;
         assert_eq!(pro_version_from_json(body).as_deref(), Some("v0.1.0"));
         // And it feeds the same semver comparison as the community path.
-        assert!(update_available("0.1.0", &pro_version_from_json(r#"{"version":"0.2.0"}"#).unwrap()));
+        assert!(update_available(
+            "0.1.0",
+            &pro_version_from_json(r#"{"version":"0.2.0"}"#).unwrap()
+        ));
     }
 
     #[test]

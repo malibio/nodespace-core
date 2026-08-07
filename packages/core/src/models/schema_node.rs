@@ -1,27 +1,11 @@
 //! Strongly-Typed SchemaNode
 //!
 //! Provides compile-time type safety for schema nodes using Universal Graph Architecture.
-//! Schema properties (fields, relationships) are stored in node.properties.
-//!
-//! # Architecture (Universal Graph)
-//!
-//! **Query Pattern:**
-//! Note: Column aliases use camelCase to match serde's `#[serde(rename_all = "camelCase")]`.
-//! Database stores snake_case, but serde expects camelCase for deserialization.
-//!
-//! ```sql
-//! SELECT
-//!     record::id(id) AS id,
-//!     properties.isCore AS isCore,
-//!     properties.version AS schemaVersion,
-//!     properties.fields AS fields,
-//!     properties.relationships AS relationships,
-//!     content,
-//!     version,
-//!     created_at AS createdAt,
-//!     modified_at AS modifiedAt
-//! FROM node:`task` WHERE node_type = 'schema';
-//! ```
+//! Field definitions are stored in `node.properties.fields`; relationship
+//! declarations are stored as `relationship` table rows between schema nodes
+//! (see `crate::models::schema` module docs) and hydrated into
+//! [`SchemaNode::relationships`] by `SqliteStore::get_schema_node` /
+//! `get_all_schemas` — callers always receive both in one fetch.
 //!
 //! ## Description Storage
 //!
@@ -40,10 +24,8 @@
 //! use nodespace_core::models::SchemaNode;
 //!
 //! // Direct field access (no JSON parsing)
-//! // let mut schema = service.get_schema_node("task").await?.unwrap();
-//! // schema.fields.push(new_field);
-//! // schema.schema_version += 1;
-//! // store.update_schema_node(schema).await?;
+//! // let schema = service.get_schema_node("task").await?.unwrap();
+//! // println!("{} fields, {} relationships", schema.fields.len(), schema.relationships.len());
 //! ```
 
 use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel, SchemaRelationship};
@@ -53,12 +35,13 @@ use serde::{Deserialize, Serialize};
 
 /// Strongly-typed schema node with direct field access
 ///
-/// Uses Universal Graph Architecture - schema data stored in node.properties.
 /// Combines node metadata (id, content, timestamps) with schema-specific
-/// fields (is_core, fields, relationships).
+/// fields (is_core, fields, relationships). Field definitions live in
+/// `node.properties`; relationship declarations live in the `relationship`
+/// table and are hydrated by the store's schema fetch methods.
 ///
-/// Fields are public for direct mutation. After modifying, persist via
-/// `store.update_schema_node(schema)`.
+/// Persist schema changes via `update_schema`/`create_schema` handlers (fields)
+/// and `NodeService::set_schema_relationships` (declarations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaNode {
@@ -98,8 +81,10 @@ pub struct SchemaNode {
 
     /// List of relationships to other node types
     ///
-    /// Relationships define edges to other schemas. Edge tables are automatically
-    /// created when the schema is saved. See [`SchemaRelationship`] for details.
+    /// Declarations live in the `relationship` table (edges between schema
+    /// nodes), NOT in `node.properties` — this field is hydrated by the store's
+    /// schema fetch methods and is empty on a bare
+    /// [`from_node`](Self::from_node) conversion. See [`SchemaRelationship`].
     #[serde(default)]
     pub relationships: Vec<SchemaRelationship>,
 
@@ -167,12 +152,6 @@ impl SchemaNode {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        let relationships: Vec<SchemaRelationship> = node
-            .properties
-            .get("relationships")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-
         let title_template = node
             .properties
             .get("titleTemplate")
@@ -194,21 +173,27 @@ impl SchemaNode {
             is_core,
             schema_version,
             fields,
-            relationships,
+            // Declarations are relationship-table rows; the store's schema
+            // fetch methods hydrate this after conversion.
+            relationships: Vec::new(),
             title_template,
             properties_header_summary_template,
         })
     }
 
-    /// Convert to universal Node (for compatibility with existing APIs)
+    /// Convert to the universal Node STORAGE shape.
     ///
-    /// This creates a Node with properties populated from the strongly-typed fields.
+    /// `relationships` is deliberately NOT written into `properties` — the
+    /// relationship table is the single source of truth for declarations, and
+    /// a `relationships` key here would resurrect the parallel JSON copy this
+    /// storage model removed. Callers that persist a schema with declarations
+    /// write them separately via `NodeService::set_schema_relationships` (or
+    /// `SqliteStore::set_schema_declarations`).
     pub fn into_node(self) -> Node {
         let mut properties = serde_json::json!({
             "isCore": self.is_core,
             "schemaVersion": self.schema_version,
             "fields": self.fields,
-            "relationships": self.relationships,
         });
 
         if let Some(template) = self.title_template {
@@ -232,6 +217,23 @@ impl SchemaNode {
             title: None, // Schema nodes don't have indexed titles
             lifecycle_status: "active".to_string(),
         }
+    }
+
+    /// Convert to a Node for the WIRE (gRPC/Tauri) boundary, with the hydrated
+    /// `relationships` embedded in `properties` alongside `fields`.
+    ///
+    /// The desktop app parses the daemon's schema responses back through
+    /// `nodespace_types::SchemaNode::from_node`, which reads
+    /// `properties.relationships` — the wire contract intentionally carries the
+    /// fully-assembled view so no client needs to know how declarations are
+    /// stored. Never persist the result: that would write the JSON copy back
+    /// into storage.
+    pub fn into_wire_node(self) -> Node {
+        let relationships =
+            serde_json::to_value(&self.relationships).unwrap_or_else(|_| serde_json::json!([]));
+        let mut node = self.into_node();
+        node.properties["relationships"] = relationships;
+        node
     }
 
     /// Get a field by name
@@ -397,6 +399,52 @@ mod tests {
         assert_eq!(schema.schema_version, 2);
         assert_eq!(schema.fields.len(), 1);
         assert_eq!(schema.fields[0].name, "status");
+    }
+
+    #[test]
+    fn test_into_node_excludes_relationships_and_wire_node_includes_them() {
+        let node = create_test_schema_node();
+        let mut schema = SchemaNode::from_node(node).unwrap();
+        schema.relationships = vec![serde_json::from_value(json!({
+            "name": "widgets",
+            "targetType": "widget",
+            "direction": "out",
+            "cardinality": "many"
+        }))
+        .unwrap()];
+
+        // Storage shape: no relationships key — the relationship table is the
+        // single source of truth for declarations.
+        let storage = schema.clone().into_node();
+        assert!(storage.properties.get("relationships").is_none());
+
+        // Wire shape: relationships embedded for clients that parse
+        // properties.relationships (desktop app via the daemon).
+        let wire = schema.into_wire_node();
+        assert_eq!(wire.properties["relationships"][0]["name"], "widgets");
+        assert_eq!(wire.properties["relationships"][0]["targetType"], "widget");
+    }
+
+    #[test]
+    fn test_from_node_ignores_legacy_relationships_key() {
+        // A legacy/foreign node carrying a relationships key must not have it
+        // read back as declarations — storage reads come from the relationship
+        // table only.
+        let node = Node::new(
+            "schema".to_string(),
+            "task".to_string(),
+            json!({
+                "isCore": true,
+                "fields": [],
+                "relationships": [{
+                    "name": "stale",
+                    "direction": "out",
+                    "cardinality": "many"
+                }]
+            }),
+        );
+        let schema = SchemaNode::from_node(node).unwrap();
+        assert!(schema.relationships.is_empty());
     }
 
     #[test]

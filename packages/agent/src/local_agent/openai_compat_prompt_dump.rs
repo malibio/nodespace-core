@@ -53,7 +53,9 @@ fn append(value: &serde_json::Value) {
                 tracing::debug!(error = %e, path = %path, "openai_compat prompt_dump: write failed");
             }
         }
-        Err(e) => tracing::debug!(error = %e, path = %path, "openai_compat prompt_dump: open failed"),
+        Err(e) => {
+            tracing::debug!(error = %e, path = %path, "openai_compat prompt_dump: open failed")
+        }
     }
 }
 

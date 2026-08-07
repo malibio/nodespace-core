@@ -130,7 +130,10 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                 }
                 Ok(Err(status)) => {
                     tracing::debug!(error = %status, "sync-status subscribe failed");
-                    emit_disconnected(&app_handle, format!("sync-status subscribe failed: {status}"));
+                    emit_disconnected(
+                        &app_handle,
+                        format!("sync-status subscribe failed: {status}"),
+                    );
                     // Wait for a channel rebuild or a short backoff, then retry.
                     tokio::select! {
                         _ = generation.changed() => {}

@@ -111,9 +111,7 @@ const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// sooner has the explicit "Refresh remote models" button, which sets
 /// `ListModelsRequest::force_refresh` to bypass this TTL entirely.
 ///
-/// No event-driven invalidation (contrast `InboundRelationshipCache`'s
-/// `schema_change_flag`, a similar cache-vs-config-write problem solved with
-/// a single `AtomicBool`): `SettingsServiceImpl` (process-global) and
+/// No event-driven invalidation: `SettingsServiceImpl` (process-global) and
 /// `LocalAgentServiceImpl` (built per-database, potentially many instances
 /// under ADR-053) share no state today, and this cache's only writer —
 /// Settings' config add/edit/delete — already calls `refreshRemoteModels`
@@ -1199,9 +1197,8 @@ impl LocalAgentServiceImpl {
     /// released before the network round trip (so a slow discovery round never
     /// blocks a concurrent cache *hit*), which means two callers racing a cold
     /// cache each run their own discovery round rather than one waiting on the
-    /// other's in-flight result. Accepted, not overlooked — same gap exists in
-    /// `InboundRelationshipCache::refresh_cache`, and it only costs an extra
-    /// fan-out on the very first mount; every call after either round
+    /// other's in-flight result. Accepted, not overlooked — it only costs an
+    /// extra fan-out on the very first mount; every call after either round
     /// completes is a cache hit.
     async fn discover_openai_compat_models(
         &self,

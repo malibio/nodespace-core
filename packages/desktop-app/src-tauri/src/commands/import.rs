@@ -518,7 +518,11 @@ mod tests {
         tmp
     }
 
-    fn names(tmp: &tempfile::TempDir, exclude: &[String], filters: WalkFilters) -> BTreeSet<String> {
+    fn names(
+        tmp: &tempfile::TempDir,
+        exclude: &[String],
+        filters: WalkFilters,
+    ) -> BTreeSet<String> {
         let mut files = Vec::new();
         collect_markdown_files_with_exclusions(tmp.path(), &mut files, exclude, filters).unwrap();
         files

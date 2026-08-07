@@ -468,10 +468,7 @@ mod tests {
         let tmp = fixture();
         // --exclude sub removes the whole sub-folder; default filters still drop
         // agent + hidden entries, leaving only the top-level plain doc.
-        assert_eq!(
-            names(&tmp, &["sub".to_string()], ALL_ON),
-            set(&["top.md"])
-        );
+        assert_eq!(names(&tmp, &["sub".to_string()], ALL_ON), set(&["top.md"]));
     }
 
     #[test]

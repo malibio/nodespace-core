@@ -623,13 +623,25 @@ mod tests {
                     "isCore": false,
                     "schemaVersion": 1,
                     "description": format!("{} schema", type_name),
-                    "fields": [{"name": "status", "type": "string"}, {"name": "title", "type": "string"}],
-                    "relationships": relationships
+                    "fields": [{"name": "status", "type": "string"}, {"name": "title", "type": "string"}]
                 }),
             );
             svc.create_node(schema_node)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to create schema '{}'", type_name));
+
+            // Declarations go through the real write path (relationship-table
+            // rows), matching production storage.
+            let declarations: Vec<crate::models::schema::SchemaRelationship> =
+                serde_json::from_value(relationships)
+                    .unwrap_or_else(|e| panic!("Invalid relationships fixture: {e}"));
+            if !declarations.is_empty() {
+                svc.set_schema_relationships(type_name, &declarations)
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to declare relationships on '{}': {e}", type_name)
+                    });
+            }
         }
 
         fn make_node(id: &str, node_type: &str, props: serde_json::Value) -> Node {

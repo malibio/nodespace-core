@@ -440,6 +440,8 @@ impl SqliteStore {
             }
         };
 
+        self.assert_schema_deletable(&node).await?;
+
         // FK CASCADE handles relationship and embedding deletion
         self.db
             .execute(
@@ -482,6 +484,10 @@ impl SqliteStore {
             .collect();
         if to_delete.is_empty() {
             return Ok(vec![]);
+        }
+
+        for node in &to_delete {
+            self.assert_schema_deletable(node).await?;
         }
 
         let tx = self
@@ -566,6 +572,11 @@ impl SqliteStore {
             Some(n) => n,
             None => return Ok((false, vec![])),
         };
+
+        // Only the target can be a schema node (descendants are its description
+        // subtree, which is ordinary content), so the declaration guard runs on
+        // the target alone.
+        self.assert_schema_deletable(&target).await?;
 
         // OCC check on target before entering the transaction.
         if target.version != expected_version {
@@ -665,6 +676,10 @@ impl SqliteStore {
     /// Uses a recursive CTE to collect all descendant IDs, then deletes them in one statement.
     /// FK CASCADE cleans relationship and embedding rows automatically.
     /// No OCC check — intended for internal system operations where version checks are unnecessary.
+    ///
+    /// Bypasses `assert_schema_deletable`: the ids reached here are `has_child`
+    /// descendants (ordinary content, e.g. a schema's description subtree) —
+    /// never schema nodes themselves. Do not route schema-node ids through this.
     pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
         self.db
             .execute(
@@ -688,6 +703,10 @@ impl SqliteStore {
     /// operations. Used to prune a document's *previous* subtree during an
     /// idempotent re-import only after the fresh subtree has been inserted, so
     /// a failed insert never destroys the old content.
+    ///
+    /// Bypasses `assert_schema_deletable`: callers pass imported-content ids,
+    /// never schema nodes. Do not route schema-node ids through this — the
+    /// FK CASCADE would silently destroy their relationship declarations.
     pub async fn delete_nodes_by_ids_unchecked(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -1706,28 +1725,6 @@ impl SqliteStore {
         Ok(node.map(|n| n.properties))
     }
 
-    pub async fn update_schema(&self, node_type: &str, schema: &Value) -> Result<()> {
-        let schema_id = node_type.to_string();
-
-        if self.get_node(&schema_id).await?.is_some() {
-            let update = NodeUpdate {
-                properties: Some(schema.clone()),
-                ..Default::default()
-            };
-            self.update_node(&schema_id, update, None).await?;
-        } else {
-            let node = Node::new_with_id(
-                schema_id,
-                "schema".to_string(),
-                node_type.to_string(),
-                schema.clone(),
-            );
-            self.create_node(node, None, None).await?;
-        }
-
-        Ok(())
-    }
-
     pub async fn rename_schema_field(&self, type_id: &str, from: &str, to: &str) -> Result<u64> {
         if from.is_empty() || to.is_empty() {
             return Err(anyhow::anyhow!("Field names must not be empty"));
@@ -2252,6 +2249,10 @@ impl SqliteStore {
             .ok_or_else(|| anyhow::anyhow!("Task node '{}' not found after update", id))
     }
 
+    /// Fetch a schema with `relationships` hydrated from its declaration edges
+    /// in the `relationship` table. One caller-facing fetch: fields come from
+    /// the node row, relationships from `get_schema_declarations` — no consumer
+    /// needs to know declarations aren't stored in `properties`.
     pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
         let mut rows = self
             .db
@@ -2265,7 +2266,10 @@ impl SqliteStore {
         if let Some(row) = rows.next().await? {
             let node = Self::row_to_node(&row)?;
             match crate::models::SchemaNode::from_node(node) {
-                Ok(schema) => Ok(Some(schema)),
+                Ok(mut schema) => {
+                    schema.relationships = self.get_schema_declarations(id).await?;
+                    Ok(Some(schema))
+                }
                 Err(e) => {
                     tracing::warn!("Failed to parse schema node '{}': {}", id, e);
                     Ok(None)
@@ -2276,6 +2280,8 @@ impl SqliteStore {
         }
     }
 
+    /// All schemas, each with `relationships` hydrated from declaration edges
+    /// (one batched query — no per-schema round trip).
     pub async fn get_all_schemas(&self) -> Result<Vec<crate::models::SchemaNode>> {
         let mut rows = self
             .db
@@ -2292,6 +2298,13 @@ impl SqliteStore {
             match crate::models::SchemaNode::from_node(node) {
                 Ok(schema) => schemas.push(schema),
                 Err(e) => tracing::warn!("Skipping invalid schema node: {}", e),
+            }
+        }
+
+        let mut declarations = self.get_all_schema_declarations().await?;
+        for schema in &mut schemas {
+            if let Some(rels) = declarations.remove(&schema.id) {
+                schema.relationships = rels;
             }
         }
         Ok(schemas)
