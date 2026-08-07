@@ -544,6 +544,7 @@ pub fn run() {
             commands::settings::get_openai_compat_configs,
             commands::settings::set_openai_compat_configs,
             // Local database registry commands (ADR-053)
+            commands::database::get_daemon_version,
             commands::database::list_databases,
             commands::database::create_database,
             commands::database::register_database,
