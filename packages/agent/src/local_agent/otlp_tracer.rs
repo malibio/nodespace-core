@@ -5,7 +5,7 @@
 //! When unset, the default no-op provider remains — callers pay zero overhead.
 //!
 //! MLflow 3.x includes a native OTLP HTTP receiver at `/v1/traces`. Point it at
-//! `http://localhost:5000`. See `scripts/mlflow-dev.md`.
+//! `http://localhost:5000`. See `../nodespace-docs/development/mlflow-dev.md`.
 
 use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::SdkTracerProvider;
