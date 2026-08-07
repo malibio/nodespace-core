@@ -1,11 +1,25 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const host = process.env.TAURI_DEV_HOST;
+
+// Single source of truth for the frontend's own version: read it straight from
+// this package's package.json (kept in lockstep with tauri.conf.json and the
+// daemon crate) and expose it to the app as the compile-time constant
+// __APP_VERSION__ (declared in src/vite-env.d.ts). Used by the dev build badge.
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf-8")
+);
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
+
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Fix esbuild CSS processing issues
   esbuild: {
