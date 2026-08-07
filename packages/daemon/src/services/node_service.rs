@@ -44,22 +44,24 @@ use crate::nodespace::{
     ChatResponse, CollectionIdResponse, CollectionIdsResponse, CollectionInfo,
     CollectionListResponse, CollectionMembersRequest, CreateCollectionRequest,
     CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest, CreateRelationshipResponse,
-    DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse, Empty,
-    ExecuteQueryRequest, ExportMarkdownRequest, ExportMarkdownResponse,
-    FindCollectionByPathRequest, FindDuplicateRequest, GetAllCollectionsRequest, GetAllSchemasRequest,
-    GetChildrenRequest, GetChildrenTreeRequest, GetCollectionByNameRequest,
-    GetNodeRelationshipsRequest, GetNodeRelationshipsResponse, GetNodeRequest, GetNodesBatchRequest,
-    GetNodesBatchResponse, GetRelatedNodesRequest, GetRelatedNodesResponse, GetRootsRequest,
-    GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionIdsResponse,
-    MentionResponse, MentionTargetRequest, MoveChildrenToParentRequest,
-    MoveChildrenToParentResponse, MoveNodeRequest, NodeCollectionsRequest, NodeData, NodeDeleted,
-    NodeEvent, NodeListResponse, NodeReference, NodeReferenceListResponse, NodeResponse,
-    NodeTreeResponse, OptionalNodeResponse, OptionalStringClear, OptionalTimestampClear,
-    QueryNodesSimpleRequest, RelationshipDeletedPayload, RelationshipPayload,
-    RemoveNodeFromCollectionRequest, RenameCollectionRequest, ReorderNodeRequest,
-    ReorderNodeResponse, SchemaParamsRequest, SchemaResultResponse, SearchRequest,
-    UpdateNodeRequest, UpdateNodesBatchRequest, UpdateNodesBatchResponse, UpdateTaskNodeRequest,
-    UpsertNodeWithParentRequest, WatchRequest,
+    DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse,
+    DeleteRelationshipRequest, DeleteRelationshipResponse, Empty, ExecuteQueryRequest,
+    ExportMarkdownRequest, ExportMarkdownResponse, FindCollectionByPathRequest,
+    FindDuplicateRequest, GetAllCollectionsRequest, GetAllSchemasRequest, GetChildrenRequest,
+    GetChildrenTreeRequest, GetCollectionByNameRequest, GetNodeRelationshipsRequest,
+    GetNodeRelationshipsResponse, GetNodeRequest, GetNodesBatchRequest, GetNodesBatchResponse,
+    GetRelatedNodesRequest, GetRelatedNodesResponse, GetRootsRequest, GetSchemaDefinitionRequest,
+    MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
+    MoveChildrenToParentRequest, MoveChildrenToParentResponse, MoveNodeRequest,
+    NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse, NodeReference,
+    NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
+    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
+    RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
+    RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SchemaParamsRequest,
+    SchemaResultResponse, SearchRequest, UpdateNodeRequest, UpdateNodesBatchRequest,
+    UpdateNodesBatchResponse, UpdateRelationshipPropertiesRequest,
+    UpdateRelationshipPropertiesResponse, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+    WatchRequest,
 };
 
 /// gRPC adapter that owns shared handles to the core services.
@@ -839,6 +841,50 @@ impl GrpcNodeService for NodeServiceImpl {
             relationship_name: output.relationship_name,
             target_id: output.target_id,
         }))
+    }
+
+    async fn delete_relationship(
+        &self,
+        request: Request<DeleteRelationshipRequest>,
+    ) -> Result<Response<DeleteRelationshipResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let input = rel_ops::DeleteRelInput {
+            source_id: req.source_id,
+            relationship_name: req.relationship_name,
+            target_id: req.target_id,
+        };
+
+        rel_ops::delete_relationship(&this.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        Ok(Response::new(DeleteRelationshipResponse {}))
+    }
+
+    async fn update_relationship_properties(
+        &self,
+        request: Request<UpdateRelationshipPropertiesRequest>,
+    ) -> Result<Response<UpdateRelationshipPropertiesResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let properties: serde_json::Value = serde_json::from_str(&req.properties_json)
+            .map_err(|e| Status::invalid_argument(format!("invalid properties_json: {e}")))?;
+
+        let input = rel_ops::UpdateRelPropsInput {
+            source_id: req.source_id,
+            relationship_name: req.relationship_name,
+            target_id: req.target_id,
+            properties,
+        };
+
+        rel_ops::update_relationship_properties(&this.node_service, input)
+            .await
+            .map_err(ops_error_to_status)?;
+
+        Ok(Response::new(UpdateRelationshipPropertiesResponse {}))
     }
 
     async fn get_related_nodes(
@@ -1915,7 +1961,8 @@ mod tests {
                 parent_id: None,
                 collection: None,
                 lifecycle_status: None,
-                properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#.to_string(),
+                properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#
+                    .to_string(),
                 position: None,
             }))
             .await
@@ -1934,7 +1981,10 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(hit.node_id, alice_id, "a colliding email must surface the existing person");
+        assert_eq!(
+            hit.node_id, alice_id,
+            "a colliding email must surface the existing person"
+        );
         assert!(hit.node_data.is_some());
 
         // A never-seen email → empty response, not an error.

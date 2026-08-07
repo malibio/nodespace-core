@@ -10,12 +10,13 @@ use crate::types::{
 };
 use chrono::{DateTime, Utc};
 use nodespace_proto::nodespace::{
-    ChildMove, CreateMentionRequest, CreateNodeRequest, DeleteMentionRequest, DeleteNodeRequest,
-    GetChildrenRequest, GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
+    ChildMove, CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest,
+    DeleteMentionRequest, DeleteNodeRequest, DeleteRelationshipRequest, GetChildrenRequest,
+    GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
     GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionTargetRequest,
     MoveChildrenToParentRequest, MoveNodeRequest, NodeData, NodeResponse, OptionalStringClear,
     OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest, UpdateNodeRequest,
-    UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+    UpdateRelationshipPropertiesRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -892,6 +893,97 @@ pub async fn get_node_relationships(
         details: Some(json),
         conflict_data: None,
     })
+}
+
+/// Create a schema-declared typed relationship edge between two nodes (issue #1918).
+///
+/// Wraps `rel_ops::create_relationship`: the daemon validates the relationship
+/// against the source node's schema (target type, cardinality) before writing.
+/// `edge_data` carries the edge's `edge_fields` values as a JSON object; omit or
+/// pass `null` for a bare edge. Returns `()` — the frontend reloads via
+/// `get_node_relationships` to see the new edge in context.
+#[tauri::command]
+pub async fn create_relationship(
+    client: State<'_, GrpcClient>,
+    source_id: String,
+    relationship_name: String,
+    target_id: String,
+    edge_data: Option<Value>,
+) -> Result<(), CommandError> {
+    let edge_data_json = match edge_data {
+        Some(v) if !v.is_null() => Some(serde_json::to_string(&v).map_err(|e| CommandError {
+            message: format!("Failed to serialize edge_data: {}", e),
+            code: "SERIALIZE_ERROR".to_string(),
+            details: None,
+            conflict_data: None,
+        })?),
+        _ => None,
+    };
+    let mut c = client.client().await;
+    c.create_relationship(Request::new(CreateRelationshipRequest {
+        source_id,
+        relationship_name,
+        target_id,
+        edge_data_json,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
+}
+
+/// Delete a schema-declared typed relationship edge (issue #1918).
+///
+/// Wraps `rel_ops::delete_relationship`. Idempotent — deleting a nonexistent
+/// edge succeeds. The daemon rejects removing the last edge of a `required`
+/// relationship; that surfaces here as a `CommandError` the caller should show.
+#[tauri::command]
+pub async fn delete_relationship(
+    client: State<'_, GrpcClient>,
+    source_id: String,
+    relationship_name: String,
+    target_id: String,
+) -> Result<(), CommandError> {
+    let mut c = client.client().await;
+    c.delete_relationship(Request::new(DeleteRelationshipRequest {
+        source_id,
+        relationship_name,
+        target_id,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
+}
+
+/// Replace the edge attributes on an existing typed relationship edge (issue #1918).
+///
+/// Wraps `rel_ops::update_relationship_properties`: overwrites the edge's stored
+/// `properties` (its `edge_fields` values) wholesale with `properties`. The edge
+/// must already exist — a missing edge surfaces as a `CommandError`. Edits values
+/// only; endpoints are immutable (remove + re-add to re-point an edge).
+#[tauri::command]
+pub async fn update_relationship_properties(
+    client: State<'_, GrpcClient>,
+    source_id: String,
+    relationship_name: String,
+    target_id: String,
+    properties: Value,
+) -> Result<(), CommandError> {
+    let properties_json = serde_json::to_string(&properties).map_err(|e| CommandError {
+        message: format!("Failed to serialize properties: {}", e),
+        code: "SERIALIZE_ERROR".to_string(),
+        details: None,
+        conflict_data: None,
+    })?;
+    let mut c = client.client().await;
+    c.update_relationship_properties(Request::new(UpdateRelationshipPropertiesRequest {
+        source_id,
+        relationship_name,
+        target_id,
+        properties_json,
+    }))
+    .await
+    .map_err(status_to_command_error)?;
+    Ok(())
 }
 
 /// Delete a mention relationship between two nodes

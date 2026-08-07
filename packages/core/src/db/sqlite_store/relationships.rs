@@ -1113,6 +1113,41 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Replace the stored `properties` JSON on a single relationship edge.
+    ///
+    /// Targets the edge identified by (`source_id` = `in_node`, `target_id` =
+    /// `out_node`, `rel_type`) and overwrites its `properties` column wholesale
+    /// (edge attributes are a small self-contained blob; callers that want a
+    /// merge read-modify-write at a higher layer). Bumps `version` and
+    /// `modified_at` so the change participates in sync like any other edge
+    /// write. Returns the edge id when a row was updated, or `None` when no such
+    /// edge exists (so the caller can surface a not-found rather than silently
+    /// succeeding on a no-op UPDATE).
+    pub async fn update_relationship_properties(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        rel_type: &str,
+        properties: &serde_json::Value,
+    ) -> Result<Option<String>> {
+        let rel_id = self
+            .get_relationship_id(source_id, target_id, rel_type)
+            .await?;
+        let Some(rel_id) = rel_id else {
+            return Ok(None);
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
+        self.db
+            .execute(
+                "UPDATE relationship SET properties = ?1, version = version + 1, modified_at = ?2 WHERE id = ?3",
+                libsql::params![props_json, now, rel_id.clone()],
+            )
+            .await
+            .context("Failed to update relationship properties")?;
+        Ok(Some(rel_id))
+    }
+
     pub async fn get_nodes_by_relationship(
         &self,
         node_id: &str,

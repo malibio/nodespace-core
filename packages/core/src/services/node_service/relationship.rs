@@ -793,6 +793,78 @@ impl NodeService {
         // Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
+        // Required-relationship last-edge protection (issue #1918): a schema
+        // relationship declared `required: true` must always retain at least one
+        // edge — deleting its final edge would leave the node violating its own
+        // schema. Reject only when the targeted edge actually exists AND it is the
+        // last remaining edge of that relationship on this source. Removing one of
+        // several is fine; deleting a nonexistent edge stays a harmless no-op.
+        // Built-in structural relationships are not schema-declared and are exempt.
+        let is_builtin = matches!(
+            relationship_name,
+            "member_of" | "has_child" | "mentions" | "has_role"
+        );
+        if !is_builtin {
+            if let Some(source) = self.get_node(source_id).await? {
+                if let Some(schema_node) = self.get_node(&source.node_type).await? {
+                    // A present-but-malformed `relationships` array must not
+                    // silently disable the guard — that would fail open on the
+                    // exact invariant this protects. Warn if parsing fails.
+                    let relationships: Vec<crate::models::schema::SchemaRelationship> =
+                        match schema_node.properties.get("relationships") {
+                            Some(raw) => serde_json::from_value(raw.clone()).unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    schema = %source.node_type,
+                                    error = %e,
+                                    "could not parse schema relationships while checking required last-edge protection; treating as none"
+                                );
+                                Vec::new()
+                            }),
+                            None => Vec::new(),
+                        };
+                    // `required` is an outbound-declaration property; only enforce
+                    // it for a forward (`direction: out`) relationship so an
+                    // inbound-declared one never counts the wrong edge set.
+                    let is_required = relationships
+                        .iter()
+                        .find(|r| r.name == relationship_name)
+                        .map(|r| {
+                            r.required == Some(true)
+                                && r.direction == crate::models::schema::RelationshipDirection::Out
+                        })
+                        .unwrap_or(false);
+                    if is_required {
+                        let edge_exists = self
+                            .store
+                            .relationship_exists(source_id, target_id, relationship_name)
+                            .await
+                            .map_err(|e| {
+                                NodeServiceError::query_failed(format!(
+                                    "Failed to check relationship existence: {}",
+                                    e
+                                ))
+                            })?;
+                        let total = self
+                            .store
+                            .check_relationship_exists(source_id, relationship_name)
+                            .await
+                            .map_err(|e| {
+                                NodeServiceError::query_failed(format!(
+                                    "Failed to count relationship edges: {}",
+                                    e
+                                ))
+                            })?;
+                        if edge_exists && total <= 1 {
+                            return Err(NodeServiceError::invalid_update(format!(
+                                "Relationship '{}' is required and this is its last edge; add another target before removing this one",
+                                relationship_name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
         let rel_id = self
             .store
             .get_relationship_id(source_id, target_id, relationship_name)
@@ -819,6 +891,70 @@ impl NodeService {
                 relationship_type: relationship_name.to_string(),
             });
         }
+
+        Ok(())
+    }
+
+    /// Replace the stored edge attributes on an existing typed relationship.
+    ///
+    /// Overwrites the `properties` JSON of the edge (`source_id` → `target_id`,
+    /// of type `relationship_name`) wholesale with `properties`. The edge must
+    /// already exist — updating a nonexistent edge is a caller error, surfaced
+    /// as `invalid_update`, not a silent no-op. Edits values only: it neither
+    /// creates, moves, nor deletes the edge, and never changes its endpoints
+    /// (issue #1918, relationship-viewer editing). Emits `RelationshipUpdated`
+    /// so the change syncs like any other edge write.
+    pub async fn update_relationship_properties(
+        &self,
+        source_id: &str,
+        relationship_name: &str,
+        target_id: &str,
+        properties: serde_json::Value,
+    ) -> Result<(), NodeServiceError> {
+        // Edge attributes are a JSON object (mirrors `edge_data` on create, which
+        // defaults to `{}`). Reject a scalar/array/null so an edit can't replace a
+        // structured edge-fields blob with a shape `get_related_nodes_with_edges`
+        // consumers don't expect.
+        if !properties.is_object() {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Relationship properties must be a JSON object, got {}",
+                match &properties {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "a boolean",
+                    serde_json::Value::Number(_) => "a number",
+                    serde_json::Value::String(_) => "a string",
+                    serde_json::Value::Array(_) => "an array",
+                    serde_json::Value::Object(_) => "an object",
+                }
+            )));
+        }
+        let rel_id = self
+            .store
+            .update_relationship_properties(source_id, target_id, relationship_name, &properties)
+            .await
+            .map_err(|e| {
+                NodeServiceError::query_failed(format!(
+                    "Failed to update relationship properties: {}",
+                    e
+                ))
+            })?;
+
+        let Some(rel_id) = rel_id else {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Relationship '{}' from '{}' to '{}' does not exist",
+                relationship_name, source_id, target_id
+            )));
+        };
+
+        self.emit_event(DomainEvent::RelationshipUpdated {
+            relationship: crate::db::events::RelationshipEvent::new(
+                rel_id,
+                source_id,
+                target_id,
+                relationship_name.to_string(),
+                properties,
+            ),
+        });
 
         Ok(())
     }
