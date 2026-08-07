@@ -31,3 +31,27 @@ export const CORE_NODE_TYPES = new Set([
 export function isCustomSchemaType(nodeType: string): boolean {
   return !CORE_NODE_TYPES.has(nodeType);
 }
+
+/**
+ * The value a viewer header shows while it is NOT focused, with markdown header syntax
+ * stripped (same rule as formatTabTitle).
+ *
+ * Which field wins depends on whether the node's schema is title_template-driven:
+ *
+ * - `hasTitleTemplate` — `title` is computed from the node's properties and is a genuinely
+ *   different value from `content`, so it is the only valid display value. There is no
+ *   fallback to `content`: an unresolved title renders empty and the read-only header shows
+ *   the titleTemplate placeholder instead (matching node-row.svelte's inline rendering).
+ * - otherwise — `content` is the source of truth. The store's cached `title` is only
+ *   refreshed by a backend round-trip, while optimistic content updates leave it untouched,
+ *   so preferring `title` here would surface a stale value (e.g. a title captured mid-slash
+ *   command, before the node's type conversion) whenever the header loses focus.
+ */
+export function computeHeaderDisplayValue(
+  node: { title?: string | null; content?: string | null } | null | undefined,
+  hasTitleTemplate: boolean
+): string {
+  const raw = hasTitleTemplate ? (node?.title ?? '') : (node?.content ?? '');
+  if (!raw) return '';
+  return raw.replace(/^#+\s*/, '');
+}
