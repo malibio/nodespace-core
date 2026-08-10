@@ -24,7 +24,10 @@
 //!
 //! Call `get_core_schemas()` to get all core schema definitions.
 
-use crate::models::schema::{EnumValue, SchemaField, SchemaProtectionLevel};
+use crate::models::schema::{
+    EnumValue, RelationshipCardinality, RelationshipDirection, SchemaField, SchemaProtectionLevel,
+    SchemaRelationship,
+};
 use crate::models::SchemaNode;
 use chrono::Utc;
 
@@ -74,7 +77,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(true),
                     extensible: Some(true),
                     default: Some(serde_json::json!("open")),
-                    description: Some("Task status".to_string()),
+                    description: Some("Status".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -105,7 +108,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: Some(true),
                     default: None,
-                    description: Some("Task priority".to_string()),
+                    description: Some("Priority".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -233,7 +236,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(true),
                     extensible: Some(true),
                     default: Some(serde_json::json!("planning")),
-                    description: Some("Project status".to_string()),
+                    description: Some("Status".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -264,7 +267,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: Some(true),
                     default: None,
-                    description: Some("Project priority".to_string()),
+                    description: Some("Priority".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -282,7 +285,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Project start date".to_string()),
+                    description: Some("Start date".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -300,7 +303,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Project end date".to_string()),
+                    description: Some("End date".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -308,7 +311,21 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     unique_case_insensitive: None,
                 },
             ],
-            relationships: vec![],
+            // A project has many tasks; the inverse (a task's single project) is
+            // derived from this declaration, so `task` needs no entry of its own.
+            // Seeding persists this as a relationship-table edge between the schema
+            // nodes (see NodeService seeding / set_schema_declarations).
+            relationships: vec![SchemaRelationship {
+                name: "tasks".to_string(),
+                target_type: Some("task".to_string()),
+                direction: RelationshipDirection::Out,
+                cardinality: RelationshipCardinality::Many,
+                required: None,
+                reverse_name: Some("project".to_string()),
+                reverse_cardinality: Some(RelationshipCardinality::One),
+                edge_fields: None,
+                description: Some("Tasks belonging to this project".to_string()),
+            }],
             title_template: None,
             properties_header_summary_template: None,
         },
@@ -1403,6 +1420,28 @@ mod tests {
         assert!(task.get_field("status").is_some());
         assert!(task.get_field("priority").is_some());
         assert!(task.get_field("due_date").is_some());
+    }
+
+    #[test]
+    fn test_project_declares_tasks_relationship() {
+        let schemas = get_core_schemas();
+        let project = schemas.iter().find(|s| s.id == "project").unwrap();
+
+        // project has-many tasks; the task-side inverse is derived from this one
+        // declaration (task carries no relationships entry of its own).
+        assert_eq!(project.relationships.len(), 1);
+        let rel = &project.relationships[0];
+        assert_eq!(rel.name, "tasks");
+        assert_eq!(rel.target_type.as_deref(), Some("task"));
+        assert_eq!(rel.cardinality, RelationshipCardinality::Many);
+        assert_eq!(rel.reverse_name.as_deref(), Some("project"));
+        assert_eq!(rel.reverse_cardinality, Some(RelationshipCardinality::One));
+
+        let task = schemas.iter().find(|s| s.id == "task").unwrap();
+        assert!(
+            task.relationships.is_empty(),
+            "task's project link is the derived inverse, not its own declaration"
+        );
     }
 
     #[test]
