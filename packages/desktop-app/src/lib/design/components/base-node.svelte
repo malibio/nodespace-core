@@ -935,6 +935,7 @@
       }}
       role="textbox"
       aria-multiline="true"
+      aria-readonly="true"
     >{#if customViewContent}
         {@render customViewContent()}
       {:else}
