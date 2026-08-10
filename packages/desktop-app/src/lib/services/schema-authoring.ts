@@ -21,6 +21,11 @@ import type { Node } from '$lib/types';
  * frontend signal (schema field, `isCore`, field count) that distinguishes these
  * from primitive body-content types like `task`/`text`, so inferring the set would
  * silently drift as new Core types are added.
+ *
+ * `tool` is listed for constraint-consistency, but note its validation also
+ * requires a non-empty `handler` property — this content default alone does not
+ * make a bare `tool` creatable via "+New"; it just keeps the content rule uniform
+ * for the day a tool-creation path (with a handler) exists.
  */
 const NAME_AS_CONTENT_TYPES = new Set(['project', 'skill', 'collection', 'agent-guidance', 'tool']);
 
