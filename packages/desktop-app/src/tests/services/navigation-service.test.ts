@@ -16,6 +16,18 @@ import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
 
+// Full isolation from sibling test files: navigation-service resolves targets by
+// reading BOTH the singleton sharedNodeStore (getNode) and the singleton
+// structureTree (getParent). Neither is per-file, so nodes/parent-edges another
+// file leaves behind can skew the ancestor walk under vitest's `forks` pool —
+// the source of the intermittent "resolves to date ancestor" flakes. Clear both
+// before every test so each case starts from an empty graph. Runs before the
+// per-describe beforeEach hooks that set up each test's own fixtures.
+beforeEach(() => {
+  sharedNodeStore.clearAll();
+  structureTree.clear();
+});
+
 describe('NavigationService - Singleton Pattern', () => {
   it('getInstance returns the same instance', () => {
     const instance1 = NavigationService.getInstance();
