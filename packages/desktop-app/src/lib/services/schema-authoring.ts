@@ -10,23 +10,42 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { backendAdapter } from '$lib/services/backend-adapter';
+import { humanizeSchemaId } from '$lib/plugins/schema-plugin-loader';
 import type { Node } from '$lib/types';
 
 /**
- * Mint a fresh, empty instance of the given schema type and return the created
- * node.
+ * Core types whose `content` field IS the node's name, not body text — their
+ * `NodeBehavior::validate()` rejects empty content. Creating one with `content: ''`
+ * (the default for body-content types) always fails validation, so these seed a
+ * type-identifying placeholder instead. Kept as an explicit list: there is no
+ * frontend signal (schema field, `isCore`, field count) that distinguishes these
+ * from primitive body-content types like `task`/`text`, so inferring the set would
+ * silently drift as new Core types are added.
  *
- * The node is created as a root (`parentId: null`) with empty content and no
- * properties; the schema-driven form UI fills in the fields once the node is
- * opened. `nodeType` is the schema's id — the same key `QueryNodeViewer` queries
- * on — so the new node matches that type's result list.
+ * `tool` is listed for constraint-consistency, but note its validation also
+ * requires a non-empty `handler` property — this content default alone does not
+ * make a bare `tool` creatable via "+New"; it just keeps the content rule uniform
+ * for the day a tool-creation path (with a handler) exists.
+ */
+const NAME_AS_CONTENT_TYPES = new Set(['project', 'skill', 'collection', 'agent-guidance', 'tool']);
+
+/**
+ * Mint a fresh instance of the given schema type and return the created node.
+ *
+ * The node is created as a root (`parentId: null`) with no properties; the
+ * schema-driven form UI fills in the fields once the node is opened. `nodeType`
+ * is the schema's id — the same key `QueryNodeViewer` queries on — so the new
+ * node matches that type's result list. Body-content types start empty ("start
+ * typing"); name-as-content Core types (see `NAME_AS_CONTENT_TYPES`) seed
+ * `"Untitled {Type}"` so they pass their non-empty-content validation.
  */
 export async function createSchemaInstance(typeId: string): Promise<Node> {
   const newId = uuidv4();
+  const content = NAME_AS_CONTENT_TYPES.has(typeId) ? `Untitled ${humanizeSchemaId(typeId)}` : '';
   await backendAdapter.createNode({
     id: newId,
     nodeType: typeId,
-    content: '',
+    content,
     properties: {},
     mentions: [],
     parentId: null,

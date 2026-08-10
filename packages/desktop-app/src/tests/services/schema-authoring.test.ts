@@ -49,6 +49,37 @@ describe('createSchemaInstance', () => {
     expect(createArg.id.length).toBeGreaterThan(0);
   });
 
+  it('seeds "Untitled {Type}" content for name-as-content Core types', async () => {
+    // These types' behaviors reject empty content, so the sidebar "+New" default
+    // of '' always failed validation; they must get a type-identifying placeholder.
+    const cases: Array<[string, string]> = [
+      ['project', 'Untitled Project'],
+      ['skill', 'Untitled Skill'],
+      ['collection', 'Untitled Collection'],
+      ['agent-guidance', 'Untitled Agent Guidance'],
+      ['tool', 'Untitled Tool'],
+    ];
+    for (const [typeId, expected] of cases) {
+      createNodeMock.mockClear();
+      await createSchemaInstance(typeId);
+      expect(createNodeMock.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ nodeType: typeId, content: expected })
+      );
+    }
+  });
+
+  it('leaves body-content and custom types with empty content', async () => {
+    // Primitives ("start typing" state) and titleTemplate/custom types must be
+    // unaffected — empty content is correct for them.
+    for (const typeId of ['text', 'header', 'task', 'code-block', 'invoice']) {
+      createNodeMock.mockClear();
+      await createSchemaInstance(typeId);
+      expect(createNodeMock.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ nodeType: typeId, content: '' })
+      );
+    }
+  });
+
   it('returns the hydrated node fetched by the generated id', async () => {
     const returned = await createSchemaInstance('invoice');
 

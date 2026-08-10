@@ -78,7 +78,7 @@ export const PLUGIN_PRIORITIES = {
  * humanizeSchemaId('sales-invoice') // 'Sales Invoice'
  * ```
  */
-function humanizeSchemaId(id: string): string {
+export function humanizeSchemaId(id: string): string {
   return (
     id
       // Insert space before uppercase letters (camelCase → camel Case)
