@@ -261,9 +261,10 @@ async fn collect_related(
 ///
 /// Each related node carries its connecting edge's `properties` so the viewer can
 /// render edge attributes. Built-in structural relationships (`has_child`,
-/// `mentions`, `member_of`, `has_role`) are excluded. Declared outbound groups are
-/// always returned (even when empty, so the viewer can add the first edge);
-/// inbound groups are returned only when they have at least one edge.
+/// `mentions`, `member_of`, `has_role`) are excluded. Declared groups are always
+/// returned on both sides — outbound and inbound — even when empty, so the viewer
+/// can add the first edge and callers can distinguish a declared-but-unlinked
+/// relationship from none at all.
 pub async fn get_node_relationships(
     node_service: &Arc<NodeService>,
     node_id: &str,
