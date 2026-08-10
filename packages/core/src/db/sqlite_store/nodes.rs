@@ -2131,6 +2131,7 @@ impl SqliteStore {
         id: &str,
         expected_version: i64,
         update: crate::models::TaskNodeUpdate,
+        title: Option<String>,
     ) -> Result<crate::models::TaskNode> {
         let current = self
             .get_node(id)
@@ -2231,12 +2232,19 @@ impl SqliteStore {
         ];
 
         if let Some(ref content) = update.content {
-            sql.push_str(", content = ?4");
+            sql.push_str(&format!(", content = ?{}", sql_params.len() + 1));
             sql_params.push(libsql::Value::Text(content.clone()));
-            sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
-        } else {
-            sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
         }
+
+        // Persist the recomputed title (when the caller determined content changed)
+        // in the same UPDATE as content, so a task's indexed `title` column never
+        // goes stale relative to its content.
+        if let Some(ref new_title) = title {
+            sql.push_str(&format!(", title = ?{}", sql_params.len() + 1));
+            sql_params.push(libsql::Value::Text(new_title.clone()));
+        }
+
+        sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
         sql_params.push(libsql::Value::Text(id.to_string()));
 
         self.db

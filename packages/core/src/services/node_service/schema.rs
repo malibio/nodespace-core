@@ -216,8 +216,36 @@ impl NodeService {
             ));
         }
 
+        // Sync the indexed `title` column when content actually changes, mirroring
+        // the generic update path (see `update_with_version_check_returning_node`
+        // and `update_schema_node` in crud.rs). The built-in "task" schema ships
+        // with no `title_template` (core_schemas.rs), so `compute_title` falls
+        // through to `strip_markdown(content)` today and status/priority/due_date/
+        // assignee/started_at/completed_at-only updates correctly leave title
+        // untouched. This guard does NOT hold if a `title_template` is ever set on
+        // the task schema (compute_title would then also depend on properties,
+        // which this path never re-syncs, and would need the *post-merge* node
+        // rather than this pre-update snapshot) — tracked in #2014, not fixed here
+        // since it's out of scope for the content-only staleness this issue reported.
+        let title_update = if let Some(ref new_content) = update.content {
+            let existing = self
+                .get_node(id)
+                .await?
+                .ok_or_else(|| NodeServiceError::node_not_found(id))?;
+
+            if &existing.content != new_content {
+                let mut updated = existing;
+                updated.content = new_content.clone();
+                self.compute_title(&updated, None).await?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.store
-            .update_task_node(id, expected_version, update)
+            .update_task_node(id, expected_version, update, title_update)
             .await
             .map_err(|e| {
                 // Get the full error chain for pattern matching
