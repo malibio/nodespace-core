@@ -887,10 +887,31 @@ export class SharedNodeStore {
    * Called by pane-content before mounting any viewer so every viewer mounts
    * with the guarantee that sharedNodeStore.getNode(nodeId) is defined.
    */
+  /**
+   * Load a node into the store on demand, returning it (or a virtual date node,
+   * or undefined). Concurrent calls for the same id are de-duplicated: a page with
+   * many `[[id]]` references to the same uncached node issues ONE backend fetch,
+   * not one per reference. The in-flight promise is tracked by id and cleared when
+   * it settles (after which the node is cached, so later calls hit the cache).
+   */
   async ensureNode(nodeId: string): Promise<Node | undefined> {
     const cached = this.nodes.get(nodeId);
     if (cached) return cached;
 
+    const existing = this.inFlightEnsures.get(nodeId);
+    if (existing) return existing;
+
+    const inFlight = this.fetchAndCacheNode(nodeId).finally(() => {
+      this.inFlightEnsures.delete(nodeId);
+    });
+    this.inFlightEnsures.set(nodeId, inFlight);
+    return inFlight;
+  }
+
+  /** In-flight `ensureNode` fetches, keyed by node id (see `ensureNode`). */
+  private inFlightEnsures = new Map<string, Promise<Node | undefined>>();
+
+  private async fetchAndCacheNode(nodeId: string): Promise<Node | undefined> {
     const epoch = this.databaseEpoch;
     const fetched = await backendAdapter.getNode(nodeId);
     // ADR-053: the active database switched while this read was in flight — the

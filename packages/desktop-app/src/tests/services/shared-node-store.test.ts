@@ -2460,4 +2460,59 @@ describe('SharedNodeStore', () => {
       });
     });
   });
+
+  describe('ensureNode in-flight de-duplication', () => {
+    const makeNode = (id: string): Node => ({
+      id,
+      nodeType: 'text',
+      content: `content-${id}`,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      version: 1,
+      properties: {},
+      mentions: []
+    });
+
+    it('issues a single backend fetch for concurrent ensureNode calls on the same id', async () => {
+      let resolveGet: (n: Node | null) => void = () => {};
+      const getPromise = new Promise<Node | null>((r) => (resolveGet = r));
+      const spy = vi.spyOn(backendAdapter, 'getNode').mockReturnValue(getPromise);
+
+      // Many `[[n1]]` references mount concurrently and each call ensureNode('n1').
+      const p1 = store.ensureNode('n1');
+      const p2 = store.ensureNode('n1');
+      const p3 = store.ensureNode('n1');
+
+      resolveGet(makeNode('n1'));
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+
+      expect(spy).toHaveBeenCalledTimes(1); // one fetch, not three
+      expect(r1?.id).toBe('n1');
+      expect(r2).toEqual(r1);
+      expect(r3).toEqual(r1);
+    });
+
+    it('fetches again only on a later cache miss (in-flight entry cleared once settled)', async () => {
+      const spy = vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('n2'));
+
+      await store.ensureNode('n2'); // fetch → caches n2
+      await store.ensureNode('n2'); // cache hit → no fetch
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(store.getNode('n2')?.id).toBe('n2');
+    });
+
+    it('does not wedge future loads when a fetch rejects', async () => {
+      const spy = vi
+        .spyOn(backendAdapter, 'getNode')
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(makeNode('n3'));
+
+      await expect(store.ensureNode('n3')).rejects.toThrow('boom');
+      // The in-flight entry was cleared on rejection, so a retry issues a fresh fetch.
+      const retried = await store.ensureNode('n3');
+      expect(retried?.id).toBe('n3');
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+  });
 });
