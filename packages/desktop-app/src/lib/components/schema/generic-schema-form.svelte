@@ -31,6 +31,7 @@
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import { loadNodeRelationshipsView } from '$lib/services/relationship-viewer-service';
   import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   const log = createLogger('GenericSchemaForm');
@@ -42,6 +43,30 @@
   let showRelationships = $state(false);
 
   let { nodeId, schema, autoOpen = false }: { nodeId: string; schema: SchemaNode; autoOpen?: boolean } = $props();
+
+  // Gate the Relationships trigger on whether this node's type actually has any
+  // typed relationship — otherwise it opens only to say "no typed relationships".
+  // The viewer's own load resolves both sides (outbound declared on this schema +
+  // inbound declared by another schema targeting this type) into one group per
+  // relationship, so we run it once per node and gate on whether any group exists.
+  // Default hidden; fail-open on a query error so a transient failure never hides a
+  // real feature.
+  let hasRelationships = $state(false);
+  let relCheckedFor = '';
+  $effect(() => {
+    const id = nodeId;
+    if (relCheckedFor === id) return;
+    relCheckedFor = id;
+    hasRelationships = false;
+    loadNodeRelationshipsView(id)
+      .then((view) => {
+        if (nodeId === id) hasRelationships = view.groups.length > 0;
+      })
+      .catch((err) => {
+        log.error('Failed to check relationships for the trigger gate', err);
+        if (nodeId === id) hasRelationships = true;
+      });
+  });
 
   // Initial value only (IIFE avoids Svelte's state_referenced_locally warning) — after
   // mount isOpen is fully user-controlled via bind:open below.
@@ -241,7 +266,9 @@
     </Collapsible.Root>
     {/if}
 
-    <!-- Relationships entry point (read-only viewer, issue #1918) -->
+    <!-- Relationships entry point (read-only viewer, issue #1918). Gated on the
+         type actually having typed relationships (outbound declared or inbound). -->
+    {#if hasRelationships}
     <button
       type="button"
       class="flex w-full items-center gap-2 py-3 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
@@ -250,6 +277,7 @@
       <WaypointsIcon class="h-4 w-4" />
       <span>Relationships</span>
     </button>
+    {/if}
   </div>
 
   <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
