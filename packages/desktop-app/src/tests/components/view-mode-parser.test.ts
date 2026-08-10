@@ -84,6 +84,13 @@ describe('view-mode-parser parseContent (real path)', () => {
     expect(r.refs).toEqual([]); // fenced content is literal
     expect(r.text).toContain(`[[${ID_A}]]`);
   });
+
+  it('renders a fenced block with an interior blank line without leaking the sentinel', () => {
+    const r = collect(parseContent('```\nline1\n\nline2\n```', true, false));
+    expect(r.text).toContain('line1');
+    expect(r.text).toContain('line2');
+    expect(r.text).not.toContain('BLANK'); // the pre-lex blank-line sentinel is restored, not leaked
+  });
 });
 
 describe('flattenToText', () => {

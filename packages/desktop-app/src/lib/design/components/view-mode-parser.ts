@@ -227,8 +227,10 @@ export function processToken(token: Token, blankPlaceholder: string, blockElemen
     case 'code': {
       // Fenced code block: render literally. A `[[id]]` inside a fence is not a
       // wikilink, so emit the raw text (fence markers included, as before) split
-      // only on line breaks — NOT through the ref splitter.
-      const raw = (token as Tokens.Code).raw ?? '';
+      // only on line breaks — NOT through the ref splitter. Restore the blank-line
+      // sentinel the pre-lex step injected across the whole content (line breaks in
+      // fenced code are real, not a wikilink concern) before splitting.
+      const raw = ((token as Tokens.Code).raw ?? '').split(blankPlaceholder).join('\n');
       raw.split('\n').forEach((line, i) => {
         if (i > 0) nodes.push({ type: 'br' });
         if (line.length > 0) nodes.push({ type: 'text', content: line });
