@@ -261,9 +261,10 @@ async fn collect_related(
 ///
 /// Each related node carries its connecting edge's `properties` so the viewer can
 /// render edge attributes. Built-in structural relationships (`has_child`,
-/// `mentions`, `member_of`, `has_role`) are excluded. Declared outbound groups are
-/// always returned (even when empty, so the viewer can add the first edge);
-/// inbound groups are returned only when they have at least one edge.
+/// `mentions`, `member_of`, `has_role`) are excluded. Declared groups are always
+/// returned on both sides — outbound and inbound — even when empty, so the viewer
+/// can add the first edge and callers can distinguish a declared-but-unlinked
+/// relationship from none at all.
 pub async fn get_node_relationships(
     node_service: &Arc<NodeService>,
     node_id: &str,
@@ -296,7 +297,7 @@ pub async fn get_node_relationships(
             }
             // Emit the group even when it has no edges yet: an empty declared
             // outbound relationship still needs to render so the viewer can add
-            // its first edge. (Inbound groups below keep skipping empties.)
+            // its first edge. The inbound branch below is symmetric.
             let related = collect_related(node_service, node_id, &rel.name, "out").await?;
             let count = related.len();
             groups.push(RelationshipGroup {
@@ -334,9 +335,11 @@ pub async fn get_node_relationships(
         // both declaring `assigned_to → person` would each surface the other's
         // edges under the wrong group and double the count.
         related.retain(|r| r.node_type == source_type);
-        if related.is_empty() {
-            continue;
-        }
+        // Emit the group even with no edges yet — symmetric with the outbound
+        // branch above — so a type reached only through a derived inbound
+        // relationship (e.g. `task`, whose `project` link is declared outbound on
+        // `project`) still surfaces the relationship, and the viewer can add the
+        // first inbound edge from this side.
         let count = related.len();
         groups.push(RelationshipGroup {
             relationship_name: rel.name.clone(),

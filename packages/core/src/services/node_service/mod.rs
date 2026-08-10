@@ -4888,6 +4888,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_node_relationships_emits_empty_declared_groups() {
+        // A declared relationship must surface even with zero edges — on BOTH
+        // sides — so the viewer can add the first edge and the visibility gate
+        // (#2007) can tell "declared but unlinked" from "no relationship at all".
+        // Regression for the inbound branch, which previously skipped empties
+        // while the outbound branch emitted them.
+        let (service, _temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+        let store = service.store();
+
+        store
+            .create_node(
+                Node::new_with_id(
+                    "widget".to_string(),
+                    "schema".to_string(),
+                    "Widget".to_string(),
+                    serde_json::json!({ "fields": [], "relationships": [] }),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .create_node(
+                Node::new_with_id(
+                    "gadget".to_string(),
+                    "schema".to_string(),
+                    "Gadget".to_string(),
+                    serde_json::json!({ "fields": [] }),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let declarations: Vec<crate::models::schema::SchemaRelationship> =
+            serde_json::from_value(serde_json::json!([{
+                "name": "assigned_to",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "gadgets"
+            }]))
+            .unwrap();
+        service
+            .set_schema_relationships("gadget", &declarations)
+            .await
+            .unwrap();
+
+        // Instances with NO edge between them.
+        for (id, ty) in [("g1", "gadget"), ("w1", "widget")] {
+            store
+                .create_node(
+                    Node::new_with_id(id.to_string(), ty.to_string(), id.to_string(), serde_json::json!({})),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        // Outbound side (already worked): empty group present.
+        let out = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let og = out
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .expect("empty outbound declared group present");
+        assert_eq!(og.count, 0);
+        assert!(og.related.is_empty());
+
+        // Inbound side (the fix): the empty group is now emitted too, so a type
+        // reached only via a derived inbound relationship still surfaces it.
+        let inb = crate::ops::rel_ops::get_node_relationships(&service, "w1")
+            .await
+            .unwrap();
+        let ig = inb
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "in")
+            .expect("empty inbound declared group present");
+        assert_eq!(ig.count, 0);
+        assert!(ig.related.is_empty());
+        assert_eq!(ig.source_type, "gadget");
+    }
+
+    #[tokio::test]
     async fn test_get_node_relationships_inbound_multiple_sources_not_duplicated() {
         // Regression (#1918): the inbound query keys only on relationship_type,
         // so two schemas declaring the SAME relationship name targeting the same
