@@ -5550,4 +5550,93 @@ mod tests {
             "unchanged skill content must be untouched"
         );
     }
+
+    /// Regression test for #2006: unlike the generic update path
+    /// (`update_with_version_check_returning_node`), `NodeService::update_task_node`
+    /// never recomputed the indexed `title` column when `content` changed — it
+    /// delegated straight to `SqliteStore::update_task_node`, which only ever wrote
+    /// `content`/`properties`/`version`/`modified_at`. A task's `title` column could
+    /// go permanently stale relative to its `content`. Title must now track content,
+    /// via the same `compute_title` call the generic path uses.
+    #[tokio::test]
+    async fn update_task_node_recomputes_title_when_content_changes() {
+        use crate::models::TaskNodeUpdate;
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+
+        let id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Original task content".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let created = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(
+            created.title.as_deref(),
+            Some("Original task content"),
+            "sanity: title must be set on create"
+        );
+
+        let update = TaskNodeUpdate::new().with_content("Updated task content".to_string());
+        let task = service
+            .update_task_node(&id, created.version, update)
+            .await
+            .expect("update_task_node should succeed");
+        assert_eq!(task.content, "Updated task content");
+
+        let refetched = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(
+            refetched.title.as_deref(),
+            Some("Updated task content"),
+            "title must be recomputed from the new content, not left stale at the old value"
+        );
+    }
+
+    /// Companion to the above: a status-only update (no `content` in the
+    /// `TaskNodeUpdate`) must NOT recompute or touch `title` — mirrors the generic
+    /// path's change-guard, scoped to what's relevant for tasks (content is the
+    /// only field that affects a task's title).
+    #[tokio::test]
+    async fn update_task_node_status_only_does_not_change_title() {
+        use crate::models::{TaskNodeUpdate, TaskStatus};
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+
+        let id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Stable task content".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let created = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(created.title.as_deref(), Some("Stable task content"));
+
+        let update = TaskNodeUpdate::new().with_status(TaskStatus::Done);
+        let task = service
+            .update_task_node(&id, created.version, update)
+            .await
+            .expect("update_task_node should succeed");
+        assert_eq!(task.status, TaskStatus::Done);
+
+        let refetched = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(
+            refetched.title.as_deref(),
+            Some("Stable task content"),
+            "a status-only update must not touch title"
+        );
+    }
 }
