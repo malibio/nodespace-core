@@ -553,11 +553,18 @@
       }
       // Hydrate the new node into the shared store so the TableView row lookup
       // resolves it, then append its id so it shows without a full re-query.
+      // `setNode` fires the wildcard subscription above synchronously, which may
+      // already have appended this id (a default type view matches it), so guard
+      // the append against a duplicate — a duplicate key crashes the keyed #each
+      // in every view. (A saved query whose filters the new node fails is NOT
+      // appended by the subscription, so this append still shows it, as intended.)
       sharedNodeStore.setNode(created, {
         type: 'database',
         reason: 'query-node-viewer new instance',
       });
-      loadedNodeIds = [...loadedNodeIds, created.id];
+      if (!loadedNodeIds.includes(created.id)) {
+        loadedNodeIds = [...loadedNodeIds, created.id];
+      }
       log.debug('QueryNodeViewer: created new instance', { typeId, newId: created.id });
       // Open the new instance immediately for editing, reusing row-open behaviour.
       handleRowClick(created.id);
