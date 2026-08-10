@@ -25,6 +25,7 @@ import {
   applySorting,
   unevaluableFilters,
   executeQueryDefinition,
+  shouldShowCreatedNode,
 } from '$lib/components/query/query-node-model';
 
 function node(id: string, overrides: Partial<Node> & Record<string, unknown> = {}): Node {
@@ -329,5 +330,67 @@ describe('unevaluableFilters', () => {
   it('returns [] for no filters', () => {
     expect(unevaluableFilters(undefined)).toEqual([]);
     expect(unevaluableFilters([])).toEqual([]);
+  });
+});
+
+describe('shouldShowCreatedNode', () => {
+  const gate = (overrides: Partial<Parameters<typeof shouldShowCreatedNode>[1]> = {}) => ({
+    queryState: 'success',
+    targetType: 'task',
+    loadedNodeIds: [] as string[],
+    definition: { targetType: 'task', filters: [] } as QueryDefinition,
+    ...overrides,
+  });
+
+  it('integrates a settled, matching, not-yet-shown node', () => {
+    expect(shouldShowCreatedNode(node('t1', { nodeType: 'task' }), gate())).toBe(true);
+  });
+
+  it('rejects a node of a different type (scoped to the view)', () => {
+    expect(shouldShowCreatedNode(node('p1', { nodeType: 'project' }), gate())).toBe(false);
+  });
+
+  it('rejects a node already shown', () => {
+    expect(
+      shouldShowCreatedNode(node('t1', { nodeType: 'task' }), gate({ loadedNodeIds: ['t1'] }))
+    ).toBe(false);
+  });
+
+  it('rejects while the view is still loading (staleness)', () => {
+    expect(shouldShowCreatedNode(node('t1', { nodeType: 'task' }), gate({ queryState: 'loading' }))).toBe(
+      false
+    );
+  });
+
+  it('rejects when there is no resolved target type', () => {
+    expect(shouldShowCreatedNode(node('t1', { nodeType: 'task' }), gate({ targetType: '' }))).toBe(false);
+  });
+
+  it('accepts any type for an all-types (*) saved query', () => {
+    expect(
+      shouldShowCreatedNode(
+        node('x1', { nodeType: 'anything' }),
+        gate({ targetType: '*', definition: { targetType: '*', filters: [] } as QueryDefinition })
+      )
+    ).toBe(true);
+  });
+
+  it("honors the saved query's client-side filters", () => {
+    const withFilter: QueryDefinition = {
+      targetType: 'task',
+      filters: [{ type: 'property', operator: 'equals', property: 'status', value: 'open' }],
+    };
+    expect(
+      shouldShowCreatedNode(
+        node('t1', { nodeType: 'task', properties: { status: 'open' } }),
+        gate({ definition: withFilter })
+      )
+    ).toBe(true);
+    expect(
+      shouldShowCreatedNode(
+        node('t2', { nodeType: 'task', properties: { status: 'done' } }),
+        gate({ definition: withFilter })
+      )
+    ).toBe(false);
   });
 });
