@@ -42,6 +42,7 @@
     mergeViewConfig,
     buildMaterializedProperties,
     executeQueryDefinition,
+    shouldShowCreatedNode,
     unevaluableFilters,
     type QueryViewKind,
     type QueryViewConfigState,
@@ -160,6 +161,24 @@
   // discrete per-node lifecycle load — not a reactive-state watch (ADR-049).
   onMount(() => {
     loadAndQuery(nodeId);
+
+    // Fold in nodes created OUTSIDE this viewer (CLI, an agent tool call, another
+    // tab/window) without a remount. The daemon's `node:created` event is hydrated
+    // into `sharedNodeStore` by tauri-sync-listener (which already drops events from
+    // a non-active database), so a wildcard subscription surfaces every active-DB
+    // node change; we append the ones that belong to this view.
+    const unsubscribe = sharedNodeStore.subscribeAll((node) => {
+      // `shouldShowCreatedNode` gates on the settled view, dedup, type, and the
+      // query's filters. Gating on 'success' matters: during a (re)load
+      // `loadedNodeIds` is reset and repopulated wholesale and the load's own
+      // `setNode` calls fire this callback, so it avoids O(n^2) self-appends and
+      // keeps a node arriving mid-switch out of a stale view (the fresh query
+      // reconciles it).
+      if (shouldShowCreatedNode(node, { queryState, targetType, loadedNodeIds, definition: currentDefinition })) {
+        loadedNodeIds = [...loadedNodeIds, node.id];
+      }
+    });
+    return unsubscribe;
   });
 
   async function safeGetSchema(typeId: string): Promise<SchemaNode | null> {

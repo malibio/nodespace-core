@@ -276,3 +276,30 @@ export function executeQueryDefinition(nodes: Node[], definition: QueryDefinitio
   }
   return result;
 }
+
+/** State a viewer needs to decide whether an externally-created node belongs. */
+export interface CreatedNodeGate {
+  /** The viewer's query lifecycle — only a settled ('success') view integrates. */
+  queryState: string;
+  /** The resolved type this view shows (`'*'` = an all-types saved query). */
+  targetType: string;
+  /** Ids already displayed — a node already shown is never re-added. */
+  loadedNodeIds: readonly string[];
+  /** The active query definition, whose filters the node must also satisfy. */
+  definition: QueryDefinition;
+}
+
+/**
+ * Whether a node created outside the viewer (CLI, agent, another tab) should be
+ * folded into an already-open query view without a remount. Pure so the viewer's
+ * `sharedNodeStore.subscribeAll` handler stays a one-liner and this logic is
+ * testable in isolation. A node qualifies when the view has settled, the node
+ * isn't already shown, its type matches the view (or the view is `'*'`), and it
+ * passes the query's client-side filters (a default type view has none).
+ */
+export function shouldShowCreatedNode(node: Node, gate: CreatedNodeGate): boolean {
+  if (gate.queryState !== 'success' || !gate.targetType) return false;
+  if (gate.loadedNodeIds.includes(node.id)) return false;
+  if (gate.targetType !== '*' && node.nodeType !== gate.targetType) return false;
+  return executeQueryDefinition([node], gate.definition).length > 0;
+}
