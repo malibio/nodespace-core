@@ -36,6 +36,7 @@
   import { NodeAutocomplete, type NodeResult } from '$lib/components/ui/node-autocomplete';
   import { SlashCommandDropdown } from '$lib/components/ui/slash-command-dropdown';
   import { createLogger } from '$lib/utils/logger';
+  import { isActiveTextSelection } from '$lib/utils/text-selection';
   // Use shadcn Calendar component (official date picker pattern)
   import { Calendar } from '$lib/components/ui/calendar';
   import { type DateValue } from '@internationalized/date';
@@ -871,6 +872,11 @@
       tabindex="0"
       onclick={(e) => {
         if (readonly) return; // title_template nodes are not editable inline
+        // A click that ends a text drag-selection must NOT focus/collapse it —
+        // that's how cross-node prose selection is copied. A genuine click leaves
+        // the selection collapsed at the caret; a drag leaves a non-empty range.
+        // Only the collapsed case proceeds to click-to-edit-at-position.
+        if (isActiveTextSelection(window.getSelection())) return;
         // Capture click coordinates
         const clickX = e.pageX;
         const clickY = e.pageY;
@@ -927,7 +933,8 @@
           setTimeout(() => controller?.focus(), 0);
         }
       }}
-      role="button"
+      role="textbox"
+      aria-multiline="true"
     >{#if customViewContent}
         {@render customViewContent()}
       {:else}
