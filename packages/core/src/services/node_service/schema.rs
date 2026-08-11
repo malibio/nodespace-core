@@ -216,30 +216,34 @@ impl NodeService {
             ));
         }
 
-        // Sync the indexed `title` column when content actually changes, mirroring
-        // the generic update path (see `update_with_version_check_returning_node`
-        // and `update_schema_node` in crud.rs). The built-in "task" schema ships
-        // with no `title_template` (core_schemas.rs), so `compute_title` falls
-        // through to `strip_markdown(content)` today and status/priority/due_date/
-        // assignee/started_at/completed_at-only updates correctly leave title
-        // untouched. This guard does NOT hold if a `title_template` is ever set on
-        // the task schema (compute_title would then also depend on properties,
-        // which this path never re-syncs, and would need the *post-merge* node
-        // rather than this pre-update snapshot) — tracked in #2014, not fixed here
-        // since it's out of scope for the content-only staleness this issue reported.
-        let title_update = if let Some(ref new_content) = update.content {
-            let existing = self
-                .get_node(id)
-                .await?
-                .ok_or_else(|| NodeServiceError::node_not_found(id))?;
+        // Sync the indexed `title` column, mirroring the generic update path's guard
+        // (`content_changed || properties_changed`, see crud.rs). A task-schema
+        // `title_template` makes the title depend on task properties as well as
+        // content, so recomputing on content alone would leave the title stale after
+        // a property-only change, and a combined content+property update must compute
+        // from the *fully-merged* node (not a pre-update snapshot) or the title lands
+        // one write behind. We build the post-update node with the same shared merge
+        // the store performs and compute the title from it. When no template is set
+        // (the built-in "task" schema today), compute_title falls through to
+        // `strip_markdown(content)`, so a property-only update recomputes to the same
+        // value — a harmless no-op write, not a behavior change.
+        let existing = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(id))?;
 
-            if &existing.content != new_content {
-                let mut updated = existing;
-                updated.content = new_content.clone();
-                self.compute_title(&updated, None).await?
-            } else {
-                None
+        let content_changed = update
+            .content
+            .as_ref()
+            .is_some_and(|new_content| new_content != &existing.content);
+
+        let title_update = if content_changed || update.has_property_fields() {
+            let mut merged = existing;
+            if let Some(ref new_content) = update.content {
+                merged.content = new_content.clone();
             }
+            update.apply_to_properties(&mut merged.properties);
+            self.compute_title(&merged, None).await?
         } else {
             None
         };
