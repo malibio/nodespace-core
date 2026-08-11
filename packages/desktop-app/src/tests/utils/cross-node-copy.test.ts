@@ -180,13 +180,20 @@ describe('buildCrossNodeCopy', () => {
     const aView = viewOf('a');
     aView.innerHTML = 'see <a class="ns-noderef" data-node-id="z">Ref</a> now';
 
+    // Make the referenced node 'z' resolvable with distinct content, so that if
+    // the chip were (wrongly) treated as a spanned node it would inject a visible
+    // third line — this is what makes the length assertion below discriminate.
+    const resolve = (id: string) =>
+      id === 'z' ? { content: 'PHANTOM REFERENCED NODE', depth: 0 } : resolveNode(id);
+
     const range = document.createRange();
     range.setStart(aView.firstChild!, 0); // start of node a ("see …")
     range.setEnd(textOf(viewOf('b')), 'tail node'.length);
-    const result = buildCrossNodeCopy({ selection: selectionOf(range), root, resolveNode });
+    const result = buildCrossNodeCopy({ selection: selectionOf(range), root, resolveNode: resolve });
 
     // Two lines only (a, b) — the reference chip 'z' must not add a third.
     expect(result).not.toBeNull();
+    expect(result).not.toContain('PHANTOM');
     expect(result!.split('\n')).toHaveLength(2);
     expect(result).toContain('tail node');
     // node a is whole (selection starts at its beginning): source syntax preserved.
@@ -211,5 +218,9 @@ describe('buildCrossNodeCopy', () => {
     expect(result).not.toBeNull();
     expect(result!.split('\n')).toHaveLength(2); // a and b only
     expect(result!.split('\n')[0]).toBe('x');
+    // Endpoint resolved to node b → b is the LAST node and is clipped to the
+    // selection end (rendered offset 6 → "ref he"). If the chip 'z' were treated
+    // as the end node, b would be a middle node and stay unclipped ("ref here").
+    expect(result!.split('\n')[1]).toBe('ref he');
   });
 });
