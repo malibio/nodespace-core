@@ -4014,8 +4014,13 @@ mod tests {
         let result = service.delete_node(&project_id, project.version).await;
 
         assert!(
-            matches!(result, Err(NodeServiceError::HierarchyViolation(_))),
-            "expected HierarchyViolation, got {:?}",
+            matches!(
+                result,
+                Err(NodeServiceError::SubtreeAccessDenied {
+                    inaccessible_count: 1
+                })
+            ),
+            "expected SubtreeAccessDenied {{ inaccessible_count: 1 }}, got {:?}",
             result
         );
 
@@ -4068,7 +4073,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_node_version_conflict_still_wins_over_access_gate() {
+    async fn test_delete_node_version_conflict_reported_when_gate_allows() {
         let (service, _temp) = create_test_service().await;
 
         let root_id = service
@@ -4076,8 +4081,8 @@ mod tests {
             .await
             .unwrap();
 
-        // A gate that would allow this subtree — proves the version conflict is
-        // reached and reported on its own terms, not masked by the gate.
+        // A gate that allows this subtree — proves the version conflict is reached
+        // and reported on its own terms when access is not the issue.
         service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
             restricted_id: "unrelated".to_string(),
         }));
@@ -4086,6 +4091,38 @@ mod tests {
         assert!(
             matches!(result, Err(NodeServiceError::VersionConflict { .. })),
             "expected VersionConflict, got {:?}",
+            result
+        );
+        assert!(service.get_node(&root_id).await.unwrap().is_some());
+    }
+
+    /// When a delete is BOTH access-denied and version-stale, the access refusal
+    /// wins: the gate runs before the OCC check (crud.rs `delete_node`), so we
+    /// never reveal version state to a caller who cannot access the subtree.
+    #[tokio::test]
+    async fn test_delete_node_access_gate_precedes_version_conflict() {
+        let (service, _temp) = create_test_service().await;
+
+        let root_id = service
+            .create_node(Node::new("text".to_string(), "root".to_string(), json!({})))
+            .await
+            .unwrap();
+
+        // Gate denies (the subtree contains the restricted root itself) AND the
+        // version is wrong. The access refusal must take precedence.
+        service.set_subtree_access_gate(std::sync::Arc::new(DenyIfPresentGate {
+            restricted_id: root_id.clone(),
+        }));
+
+        let result = service.delete_node(&root_id, 999).await;
+        assert!(
+            matches!(
+                result,
+                Err(NodeServiceError::SubtreeAccessDenied {
+                    inaccessible_count: 1
+                })
+            ),
+            "expected SubtreeAccessDenied (gate precedes OCC), got {:?}",
             result
         );
         assert!(service.get_node(&root_id).await.unwrap().is_some());

@@ -13,11 +13,14 @@ import {
   type CommandError,
   type VersionConflictData,
   type VersionConflictCommandError,
+  type SubtreeAccessDeniedData,
+  type SubtreeAccessDeniedCommandError,
   isCommandError,
   toError,
   DatabaseInitializationError,
   NodeOperationError,
-  isVersionConflict
+  isVersionConflict,
+  isSubtreeAccessDenied
 } from '$lib/types/errors';
 import type { Node } from '$lib/types/node';
 
@@ -452,6 +455,85 @@ describe('isVersionConflict Type Guard (gRPC shape)', () => {
       expect(err.conflictData.expected).toBe(3);
       expect(err.conflictData.actual).toBe(5);
     }
+  });
+});
+
+describe('isSubtreeAccessDenied Type Guard (gRPC shape)', () => {
+  const makeRefusal = (
+    overrides?: Partial<SubtreeAccessDeniedData>
+  ): SubtreeAccessDeniedCommandError => ({
+    message: 'Delete refused: subtree contains 3 node(s) not accessible to the current actor',
+    code: 'SUBTREE_ACCESS_DENIED',
+    details: 'FailedPrecondition',
+    conflictData: {
+      inaccessibleCount: 3,
+      ...overrides
+    }
+  });
+
+  it('identifies a valid SUBTREE_ACCESS_DENIED error', () => {
+    expect(isSubtreeAccessDenied(makeRefusal())).toBe(true);
+  });
+
+  it('narrows to expose the inaccessibleCount', () => {
+    const err = makeRefusal({ inaccessibleCount: 7 });
+    if (isSubtreeAccessDenied(err)) {
+      expect(err.conflictData.inaccessibleCount).toBe(7);
+    } else {
+      throw new Error('type guard should have matched');
+    }
+  });
+
+  it('rejects a VERSION_CONFLICT error (distinct refusal)', () => {
+    expect(
+      isSubtreeAccessDenied({
+        message: 'err',
+        code: 'VERSION_CONFLICT',
+        conflictData: { node_id: 'x', expected: 1, actual: 2 }
+      })
+    ).toBe(false);
+  });
+
+  it('rejects error with wrong code string', () => {
+    expect(
+      isSubtreeAccessDenied({
+        message: 'err',
+        code: 'INVALID_ARGUMENT',
+        conflictData: { inaccessibleCount: 1 }
+      })
+    ).toBe(false);
+  });
+
+  it('rejects error without conflictData', () => {
+    expect(isSubtreeAccessDenied({ message: 'err', code: 'SUBTREE_ACCESS_DENIED' })).toBe(false);
+  });
+
+  it('rejects error with null conflictData', () => {
+    expect(
+      isSubtreeAccessDenied({ message: 'err', code: 'SUBTREE_ACCESS_DENIED', conflictData: null })
+    ).toBe(false);
+  });
+
+  it('rejects error with non-numeric inaccessibleCount', () => {
+    expect(
+      isSubtreeAccessDenied({
+        message: 'err',
+        code: 'SUBTREE_ACCESS_DENIED',
+        conflictData: { inaccessibleCount: '3' }
+      })
+    ).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isSubtreeAccessDenied(null)).toBe(false);
+  });
+
+  it('rejects undefined', () => {
+    expect(isSubtreeAccessDenied(undefined)).toBe(false);
+  });
+
+  it('rejects Error instances', () => {
+    expect(isSubtreeAccessDenied(new Error('test'))).toBe(false);
   });
 });
 

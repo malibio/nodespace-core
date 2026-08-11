@@ -120,11 +120,32 @@ pub struct CommandError {
 }
 
 fn status_to_command_error(status: tonic::Status) -> CommandError {
+    // A cascade delete refused by the ADR-041 subtree access gate carries the
+    // inaccessible-node count in `x-subtree-inaccessible-count` metadata. Only a
+    // FailedPrecondition WITH that metadata is an access refusal — the daemon
+    // returns FailedPrecondition from unrelated paths too (node-create/schema
+    // failures), which must not be branded as a security refusal.
+    let subtree_inaccessible_count: Option<u64> = if status.code() == tonic::Code::FailedPrecondition
+    {
+        status
+            .metadata()
+            .get("x-subtree-inaccessible-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+    } else {
+        None
+    };
+
     let code = match status.code() {
         tonic::Code::NotFound => "NODE_NOT_FOUND",
         tonic::Code::Aborted => "VERSION_CONFLICT",
         tonic::Code::AlreadyExists => "COLLECTION_EXISTS",
         tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        // Distinct from ordinary validation so the frontend can restore the
+        // optimistically-removed node and show a dedicated refusal modal.
+        tonic::Code::FailedPrecondition if subtree_inaccessible_count.is_some() => {
+            "SUBTREE_ACCESS_DENIED"
+        }
         _ => "GRPC_ERROR",
     }
     .to_string();
@@ -136,7 +157,9 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| serde_json::from_str(s).ok())
     } else {
-        None
+        // Present only for a genuine subtree refusal (count metadata parsed above).
+        subtree_inaccessible_count
+            .map(|inaccessible_count| serde_json::json!({ "inaccessibleCount": inaccessible_count }))
     };
 
     CommandError {

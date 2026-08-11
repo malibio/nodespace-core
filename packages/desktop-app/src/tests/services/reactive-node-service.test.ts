@@ -850,6 +850,7 @@ describe('ReactiveNodeService - Delete Node', () => {
     expect(service.rootNodeIds).not.toContain('delete-test');
   });
 
+
   it('fires nodeDeleted event', async () => {
     await service.deleteNode('delete-test');
 

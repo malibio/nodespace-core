@@ -41,6 +41,12 @@ pub enum NodeServiceError {
     #[error("Hierarchy constraint violated: {0}")]
     HierarchyViolation(String),
 
+    /// Cascade delete refused because the subtree contains nodes the current actor
+    /// cannot read (ADR-041 access gate). Distinct from `HierarchyViolation` so it can
+    /// be surfaced to the UI as its own refusal case, not an ordinary validation error.
+    #[error("Delete refused: subtree contains {inaccessible_count} node(s) not accessible to the current actor")]
+    SubtreeAccessDenied { inaccessible_count: u64 },
+
     /// Bulk operation failed
     #[error("Bulk operation failed: {context}")]
     BulkOperationFailed { context: String },
@@ -137,6 +143,11 @@ impl NodeServiceError {
     /// Create a hierarchy violation error
     pub fn hierarchy_violation(msg: impl Into<String>) -> Self {
         Self::HierarchyViolation(msg.into())
+    }
+
+    /// Create a subtree-access-denied error (ADR-041 cascade-delete gate refusal)
+    pub fn subtree_access_denied(inaccessible_count: u64) -> Self {
+        Self::SubtreeAccessDenied { inaccessible_count }
     }
 
     /// Create a bulk operation failed error

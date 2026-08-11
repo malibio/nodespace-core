@@ -20,7 +20,8 @@ import { requiresAtomicBatching } from '$lib/utils/placeholder-detection';
 import { shouldLogDatabaseErrors, isTestEnvironment } from '$lib/utils/test-environment';
 import { backendAdapter } from './backend-adapter';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
-import { isVersionConflict } from '$lib/types/errors';
+import { isVersionConflict, isSubtreeAccessDenied } from '$lib/types/errors';
+import { showSubtreeAccessDenied } from './subtree-access-denied.svelte';
 import { isValidDateId } from '$lib/types/date-node';
 import { createLogger } from '$lib/utils/logger';
 import { getPendingMoveOperation } from './pending-operations';
@@ -2019,18 +2020,29 @@ export class SharedNodeStore {
    * @param source - Source of the deletion
    * @param skipPersistence - Skip database persistence (default: false)
    * @param dependencies - Node IDs that must be persisted before deletion (prevents FOREIGN KEY violations)
+   * @param onRefused - Called if the backend refuses the delete via the subtree
+   *   access gate, AFTER this store restores its own state. Lets a caller that
+   *   also removed the node optimistically from its OWN state (e.g. the reactive
+   *   view service's `_rootNodeIds`/`_uiState`) restore that too — the store can't
+   *   reach those layers. Not called for success or any other error.
    */
   deleteNode(
     nodeId: string,
     source: UpdateSource,
     skipPersistence = false,
-    dependencies: string[] = []
+    dependencies: string[] = [],
+    onRefused?: () => void
   ): void {
     // Cancel any active batch before deletion
     this.cancelBatch(nodeId);
 
     const node = this.nodes.get(nodeId);
     if (node) {
+      // Capture what the optimistic removal is about to strip, so a backend refusal
+      // (subtree-access-denied) can restore the node exactly as it was.
+      const removedVersion = this.versions.get(nodeId);
+      const wasPersisted = this.persistedNodeIds.has(nodeId);
+
       this.nodesDelete(nodeId);
       this.versions.delete(nodeId);
       this.pendingUpdates.delete(nodeId);
@@ -2066,6 +2078,28 @@ export class SharedNodeStore {
 
               // Always track errors in test environment for verification
               this.trackErrorIfTesting(error);
+
+              // A cascade delete refused by the ADR-041 subtree access gate: the node
+              // was already removed optimistically, but nothing was deleted on the
+              // backend. Restore exactly what the optimistic removal stripped and
+              // surface the refusal to the UI. Non-refusal errors keep today's
+              // behavior (the removal stands, error re-thrown to the coordinator).
+              if (isSubtreeAccessDenied(dbError)) {
+                this.nodesSet(nodeId, node);
+                if (removedVersion !== undefined) {
+                  this.versions.set(nodeId, removedVersion);
+                }
+                if (wasPersisted) {
+                  this.persistedNodeIds.add(nodeId);
+                }
+                this.notifySubscribers(nodeId, node, source);
+
+                // Let the caller restore its own optimistic removal (view layer)
+                // before we surface the refusal.
+                onRefused?.();
+
+                showSubtreeAccessDenied(dbError.conflictData.inaccessibleCount);
+              }
 
               throw error; // Re-throw to mark operation as failed in coordinator
             }

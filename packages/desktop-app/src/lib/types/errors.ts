@@ -123,3 +123,42 @@ export function isVersionConflict(
   const cd = err.conflictData as Record<string, unknown>;
   return typeof cd.node_id === 'string';
 }
+
+/**
+ * Structured payload carried by SUBTREE_ACCESS_DENIED CommandErrors.
+ * Mirrors the JSON derived from the daemon's x-subtree-inaccessible-count metadata
+ * header when a cascade delete is refused by the ADR-041 subtree access gate.
+ */
+export interface SubtreeAccessDeniedData {
+  /** Minimum number of nodes in the delete the actor cannot read. */
+  inaccessibleCount: number;
+}
+
+/**
+ * A CommandError that carries a structured subtree-access-denied payload.
+ * Produced by the daemon → Tauri command → frontend pipeline when a cascade
+ * delete is refused because the subtree contains nodes the actor cannot read.
+ */
+export interface SubtreeAccessDeniedCommandError extends CommandError {
+  code: 'SUBTREE_ACCESS_DENIED';
+  conflictData: SubtreeAccessDeniedData;
+}
+
+/**
+ * Type guard: returns true when the thrown value is a SUBTREE_ACCESS_DENIED
+ * CommandError carrying the daemon's structured refusal payload.
+ *
+ * Matches the gRPC/Tauri shape: { code: "SUBTREE_ACCESS_DENIED", conflictData: { inaccessibleCount } }
+ */
+export function isSubtreeAccessDenied(
+  error: unknown
+): error is SubtreeAccessDeniedCommandError {
+  if (typeof error !== 'object' || error === null) return false;
+
+  const err = error as Record<string, unknown>;
+  if (err.code !== 'SUBTREE_ACCESS_DENIED') return false;
+  if (typeof err.conflictData !== 'object' || err.conflictData === null) return false;
+
+  const cd = err.conflictData as Record<string, unknown>;
+  return typeof cd.inaccessibleCount === 'number';
+}

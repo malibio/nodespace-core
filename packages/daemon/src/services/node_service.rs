@@ -1817,6 +1817,27 @@ fn ops_error_to_status(err: OpsError) -> Status {
             }
             status
         }
+        OpsError::SubtreeAccessDenied { inaccessible_count } => {
+            // Distinct from ordinary validation (INVALID_ARGUMENT): a cascade delete was
+            // refused because the actor cannot read every node in the subtree (ADR-041).
+            // FAILED_PRECONDITION + the count in metadata lets the frontend recognise the
+            // refusal and show a dedicated modal. Mirrors the VersionConflict metadata
+            // attachment above.
+            let message = format!(
+                "Delete refused: subtree contains {} node(s) not accessible to the current actor",
+                inaccessible_count
+            );
+            let mut status = Status::failed_precondition(message);
+            if let Ok(val) = inaccessible_count
+                .to_string()
+                .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+            {
+                status
+                    .metadata_mut()
+                    .insert("x-subtree-inaccessible-count", val);
+            }
+            status
+        }
         OpsError::ValidationFailed(msg) => {
             Status::invalid_argument(format!("Validation failed: {}", msg))
         }
@@ -2584,6 +2605,21 @@ mod tests {
         // child-transfer-failure (identical pipeline to single MoveNode conflicts).
         let s = to_status(NodeServiceError::version_conflict("child-k", 1, 5));
         assert_eq!(s.code(), tonic::Code::Aborted);
+    }
+
+    #[test]
+    fn error_mapping_subtree_access_denied_returns_failed_precondition() {
+        // A cascade delete refused by the ADR-041 access gate must map to a DISTINCT
+        // status (FAILED_PRECONDITION, not INVALID_ARGUMENT) carrying the inaccessible
+        // count in metadata, so the frontend can tell a refusal apart from ordinary
+        // validation and surface a dedicated modal.
+        let s = to_status(NodeServiceError::subtree_access_denied(3));
+        assert_eq!(s.code(), tonic::Code::FailedPrecondition);
+        let header = s
+            .metadata()
+            .get("x-subtree-inaccessible-count")
+            .expect("x-subtree-inaccessible-count header missing");
+        assert_eq!(header.to_str().unwrap(), "3");
     }
 
     #[test]
