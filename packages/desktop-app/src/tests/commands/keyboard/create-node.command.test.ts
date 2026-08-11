@@ -8,7 +8,7 @@
  * - Multiline handling
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { CreateNodeCommand } from '$lib/commands/keyboard/create-node.command';
 import type { KeyboardContext } from '$lib/services/keyboard-command-registry';
 import type { TextareaController } from '$lib/design/components/textarea-controller';
@@ -17,6 +17,14 @@ describe('CreateNodeCommand', () => {
   let command: CreateNodeCommand;
   let mockController: Partial<TextareaController>;
   let createNewNodeSpy: ReturnType<typeof vi.fn>;
+
+  // Some tests replace document.querySelector outright. Captured once here so the
+  // afterEach can always put it back, including when a test fails.
+  const originalQuerySelector = document.querySelector;
+
+  afterEach(() => {
+    document.querySelector = originalQuerySelector;
+  });
 
   beforeEach(() => {
     command = new CreateNodeCommand();
@@ -50,8 +58,10 @@ describe('CreateNodeCommand', () => {
     });
 
     it('should not execute when slash command dropdown is active', () => {
-      // Mock DOM query
-      const originalQuerySelector = document.querySelector;
+      // Mock DOM query. Restored by the afterEach below rather than inline: this is a
+      // direct assignment, not a spy, so vitest's per-file restoreAllMocks cannot repair
+      // it, and a failing expectation would leave a querySelector that returns null for
+      // nearly every selector for the rest of the fork.
       document.querySelector = vi.fn((selector) => {
         if (selector === '[role="listbox"][aria-label="Slash command palette"]') {
           return {} as Element; // Dropdown exists
@@ -61,14 +71,13 @@ describe('CreateNodeCommand', () => {
 
       const context = createContext({ key: 'Enter' });
       expect(command.canExecute(context)).toBe(false);
-
-      // Restore
-      document.querySelector = originalQuerySelector;
     });
 
     it('should not execute when autocomplete dropdown is active', () => {
-      // Mock DOM query
-      const originalQuerySelector = document.querySelector;
+      // Mock DOM query. Restored by the afterEach below rather than inline: this is a
+      // direct assignment, not a spy, so vitest's per-file restoreAllMocks cannot repair
+      // it, and a failing expectation would leave a querySelector that returns null for
+      // nearly every selector for the rest of the fork.
       document.querySelector = vi.fn((selector) => {
         if (selector === '[role="listbox"][aria-label="Node reference autocomplete"]') {
           return {} as Element; // Dropdown exists
@@ -78,9 +87,6 @@ describe('CreateNodeCommand', () => {
 
       const context = createContext({ key: 'Enter' });
       expect(command.canExecute(context)).toBe(false);
-
-      // Restore
-      document.querySelector = originalQuerySelector;
     });
 
     it('should not execute for non-Enter keys', () => {

@@ -12,9 +12,18 @@ describe('LayoutPersistenceService', () => {
     vi.useFakeTimers();
   });
 
+  const originalSetItemForFile = window.localStorage.setItem;
+  const originalGetItemForFile = window.localStorage.getItem;
+
   afterEach(() => {
     // Restore real timers
     vi.useRealTimers();
+    // Some tests below swap a localStorage method to make it throw and restore it as the
+    // last statement of the body, which a failing assertion skips — leaving a throwing
+    // storage for the rest of the fork. setup.ts's polyfill guard only checks the methods
+    // are functions, so a vi.fn passes and it will not re-polyfill. Restore here instead.
+    window.localStorage.setItem = originalSetItemForFile;
+    window.localStorage.getItem = originalGetItemForFile;
   });
 
   describe('save and load', () => {
@@ -494,7 +503,6 @@ describe('LayoutPersistenceService', () => {
   describe('error handling', () => {
     it('handles localStorage quota exceeded during save', () => {
       // Mock setItem to throw quota exceeded error
-      const originalSetItem = window.localStorage.setItem;
       window.localStorage.setItem = vi.fn(() => {
         throw new Error('QuotaExceededError');
       });
@@ -511,9 +519,6 @@ describe('LayoutPersistenceService', () => {
         LayoutPersistenceService.save(mockState);
         vi.advanceTimersByTime(500);
       }).not.toThrow();
-
-      // Restore original implementation
-      window.localStorage.setItem = originalSetItem;
     });
 
     it('clears pending state on save error', () => {
@@ -544,7 +549,6 @@ describe('LayoutPersistenceService', () => {
 
     it('handles localStorage errors during load', () => {
       // Mock getItem to throw error
-      const originalGetItem = window.localStorage.getItem;
       window.localStorage.getItem = vi.fn(() => {
         throw new Error('Storage error');
       });
@@ -552,13 +556,9 @@ describe('LayoutPersistenceService', () => {
       // Should return null and not throw
       const loaded = LayoutPersistenceService.load();
       expect(loaded).toBeNull();
-
-      // Restore original implementation
-      window.localStorage.getItem = originalGetItem;
     });
 
     it('handles saveNow with storage error', () => {
-      const originalSetItem = window.localStorage.setItem;
       window.localStorage.setItem = vi.fn(() => {
         throw new Error('Storage error');
       });
@@ -574,9 +574,6 @@ describe('LayoutPersistenceService', () => {
       expect(() => {
         LayoutPersistenceService.saveNow(mockState);
       }).not.toThrow();
-
-      // Restore original implementation
-      window.localStorage.setItem = originalSetItem;
     });
   });
 
