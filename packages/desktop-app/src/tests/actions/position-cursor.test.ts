@@ -15,12 +15,18 @@ describe('positionCursor action', () => {
   let rafSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    // Ensure requestAnimationFrame exists in test environment
+    // These tests need a synchronous requestAnimationFrame so the cursor-positioning
+    // callback runs inline and can be asserted. Install it as a STUB rather than
+    // assigning to globalThis: vitest runs many files per fork, and a synchronous rAF
+    // left behind makes any later test that mounts a bits-ui Collapsible recurse until
+    // the stack overflows — a failure that surfaces in an unrelated file with no hint
+    // of where it came from. `vi.unstubAllGlobals` in afterEach puts back whatever was
+    // there, including nothing.
     if (!globalThis.requestAnimationFrame) {
-      globalThis.requestAnimationFrame = ((cb: (time: number) => void) => {
+      vi.stubGlobal('requestAnimationFrame', (cb: (time: number) => void) => {
         cb(0);
         return 0;
-      }) as typeof requestAnimationFrame;
+      });
     }
 
     // Create textarea element
@@ -61,6 +67,8 @@ describe('positionCursor action', () => {
     if (rafSpy) {
       rafSpy.mockRestore();
     }
+    // Drop the synchronous stand-in so it cannot reach another file in this fork.
+    vi.unstubAllGlobals();
     controller.destroy();
     document.body.removeChild(textarea);
   });

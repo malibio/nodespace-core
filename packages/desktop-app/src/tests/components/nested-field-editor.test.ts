@@ -6,7 +6,7 @@
  * their controls and structural affordances, and that an edit rebuilds the whole
  * value immutably and emits it via onChange (the editor never touches a store).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import type { SchemaField } from '$lib/types/schema-node';
 
@@ -18,26 +18,8 @@ function field(partial: Partial<SchemaField> & { name: string; type: string }): 
   return { protection: 'user', indexed: false, ...partial };
 }
 
-// bits-ui Collapsible.Content schedules a mount effect via requestAnimationFrame.
-// Another suite (position-cursor) installs a SYNCHRONOUS rAF global and never
-// restores it; a synchronous rAF makes that mount effect recurse into itself and
-// overflow the stack. Guarantee a well-behaved async rAF here so these renders are
-// deterministic regardless of suite ordering, and restore it afterwards.
-let originalRaf: typeof globalThis.requestAnimationFrame;
-let originalCancelRaf: typeof globalThis.cancelAnimationFrame;
-beforeEach(() => {
-  originalRaf = globalThis.requestAnimationFrame;
-  originalCancelRaf = globalThis.cancelAnimationFrame;
-  globalThis.requestAnimationFrame = ((cb: (time: number) => void) =>
-    setTimeout(() => cb(performance.now()), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-  globalThis.cancelAnimationFrame = ((id: number) =>
-    clearTimeout(id as unknown as ReturnType<typeof setTimeout>)) as typeof globalThis.cancelAnimationFrame;
-});
-
 afterEach(() => {
   cleanup();
-  globalThis.requestAnimationFrame = originalRaf;
-  globalThis.cancelAnimationFrame = originalCancelRaf;
 });
 
 describe('NestedFieldEditor — object of leaves', () => {

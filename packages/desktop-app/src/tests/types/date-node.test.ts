@@ -5,7 +5,7 @@
  * Tests cover type guards, date validation, formatting, and helper functions.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import type { Node } from '$lib/types/node';
 import {
   type DateNode,
@@ -16,6 +16,15 @@ import {
   generateDateId,
   DateNodeHelpers
 } from '$lib/types/date-node';
+
+
+// Vitest's fake timers replace requestAnimationFrame along with the clock. Files share a
+// fork, so leaving them installed changes the environment for every test that runs after
+// this one — a component waiting on rAF simply never mounts, and the failure surfaces
+// somewhere unrelated. Hand the real timers back after each test.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('DateNode Type Guard', () => {
   it('identifies date nodes correctly', () => {
