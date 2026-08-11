@@ -227,19 +227,22 @@ describe('Client ID Service', () => {
         configurable: true,
       });
 
-      resetClientId(); // Clear first
+      try {
+        resetClientId(); // Clear first
 
-      // Should throw when trying to store
-      expect(() => {
-        getClientId();
-      }).toThrow();
-
-      // Restore
-      Object.defineProperty(window, 'sessionStorage', {
-        value: original,
-        writable: true,
-        configurable: true,
-      });
+        // Should throw when trying to store
+        expect(() => {
+          getClientId();
+        }).toThrow();
+      } finally {
+        // Restore in a finally: a failing expectation above would otherwise leave the
+        // throwing stub installed for every later test file in this fork.
+        Object.defineProperty(window, 'sessionStorage', {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
     });
 
     it('should handle very long stored client IDs', () => {

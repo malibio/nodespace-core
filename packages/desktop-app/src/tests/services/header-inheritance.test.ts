@@ -6,23 +6,10 @@
  * should automatically inherit the header syntax (e.g., start with "# ").
  */
 
-// Mock Svelte 5 runes immediately before any imports - using proper type assertions
-(globalThis as Record<string, unknown>).$state = function <T>(initialValue: T): T {
-  if (typeof initialValue !== 'object' || initialValue === null) {
-    return initialValue;
-  }
-  return initialValue;
-};
-
-(globalThis as Record<string, unknown>).$derived = {
-  by: function <T>(getter: () => T): T {
-    return getter();
-  }
-};
-
-(globalThis as Record<string, unknown>).$effect = function (fn: () => void | (() => void)): void {
-  fn();
-};
+// Svelte 5 runes are mocked for every test file by the shared setup
+// (`src/tests/setup-svelte-mocks.ts`); this file previously installed its own
+// copies on globalThis and never restored them, which left a subtly different
+// $effect — one that does not swallow errors — in place for the rest of the fork.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {

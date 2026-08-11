@@ -45,6 +45,10 @@ describe('SharedNodeStore', () => {
   });
 
   afterEach(() => {
+    // A test that fakes timers restores them at the end of its body, which a failing
+    // assertion skips — leaving the fake clock installed for every later file in this
+    // fork. Restoring here covers that. It is a no-op when timers aren't faked.
+    vi.useRealTimers();
     // Clean up
     store.clearAll();
     SharedNodeStore.resetInstance();
