@@ -189,6 +189,68 @@ describe('SchemaPropertyForm — nested values persist under properties[nodeType
   });
 });
 
+describe('SchemaPropertyForm — un-migrated flat properties', () => {
+  beforeEach(() => {
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(
+      schemaWith([ADDRESS_FIELD], 'invoice') as never
+    );
+    // Old FLAT shape: `address` sits at the top level, not yet migrated into the
+    // `invoice` namespace. updateProperty migrates on first write, so the read
+    // path must see it too.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      nodeWith('invoice', { address: { street: 'A', city: 'B' }, total: 10 })
+    );
+  });
+
+  it('shows an un-migrated nested value instead of an empty editor', async () => {
+    const { container } = render(SchemaPropertyForm, {
+      props: { nodeId: 'node-1', nodeType: 'invoice' }
+    });
+
+    await waitFor(() => expect(container.querySelector('button')).toBeTruthy());
+    await fireEvent.click(container.querySelector('button')!);
+
+    // Reading the flat location means the summary counts the real keys. Reading only
+    // the namespace would render "0 fields" and open an empty editor.
+    await waitFor(() => expect(screen.getByText('2 fields')).toBeTruthy());
+  });
+
+  it('does not destroy sibling keys the user was never shown', async () => {
+    const { container } = render(SchemaPropertyForm, {
+      props: { nodeId: 'node-1', nodeType: 'invoice' }
+    });
+
+    await waitFor(() => expect(container.querySelector('button')).toBeTruthy());
+    await fireEvent.click(container.querySelector('button')!);
+    await fireEvent.click(screen.getByText('2 fields'));
+    await waitFor(() => expect(screen.getByLabelText('Street')).toBeTruthy());
+    await fireEvent.input(screen.getByLabelText('Street'), { target: { value: 'X' } });
+
+    // `city` was never rendered (it is not a declared sub-field) but must survive the
+    // migration write, which persists the namespace wholesale.
+    const persisted = persistedProperties(updateNodeSpy) as {
+      invoice: { address: Record<string, unknown> };
+    };
+    expect(persisted.invoice.address).toEqual({ street: 'X', city: 'B' });
+  });
+
+  it('persists with replaceProperties so the migration is not merged back', async () => {
+    const { container } = render(SchemaPropertyForm, {
+      props: { nodeId: 'node-1', nodeType: 'invoice' }
+    });
+
+    await waitFor(() => expect(container.querySelector('button')).toBeTruthy());
+    await fireEvent.click(container.querySelector('button')!);
+    await fireEvent.click(screen.getByText('2 fields'));
+    await waitFor(() => expect(screen.getByLabelText('Street')).toBeTruthy());
+    await fireEvent.input(screen.getByLabelText('Street'), { target: { value: 'X' } });
+
+    expect(updateNodeSpy.mock.calls[0][3]).toEqual(
+      expect.objectContaining({ replaceProperties: true })
+    );
+  });
+});
+
 describe('SchemaPropertyForm — boolean fields', () => {
   beforeEach(() => {
     vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(

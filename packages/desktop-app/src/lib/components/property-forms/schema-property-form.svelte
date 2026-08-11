@@ -139,7 +139,12 @@
       return (typeNamespace as Record<string, unknown>)[fieldName];
     }
 
-    return undefined;
+    // Old flat shape, not yet migrated. `updateProperty` migrates it on the first write, so the
+    // value must be READ from here too — otherwise an un-migrated field renders empty and that
+    // first write persists the empty edit over the real value. Harmless for a leaf (the user
+    // retypes what they can see is missing); destructive for a nested object, where the keys
+    // that were never displayed would be replaced wholesale.
+    return node.properties?.[fieldName];
   }
 
   // Get schema fields directly from typed field (no helper needed)
@@ -469,7 +474,14 @@
                   {field}
                   {fieldId}
                   value={leafValue(field)}
-                  onChange={(newValue) => updateProperty(field.name, newValue)}
+                  onChange={(newValue) => {
+                    // An empty emission from the enum control is not a user choosing "none" —
+                    // this form writes with replaceProperties and recomputes the title from the
+                    // new value, so persisting '' would blank both. Other fields may legitimately
+                    // clear to ''.
+                    if (field.type === 'enum' && !newValue) return;
+                    updateProperty(field.name, newValue);
+                  }}
                 />
               {/if}
             </div>

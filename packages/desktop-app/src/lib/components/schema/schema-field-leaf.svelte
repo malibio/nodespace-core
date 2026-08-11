@@ -89,8 +89,11 @@
     onValueChange={(newValue) => onChange(newValue)}
   >
     <Select.Trigger class="w-full">
+      <!-- A stored value the schema no longer declares still reads as a label rather than a
+           raw key, so the control agrees with the collapsed header that humanizes the same
+           value. -->
       {enumValues.find((ev) => ev.value === currentValue)?.label ||
-        currentValue ||
+        (currentValue ? formatFieldLabel(currentValue) : '') ||
         `Select ${formatFieldLabel(field.name)}...`}
     </Select.Trigger>
     <Select.Content>
