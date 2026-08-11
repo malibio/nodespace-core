@@ -1,13 +1,16 @@
 <!--
   NestedPropertyModal — edit a single nested (object/array) schema property.
 
-  Opens a dialog for one `field` of a node, reads the current top-level value from
-  the shared store (`node.properties[field.name]`), and renders the recursive
-  NestedFieldEditor. On every edit it persists the whole rebuilt value back through
-  `sharedNodeStore.updateNode` — the same persistence path GenericSchemaForm's
-  `updateField` uses (full properties bag spread with the one changed top-level
-  field). The editor stays pure; this component is the only place that touches the
-  store.
+  Opens a dialog for one `field` and renders the recursive NestedFieldEditor over
+  the `value` the caller supplies. On every edit it hands the whole rebuilt value
+  back through `onPersist`.
+
+  Persistence is deliberately NOT owned here: the property forms that open this
+  modal each store values under a different namespace — flat `properties[field]`
+  for the generic schema form, `properties.task[field]` for the task form,
+  `properties[nodeType][field]` for the schema property form — so each caller
+  supplies both the current value and the write. That keeps one modal (and one
+  editor) shared by every form.
 
   Mirrors RelationshipViewerModal's dialog + `open = $bindable()` idiom.
 -->
@@ -15,21 +18,16 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import { Button } from '$lib/components/ui/button';
   import NestedFieldEditor from './nested-field-editor.svelte';
-  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import type { SchemaField } from '$lib/types/schema-node';
-  import type { Node } from '$lib/types';
 
   interface Props {
     open: boolean;
-    nodeId: string;
     field: SchemaField;
+    value: unknown;
+    onPersist: (_value: unknown) => void;
   }
 
-  let { open = $bindable(false), nodeId, field }: Props = $props();
-
-  const node = $derived<Node | null>(nodeId ? (sharedNodeStore.getNode(nodeId) ?? null) : null);
-
-  const value = $derived(node?.properties?.[field.name]);
+  let { open = $bindable(false), field, value, onPersist }: Props = $props();
 
   function formatFieldLabel(fieldName: string): string {
     return fieldName
@@ -37,15 +35,6 @@
       .split(' ')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
-  }
-
-  function persist(newValue: unknown) {
-    if (!node) return;
-    sharedNodeStore.updateNode(
-      nodeId,
-      { properties: { ...node.properties, [field.name]: newValue } },
-      { type: 'viewer', viewerId: 'nested-property-modal' }
-    );
   }
 </script>
 
@@ -59,15 +48,11 @@
     </Dialog.Header>
 
     <div class="max-h-[60vh] overflow-y-auto py-1">
-      {#if node}
-        <!-- Remount per field so the editor's per-child expand/collapse state
-             doesn't bleed across fields in the single reused modal instance. -->
-        {#key field.name}
-          <NestedFieldEditor {field} {value} onChange={persist} />
-        {/key}
-      {:else}
-        <div class="text-muted-foreground py-6 text-center text-sm">Node not found.</div>
-      {/if}
+      <!-- Remount per field so the editor's per-child expand/collapse state
+           doesn't bleed across fields in the single reused modal instance. -->
+      {#key field.name}
+        <NestedFieldEditor {field} {value} onChange={onPersist} />
+      {/key}
     </div>
 
     <Dialog.Footer>

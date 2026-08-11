@@ -2,8 +2,14 @@
   SchemaPropertyForm - Schema-Driven Property UI
 
   Dynamically generates form fields based on schema definitions.
-  Supports enum (Select), date (Calendar), text (Input), and other field types.
-  Uses Collapsible UI pattern with field completion tracking.
+  Leaf fields (enum, date, number, boolean, string/text) render through the
+  shared SchemaFieldLeaf; object/array fields render a summary trigger that opens
+  the shared NestedPropertyModal. The one control this form still owns is the
+  assignee combobox. Uses Collapsible UI pattern with field completion tracking.
+
+  Values are stored/read under properties[nodeType][field.name] — including
+  nested values, which persist through the same updateProperty (and therefore
+  the same flat→nested migration) as every other field.
 
   Props:
   - nodeId: ID of the node to display properties for
@@ -20,10 +26,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Collapsible } from 'bits-ui';
-  import * as Select from '$lib/components/ui/select';
   import * as Popover from '$lib/components/ui/popover';
-  import { Calendar } from '$lib/components/ui/calendar';
-  import { Input } from '$lib/components/ui/input';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import {
@@ -36,6 +39,10 @@
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import { evaluateTitleTemplate } from '$lib/utils/title-template';
+  import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
+  import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
+  import NestedPropertyModal from '$lib/components/schema/nested-property-modal.svelte';
+  import { isNestedField } from '$lib/utils/nested-property-ops';
 
   // Logger instance for SchemaPropertyForm component
   const log = createLogger('SchemaPropertyForm');
@@ -61,6 +68,13 @@
   let comboboxOpen = $state<Record<string, boolean>>({});
   let comboboxSearch = $state<Record<string, string>>({});
 
+  // Nested (object/array) property editor. One modal instance is reused; the
+  // clicked field determines what it edits. It persists through updateProperty
+  // below, so nested values land under `properties[nodeType].<field>` alongside
+  // every other field of this type.
+  let nestedModalField = $state<SchemaField | null>(null);
+  let nestedModalOpen = $state(false);
+
   /**
    * Assignee options - currently empty placeholder
    *
@@ -85,22 +99,6 @@
         const schemaNode = await backendAdapter.getSchema(nodeType);
         if (isSchemaNode(schemaNode)) {
           schema = schemaNode;
-          // Pre-initialize comboboxOpen keys for all popover-backed fields.
-          // Date fields use bind:open which requires pre-initialization to avoid
-          // mutating $state inside template expressions (Svelte 5 forbids this).
-          // Text/assignee fields are unified here for consistency.
-          for (const field of schemaNode.fields) {
-            if (field.type === 'date') {
-              const key = `date_${field.name}`;
-              if (comboboxOpen[key] === undefined) {
-                comboboxOpen[key] = false;
-              }
-            } else if (field.type === 'text' || field.type === 'string') {
-              if (comboboxOpen[field.name] === undefined) {
-                comboboxOpen[field.name] = false;
-              }
-            }
-          }
         } else {
           schemaError = `Invalid schema node for type: ${nodeType}`;
           schema = null;
@@ -141,7 +139,12 @@
       return (typeNamespace as Record<string, unknown>)[fieldName];
     }
 
-    return undefined;
+    // Old flat shape, not yet migrated. `updateProperty` migrates it on the first write, so the
+    // value must be READ from here too — otherwise an un-migrated field renders empty and that
+    // first write persists the empty edit over the real value. Harmless for a leaf (the user
+    // retypes what they can see is missing); destructive for a nested object, where the keys
+    // that were never displayed would be replaced wholesale.
+    return node.properties?.[fieldName];
   }
 
   // Get schema fields directly from typed field (no helper needed)
@@ -275,29 +278,6 @@
     return values;
   }
 
-  // Convert between different value formats
-  function parsePropertyValue(field: SchemaField, value: unknown): unknown {
-    if (value === null || value === undefined) return value;
-
-    switch (field.type) {
-      case 'date':
-        if (typeof value === 'string') {
-          try {
-            return parseDate(value);
-          } catch {
-            return undefined;
-          }
-        }
-        return value;
-      case 'number':
-        return typeof value === 'string' ? parseFloat(value) : value;
-      case 'boolean':
-        return typeof value === 'string' ? value === 'true' : value;
-      default:
-        return value;
-    }
-  }
-
   // Format date for display
   function formatDateDisplay(value: unknown): string {
     if (!value) return 'Pick a date';
@@ -315,12 +295,6 @@
     return String(value);
   }
 
-  // Format date value for storage (ISO string)
-  function formatDateForStorage(value: DateValue | undefined): string | null {
-    if (!value) return null;
-    return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
-  }
-
   // Format enum value for display (convert snake_case to Title Case)
   // Handles lowercase values like "in_progress" → "In Progress"
   function formatEnumLabel(value: string): string {
@@ -336,6 +310,18 @@
     const value = getPropertyValue(field.name);
     // Use current value, or fall back to schema default, or empty string
     return value ? String(value) : field.default ? String(field.default) : '';
+  }
+
+  // Value handed to SchemaFieldLeaf. Enums resolve through getEnumValue so an
+  // unset field still shows the schema default; every other type passes the
+  // stored value through untouched (the leaf owns its own parsing/defaults).
+  function leafValue(field: SchemaField): unknown {
+    return field.type === 'enum' ? getEnumValue(field) : getPropertyValue(field.name);
+  }
+
+  function openNestedModal(field: SchemaField) {
+    nestedModalField = field;
+    nestedModalOpen = true;
   }
 </script>
 
@@ -399,184 +385,104 @@
                 {field.description || formatEnumLabel(field.name)}
               </label>
 
-              {#if field.type === 'enum'}
-                <!-- Enum Field → shadcn Select Component (Fixed with bind:value) -->
-                {@const enumValues = getEnumValues(field)}
-                {@const currentEnumValue = getEnumValue(field)}
-                {@const currentLabel =
-                  enumValues.find((ev) => ev.value === currentEnumValue)?.label ||
-                  formatEnumLabel(currentEnumValue)}
-                <Select.Root
-                  type="single"
-                  value={currentEnumValue}
-                  onValueChange={(newValue) => {
-                    if (newValue) {
-                      updateProperty(field.name, newValue);
-                    }
+              {#if isNestedField(field)}
+                <!-- Object/array field → summary trigger opening the shared nested editor -->
+                <NestedFieldTrigger
+                  {field}
+                  {fieldId}
+                  value={getPropertyValue(field.name)}
+                  onopen={() => openNestedModal(field)}
+                />
+              {:else if field.name === 'assignee' && (field.type === 'text' || field.type === 'string')}
+                <!-- Assignee Combobox — the one leaf this form renders itself -->
+                {@const currentValue = (getPropertyValue(field.name) as string) || ''}
+                {@const isAssigneeOpen = comboboxOpen[field.name] || false}
+                {@const searchValue = comboboxSearch[field.name] || ''}
+                <Popover.Root
+                  open={isAssigneeOpen}
+                  onOpenChange={(open) => {
+                    comboboxOpen[field.name] = open;
                   }}
                 >
-                  <Select.Trigger class="w-full">
-                    {currentLabel}
-                  </Select.Trigger>
-                  <Select.Content>
-                    {#each enumValues as ev}
-                      <Select.Item value={ev.value} label={ev.label} />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              {:else if field.type === 'date'}
-                <!-- Date Field → Calendar with Popover -->
-                {@const rawDateValue = parsePropertyValue(field, getPropertyValue(field.name))}
-                {@const dateValue = (rawDateValue ? rawDateValue : undefined) as
-                  | DateValue
-                  | DateValue[]
-                  | undefined}
-                {@const popoverOpenKey = `date_${field.name}`}
-                <Popover.Root bind:open={comboboxOpen[popoverOpenKey]}>
                   <Popover.Trigger
-                    id={fieldId}
                     class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
                   >
-                    <span class={dateValue ? '' : 'text-muted-foreground'}>
-                      {formatDateDisplay(dateValue)}
+                    <span class={currentValue ? '' : 'text-muted-foreground'}>
+                      {currentValue || 'Select assignee...'}
                     </span>
                     <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                      <rect
-                        x="2"
-                        y="3"
-                        width="12"
-                        height="11"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                      />
                       <path
-                        d="M5 1v3M11 1v3M2 6h12"
+                        d="M4 6l4 4 4-4"
                         stroke="currentColor"
-                        stroke-width="1.5"
+                        stroke-width="2"
                         stroke-linecap="round"
+                        stroke-linejoin="round"
                       />
                     </svg>
                   </Popover.Trigger>
-                  <Popover.Content class="w-auto p-0" align="start">
-                    <Calendar
-                      value={dateValue as never}
-                      onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                        // Handle single date value (not array)
-                        const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                        updateProperty(field.name, formatDateForStorage(singleValue));
-                        // Close the popover after selecting a date
-                        comboboxOpen[popoverOpenKey] = false;
-                      }}
-                      type="single"
-                    />
+                  <Popover.Content class="w-[200px] p-0" align="start">
+                    <div class="flex flex-col">
+                      <input
+                        type="text"
+                        placeholder="Search assignee..."
+                        value={searchValue}
+                        oninput={(e) => {
+                          comboboxSearch[field.name] = e.currentTarget.value;
+                        }}
+                        class="flex h-10 w-full border-b border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
+                      />
+                      <div class="max-h-[200px] overflow-y-auto">
+                        {#if assigneeOptions.length === 0}
+                          <div class="px-3 py-2 text-sm text-muted-foreground">
+                            No assignees available
+                          </div>
+                        {:else}
+                          {#each assigneeOptions.filter((a) => a.label
+                              .toLowerCase()
+                              .includes(searchValue.toLowerCase())) as assignee}
+                            <button
+                              type="button"
+                              class="relative flex w-full cursor-pointer select-none items-center rounded-sm px-3 py-2 text-sm outline-none hover:bg-muted"
+                              onclick={() => {
+                                updateProperty(field.name, assignee.value);
+                                comboboxOpen[field.name] = false;
+                                comboboxSearch[field.name] = '';
+                              }}
+                            >
+                              {assignee.label}
+                              {#if currentValue === assignee.value}
+                                <svg class="ml-auto h-4 w-4" viewBox="0 0 16 16" fill="none">
+                                  <path
+                                    d="M3 8l4 4 6-8"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  />
+                                </svg>
+                              {/if}
+                            </button>
+                          {/each}
+                        {/if}
+                      </div>
+                    </div>
                   </Popover.Content>
                 </Popover.Root>
-              {:else if field.type === 'text' || field.type === 'string'}
-                <!-- Text Field → Combobox for assignee, Input for others -->
-                {#if field.name === 'assignee'}
-                  <!-- Assignee Combobox (matches demo structure) -->
-                  {@const currentValue = (getPropertyValue(field.name) as string) || ''}
-                  {@const isOpen = comboboxOpen[field.name] || false}
-                  {@const searchValue = comboboxSearch[field.name] || ''}
-                  <Popover.Root
-                    open={isOpen}
-                    onOpenChange={(open) => {
-                      comboboxOpen[field.name] = open;
-                    }}
-                  >
-                    <Popover.Trigger
-                      class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                    >
-                      <span class={currentValue ? '' : 'text-muted-foreground'}>
-                        {currentValue || 'Select assignee...'}
-                      </span>
-                      <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                        <path
-                          d="M4 6l4 4 4-4"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        />
-                      </svg>
-                    </Popover.Trigger>
-                    <Popover.Content class="w-[200px] p-0" align="start">
-                      <div class="flex flex-col">
-                        <input
-                          type="text"
-                          placeholder="Search assignee..."
-                          value={searchValue}
-                          oninput={(e) => {
-                            comboboxSearch[field.name] = e.currentTarget.value;
-                          }}
-                          class="flex h-10 w-full border-b border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                        />
-                        <div class="max-h-[200px] overflow-y-auto">
-                          {#if assigneeOptions.length === 0}
-                            <div class="px-3 py-2 text-sm text-muted-foreground">
-                              No assignees available
-                            </div>
-                          {:else}
-                            {#each assigneeOptions.filter((a) => a.label
-                                .toLowerCase()
-                                .includes(searchValue.toLowerCase())) as assignee}
-                              <button
-                                type="button"
-                                class="relative flex w-full cursor-pointer select-none items-center rounded-sm px-3 py-2 text-sm outline-none hover:bg-muted"
-                                onclick={() => {
-                                  updateProperty(field.name, assignee.value);
-                                  comboboxOpen[field.name] = false;
-                                  comboboxSearch[field.name] = '';
-                                }}
-                              >
-                                {assignee.label}
-                                {#if currentValue === assignee.value}
-                                  <svg class="ml-auto h-4 w-4" viewBox="0 0 16 16" fill="none">
-                                    <path
-                                      d="M3 8l4 4 6-8"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    />
-                                  </svg>
-                                {/if}
-                              </button>
-                            {/each}
-                          {/if}
-                        </div>
-                      </div>
-                    </Popover.Content>
-                  </Popover.Root>
-                {:else}
-                  <!-- Regular Text Input -->
-                  <Input
-                    id={fieldId}
-                    type="text"
-                    value={(getPropertyValue(field.name) as string) || ''}
-                    oninput={(e) => {
-                      updateProperty(field.name, e.currentTarget.value);
-                    }}
-                    placeholder={field.default ? String(field.default) : ''}
-                  />
-                {/if}
-              {:else if field.type === 'number'}
-                <!-- Number Field → Input Component -->
-                <Input
-                  id={fieldId}
-                  type="number"
-                  value={(getPropertyValue(field.name) as number) || field.default || 0}
-                  oninput={(e) => {
-                    updateProperty(field.name, parseFloat(e.currentTarget.value) || 0);
+              {:else}
+                <!-- Every other leaf type (enum, date, number, boolean, string/text) -->
+                <SchemaFieldLeaf
+                  {field}
+                  {fieldId}
+                  value={leafValue(field)}
+                  onChange={(newValue) => {
+                    // An empty emission from the enum control is not a user choosing "none" —
+                    // this form writes with replaceProperties and recomputes the title from the
+                    // new value, so persisting '' would blank both. Other fields may legitimately
+                    // clear to ''.
+                    if (field.type === 'enum' && !newValue) return;
+                    updateProperty(field.name, newValue);
                   }}
                 />
-              {:else if field.type === 'boolean'}
-                <!-- Boolean Field → Checkbox (future implementation) -->
-                <div class="text-sm text-muted-foreground">Boolean field (not yet implemented)</div>
-              {:else}
-                <!-- Unknown Field Type -->
-                <div class="text-sm text-muted-foreground">Unknown field type: {field.type}</div>
               {/if}
             </div>
           {/each}
@@ -584,6 +490,16 @@
       </Collapsible.Content>
     </Collapsible.Root>
   </div>
+
+  {#if nestedModalField}
+    {@const nestedField = nestedModalField}
+    <NestedPropertyModal
+      bind:open={nestedModalOpen}
+      field={nestedField}
+      value={getPropertyValue(nestedField.name)}
+      onPersist={(newValue) => updateProperty(nestedField.name, newValue)}
+    />
+  {/if}
 {/if}
 
 <style>

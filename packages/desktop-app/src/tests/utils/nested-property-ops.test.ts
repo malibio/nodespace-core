@@ -18,6 +18,7 @@ import {
   makeEmptyValueForField,
   makeEmptyArrayItem,
   isNestedField,
+  nestedFieldSummary,
   shiftItemOpenStateOnDelete
 } from '$lib/utils/nested-property-ops';
 import type { SchemaField } from '$lib/types/schema-node';
@@ -161,6 +162,31 @@ describe('isNestedField', () => {
     expect(isNestedField(field({ name: 'a', type: 'array' }))).toBe(true);
     expect(isNestedField(field({ name: 's', type: 'string' }))).toBe(false);
     expect(isNestedField(field({ name: 'e', type: 'enum' }))).toBe(false);
+  });
+});
+
+describe('nestedFieldSummary', () => {
+  const objectField = field({ name: 'address', type: 'object' });
+  const arrayField = field({ name: 'contacts', type: 'array' });
+
+  it('counts populated keys for an object field, singular at one', () => {
+    expect(nestedFieldSummary(objectField, {})).toBe('0 fields');
+    expect(nestedFieldSummary(objectField, { street: '1 Main' })).toBe('1 field');
+    expect(nestedFieldSummary(objectField, { street: '1 Main', city: 'Denver' })).toBe('2 fields');
+  });
+
+  it('counts elements for an array field, singular at one', () => {
+    expect(nestedFieldSummary(arrayField, [])).toBe('0 items');
+    expect(nestedFieldSummary(arrayField, ['a'])).toBe('1 item');
+    expect(nestedFieldSummary(arrayField, ['a', 'b'])).toBe('2 items');
+  });
+
+  it('treats a missing or wrong-shaped value as empty', () => {
+    expect(nestedFieldSummary(objectField, null)).toBe('0 fields');
+    expect(nestedFieldSummary(objectField, undefined)).toBe('0 fields');
+    expect(nestedFieldSummary(objectField, ['a'])).toBe('0 fields');
+    expect(nestedFieldSummary(arrayField, null)).toBe('0 items');
+    expect(nestedFieldSummary(arrayField, { a: 1 })).toBe('0 items');
   });
 });
 
