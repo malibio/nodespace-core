@@ -104,8 +104,10 @@ class NodeRefPreviewController {
     const nodeId = extractNodeIdFromHref(href);
     if (!nodeId) return;
 
-    // Already showing or scheduled for this exact anchor: leave it be.
-    if (this.#pendingId === nodeId && this.state.anchor === anchor) return;
+    // Same reference already scheduled or already shown: leave the pending timer
+    // alone. Crossing nested spans inside a reference fires repeated mouseover
+    // events — resetting the timer on each would keep the delay from ever elapsing.
+    if (this.#pendingId === nodeId) return;
 
     this.#clearTimer();
     this.#pendingId = nodeId;

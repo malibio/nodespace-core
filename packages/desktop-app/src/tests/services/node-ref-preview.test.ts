@@ -153,6 +153,20 @@ describe('nodeRefPreview controller', () => {
     expect(getNode).not.toHaveBeenCalled();
   });
 
+  it('does not reset the delay on repeated requests for the same reference', async () => {
+    // Crossing nested spans re-fires requestPreview; the timer must keep counting
+    // from the first request, not restart, or the card never appears.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(makeNode({ id: 'abc', title: 'X' }));
+    const a = anchor('nodespace://abc');
+
+    nodeRefPreview.requestPreview(a);
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS - 100);
+    nodeRefPreview.requestPreview(a); // repeat mid-delay
+    await vi.advanceTimersByTimeAsync(100); // original deadline
+
+    expect(nodeRefPreview.state.visible).toBe(true);
+  });
+
   it('cancels a pending reveal when hidden before the delay elapses', async () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(makeNode());
     nodeRefPreview.requestPreview(anchor('nodespace://abc'));
