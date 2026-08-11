@@ -60,14 +60,15 @@ describe('positionCursor action', () => {
       slashCommandSelected: vi.fn(),
       nodeTypeConversionDetected: vi.fn()
     });
-
   });
 
   afterEach(() => {
-    // Order matters: hand the real timers back BEFORE dropping the stub, so the fake
-    // timers' uninstall cannot write the stand-in through to happy-dom's window. Doing
-    // it here rather than at the end of each test body also covers a failing test, which
-    // would otherwise skip its inline restore and leak.
+    // Order matters. Restoring timers AFTER the unstub is destructive: sinon's uninstall
+    // checks whether the current global was its own installed property, and against the
+    // pristine accessor that check fails, so it takes the delete branch and removes
+    // requestAnimationFrame from the fork entirely. Restore timers first, then unstub.
+    // Doing this here rather than at the end of each test body also covers a failing
+    // test, which would otherwise skip its restore and leak.
     vi.useRealTimers();
     vi.unstubAllGlobals();
     controller.destroy();
@@ -229,7 +230,6 @@ describe('positionCursor action', () => {
     // Should retry because selectionStart (5) !== data.position (20)
     expect(setCursorSpy).toHaveBeenCalledTimes(2);
     expect(setCursorSpy).toHaveBeenCalledWith(20);
-
   });
 
   it('should not retry node-type-conversion if cursor position is correct', async () => {
@@ -256,7 +256,6 @@ describe('positionCursor action', () => {
 
     // Should NOT retry because position is already correct
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
-
   });
 
   it('should not retry node-type-conversion if element is not a textarea', async () => {
@@ -282,7 +281,6 @@ describe('positionCursor action', () => {
 
     // Should NOT retry because activeElement is not a textarea
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
-
   });
 
   it('should apply inherited-type cursor position', () => {
@@ -327,7 +325,6 @@ describe('positionCursor action', () => {
     // Should retry because selectionStart (3) !== data.position (12)
     expect(setCursorSpy).toHaveBeenCalledTimes(2);
     expect(setCursorSpy).toHaveBeenCalledWith(12);
-
   });
 
   it('should not retry inherited-type if cursor position is correct', async () => {
@@ -354,7 +351,6 @@ describe('positionCursor action', () => {
 
     // Should NOT retry because position is already correct
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
-
   });
 
   it('should use skipSyntax default value (true) for default position', () => {

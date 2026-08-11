@@ -17,7 +17,6 @@ import {
   DateNodeHelpers
 } from '$lib/types/date-node';
 
-
 // Vitest's fake timers replace requestAnimationFrame along with the clock. Files share a
 // fork, so leaving them installed changes the environment for every test that runs after
 // this one — a component waiting on rAF simply never mounts, and the failure surfaces
