@@ -4942,7 +4942,12 @@ mod tests {
         for (id, ty) in [("g1", "gadget"), ("w1", "widget")] {
             store
                 .create_node(
-                    Node::new_with_id(id.to_string(), ty.to_string(), id.to_string(), serde_json::json!({})),
+                    Node::new_with_id(
+                        id.to_string(),
+                        ty.to_string(),
+                        id.to_string(),
+                        serde_json::json!({}),
+                    ),
                     None,
                     None,
                 )
@@ -5727,6 +5732,122 @@ mod tests {
             refetched.title.as_deref(),
             Some("Stable task content"),
             "a status-only update must not touch title"
+        );
+    }
+
+    /// Set a `title_template` on the built-in "task" schema, preserving its other
+    /// schema properties (isCore / schemaVersion / fields). Mirrors how the schema
+    /// stores the template (`properties.titleTemplate`, read back by
+    /// `SchemaNode::from_node`).
+    #[cfg(test)]
+    async fn set_task_title_template(service: &NodeService, template: &str) {
+        let schema_node = service
+            .get_node("task")
+            .await
+            .unwrap()
+            .expect("task schema node must exist");
+        let mut properties = schema_node.properties.clone();
+        properties["titleTemplate"] = json!(template);
+        let update = crate::models::NodeUpdate {
+            properties: Some(properties),
+            ..Default::default()
+        };
+        service.update_node_unchecked("task", update).await.unwrap();
+    }
+
+    /// #2014: with a `title_template` set on the task schema, a property-only update
+    /// (no `content`) must recompute the indexed title from the template — the
+    /// #2006 content-only guard would leave it stale.
+    #[tokio::test]
+    async fn update_task_node_property_only_recomputes_templated_title() {
+        use crate::models::TaskNodeUpdate;
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+        set_task_title_template(&service, "Owner: {assignee}").await;
+
+        let id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Draft the spec".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let created = service.get_node(&id).await.unwrap().unwrap();
+
+        // Assignee-only update (no content) — the template now depends on it.
+        let update = TaskNodeUpdate::new().with_assignee(Some("alice".to_string()));
+        service
+            .update_task_node(&id, created.version, update)
+            .await
+            .expect("update_task_node should succeed");
+
+        let refetched = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(
+            refetched.title.as_deref(),
+            Some("Owner: alice"),
+            "a property-only update must recompute a title_template-driven title"
+        );
+    }
+
+    /// #2014: a single call that changes both content and a task property must
+    /// compute the templated title from the *post-merge* node — the value used
+    /// must be the new property, not the pre-update one (one write behind).
+    #[tokio::test]
+    async fn update_task_node_combined_update_uses_post_merge_properties() {
+        use crate::models::TaskNodeUpdate;
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+        set_task_title_template(&service, "Owner: {assignee}").await;
+
+        let id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Draft the spec".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Seed a prior assignee so a stale read would produce a visibly wrong title.
+        let created = service.get_node(&id).await.unwrap().unwrap();
+        service
+            .update_task_node(
+                &id,
+                created.version,
+                TaskNodeUpdate::new().with_assignee(Some("bob".to_string())),
+            )
+            .await
+            .unwrap();
+
+        // One call updating BOTH content and assignee.
+        let seeded = service.get_node(&id).await.unwrap().unwrap();
+        let update = TaskNodeUpdate::new()
+            .with_content("Ship the spec".to_string())
+            .with_assignee(Some("carol".to_string()));
+        service
+            .update_task_node(&id, seeded.version, update)
+            .await
+            .expect("update_task_node should succeed");
+
+        let refetched = service.get_node(&id).await.unwrap().unwrap();
+        assert_eq!(
+            refetched.content, "Ship the spec",
+            "content should be updated"
+        );
+        assert_eq!(
+            refetched.title.as_deref(),
+            Some("Owner: carol"),
+            "combined update must compute title from the new (post-merge) assignee, not the stale one"
         );
     }
 }

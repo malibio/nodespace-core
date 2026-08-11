@@ -2146,79 +2146,19 @@ impl SqliteStore {
             ));
         }
 
+        // Merge the update's task-property fields into the node's properties via the
+        // shared helper (also used by the service layer to compute a title_template
+        // title against the post-merge node — keeping the two in lockstep). The
+        // helper is a best-effort no-op on malformed shapes; the persist path keeps
+        // the stricter contract and rejects them loudly, as before this refactor.
         let mut props = current.properties.clone();
-        let task_obj = props
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("Invalid properties"))?
-            .entry("task")
-            .or_insert(serde_json::json!({}))
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("Invalid task properties"))?
-            .clone();
-
-        let mut task_obj_owned = task_obj;
-
-        if let Some(ref status) = update.status {
-            task_obj_owned.insert("status".to_string(), serde_json::json!(status.as_str()));
+        let root = props
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Invalid properties"))?;
+        if root.get("task").is_some_and(|task| !task.is_object()) {
+            return Err(anyhow::anyhow!("Invalid task properties"));
         }
-        if let Some(ref priority_opt) = update.priority {
-            match priority_opt {
-                Some(p) => {
-                    task_obj_owned.insert("priority".to_string(), serde_json::json!(p.as_str()));
-                }
-                None => {
-                    task_obj_owned.remove("priority");
-                }
-            }
-        }
-        if let Some(ref due_date_opt) = update.due_date {
-            match due_date_opt {
-                Some(s) => {
-                    task_obj_owned.insert("due_date".to_string(), serde_json::json!(s));
-                }
-                None => {
-                    task_obj_owned.remove("due_date");
-                }
-            }
-        }
-        if let Some(ref assignee_opt) = update.assignee {
-            match assignee_opt {
-                Some(a) => {
-                    task_obj_owned.insert("assignee".to_string(), serde_json::json!(a));
-                }
-                None => {
-                    task_obj_owned.remove("assignee");
-                }
-            }
-        }
-        if let Some(ref started_at_opt) = update.started_at {
-            match started_at_opt {
-                Some(s) => {
-                    task_obj_owned.insert("started_at".to_string(), serde_json::json!(s));
-                }
-                None => {
-                    task_obj_owned.remove("started_at");
-                }
-            }
-        }
-        if let Some(ref completed_at_opt) = update.completed_at {
-            match completed_at_opt {
-                Some(s) => {
-                    task_obj_owned.insert("completed_at".to_string(), serde_json::json!(s));
-                }
-                None => {
-                    task_obj_owned.remove("completed_at");
-                }
-            }
-        }
-
-        // Re-insert updated task object back into properties
-        if let Some(props_obj) = props.as_object_mut() {
-            props_obj.insert(
-                "task".to_string(),
-                serde_json::Value::Object(task_obj_owned),
-            );
-        }
+        update.apply_to_properties(&mut props);
 
         let props_json = serde_json::to_string(&props).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();

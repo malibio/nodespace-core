@@ -814,6 +814,82 @@ impl TaskNodeUpdate {
     pub fn has_content_field(&self) -> bool {
         self.content.is_some()
     }
+
+    /// Merge this update's task-property fields into a node's namespaced
+    /// `properties` value (the `{ "task": { ... } }` object).
+    ///
+    /// Shared by the write path (`SqliteStore::update_task_node`, which persists
+    /// the result) and the title-computation path (`NodeService::update_task_node`,
+    /// which needs the post-merge node to recompute a `title_template`-driven
+    /// title) so the two can never drift. Content is deliberately not handled here
+    /// — it's a node column, not a task property. No-op if `properties` (or its
+    /// `task` entry) isn't a JSON object.
+    pub fn apply_to_properties(&self, properties: &mut serde_json::Value) {
+        let Some(root) = properties.as_object_mut() else {
+            return;
+        };
+        let Some(task) = root
+            .entry("task")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+        else {
+            return;
+        };
+
+        if let Some(ref status) = self.status {
+            task.insert("status".to_string(), serde_json::json!(status.as_str()));
+        }
+        if let Some(ref priority_opt) = self.priority {
+            match priority_opt {
+                Some(p) => {
+                    task.insert("priority".to_string(), serde_json::json!(p.as_str()));
+                }
+                None => {
+                    task.remove("priority");
+                }
+            }
+        }
+        if let Some(ref due_date_opt) = self.due_date {
+            match due_date_opt {
+                Some(s) => {
+                    task.insert("due_date".to_string(), serde_json::json!(s));
+                }
+                None => {
+                    task.remove("due_date");
+                }
+            }
+        }
+        if let Some(ref assignee_opt) = self.assignee {
+            match assignee_opt {
+                Some(a) => {
+                    task.insert("assignee".to_string(), serde_json::json!(a));
+                }
+                None => {
+                    task.remove("assignee");
+                }
+            }
+        }
+        if let Some(ref started_at_opt) = self.started_at {
+            match started_at_opt {
+                Some(s) => {
+                    task.insert("started_at".to_string(), serde_json::json!(s));
+                }
+                None => {
+                    task.remove("started_at");
+                }
+            }
+        }
+        if let Some(ref completed_at_opt) = self.completed_at {
+            match completed_at_opt {
+                Some(s) => {
+                    task.insert("completed_at".to_string(), serde_json::json!(s));
+                }
+                None => {
+                    task.remove("completed_at");
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
