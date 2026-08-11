@@ -60,7 +60,11 @@
 
     <div class="max-h-[60vh] overflow-y-auto py-1">
       {#if node}
-        <NestedFieldEditor {field} {value} onChange={persist} />
+        <!-- Remount per field so the editor's per-child expand/collapse state
+             doesn't bleed across fields in the single reused modal instance. -->
+        {#key field.name}
+          <NestedFieldEditor {field} {value} onChange={persist} />
+        {/key}
       {:else}
         <div class="text-muted-foreground py-6 text-center text-sm">Node not found.</div>
       {/if}

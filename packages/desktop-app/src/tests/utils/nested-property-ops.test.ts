@@ -17,7 +17,8 @@ import {
   addArrayItem,
   makeEmptyValueForField,
   makeEmptyArrayItem,
-  isNestedField
+  isNestedField,
+  shiftItemOpenStateOnDelete
 } from '$lib/utils/nested-property-ops';
 import type { SchemaField } from '$lib/types/schema-node';
 
@@ -160,5 +161,25 @@ describe('isNestedField', () => {
     expect(isNestedField(field({ name: 'a', type: 'array' }))).toBe(true);
     expect(isNestedField(field({ name: 's', type: 'string' }))).toBe(false);
     expect(isNestedField(field({ name: 'e', type: 'enum' }))).toBe(false);
+  });
+});
+
+describe('shiftItemOpenStateOnDelete', () => {
+  it('drops the removed index and shifts higher indices down', () => {
+    // Items [0,1,2]; elements 1 and 2 expanded. Delete index 0 → old 1→0, 2→1.
+    const open = { 'item-1': true, 'item-2': true };
+    expect(shiftItemOpenStateOnDelete(open, 0)).toEqual({ 'item-0': true, 'item-1': true });
+  });
+
+  it('drops the removed index itself and leaves lower indices untouched', () => {
+    const open = { 'item-0': true, 'item-1': true, 'item-2': true };
+    expect(shiftItemOpenStateOnDelete(open, 1)).toEqual({ 'item-0': true, 'item-1': true });
+  });
+
+  it('preserves non-item keys and does not mutate the input', () => {
+    const open = { 'item-0': true, other: false };
+    const result = shiftItemOpenStateOnDelete(open, 0);
+    expect(result).toEqual({ other: false });
+    expect(open).toEqual({ 'item-0': true, other: false }); // unchanged
   });
 });

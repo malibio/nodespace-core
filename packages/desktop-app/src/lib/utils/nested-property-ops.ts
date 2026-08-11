@@ -103,3 +103,30 @@ export function makeEmptyArrayItem(field: SchemaField): unknown {
 export function isNestedField(field: SchemaField): boolean {
   return field.type === 'object' || field.type === 'array';
 }
+
+/**
+ * Shift index-keyed open/collapse state (`item-<n>`) to follow array content
+ * after the element at `removedIndex` is deleted: the removed key is dropped and
+ * every higher index shifts down by one. Non-`item-<n>` keys are preserved.
+ *
+ * The nested editor keys both its array `{#each}` and its per-element expand
+ * state by index; without this shift, deleting a middle element would leave the
+ * wrong element appearing expanded.
+ */
+export function shiftItemOpenStateOnDelete(
+  openState: Record<string, boolean>,
+  removedIndex: number
+): Record<string, boolean> {
+  const next: Record<string, boolean> = {};
+  for (const [key, isOpen] of Object.entries(openState)) {
+    const match = key.match(/^item-(\d+)$/);
+    if (!match) {
+      next[key] = isOpen;
+      continue;
+    }
+    const index = Number(match[1]);
+    if (index === removedIndex) continue; // drop the removed element's state
+    next[index > removedIndex ? `item-${index - 1}` : key] = isOpen;
+  }
+  return next;
+}

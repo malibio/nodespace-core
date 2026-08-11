@@ -35,7 +35,8 @@
     deleteArrayIndex,
     addArrayItem,
     makeEmptyArrayItem,
-    isNestedField
+    isNestedField,
+    shiftItemOpenStateOnDelete
   } from '$lib/utils/nested-property-ops';
 
   let {
@@ -68,6 +69,14 @@
       .split(' ')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
+  }
+
+  // Delete an array element, shifting the per-element open-state down so expand/
+  // collapse follows the content across the delete (both openKeys and the each
+  // block are index-keyed).
+  function removeArrayItem(index: number) {
+    openKeys = shiftItemOpenStateOnDelete(openKeys, index);
+    onChange(deleteArrayIndex(value, index));
   }
 
   // Synthetic object field describing each element of an array-of-objects, so the
@@ -213,7 +222,7 @@
                 size="icon"
                 class="text-muted-foreground hover:text-destructive size-7"
                 aria-label={`Remove item ${index + 1}`}
-                onclick={() => onChange(deleteArrayIndex(value, index))}
+                onclick={() => removeArrayItem(index)}
               >
                 <XIcon class="size-4" />
               </Button>
@@ -242,7 +251,7 @@
               size="icon"
               class="text-muted-foreground hover:text-destructive size-7 shrink-0"
               aria-label={`Remove item ${index + 1}`}
-              onclick={() => onChange(deleteArrayIndex(value, index))}
+              onclick={() => removeArrayItem(index)}
             >
               <XIcon class="size-4" />
             </Button>
