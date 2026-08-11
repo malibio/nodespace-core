@@ -104,4 +104,31 @@ describe('deleteNode subtree-access-denied restore', () => {
     expect(store.getNode(NODE_ID)).toBeUndefined();
     expect(getSubtreeAccessDeniedState().pending).toBeNull();
   }, 3000);
+
+  it('invokes onRefused on a refusal so a caller can restore its own view state', async () => {
+    // The reactive view service also removes the node from its own `_rootNodeIds`
+    // (the top-level view's source of truth), which the store can't reach — so on a
+    // refusal the store calls this callback to let that layer restore too.
+    seedPersistedNode(store);
+    const onRefused = vi.fn();
+
+    vi.spyOn(backendAdapter, 'deleteNode').mockRejectedValueOnce(makeRefusalError(2));
+    store.deleteNode(NODE_ID, viewerSource, false, [], onRefused);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(onRefused).toHaveBeenCalledTimes(1);
+  }, 3000);
+
+  it('does NOT invoke onRefused for a non-refusal error', async () => {
+    seedPersistedNode(store);
+    const onRefused = vi.fn();
+
+    vi.spyOn(backendAdapter, 'deleteNode').mockRejectedValueOnce(new Error('network unreachable'));
+    store.deleteNode(NODE_ID, viewerSource, false, [], onRefused);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(onRefused).not.toHaveBeenCalled();
+  }, 3000);
 });

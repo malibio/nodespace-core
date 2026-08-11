@@ -1295,12 +1295,31 @@ export function createReactiveNodeService(events: NodeManagerEvents) {
 
     cleanupDebouncedOperations(nodeId);
 
-    sharedNodeStore.deleteNode(nodeId, viewerSource);
+    // Capture the view-layer state the optimistic removal below is about to strip,
+    // so a backend refusal (subtree access gate) can restore it. The store delete
+    // is fire-and-forget and the refusal fires async, so the store invokes this
+    // callback once it has restored its own state — the store can't reach
+    // `_rootNodeIds`/`_uiState`, which are this service's source of truth for the
+    // top-level view (`getVisibleNodesForParent(null)`).
+    const removedRootIndex = _rootNodeIds.indexOf(nodeId);
+    const removedUiState = _uiState[nodeId];
+    const restoreOnRefusal = () => {
+      if (removedRootIndex >= 0 && !_rootNodeIds.includes(nodeId)) {
+        const restored = [..._rootNodeIds];
+        restored.splice(Math.min(removedRootIndex, restored.length), 0, nodeId);
+        _rootNodeIds = restored; // reassign for Svelte 5 reactivity
+      }
+      if (removedUiState !== undefined) {
+        _uiState[nodeId] = removedUiState;
+      }
+      events.hierarchyChanged();
+    };
+
+    sharedNodeStore.deleteNode(nodeId, viewerSource, false, [], restoreOnRefusal);
     delete _uiState[nodeId];
 
     // CRITICAL: Must reassign (not mutate) for Svelte 5 reactivity
-    const rootIndex = _rootNodeIds.indexOf(nodeId);
-    if (rootIndex >= 0) {
+    if (removedRootIndex >= 0) {
       _rootNodeIds = _rootNodeIds.filter((id) => id !== nodeId);
     }
 

@@ -2020,12 +2020,18 @@ export class SharedNodeStore {
    * @param source - Source of the deletion
    * @param skipPersistence - Skip database persistence (default: false)
    * @param dependencies - Node IDs that must be persisted before deletion (prevents FOREIGN KEY violations)
+   * @param onRefused - Called if the backend refuses the delete via the subtree
+   *   access gate, AFTER this store restores its own state. Lets a caller that
+   *   also removed the node optimistically from its OWN state (e.g. the reactive
+   *   view service's `_rootNodeIds`/`_uiState`) restore that too — the store can't
+   *   reach those layers. Not called for success or any other error.
    */
   deleteNode(
     nodeId: string,
     source: UpdateSource,
     skipPersistence = false,
-    dependencies: string[] = []
+    dependencies: string[] = [],
+    onRefused?: () => void
   ): void {
     // Cancel any active batch before deletion
     this.cancelBatch(nodeId);
@@ -2087,6 +2093,10 @@ export class SharedNodeStore {
                   this.persistedNodeIds.add(nodeId);
                 }
                 this.notifySubscribers(nodeId, node, source);
+
+                // Let the caller restore its own optimistic removal (view layer)
+                // before we surface the refusal.
+                onRefused?.();
 
                 showSubtreeAccessDenied(dbError.conflictData.inaccessibleCount);
               }
