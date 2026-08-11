@@ -38,6 +38,10 @@
     fieldId: string;
   } = $props();
 
+  // Date picker popover state — owned here so picking a date dismisses the
+  // calendar instead of leaving it open over the rest of the form.
+  let datePickerOpen = $state(false);
+
   function formatFieldLabel(fieldName: string): string {
     return fieldName
       .replace(/[_-]/g, ' ')
@@ -98,7 +102,7 @@
 {:else if field.type === 'date'}
   {@const rawValue = value as string | null}
   {@const dateVal = parseDateFromValue(rawValue)}
-  <Popover.Root>
+  <Popover.Root bind:open={datePickerOpen}>
     <Popover.Trigger
       id={fieldId}
       class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
@@ -117,6 +121,7 @@
         onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
           const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
           onChange(formatDateForStorage(singleValue));
+          datePickerOpen = false;
         }}
         type="single"
       />

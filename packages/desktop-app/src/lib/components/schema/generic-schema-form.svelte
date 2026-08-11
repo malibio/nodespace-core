@@ -5,14 +5,12 @@
   Used by BaseNodeViewer when a node's nodeType is a UUID (custom schema type)
   that has no registered plugin schema form.
 
-  Field type → input mapping:
-  - string/text → text input
-  - number → number input
-  - boolean → checkbox
-  - enum → dropdown (using coreValues + userValues)
-  - date → date picker
+  Field type → control:
+  - leaf fields (string/text, number, boolean, enum, date) → SchemaFieldLeaf
+  - object/array → summary trigger opening the shared NestedPropertyModal
 
-  Values are stored/read from node.properties[field.name] (flat, not namespaced).
+  Values are stored/read from node.properties[field.name] (flat, not namespaced),
+  nested values included.
 
   Props:
   - nodeId: ID of the node to display properties for
@@ -27,6 +25,7 @@
   import { createLogger } from '$lib/utils/logger';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
   import SchemaFieldLeaf from './schema-field-leaf.svelte';
+  import NestedFieldTrigger from './nested-field-trigger.svelte';
   import NestedPropertyModal from './nested-property-modal.svelte';
   import { isNestedField } from '$lib/utils/nested-property-ops';
   import { loadNodeRelationshipsView } from '$lib/services/relationship-viewer-service';
@@ -120,18 +119,6 @@
       .join(' ');
   }
 
-  // Compact summary for a nested (object/array) field's trigger button: the item
-  // count for arrays, the populated-key count for objects.
-  function nestedSummary(field: SchemaField): string {
-    const value = getFieldValue(field.name);
-    if (field.type === 'array') {
-      const n = Array.isArray(value) ? value.length : 0;
-      return `${n} ${n === 1 ? 'item' : 'items'}`;
-    }
-    const n = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).length : 0;
-    return `${n} ${n === 1 ? 'field' : 'fields'}`;
-  }
-
   function openNestedModal(field: SchemaField) {
     nestedModalField = field;
     nestedModalOpen = true;
@@ -177,15 +164,12 @@
               </label>
 
               {#if isNestedField(field)}
-                <button
-                  type="button"
-                  id={fieldId}
-                  class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm transition-all hover:opacity-80 focus-visible:outline-none"
-                  onclick={() => openNestedModal(field)}
-                >
-                  <span class="text-muted-foreground">{nestedSummary(field)}</span>
-                  <span class="text-xs text-muted-foreground">Edit</span>
-                </button>
+                <NestedFieldTrigger
+                  {field}
+                  {fieldId}
+                  value={getFieldValue(field.name)}
+                  onopen={() => openNestedModal(field)}
+                />
               {:else}
                 <SchemaFieldLeaf
                   {field}
@@ -218,7 +202,13 @@
   <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
 
   {#if nestedModalField}
-    <NestedPropertyModal bind:open={nestedModalOpen} {nodeId} field={nestedModalField} />
+    {@const nestedField = nestedModalField}
+    <NestedPropertyModal
+      bind:open={nestedModalOpen}
+      field={nestedField}
+      value={getFieldValue(nestedField.name)}
+      onPersist={(newValue) => updateField(nestedField.name, newValue)}
+    />
   {/if}
 {/if}
 

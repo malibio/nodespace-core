@@ -105,6 +105,20 @@ export function isNestedField(field: SchemaField): boolean {
 }
 
 /**
+ * Compact summary of a nested field's current value, shown on the trigger that
+ * opens the nested editor: the element count for an array, the populated-key
+ * count for an object. A missing/wrong-shaped value counts as zero.
+ */
+export function nestedFieldSummary(field: SchemaField, value: unknown): string {
+  if (field.type === 'array') {
+    const count = asArray(value).length;
+    return `${count} ${count === 1 ? 'item' : 'items'}`;
+  }
+  const count = Object.keys(asRecord(value)).length;
+  return `${count} ${count === 1 ? 'field' : 'fields'}`;
+}
+
+/**
  * Shift index-keyed open/collapse state (`item-<n>`) to follow array content
  * after the element at `removedIndex` is deleted: the removed key is dropped and
  * every higher index shifts down by one. Non-`item-<n>` keys are preserved.

@@ -3,7 +3,12 @@
 
   Hybrid approach:
   - Hardcoded UI for core task properties (status, priority, dueDate, assignee)
-  - Dynamic rendering for user-defined schema extensions
+  - Dynamic rendering for user-defined schema extensions: leaf fields render
+    through the shared SchemaFieldLeaf, object/array fields render a summary
+    trigger that opens the shared NestedPropertyModal
+
+  User-defined values (nested ones included) are stored under
+  properties.task[field.name] via updateUserField.
 
   Props:
   - nodeId: ID of the task node to display properties for
@@ -15,20 +20,18 @@
   import * as Select from '$lib/components/ui/select';
   import * as Popover from '$lib/components/ui/popover';
   import { Calendar } from '$lib/components/ui/calendar';
-  import { Input } from '$lib/components/ui/input';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import {
-    type SchemaNode,
-    type SchemaField,
-    type EnumValue,
-    isSchemaNode
-  } from '$lib/types/schema-node';
+  import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
   import type { TaskStatus } from '$lib/types/task-node';
   import { nodeToTaskNode } from '$lib/types/task-node';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
+  import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
+  import NestedPropertyModal from '$lib/components/schema/nested-property-modal.svelte';
+  import { isNestedField } from '$lib/utils/nested-property-ops';
   import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   // Logger instance for TaskSchemaForm component
@@ -37,6 +40,13 @@
   // Relationships viewer entry point (issue #1918) — a task's typed
   // relationships (e.g. assigned_to → person) surface here, as on other forms.
   let showRelationships = $state(false);
+
+  // Nested (object/array) user-field editor. One modal instance is reused; the
+  // clicked field determines what it edits. It persists through updateUserField
+  // below, so nested values land under `properties.task.<field>` like every other
+  // user-defined field on a task.
+  let nestedModalField = $state<SchemaField | null>(null);
+  let nestedModalOpen = $state(false);
 
   // Props - only nodeId needed since we know it's a task
   let { nodeId }: { nodeId: string } = $props();
@@ -227,12 +237,9 @@
     );
   }
 
-  // Get enum values for a schema field
-  function getEnumValues(field: SchemaField): EnumValue[] {
-    const values: EnumValue[] = [];
-    if (field.coreValues) values.push(...field.coreValues);
-    if (field.userValues) values.push(...field.userValues);
-    return values;
+  function openNestedModal(field: SchemaField) {
+    nestedModalField = field;
+    nestedModalOpen = true;
   }
 
   // Format enum label
@@ -639,83 +646,20 @@
                 {field.description || formatEnumLabel(field.name)}
               </label>
 
-              {#if field.type === 'enum'}
-                {@const enumValues = getEnumValues(field)}
-                {@const currentValue = (getUserFieldValue(field.name) as string) || ''}
-                <Select.Root
-                  type="single"
-                  value={currentValue}
-                  onValueChange={(newValue) => updateUserField(field.name, newValue)}
-                >
-                  <Select.Trigger class="w-full">
-                    {enumValues.find((ev) => ev.value === currentValue)?.label ||
-                      currentValue ||
-                      `Select ${field.name}...`}
-                  </Select.Trigger>
-                  <Select.Content>
-                    {#each enumValues as ev}
-                      <Select.Item value={ev.value} label={ev.label} />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              {:else if field.type === 'date'}
-                {@const rawDateValue = getUserFieldValue(field.name) as string | null}
-                {@const dateVal = parseDateFromBackend(rawDateValue)}
-                <Popover.Root>
-                  <Popover.Trigger
-                    id={fieldId}
-                    class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                  >
-                    <span class={dateVal ? '' : 'text-muted-foreground'}>
-                      {formatDateDisplay(rawDateValue)}
-                    </span>
-                    <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                      <rect
-                        x="2"
-                        y="3"
-                        width="12"
-                        height="11"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                      />
-                      <path
-                        d="M5 1v3M11 1v3M2 6h12"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                        stroke-linecap="round"
-                      />
-                    </svg>
-                  </Popover.Trigger>
-                  <Popover.Content class="w-auto p-0" align="start">
-                    <!-- Cast to `never` works around bits-ui Calendar type mismatch (see core dueDate field comment) -->
-                    <Calendar
-                      value={dateVal as never}
-                      onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                        const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                        updateUserField(field.name, formatDateForStorage(singleValue));
-                      }}
-                      type="single"
-                    />
-                  </Popover.Content>
-                </Popover.Root>
-              {:else if field.type === 'text' || field.type === 'string'}
-                <Input
-                  id={fieldId}
-                  type="text"
-                  value={(getUserFieldValue(field.name) as string) || ''}
-                  oninput={(e) => updateUserField(field.name, e.currentTarget.value)}
-                  placeholder={field.default ? String(field.default) : ''}
-                />
-              {:else if field.type === 'number'}
-                <Input
-                  id={fieldId}
-                  type="number"
-                  value={(getUserFieldValue(field.name) as number) || field.default || 0}
-                  oninput={(e) => updateUserField(field.name, parseFloat(e.currentTarget.value) || 0)}
+              {#if isNestedField(field)}
+                <NestedFieldTrigger
+                  {field}
+                  {fieldId}
+                  value={getUserFieldValue(field.name)}
+                  onopen={() => openNestedModal(field)}
                 />
               {:else}
-                <div class="text-sm text-muted-foreground">Unknown field type: {field.type}</div>
+                <SchemaFieldLeaf
+                  {field}
+                  {fieldId}
+                  value={getUserFieldValue(field.name)}
+                  onChange={(newValue) => updateUserField(field.name, newValue)}
+                />
               {/if}
             </div>
           {/each}
@@ -735,6 +679,16 @@
   </div>
 
   <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
+
+  {#if nestedModalField}
+    {@const nestedField = nestedModalField}
+    <NestedPropertyModal
+      bind:open={nestedModalOpen}
+      field={nestedField}
+      value={getUserFieldValue(nestedField.name)}
+      onPersist={(newValue) => updateUserField(nestedField.name, newValue)}
+    />
+  {/if}
 {/if}
 
 <style>
