@@ -11,23 +11,29 @@ import { TextareaController } from '$lib/design/components/textarea-controller';
 describe('positionCursor action', () => {
   let textarea: HTMLTextAreaElement;
   let controller: TextareaController;
-  // Type as Vitest mock instance - vi.spyOn returns a mock that can be restored
-  let rafSpy: ReturnType<typeof vi.fn>;
+  // A synchronous stand-in so the cursor-positioning callback runs inline and can be
+  // asserted. It is installed with `vi.stubGlobal`, NOT `vi.spyOn`, and that distinction
+  // is the whole point:
+  //
+  // happy-dom installs `requestAnimationFrame` on `globalThis` as an accessor whose
+  // setter writes through to its `window`. `vi.spyOn` replaces only the getter and keeps
+  // that setter, so when `vi.useFakeTimers()` assigns its fake it lands on `window` —
+  // and `vi.useRealTimers()` then "restores" whatever it read at install time, which was
+  // the synchronous spy. `mockRestore()` afterwards puts back a getter that reads the
+  // poisoned `window` value, so the synchronous rAF outlives this file. Every later test
+  // in the same fork that mounts a bits-ui Collapsible then recurses until the stack
+  // overflows, failing somewhere with no hint of where it came from.
+  //
+  // `vi.stubGlobal` defines a plain data property that shadows the write-through
+  // accessor, and `vi.unstubAllGlobals()` removes it outright.
+  const rafMock = vi.fn((cb: (time: number) => void) => {
+    cb(0);
+    return 0;
+  });
 
   beforeEach(() => {
-    // These tests need a synchronous requestAnimationFrame so the cursor-positioning
-    // callback runs inline and can be asserted. Install it as a STUB rather than
-    // assigning to globalThis: vitest runs many files per fork, and a synchronous rAF
-    // left behind makes any later test that mounts a bits-ui Collapsible recurse until
-    // the stack overflows — a failure that surfaces in an unrelated file with no hint
-    // of where it came from. `vi.unstubAllGlobals` in afterEach puts back whatever was
-    // there, including nothing.
-    if (!globalThis.requestAnimationFrame) {
-      vi.stubGlobal('requestAnimationFrame', (cb: (time: number) => void) => {
-        cb(0);
-        return 0;
-      });
-    }
+    rafMock.mockClear();
+    vi.stubGlobal('requestAnimationFrame', rafMock);
 
     // Create textarea element
     textarea = document.createElement('textarea');
@@ -55,19 +61,14 @@ describe('positionCursor action', () => {
       nodeTypeConversionDetected: vi.fn()
     });
 
-    // Spy on requestAnimationFrame
-    // Type cast required: vi.spyOn returns generic Mock type that doesn't expose mockRestore until runtime
-    rafSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((cb) => {
-      cb(0);
-      return 0;
-    }) as ReturnType<typeof vi.fn>;
   });
 
   afterEach(() => {
-    if (rafSpy) {
-      rafSpy.mockRestore();
-    }
-    // Drop the synchronous stand-in so it cannot reach another file in this fork.
+    // Order matters: hand the real timers back BEFORE dropping the stub, so the fake
+    // timers' uninstall cannot write the stand-in through to happy-dom's window. Doing
+    // it here rather than at the end of each test body also covers a failing test, which
+    // would otherwise skip its inline restore and leak.
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     controller.destroy();
     document.body.removeChild(textarea);
@@ -79,7 +80,7 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'default', skipSyntax: true };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(spy).toHaveBeenCalledWith(0, true);
   });
 
@@ -89,7 +90,7 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'absolute', position: 10 };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(spy).toHaveBeenCalledWith(10);
   });
 
@@ -99,7 +100,7 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'arrow-navigation', direction: 'up', pixelOffset: 50 };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(spy).toHaveBeenCalledWith('up', 50);
   });
 
@@ -109,7 +110,7 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'line-column', line: 2, skipSyntax: false };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(spy).toHaveBeenCalledWith(2, false);
   });
 
@@ -193,13 +194,16 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'node-type-conversion', position: 15 };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(focusSpy).toHaveBeenCalled();
     expect(setCursorSpy).toHaveBeenCalledWith(15);
   });
 
   it('should retry node-type-conversion if cursor position changes', async () => {
-    vi.useFakeTimers();
+    // Fake ONLY the timer these retries use. `useFakeTimers()` with no argument also
+    // replaces requestAnimationFrame, which would swallow the synchronous stand-in
+    // installed above and stop the positioning callback from running at all.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     // Mock setCursorPosition to NOT actually change the cursor position
     // This simulates the scenario where a component switch resets the cursor
@@ -226,11 +230,13 @@ describe('positionCursor action', () => {
     expect(setCursorSpy).toHaveBeenCalledTimes(2);
     expect(setCursorSpy).toHaveBeenCalledWith(20);
 
-    vi.useRealTimers();
   });
 
   it('should not retry node-type-conversion if cursor position is correct', async () => {
-    vi.useFakeTimers();
+    // Fake ONLY the timer these retries use. `useFakeTimers()` with no argument also
+    // replaces requestAnimationFrame, which would swallow the synchronous stand-in
+    // installed above and stop the positioning callback from running at all.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     const setCursorSpy = vi.spyOn(controller, 'setCursorPosition');
     const data: CursorPosition = { type: 'node-type-conversion', position: 20 };
@@ -251,11 +257,13 @@ describe('positionCursor action', () => {
     // Should NOT retry because position is already correct
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
 
-    vi.useRealTimers();
   });
 
   it('should not retry node-type-conversion if element is not a textarea', async () => {
-    vi.useFakeTimers();
+    // Fake ONLY the timer these retries use. `useFakeTimers()` with no argument also
+    // replaces requestAnimationFrame, which would swallow the synchronous stand-in
+    // installed above and stop the positioning callback from running at all.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     const setCursorSpy = vi.spyOn(controller, 'setCursorPosition');
     const data: CursorPosition = { type: 'node-type-conversion', position: 20 };
@@ -275,7 +283,6 @@ describe('positionCursor action', () => {
     // Should NOT retry because activeElement is not a textarea
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
 
-    vi.useRealTimers();
   });
 
   it('should apply inherited-type cursor position', () => {
@@ -285,13 +292,16 @@ describe('positionCursor action', () => {
     const data: CursorPosition = { type: 'inherited-type', position: 8 };
     positionCursor(textarea, { data, controller });
 
-    expect(rafSpy).toHaveBeenCalled();
+    expect(rafMock).toHaveBeenCalled();
     expect(focusSpy).toHaveBeenCalled();
     expect(setCursorSpy).toHaveBeenCalledWith(8);
   });
 
   it('should retry inherited-type if cursor position changes', async () => {
-    vi.useFakeTimers();
+    // Fake ONLY the timer these retries use. `useFakeTimers()` with no argument also
+    // replaces requestAnimationFrame, which would swallow the synchronous stand-in
+    // installed above and stop the positioning callback from running at all.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     // Mock setCursorPosition to NOT actually change the cursor position
     // This simulates the scenario where a component switch resets the cursor
@@ -318,11 +328,13 @@ describe('positionCursor action', () => {
     expect(setCursorSpy).toHaveBeenCalledTimes(2);
     expect(setCursorSpy).toHaveBeenCalledWith(12);
 
-    vi.useRealTimers();
   });
 
   it('should not retry inherited-type if cursor position is correct', async () => {
-    vi.useFakeTimers();
+    // Fake ONLY the timer these retries use. `useFakeTimers()` with no argument also
+    // replaces requestAnimationFrame, which would swallow the synchronous stand-in
+    // installed above and stop the positioning callback from running at all.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     const setCursorSpy = vi.spyOn(controller, 'setCursorPosition');
     const data: CursorPosition = { type: 'inherited-type', position: 12 };
@@ -343,7 +355,6 @@ describe('positionCursor action', () => {
     // Should NOT retry because position is already correct
     expect(setCursorSpy).toHaveBeenCalledTimes(1);
 
-    vi.useRealTimers();
   });
 
   it('should use skipSyntax default value (true) for default position', () => {
