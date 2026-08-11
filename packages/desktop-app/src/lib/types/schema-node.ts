@@ -95,6 +95,12 @@ export interface SchemaField {
   /** For array fields, the type of items in the array */
   itemType?: string;
 
+  /** Sub-fields of an object field (field.type === 'object') */
+  fields?: SchemaField[];
+
+  /** Sub-fields of each object element in an array field (field.itemType === 'object') */
+  itemFields?: SchemaField[];
+
   /**
    * Machine-bound: persisted and read locally like any other property, but never
    * included in a sync push and ignored if it arrives in a pull. Use when a value

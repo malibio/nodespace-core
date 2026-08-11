@@ -1,0 +1,185 @@
+/**
+ * Unit tests for nested-property-ops — the pure, immutable value transforms that
+ * back the recursive nested (object/array) schema-property editor.
+ *
+ * These cover the operations the editor relies on for correctness: setting and
+ * deleting object keys (including at depth, via composition), replacing/deleting
+ * array indices, appending items, and building empty values/elements for a field.
+ * Every op must return a fresh value and never mutate its input.
+ */
+
+import { describe, it, expect } from 'vitest';
+import {
+  setObjectKey,
+  deleteObjectKey,
+  replaceArrayIndex,
+  deleteArrayIndex,
+  addArrayItem,
+  makeEmptyValueForField,
+  makeEmptyArrayItem,
+  isNestedField,
+  shiftItemOpenStateOnDelete
+} from '$lib/utils/nested-property-ops';
+import type { SchemaField } from '$lib/types/schema-node';
+
+function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
+  return { protection: 'user', indexed: false, ...partial };
+}
+
+describe('setObjectKey', () => {
+  it('sets a key on an object without mutating the input', () => {
+    const original = { a: 1 };
+    const next = setObjectKey(original, 'b', 2);
+    expect(next).toEqual({ a: 1, b: 2 });
+    expect(original).toEqual({ a: 1 });
+    expect(next).not.toBe(original);
+  });
+
+  it('overwrites an existing key', () => {
+    expect(setObjectKey({ a: 1 }, 'a', 9)).toEqual({ a: 9 });
+  });
+
+  it('treats null/undefined/non-object as an empty object', () => {
+    expect(setObjectKey(null, 'a', 1)).toEqual({ a: 1 });
+    expect(setObjectKey(undefined, 'a', 1)).toEqual({ a: 1 });
+    expect(setObjectKey(42, 'a', 1)).toEqual({ a: 1 });
+    expect(setObjectKey(['x'], 'a', 1)).toEqual({ a: 1 });
+  });
+
+  it('composes to set a value at depth immutably', () => {
+    const value = { address: { city: 'Denver' } };
+    const inner = value.address;
+    const next = setObjectKey(value, 'address', setObjectKey(inner, 'zip', '80202'));
+    expect(next).toEqual({ address: { city: 'Denver', zip: '80202' } });
+    // Original untouched at every level.
+    expect(value).toEqual({ address: { city: 'Denver' } });
+    expect(next.address).not.toBe(inner);
+  });
+});
+
+describe('deleteObjectKey', () => {
+  it('removes a key without mutating the input', () => {
+    const original = { a: 1, b: 2 };
+    const next = deleteObjectKey(original, 'a');
+    expect(next).toEqual({ b: 2 });
+    expect(original).toEqual({ a: 1, b: 2 });
+  });
+
+  it('is a no-op for a missing key', () => {
+    expect(deleteObjectKey({ a: 1 }, 'z')).toEqual({ a: 1 });
+  });
+
+  it('deletes a key at depth via composition', () => {
+    const value = { address: { city: 'Denver', zip: '80202' } };
+    const next = setObjectKey(value, 'address', deleteObjectKey(value.address, 'zip'));
+    expect(next).toEqual({ address: { city: 'Denver' } });
+    expect(value.address).toEqual({ city: 'Denver', zip: '80202' });
+  });
+});
+
+describe('replaceArrayIndex', () => {
+  it('replaces an element without mutating the input', () => {
+    const original = [1, 2, 3];
+    const next = replaceArrayIndex(original, 1, 9);
+    expect(next).toEqual([1, 9, 3]);
+    expect(original).toEqual([1, 2, 3]);
+  });
+
+  it('replaces an object element in an array of objects', () => {
+    const arr = [{ email: 'a@x.com' }, { email: 'b@x.com' }];
+    const next = replaceArrayIndex(arr, 0, setObjectKey(arr[0], 'email', 'c@x.com'));
+    expect(next).toEqual([{ email: 'c@x.com' }, { email: 'b@x.com' }]);
+    expect(arr[0]).toEqual({ email: 'a@x.com' });
+  });
+
+  it('leaves the array unchanged for an out-of-range index', () => {
+    expect(replaceArrayIndex([1, 2], 5, 9)).toEqual([1, 2]);
+  });
+
+  it('treats a non-array as empty', () => {
+    expect(replaceArrayIndex(null, 0, 9)).toEqual([]);
+  });
+});
+
+describe('deleteArrayIndex', () => {
+  it('removes an element without mutating the input', () => {
+    const original = ['a', 'b', 'c'];
+    const next = deleteArrayIndex(original, 1);
+    expect(next).toEqual(['a', 'c']);
+    expect(original).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is a no-op for an out-of-range index', () => {
+    expect(deleteArrayIndex(['a'], 3)).toEqual(['a']);
+  });
+});
+
+describe('addArrayItem', () => {
+  it('appends an item without mutating the input', () => {
+    const original = [1, 2];
+    const next = addArrayItem(original, 3);
+    expect(next).toEqual([1, 2, 3]);
+    expect(original).toEqual([1, 2]);
+  });
+
+  it('treats null as an empty array', () => {
+    expect(addArrayItem(null, 'x')).toEqual(['x']);
+  });
+});
+
+describe('makeEmptyValueForField', () => {
+  it('returns type-appropriate empties', () => {
+    expect(makeEmptyValueForField(field({ name: 'o', type: 'object' }))).toEqual({});
+    expect(makeEmptyValueForField(field({ name: 'a', type: 'array' }))).toEqual([]);
+    expect(makeEmptyValueForField(field({ name: 'b', type: 'boolean' }))).toBe(false);
+    expect(makeEmptyValueForField(field({ name: 'n', type: 'number' }))).toBe(0);
+    expect(makeEmptyValueForField(field({ name: 's', type: 'string' }))).toBe('');
+    expect(makeEmptyValueForField(field({ name: 't', type: 'text' }))).toBe('');
+    expect(makeEmptyValueForField(field({ name: 'e', type: 'enum' }))).toBe('');
+    expect(makeEmptyValueForField(field({ name: 'd', type: 'date' }))).toBeNull();
+  });
+});
+
+describe('makeEmptyArrayItem', () => {
+  it('returns an empty object for an array of objects', () => {
+    expect(makeEmptyArrayItem(field({ name: 'contacts', type: 'array', itemType: 'object' }))).toEqual({});
+  });
+
+  it('returns the scalar empty for an array of scalars', () => {
+    expect(makeEmptyArrayItem(field({ name: 'tags', type: 'array', itemType: 'string' }))).toBe('');
+    expect(makeEmptyArrayItem(field({ name: 'counts', type: 'array', itemType: 'number' }))).toBe(0);
+  });
+
+  it('defaults a missing itemType to an empty string', () => {
+    expect(makeEmptyArrayItem(field({ name: 'x', type: 'array' }))).toBe('');
+  });
+});
+
+describe('isNestedField', () => {
+  it('is true only for object and array fields', () => {
+    expect(isNestedField(field({ name: 'o', type: 'object' }))).toBe(true);
+    expect(isNestedField(field({ name: 'a', type: 'array' }))).toBe(true);
+    expect(isNestedField(field({ name: 's', type: 'string' }))).toBe(false);
+    expect(isNestedField(field({ name: 'e', type: 'enum' }))).toBe(false);
+  });
+});
+
+describe('shiftItemOpenStateOnDelete', () => {
+  it('drops the removed index and shifts higher indices down', () => {
+    // Items [0,1,2]; elements 1 and 2 expanded. Delete index 0 → old 1→0, 2→1.
+    const open = { 'item-1': true, 'item-2': true };
+    expect(shiftItemOpenStateOnDelete(open, 0)).toEqual({ 'item-0': true, 'item-1': true });
+  });
+
+  it('drops the removed index itself and leaves lower indices untouched', () => {
+    const open = { 'item-0': true, 'item-1': true, 'item-2': true };
+    expect(shiftItemOpenStateOnDelete(open, 1)).toEqual({ 'item-0': true, 'item-1': true });
+  });
+
+  it('preserves non-item keys and does not mutate the input', () => {
+    const open = { 'item-0': true, other: false };
+    const result = shiftItemOpenStateOnDelete(open, 0);
+    expect(result).toEqual({ other: false });
+    expect(open).toEqual({ 'item-0': true, other: false }); // unchanged
+  });
+});

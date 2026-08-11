@@ -1,0 +1,132 @@
+/**
+ * Pure, immutable value transforms for nested (object/array) schema properties.
+ *
+ * These helpers never mutate their inputs — each returns a fresh value with the
+ * requested change applied. They are deliberately store-agnostic so the recursive
+ * editor can rebuild a whole top-level property value immutably from leaf edits,
+ * and so the transforms are trivially unit-testable in isolation.
+ */
+
+import type { SchemaField } from '$lib/types/schema-node';
+
+/** Treat a possibly null/undefined value as an object record for safe spreading. */
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** Treat a possibly null/undefined value as an array for safe indexing. */
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? (value as unknown[]) : [];
+}
+
+/**
+ * Return a copy of the object `value` with `key` set to `newValue`.
+ * A null/undefined/non-object `value` is treated as an empty object.
+ */
+export function setObjectKey(value: unknown, key: string, newValue: unknown): Record<string, unknown> {
+  return { ...asRecord(value), [key]: newValue };
+}
+
+/**
+ * Return a copy of the object `value` with `key` removed.
+ * A null/undefined/non-object `value` yields an empty object.
+ */
+export function deleteObjectKey(value: unknown, key: string): Record<string, unknown> {
+  const next = { ...asRecord(value) };
+  delete next[key];
+  return next;
+}
+
+/**
+ * Return a copy of the array `value` with element at `index` replaced by `newValue`.
+ * An out-of-range index leaves the array unchanged (defensive; the editor only
+ * ever replaces indices it just rendered).
+ */
+export function replaceArrayIndex(value: unknown, index: number, newValue: unknown): unknown[] {
+  const arr = [...asArray(value)];
+  if (index < 0 || index >= arr.length) return arr;
+  arr[index] = newValue;
+  return arr;
+}
+
+/** Return a copy of the array `value` with the element at `index` removed. */
+export function deleteArrayIndex(value: unknown, index: number): unknown[] {
+  const arr = [...asArray(value)];
+  if (index < 0 || index >= arr.length) return arr;
+  arr.splice(index, 1);
+  return arr;
+}
+
+/** Return a copy of the array `value` with `item` appended. */
+export function addArrayItem(value: unknown, item: unknown): unknown[] {
+  return [...asArray(value), item];
+}
+
+/**
+ * A sensible empty/default value for a leaf/nested field, used when adding an
+ * array element or initializing a missing sub-value. Object → {}, array → [],
+ * boolean → false, number → 0, string/text/enum → '', everything else → null.
+ */
+export function makeEmptyValueForField(field: SchemaField): unknown {
+  switch (field.type) {
+    case 'object':
+      return {};
+    case 'array':
+      return [];
+    case 'boolean':
+      return false;
+    case 'number':
+      return 0;
+    case 'string':
+    case 'text':
+    case 'enum':
+      return '';
+    default:
+      return null;
+  }
+}
+
+/**
+ * A sensible empty element for a new array item, based on the array field's
+ * `itemType`. An `object` item type yields `{}`; a scalar item type yields the
+ * empty value for that scalar (mirrors {@link makeEmptyValueForField}).
+ */
+export function makeEmptyArrayItem(field: SchemaField): unknown {
+  if (field.itemType === 'object') return {};
+  // Reuse the scalar defaults by mapping itemType onto a synthetic field type.
+  return makeEmptyValueForField({ ...field, type: field.itemType ?? 'string' });
+}
+
+/** True when a field renders as a nested editor (object with sub-fields, or an array). */
+export function isNestedField(field: SchemaField): boolean {
+  return field.type === 'object' || field.type === 'array';
+}
+
+/**
+ * Shift index-keyed open/collapse state (`item-<n>`) to follow array content
+ * after the element at `removedIndex` is deleted: the removed key is dropped and
+ * every higher index shifts down by one. Non-`item-<n>` keys are preserved.
+ *
+ * The nested editor keys both its array `{#each}` and its per-element expand
+ * state by index; without this shift, deleting a middle element would leave the
+ * wrong element appearing expanded.
+ */
+export function shiftItemOpenStateOnDelete(
+  openState: Record<string, boolean>,
+  removedIndex: number
+): Record<string, boolean> {
+  const next: Record<string, boolean> = {};
+  for (const [key, isOpen] of Object.entries(openState)) {
+    const match = key.match(/^item-(\d+)$/);
+    if (!match) {
+      next[key] = isOpen;
+      continue;
+    }
+    const index = Number(match[1]);
+    if (index === removedIndex) continue; // drop the removed element's state
+    next[index > removedIndex ? `item-${index - 1}` : key] = isOpen;
+  }
+  return next;
+}

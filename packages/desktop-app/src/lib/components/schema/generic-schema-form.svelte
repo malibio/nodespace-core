@@ -21,16 +21,14 @@
 
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
-  import * as Select from '$lib/components/ui/select';
-  import * as Popover from '$lib/components/ui/popover';
-  import { Calendar } from '$lib/components/ui/calendar';
-  import { Input } from '$lib/components/ui/input';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import type { SchemaNode, SchemaField, EnumValue } from '$lib/types/schema-node';
+  import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
-  import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import SchemaFieldLeaf from './schema-field-leaf.svelte';
+  import NestedPropertyModal from './nested-property-modal.svelte';
+  import { isNestedField } from '$lib/utils/nested-property-ops';
   import { loadNodeRelationshipsView } from '$lib/services/relationship-viewer-service';
   import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
@@ -41,6 +39,11 @@
   // conceptual siblings of fields. Task/date nodes use their own plugin schema
   // forms and do not yet expose this trigger (follow-up).
   let showRelationships = $state(false);
+
+  // Nested (object/array) property editor. One modal instance is reused; the
+  // clicked field determines what it edits.
+  let nestedModalField = $state<SchemaField | null>(null);
+  let nestedModalOpen = $state(false);
 
   let { nodeId, schema, autoOpen = false }: { nodeId: string; schema: SchemaNode; autoOpen?: boolean } = $props();
 
@@ -109,13 +112,6 @@
     );
   }
 
-  function getEnumValues(field: SchemaField): EnumValue[] {
-    const values: EnumValue[] = [];
-    if (field.coreValues) values.push(...field.coreValues);
-    if (field.userValues) values.push(...field.userValues);
-    return values;
-  }
-
   function formatFieldLabel(fieldName: string): string {
     return fieldName
       .replace(/[_-]/g, ' ')
@@ -124,26 +120,21 @@
       .join(' ');
   }
 
-  function parseDateFromValue(value: string | null | undefined): DateValue | undefined {
-    if (!value) return undefined;
-    try {
-      const dateOnly = typeof value === 'string' && value.includes('T') ? value.split('T')[0] : value;
-      return parseDate(dateOnly as string);
-    } catch (error) {
-      log.warn(`Failed to parse date value "${value}":`, error);
-      return undefined;
+  // Compact summary for a nested (object/array) field's trigger button: the item
+  // count for arrays, the populated-key count for objects.
+  function nestedSummary(field: SchemaField): string {
+    const value = getFieldValue(field.name);
+    if (field.type === 'array') {
+      const n = Array.isArray(value) ? value.length : 0;
+      return `${n} ${n === 1 ? 'item' : 'items'}`;
     }
+    const n = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).length : 0;
+    return `${n} ${n === 1 ? 'field' : 'fields'}`;
   }
 
-  function formatDateDisplay(value: string | null | undefined): string {
-    if (!value) return 'Pick a date';
-    const date = parseDateFromValue(value as string);
-    return date ? date.toString() : (value as string);
-  }
-
-  function formatDateForStorage(value: DateValue | undefined): string | null {
-    if (!value) return null;
-    return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
+  function openNestedModal(field: SchemaField) {
+    nestedModalField = field;
+    nestedModalOpen = true;
   }
 </script>
 
@@ -185,79 +176,23 @@
                 {field.description || formatFieldLabel(field.name)}
               </label>
 
-              {#if field.type === 'enum'}
-                {@const enumValues = getEnumValues(field)}
-                {@const currentValue = (getFieldValue(field.name) as string) || ''}
-                <Select.Root
-                  type="single"
-                  value={currentValue}
-                  onValueChange={(newValue) => updateField(field.name, newValue)}
+              {#if isNestedField(field)}
+                <button
+                  type="button"
+                  id={fieldId}
+                  class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm transition-all hover:opacity-80 focus-visible:outline-none"
+                  onclick={() => openNestedModal(field)}
                 >
-                  <Select.Trigger class="w-full">
-                    {enumValues.find((ev) => ev.value === currentValue)?.label ||
-                      currentValue ||
-                      `Select ${formatFieldLabel(field.name)}...`}
-                  </Select.Trigger>
-                  <Select.Content>
-                    {#each enumValues as ev}
-                      <Select.Item value={ev.value} label={ev.label} />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              {:else if field.type === 'date'}
-                {@const rawValue = getFieldValue(field.name) as string | null}
-                {@const dateVal = parseDateFromValue(rawValue)}
-                <Popover.Root>
-                  <Popover.Trigger
-                    id={fieldId}
-                    class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                  >
-                    <span class={dateVal ? '' : 'text-muted-foreground'}>
-                      {formatDateDisplay(rawValue)}
-                    </span>
-                    <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                      <rect x="2" y="3" width="12" height="11" rx="1" stroke="currentColor" stroke-width="1.5" />
-                      <path d="M5 1v3M11 1v3M2 6h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                    </svg>
-                  </Popover.Trigger>
-                  <Popover.Content class="w-auto p-0" align="start">
-                    <Calendar
-                      value={dateVal as never}
-                      onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                        const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                        updateField(field.name, formatDateForStorage(singleValue));
-                      }}
-                      type="single"
-                    />
-                  </Popover.Content>
-                </Popover.Root>
-              {:else if field.type === 'number'}
-                <Input
-                  id={fieldId}
-                  type="number"
-                  value={(getFieldValue(field.name) as number) ?? (field.default as number) ?? 0}
-                  oninput={(e) => updateField(field.name, parseFloat(e.currentTarget.value) || 0)}
-                />
-              {:else if field.type === 'boolean'}
-                <div class="flex items-center gap-2 h-10">
-                  <input
-                    id={fieldId}
-                    type="checkbox"
-                    checked={!!(getFieldValue(field.name) as boolean)}
-                    onchange={(e) => updateField(field.name, e.currentTarget.checked)}
-                    class="h-4 w-4 rounded border-input"
-                  />
-                </div>
-              {:else if field.type === 'string' || field.type === 'text'}
-                <Input
-                  id={fieldId}
-                  type="text"
-                  value={(getFieldValue(field.name) as string) || ''}
-                  oninput={(e) => updateField(field.name, e.currentTarget.value)}
-                  placeholder={field.default ? String(field.default) : ''}
-                />
+                  <span class="text-muted-foreground">{nestedSummary(field)}</span>
+                  <span class="text-xs text-muted-foreground">Edit</span>
+                </button>
               {:else}
-                <div class="text-sm text-muted-foreground">Unknown field type: {field.type}</div>
+                <SchemaFieldLeaf
+                  {field}
+                  {fieldId}
+                  value={getFieldValue(field.name)}
+                  onChange={(newValue) => updateField(field.name, newValue)}
+                />
               {/if}
             </div>
           {/each}
@@ -281,6 +216,10 @@
   </div>
 
   <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
+
+  {#if nestedModalField}
+    <NestedPropertyModal bind:open={nestedModalOpen} {nodeId} field={nestedModalField} />
+  {/if}
 {/if}
 
 <style>
