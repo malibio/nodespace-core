@@ -21,6 +21,7 @@
   import type { SchemaFormComponent } from '$lib/plugins/types';
   import { getNodeServices } from '$lib/contexts/node-service-context.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { buildCrossNodeCopy } from '$lib/utils/cross-node-copy';
   import { focusManager } from '$lib/services/focus-manager.svelte';
   import { NodeExpansionCoordinator } from '$lib/services/node-expansion-coordinator';
   import { structureTree as reactiveStructureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -270,10 +271,36 @@
 
       scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
 
+      // Cross-node copy (#278): a text selection spanning more than one node
+      // copies the underlying source markdown (clipped to the selection, nesting
+      // preserved as indentation) instead of the browser default (stripped,
+      // boundary-less rendered text). Single-node selections fall through to
+      // native copy. The `copy` event bubbles to this container from the node
+      // that holds the selection.
+      const container = scrollContainer;
+      const handleCopy = (event: ClipboardEvent) => {
+        const depths = new Map(visibleNodesFromStores.map((n) => [n.id, n.depth]));
+        const markdown = buildCrossNodeCopy({
+          selection: typeof window !== 'undefined' ? window.getSelection() : null,
+          root: container,
+          resolveNode: (id) => {
+            const node = sharedNodeStore.getNode(id);
+            if (!node) return null;
+            return { content: node.content, depth: depths.get(id) ?? 0 };
+          }
+        });
+        if (markdown === null) return; // leave native copy behavior untouched
+        event.preventDefault();
+        event.clipboardData?.setData('text/plain', markdown);
+      };
+
+      scrollContainer.addEventListener('copy', handleCopy);
+
       // Store cleanup function
       scrollCleanup = () => {
         if (scrollContainer) {
           scrollContainer.removeEventListener('scroll', handleScroll);
+          scrollContainer.removeEventListener('copy', handleCopy);
         }
       };
     }
