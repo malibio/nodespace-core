@@ -91,6 +91,10 @@ describe('getCollectionService dispatcher', () => {
 
   afterEach(() => {
     process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    // Was unstubbed at the end of the test body, which a failing assertion skips —
+    // leaving a stubbed fetch for the rest of the fork. The sibling describe already
+    // does it here.
+    vi.unstubAllGlobals();
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
     Reflect.deleteProperty(window, '__TAURI__');
   });
@@ -133,7 +137,6 @@ describe('getCollectionService dispatcher', () => {
     await svc.getAllCollections();
 
     expect(fetch).toHaveBeenCalledWith('http://localhost:3001/api/collections');
-    vi.unstubAllGlobals();
   });
 });
 

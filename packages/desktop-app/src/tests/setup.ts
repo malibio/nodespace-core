@@ -272,16 +272,28 @@ interface MockResizeObserver {
   disconnect: vi.fn()
 }));
 
-// Mock console methods for cleaner test output
-const originalConsoleError = console.error;
-console.error = (...args) => {
-  // Suppress known framework warnings during tests
-  const message = args[0];
-  if (typeof message === 'string' && message.includes('Warning:')) {
-    return;
-  }
-  originalConsoleError(...args);
-};
+// Mock console methods for cleaner test output.
+//
+// Setup files re-execute for every test file in the fork, so wrapping
+// unconditionally would capture the previous wrapper each time and build a chain as
+// deep as the number of files — running the filter once per link on every call.
+// Mark the wrapper and skip if one is already installed.
+const WRAPPED = Symbol.for('nodespace.test.setupWrapper');
+type Wrapped = { [WRAPPED]?: true };
+
+if (!(console.error as Wrapped)[WRAPPED]) {
+  const originalConsoleError = console.error;
+  const wrappedConsoleError = (...args: Parameters<typeof console.error>) => {
+    // Suppress known framework warnings during tests
+    const message = args[0];
+    if (typeof message === 'string' && message.includes('Warning:')) {
+      return;
+    }
+    originalConsoleError(...args);
+  };
+  (wrappedConsoleError as Wrapped)[WRAPPED] = true;
+  console.error = wrappedConsoleError;
+}
 
 // Enhanced Event constructor to ensure proper target property
 interface MockEventTarget {
@@ -297,22 +309,29 @@ interface TestEventInit {
   target?: MockEventTarget;
 }
 
-const OriginalEvent = globalThis.Event;
-globalThis.Event = class extends OriginalEvent {
-  constructor(type: string, eventInitDict?: TestEventInit) {
-    // Extract standard EventInit properties for parent constructor
-    const { target, ...standardEventInit } = eventInitDict || {};
-    super(type, standardEventInit);
-    // Ensure target is properly set when event is created
-    if (!this.target && target) {
-      Object.defineProperty(this, 'target', {
-        value: target,
-        writable: false,
-        configurable: true
-      });
+// Same re-execution caveat as console.error above: without the guard each file
+// subclasses the previous subclass, leaving a prototype chain roughly as deep as the
+// file count by the end of a run.
+if (!(globalThis.Event as unknown as Wrapped)[WRAPPED]) {
+  const OriginalEvent = globalThis.Event;
+  const TestEvent = class extends OriginalEvent {
+    constructor(type: string, eventInitDict?: TestEventInit) {
+      // Extract standard EventInit properties for parent constructor
+      const { target, ...standardEventInit } = eventInitDict || {};
+      super(type, standardEventInit);
+      // Ensure target is properly set when event is created
+      if (!this.target && target) {
+        Object.defineProperty(this, 'target', {
+          value: target,
+          writable: false,
+          configurable: true
+        });
+      }
     }
-  }
-} as typeof Event;
+  };
+  (TestEvent as unknown as Wrapped)[WRAPPED] = true;
+  globalThis.Event = TestEvent as typeof Event;
+}
 
 // Mock Tauri environment detection
 // Tests run in browser mode (without Tauri), so __TAURI__ should not be defined

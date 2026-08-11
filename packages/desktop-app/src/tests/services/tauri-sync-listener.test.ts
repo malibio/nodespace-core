@@ -149,6 +149,10 @@ describe('TauriSyncListener', () => {
     mockNodes.clear();
     mockEventListeners.clear();
     vi.restoreAllMocks();
+    // This file installs the Tauri bridge markers; clear them rather than relying on a
+    // later file's setup to do it, which only works by accident of ordering.
+    Reflect.deleteProperty(window, '__TAURI__');
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
   });
 
   describe('Environment Detection', () => {

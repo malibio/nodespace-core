@@ -16,8 +16,15 @@ describe('Test Database Mode Utilities', () => {
   });
 
   afterEach(() => {
-    // Restore original environment
-    process.env = { ...originalEnv };
+    // Restore original environment. Mutate in place rather than assigning a fresh
+    // object: `process.env` is a live binding that other code may already hold a
+    // reference to, and replacing it swaps that live object for a plain clone.
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   describe('shouldUseDatabase', () => {
