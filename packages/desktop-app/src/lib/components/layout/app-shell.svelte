@@ -24,12 +24,19 @@
   import { settingsStore } from '$lib/stores/settings.svelte';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
-  import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
+  import {
+    openUrl,
+    isExternalUrl,
+    isNodespaceUrl,
+    extractNodeIdFromHref
+  } from '$lib/utils/external-links';
   import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
   import { proSync } from '$lib/stores/pro-sync.svelte';
   import { getActiveChromeContributions } from '$lib/plugins/ui-extensions.svelte';
   import ExtensionOutlet from '$lib/plugins/extension-outlet.svelte';
   import ConflictToast from '$lib/components/conflict-toast.svelte';
+  import NodeRefPreview from '$lib/components/references/node-ref-preview.svelte';
+  import { nodeRefPreview } from '$lib/services/node-ref-preview.svelte';
   import UpdateBanner from '$lib/components/update-banner.svelte';
   import { updateStatus } from '$lib/stores/update-status.svelte';
   import { recoveredItems } from '$lib/stores/recovered-items.svelte';
@@ -459,25 +466,10 @@
       event.preventDefault();
       event.stopPropagation();
 
-      // Extract node ID from various formats:
-      // - nodespace://uuid (standard format)
-      // - nodespace://node/uuid (full URI format)
-      let nodeId = href.replace('nodespace://', '');
-
-      // Handle nodespace://node/uuid format
-      if (nodeId.startsWith('node/')) {
-        nodeId = nodeId.replace('node/', '');
-      }
-
-      // Remove query parameters if present (e.g., ?hierarchy=true)
-      const queryIndex = nodeId.indexOf('?');
-      if (queryIndex !== -1) {
-        nodeId = nodeId.substring(0, queryIndex);
-      }
-
-      // Validate node ID is not empty
-      // NavigationService will handle resolution (UUIDs, date nodes, etc.)
-      if (!nodeId || nodeId.trim() === '') {
+      // Extract node ID (handles nodespace://uuid, nodespace://node/uuid,
+      // and trailing query params). NavigationService resolves it further.
+      const nodeId = extractNodeIdFromHref(href);
+      if (!nodeId) {
         log.error('Empty node ID in link');
         statusBar.error('Invalid link: empty document reference');
         return;
@@ -532,6 +524,53 @@
     // This ensures we catch the event before any other handlers
     document.addEventListener('click', handleLinkClick, true);
 
+    // --- Node-reference hover/focus previews -------------------------------
+    // Both reference render paths (markdown-link and NodeRefInline) resolve to
+    // the same `a.ns-noderef` anchor, so one delegated trigger covers them all.
+    // The controller owns the reveal delay and content; the card renders itself.
+    const nodeRefAnchor = (target: unknown): HTMLElement | null => {
+      if (!(target instanceof Element)) return null;
+      const anchor = target.closest('a.ns-noderef');
+      if (!(anchor instanceof HTMLElement)) return null;
+      return isNodespaceUrl(anchor.getAttribute('href') ?? '') ? anchor : null;
+    };
+
+    const handleRefPointerOver = (event: MouseEvent) => {
+      const anchor = nodeRefAnchor(event.target);
+      if (anchor) nodeRefPreview.requestPreview(anchor);
+    };
+
+    const handleRefPointerOut = (event: MouseEvent) => {
+      const anchor = nodeRefAnchor(event.target);
+      if (!anchor) return;
+      // Ignore moves that stay within the same anchor (e.g. onto a nested span).
+      const next = event.relatedTarget;
+      if (next instanceof HTMLElement && anchor.contains(next)) return;
+      nodeRefPreview.hide();
+    };
+
+    const handleRefFocusIn = (event: FocusEvent) => {
+      const anchor = nodeRefAnchor(event.target);
+      if (anchor) nodeRefPreview.requestPreview(anchor);
+    };
+
+    const handleRefFocusOut = () => nodeRefPreview.hide();
+
+    const handleRefDismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') nodeRefPreview.hide();
+    };
+
+    // Scroll shifts anchors out from under a fixed card — dismiss rather than
+    // chase. Capture phase catches scrolls on any nested scroll container.
+    const handleRefScroll = () => nodeRefPreview.hide();
+
+    document.addEventListener('mouseover', handleRefPointerOver);
+    document.addEventListener('mouseout', handleRefPointerOut);
+    document.addEventListener('focusin', handleRefFocusIn);
+    document.addEventListener('focusout', handleRefFocusOut);
+    document.addEventListener('keydown', handleRefDismiss);
+    document.addEventListener('scroll', handleRefScroll, true);
+
     return async () => {
       // Flush any pending tab state saves before unmounting
       TabPersistenceService.flush();
@@ -572,6 +611,15 @@
       browserSyncService.destroy();
       // Cleanup click handler (must match capture phase flag)
       document.removeEventListener('click', handleLinkClick, true);
+
+      // Cleanup node-reference preview triggers
+      document.removeEventListener('mouseover', handleRefPointerOver);
+      document.removeEventListener('mouseout', handleRefPointerOut);
+      document.removeEventListener('focusin', handleRefFocusIn);
+      document.removeEventListener('focusout', handleRefFocusOut);
+      document.removeEventListener('keydown', handleRefDismiss);
+      document.removeEventListener('scroll', handleRefScroll, true);
+      nodeRefPreview.hide();
     };
   });
 
@@ -649,6 +697,9 @@
 
     <!-- First-launch onboarding wizard -->
     <OnboardingWizard open={showOnboarding} onClose={() => (showOnboarding = false)} />
+
+    <!-- Hover/focus preview card for node references (single shared instance) -->
+    <NodeRefPreview />
 
     <!-- Conflict resolution notifications -->
     <ConflictToast />

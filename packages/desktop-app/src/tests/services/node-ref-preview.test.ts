@@ -1,0 +1,184 @@
+/**
+ * NodeRefPreview controller tests
+ *
+ * Covers the pure title/snippet builders and the show/hide state machine
+ * (delay, cache-first resolution, not-found fallback, and async-race guarding).
+ * Follows the singleton-spy pattern (vi.spyOn on the real sharedNodeStore),
+ * never vi.mock, so nothing leaks across files under the forks pool.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  nodeRefPreview,
+  buildPreviewTitle,
+  buildPreviewSnippet,
+  PREVIEW_DELAY_MS,
+  SNIPPET_MAX_LENGTH
+} from '../../lib/services/node-ref-preview.svelte';
+import { sharedNodeStore } from '../../lib/services/shared-node-store.svelte';
+import type { Node } from '../../lib/types';
+
+function makeNode(overrides: Partial<Node> = {}): Node {
+  return {
+    id: 'node-1',
+    nodeType: 'text',
+    content: 'Body content',
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    properties: {},
+    mentions: [],
+    ...overrides
+  };
+}
+
+function anchor(href: string): HTMLElement {
+  const a = document.createElement('a');
+  a.className = 'ns-noderef ns-noderef-valid';
+  a.setAttribute('href', href);
+  return a;
+}
+
+describe('buildPreviewTitle', () => {
+  it('prefers the indexed title', () => {
+    expect(buildPreviewTitle(makeNode({ title: '  My Title  ', content: 'x' }))).toBe('My Title');
+  });
+
+  it('falls back to the first content line when no title', () => {
+    expect(buildPreviewTitle(makeNode({ title: null, content: 'First line\nSecond line' }))).toBe(
+      'First line'
+    );
+  });
+
+  it('is empty when there is no title and no content', () => {
+    expect(buildPreviewTitle(makeNode({ title: null, content: '' }))).toBe('');
+  });
+});
+
+describe('buildPreviewSnippet', () => {
+  it('collapses whitespace of the full content when a title exists', () => {
+    const node = makeNode({ title: 'T', content: 'line one\n\n  line   two ' });
+    expect(buildPreviewSnippet(node)).toBe('line one line two');
+  });
+
+  it('drops the first line (used as title) when the node has no title', () => {
+    const node = makeNode({ title: null, content: 'Title line\nreal body here' });
+    expect(buildPreviewSnippet(node)).toBe('real body here');
+  });
+
+  it('returns empty when a title-less node has only one line', () => {
+    expect(buildPreviewSnippet(makeNode({ title: null, content: 'only a title' }))).toBe('');
+  });
+
+  it('truncates long content with an ellipsis', () => {
+    const long = 'a'.repeat(SNIPPET_MAX_LENGTH + 50);
+    const result = buildPreviewSnippet(makeNode({ title: 'T', content: long }));
+    expect(result.endsWith('…')).toBe(true);
+    expect(result.length).toBe(SNIPPET_MAX_LENGTH + 1);
+  });
+
+  it('is empty for empty content', () => {
+    expect(buildPreviewSnippet(makeNode({ title: 'T', content: '' }))).toBe('');
+  });
+});
+
+describe('nodeRefPreview controller', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    nodeRefPreview.hide();
+  });
+
+  afterEach(() => {
+    nodeRefPreview.hide();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('reveals a cached node after the delay', async () => {
+    const node = makeNode({ id: 'abc', title: 'Cached', content: 'Cached\nsnippet body' });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(node);
+    const ensure = vi.spyOn(sharedNodeStore, 'ensureNode');
+
+    nodeRefPreview.requestPreview(anchor('nodespace://abc'));
+    expect(nodeRefPreview.state.visible).toBe(false); // still within the delay
+
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(nodeRefPreview.state.visible).toBe(true);
+    expect(nodeRefPreview.state.loading).toBe(false);
+    expect(nodeRefPreview.state.notFound).toBe(false);
+    expect(nodeRefPreview.state.title).toBe('Cached');
+    expect(nodeRefPreview.state.snippet).toBe('snippet body');
+    expect(ensure).not.toHaveBeenCalled(); // cache hit skips the fetch
+  });
+
+  it('fetches an uncached node then reveals it', async () => {
+    const node = makeNode({ id: 'xyz', title: 'Fetched', content: 'Fetched\nfrom store' });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(undefined);
+    vi.spyOn(sharedNodeStore, 'ensureNode').mockResolvedValue(node);
+
+    nodeRefPreview.requestPreview(anchor('nodespace://xyz'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(nodeRefPreview.state.visible).toBe(true);
+    expect(nodeRefPreview.state.title).toBe('Fetched');
+    expect(nodeRefPreview.state.snippet).toBe('from store');
+  });
+
+  it('shows a not-found state when the node cannot be resolved', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(undefined);
+    vi.spyOn(sharedNodeStore, 'ensureNode').mockResolvedValue(undefined);
+
+    nodeRefPreview.requestPreview(anchor('nodespace://missing'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(nodeRefPreview.state.visible).toBe(true);
+    expect(nodeRefPreview.state.notFound).toBe(true);
+    expect(nodeRefPreview.state.nodeId).toBe('missing');
+  });
+
+  it('ignores anchors that are not nodespace references', async () => {
+    const getNode = vi.spyOn(sharedNodeStore, 'getNode');
+    nodeRefPreview.requestPreview(anchor('https://example.com'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(nodeRefPreview.state.visible).toBe(false);
+    expect(getNode).not.toHaveBeenCalled();
+  });
+
+  it('ignores deleted (broken) references', async () => {
+    const getNode = vi.spyOn(sharedNodeStore, 'getNode');
+    nodeRefPreview.requestPreview(anchor('nodespace://gone?deleted=true'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(nodeRefPreview.state.visible).toBe(false);
+    expect(getNode).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending reveal when hidden before the delay elapses', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(makeNode());
+    nodeRefPreview.requestPreview(anchor('nodespace://abc'));
+    nodeRefPreview.hide();
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(nodeRefPreview.state.visible).toBe(false);
+  });
+
+  it('does not resurrect a card hidden mid-fetch (async race)', async () => {
+    let resolveFetch: (n: Node | undefined) => void = () => {};
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(undefined);
+    vi.spyOn(sharedNodeStore, 'ensureNode').mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    nodeRefPreview.requestPreview(anchor('nodespace://slow'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS); // fires reveal → awaits fetch
+    // User moves away before the fetch settles.
+    nodeRefPreview.hide();
+    resolveFetch(makeNode({ id: 'slow', title: 'Too late' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(nodeRefPreview.state.visible).toBe(false);
+    expect(nodeRefPreview.state.title).toBe('');
+  });
+});
