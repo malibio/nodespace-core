@@ -556,8 +556,6 @@ describe('LayoutPersistenceService', () => {
       // Should return null and not throw
       const loaded = LayoutPersistenceService.load();
       expect(loaded).toBeNull();
-
-      // Restore original implementation
     });
 
     it('handles saveNow with storage error', () => {
