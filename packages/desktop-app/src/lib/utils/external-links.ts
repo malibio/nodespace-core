@@ -56,3 +56,34 @@ export function isExternalUrl(url: string): boolean {
 export function isNodespaceUrl(url: string): boolean {
   return url.startsWith('nodespace://');
 }
+
+/**
+ * Extract the target node id from a `nodespace://` href.
+ *
+ * Accepts the formats emitted across the app:
+ * - `nodespace://uuid`
+ * - `nodespace://node/uuid` (full URI form)
+ * - trailing query params (`?hierarchy=true`, `?deleted=true`) are stripped
+ *
+ * @returns the trimmed node id, or `null` when the href is not a nodespace
+ *          link or carries no id.
+ */
+export function extractNodeIdFromHref(href: string): string | null {
+  if (!isNodespaceUrl(href)) return null;
+
+  let nodeId = href.slice('nodespace://'.length);
+
+  // Full-URI form: nodespace://node/uuid
+  if (nodeId.startsWith('node/')) {
+    nodeId = nodeId.slice('node/'.length);
+  }
+
+  // Drop query params (e.g. ?hierarchy=true, ?deleted=true)
+  const queryIndex = nodeId.indexOf('?');
+  if (queryIndex !== -1) {
+    nodeId = nodeId.slice(0, queryIndex);
+  }
+
+  nodeId = nodeId.trim();
+  return nodeId === '' ? null : nodeId;
+}

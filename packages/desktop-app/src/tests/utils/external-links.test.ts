@@ -8,7 +8,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { openUrl, isExternalUrl, isNodespaceUrl } from '$lib/utils/external-links';
+import {
+  openUrl,
+  isExternalUrl,
+  isNodespaceUrl,
+  extractNodeIdFromHref
+} from '$lib/utils/external-links';
 
 describe('External Links Utility - URL Detection', () => {
   describe('isExternalUrl', () => {
@@ -68,6 +73,34 @@ describe('External Links Utility - URL Detection', () => {
     it('returns false for empty or invalid strings', () => {
       expect(isNodespaceUrl('')).toBe(false);
       expect(isNodespaceUrl('nodespacebutnotprotocol')).toBe(false);
+    });
+  });
+
+  describe('extractNodeIdFromHref', () => {
+    it('extracts the id from the standard form', () => {
+      expect(extractNodeIdFromHref('nodespace://abc-123')).toBe('abc-123');
+      expect(extractNodeIdFromHref('nodespace://2025-01-15')).toBe('2025-01-15');
+    });
+
+    it('extracts the id from the full-URI (node/) form', () => {
+      expect(extractNodeIdFromHref('nodespace://node/abc-123')).toBe('abc-123');
+    });
+
+    it('strips trailing query params', () => {
+      expect(extractNodeIdFromHref('nodespace://abc-123?hierarchy=true')).toBe('abc-123');
+      expect(extractNodeIdFromHref('nodespace://node/abc-123?deleted=true')).toBe('abc-123');
+    });
+
+    it('returns null for non-nodespace hrefs', () => {
+      expect(extractNodeIdFromHref('https://example.com')).toBeNull();
+      expect(extractNodeIdFromHref('/relative')).toBeNull();
+      expect(extractNodeIdFromHref('')).toBeNull();
+    });
+
+    it('returns null when the id is empty', () => {
+      expect(extractNodeIdFromHref('nodespace://')).toBeNull();
+      expect(extractNodeIdFromHref('nodespace://node/')).toBeNull();
+      expect(extractNodeIdFromHref('nodespace://?deleted=true')).toBeNull();
     });
   });
 });
