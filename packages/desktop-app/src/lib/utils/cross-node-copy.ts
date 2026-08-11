@@ -18,6 +18,19 @@
  * them (text length, +1 per `<br>`), then mapped to source offsets with
  * `mapViewPositionToEditPosition` — the same mapping the click-to-edit-at-character
  * handler uses.
+ *
+ * Known limitations, both confined to a single clip boundary (whole and middle
+ * nodes are always exact source): (1) the shared offset mapper accounts for
+ * emphasis/code/heading/list syntax but not markdown-link / node-reference source
+ * (`[Title](nodespace://id)`), so a first/last-node boundary that falls *after* a
+ * reference within that node can map imprecisely; (2) a boundary landing inside a
+ * paired inline marker slices mid-pair and can yield an unbalanced marker
+ * (e.g. `**bold`). Both are inherent to slicing source at a rendered boundary.
+ *
+ * Note `[data-node-id]` is NOT unique to node roots: inline references render as
+ * `<a class="ns-noderef" data-node-id={refId}>` inside a node's view. Node roots
+ * carry class `node` (base-node.svelte), so the scan is scoped to
+ * `.node[data-node-id]` to exclude reference chips.
  */
 
 import { isActiveTextSelection } from './text-selection';
@@ -43,10 +56,13 @@ export interface BuildCrossNodeCopyParams {
 /** Spaces of indentation per relative depth level in the copied markdown. */
 const INDENT_UNIT = '  ';
 
-/** The nearest `[data-node-id]` ancestor of a DOM node, within `root`. */
+/** CSS selector for a node root (excludes inline `.ns-noderef` reference chips). */
+const NODE_ROOT_SELECTOR = '.node[data-node-id]';
+
+/** The nearest node-root ancestor of a DOM node, within `root`. */
 function closestNodeElement(node: Node | null, root: HTMLElement): HTMLElement | null {
   let el = node instanceof Element ? node : (node?.parentElement ?? null);
-  el = el?.closest('[data-node-id]') ?? null;
+  el = el?.closest(NODE_ROOT_SELECTOR) ?? null;
   return el instanceof HTMLElement && root.contains(el) ? el : null;
 }
 
@@ -184,13 +200,15 @@ export function buildCrossNodeCopy(params: BuildCrossNodeCopyParams): string | n
     return null;
   }
 
-  // Collect the spanned nodes in document order, scoped to this viewer.
-  const allNodeEls = Array.from(root.querySelectorAll<HTMLElement>('[data-node-id]'));
+  // Collect the spanned node roots in document order, scoped to this viewer.
+  // A DOM Range is always normalized (startContainer precedes endContainer in
+  // document order), so startEl is at or before endEl and no direction swap is
+  // needed: the range start clips the first node, the range end clips the last.
+  const allNodeEls = Array.from(root.querySelectorAll<HTMLElement>(NODE_ROOT_SELECTOR));
   const startIdx = allNodeEls.indexOf(startEl);
   const endIdx = allNodeEls.indexOf(endEl);
-  if (startIdx === -1 || endIdx === -1) return null;
-  const [firstIdx, lastIdx] = startIdx <= endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-  const spanned = allNodeEls.slice(firstIdx, lastIdx + 1);
+  if (startIdx === -1 || endIdx === -1 || startIdx > endIdx) return null;
+  const spanned = allNodeEls.slice(startIdx, endIdx + 1);
 
   // The selection's shallowest node anchors indentation at column 0.
   const infos = spanned.map((el) => resolveNode(el.dataset.nodeId ?? ''));
@@ -200,15 +218,8 @@ export function buildCrossNodeCopy(params: BuildCrossNodeCopyParams): string | n
   );
   const baseDepth = Number.isFinite(minDepth) ? minDepth : 0;
 
-  // Selection may be anchored either direction; clip the document-first spanned
-  // node from the earlier endpoint and the document-last node to the later one.
-  const startsAtFirst = startIdx <= endIdx;
-  const clipStart = startsAtFirst
-    ? { container: range.startContainer, offset: range.startOffset }
-    : { container: range.endContainer, offset: range.endOffset };
-  const clipEnd = startsAtFirst
-    ? { container: range.endContainer, offset: range.endOffset }
-    : { container: range.startContainer, offset: range.startOffset };
+  const clipStart = { container: range.startContainer, offset: range.startOffset };
+  const clipEnd = { container: range.endContainer, offset: range.endOffset };
 
   const lines: string[] = [];
 

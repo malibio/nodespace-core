@@ -32,6 +32,7 @@ function buildViewer(nodes: NodeFixture[]): {
   const info = new Map<string, CopyNodeInfo>();
   for (const n of nodes) {
     const nodeEl = document.createElement('div');
+    nodeEl.className = 'node'; // node roots carry class `node` (base-node.svelte)
     nodeEl.setAttribute('data-node-id', n.id);
     const view = document.createElement('div');
     view.className = 'node__content--view';
@@ -166,18 +167,49 @@ describe('buildCrossNodeCopy', () => {
     );
   });
 
-  it('handles a backward (end-before-start) selection', () => {
+  it('ignores inline reference chips that carry a data-node-id', () => {
+    // A node's view can contain an inline `<a class="ns-noderef" data-node-id=…>`
+    // reference to ANOTHER node. That chip must not be treated as a node boundary
+    // (no phantom line, no wrong-node clipping) — only `.node[data-node-id]` roots
+    // count.
     const { root, resolveNode, viewOf } = buildViewer([
-      { id: 'a', content: 'Hello world', view: 'Hello world', depth: 0 },
-      { id: 'b', content: 'Second line', view: 'Second line', depth: 0 }
+      { id: 'a', content: 'see [Ref](nodespace://z) now', view: 'see Ref now', depth: 0 },
+      { id: 'b', content: 'tail node', view: 'tail node', depth: 0 }
     ]);
-    // Range is always normalized (start<=end), but the anchor may be in node b;
-    // build the range in document order and confirm clipping is by document order.
+    // Inject a reference chip inside node a's view, wrapping "Ref".
+    const aView = viewOf('a');
+    aView.innerHTML = 'see <a class="ns-noderef" data-node-id="z">Ref</a> now';
+
     const range = document.createRange();
-    range.setStart(textOf(viewOf('a')), 6);
-    range.setEnd(textOf(viewOf('b')), 6);
-    expect(buildCrossNodeCopy({ selection: selectionOf(range), root, resolveNode })).toBe(
-      'world\nSecond'
-    );
+    range.setStart(aView.firstChild!, 0); // start of node a ("see …")
+    range.setEnd(textOf(viewOf('b')), 'tail node'.length);
+    const result = buildCrossNodeCopy({ selection: selectionOf(range), root, resolveNode });
+
+    // Two lines only (a, b) — the reference chip 'z' must not add a third.
+    expect(result).not.toBeNull();
+    expect(result!.split('\n')).toHaveLength(2);
+    expect(result).toContain('tail node');
+    // node a is whole (selection starts at its beginning): source syntax preserved.
+    expect(result!.split('\n')[0]).toBe('see [Ref](nodespace://z) now');
+  });
+
+  it('resolves an endpoint inside a reference chip to the containing node', () => {
+    const { root, resolveNode, viewOf } = buildViewer([
+      { id: 'a', content: 'x', view: 'x', depth: 0 },
+      { id: 'b', content: 'ref here', view: 'ref here', depth: 0 }
+    ]);
+    const bView = viewOf('b');
+    bView.innerHTML = 'ref <a class="ns-noderef" data-node-id="z">here</a>';
+
+    const range = document.createRange();
+    range.setStart(textOf(viewOf('a')), 0);
+    // End inside the reference chip's text — must resolve to node b, not node z.
+    const chipText = bView.querySelector('a')!.firstChild!;
+    range.setEnd(chipText, 2);
+    const result = buildCrossNodeCopy({ selection: selectionOf(range), root, resolveNode });
+
+    expect(result).not.toBeNull();
+    expect(result!.split('\n')).toHaveLength(2); // a and b only
+    expect(result!.split('\n')[0]).toBe('x');
   });
 });
