@@ -2148,10 +2148,15 @@ impl SqliteStore {
 
         // Merge the update's task-property fields into the node's properties via the
         // shared helper (also used by the service layer to compute a title_template
-        // title against the post-merge node — keeping the two in lockstep).
+        // title against the post-merge node — keeping the two in lockstep). The
+        // helper is a best-effort no-op on malformed shapes; the persist path keeps
+        // the stricter contract and rejects them loudly, as before this refactor.
         let mut props = current.properties.clone();
-        if props.as_object().is_none() {
-            return Err(anyhow::anyhow!("Invalid properties"));
+        let root = props
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Invalid properties"))?;
+        if root.get("task").is_some_and(|task| !task.is_object()) {
+            return Err(anyhow::anyhow!("Invalid task properties"));
         }
         update.apply_to_properties(&mut props);
 
