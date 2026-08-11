@@ -26,6 +26,13 @@ export const PREVIEW_DELAY_MS = 450;
 export const SNIPPET_MAX_LENGTH = 220;
 
 /**
+ * DOM id of the (single) preview card. The active reference anchor points its
+ * `aria-describedby` here while the card is shown, so screen-reader users get the
+ * same title/snippet on focus that sighted users get on hover.
+ */
+export const PREVIEW_CARD_ID = 'node-ref-preview-card';
+
+/**
  * Title shown for a resolved node: indexed title first, then the first content
  * line, then empty (the card falls back to the raw id in that case).
  */
@@ -89,6 +96,10 @@ class NodeRefPreviewController {
   #timer: ReturnType<typeof setTimeout> | null = null;
   /** The id we intend to show; guards async races when the pointer moves on. */
   #pendingId: string | null = null;
+  /** The anchor we intend to show it against (paired with #pendingId). */
+  #pendingAnchor: HTMLElement | null = null;
+  /** Anchor currently carrying our aria-describedby, so we can clear it. */
+  #describedAnchor: HTMLElement | null = null;
 
   /**
    * Arm a preview for a hovered/focused reference anchor. No-op for non-noderef
@@ -104,13 +115,16 @@ class NodeRefPreviewController {
     const nodeId = extractNodeIdFromHref(href);
     if (!nodeId) return;
 
-    // Same reference already scheduled or already shown: leave the pending timer
-    // alone. Crossing nested spans inside a reference fires repeated mouseover
-    // events — resetting the timer on each would keep the delay from ever elapsing.
-    if (this.#pendingId === nodeId) return;
+    // Same reference (same id AND same anchor) already scheduled or shown: leave
+    // the pending timer alone. Crossing nested spans inside a reference fires
+    // repeated mouseover events on the same anchor — resetting the timer on each
+    // would keep the delay from ever elapsing. A different anchor for the same id
+    // (the same node referenced twice on a page) does re-anchor.
+    if (this.#pendingId === nodeId && this.#pendingAnchor === anchor) return;
 
     this.#clearTimer();
     this.#pendingId = nodeId;
+    this.#pendingAnchor = anchor;
     this.#timer = setTimeout(() => {
       this.#timer = null;
       void this.#reveal(nodeId, anchor);
@@ -126,6 +140,7 @@ class NodeRefPreviewController {
     this.state.title = '';
     this.state.snippet = '';
     this.state.visible = true;
+    this.#setDescribedBy(anchor);
 
     let node = sharedNodeStore.getNode(nodeId);
     if (!node) {
@@ -155,9 +170,25 @@ class NodeRefPreviewController {
   hide(): void {
     this.#clearTimer();
     this.#pendingId = null;
+    this.#pendingAnchor = null;
+    this.#setDescribedBy(null);
     if (this.state.visible || this.state.anchor) {
       this.state = emptyState();
     }
+  }
+
+  /**
+   * Point the given anchor's `aria-describedby` at the card (clearing it from any
+   * previously described anchor). Passing null clears it entirely.
+   */
+  #setDescribedBy(anchor: HTMLElement | null): void {
+    if (this.#describedAnchor && this.#describedAnchor !== anchor) {
+      this.#describedAnchor.removeAttribute('aria-describedby');
+    }
+    if (anchor) {
+      anchor.setAttribute('aria-describedby', PREVIEW_CARD_ID);
+    }
+    this.#describedAnchor = anchor;
   }
 
   #clearTimer(): void {

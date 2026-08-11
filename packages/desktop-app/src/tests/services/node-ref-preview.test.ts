@@ -13,7 +13,8 @@ import {
   buildPreviewTitle,
   buildPreviewSnippet,
   PREVIEW_DELAY_MS,
-  SNIPPET_MAX_LENGTH
+  SNIPPET_MAX_LENGTH,
+  PREVIEW_CARD_ID
 } from '../../lib/services/node-ref-preview.svelte';
 import { sharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import type { Node } from '../../lib/types';
@@ -165,6 +166,35 @@ describe('nodeRefPreview controller', () => {
     await vi.advanceTimersByTimeAsync(100); // original deadline
 
     expect(nodeRefPreview.state.visible).toBe(true);
+  });
+
+  it('links the anchor to the card via aria-describedby while shown, and clears it on hide', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(makeNode({ id: 'abc', title: 'X' }));
+    const a = anchor('nodespace://abc');
+
+    nodeRefPreview.requestPreview(a);
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(a.getAttribute('aria-describedby')).toBe(PREVIEW_CARD_ID);
+
+    nodeRefPreview.hide();
+    expect(a.hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('moves aria-describedby off the old anchor when re-anchoring to the same node', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(makeNode({ id: 'abc', title: 'X' }));
+    const a = anchor('nodespace://abc');
+    const b = anchor('nodespace://abc');
+
+    nodeRefPreview.requestPreview(a);
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(a.getAttribute('aria-describedby')).toBe(PREVIEW_CARD_ID);
+
+    // Same id, different anchor: re-anchors rather than short-circuiting.
+    nodeRefPreview.requestPreview(b);
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(a.hasAttribute('aria-describedby')).toBe(false);
+    expect(b.getAttribute('aria-describedby')).toBe(PREVIEW_CARD_ID);
+    expect(nodeRefPreview.state.anchor).toBe(b);
   });
 
   it('cancels a pending reveal when hidden before the delay elapses', async () => {

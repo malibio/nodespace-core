@@ -11,7 +11,7 @@
 -->
 
 <script lang="ts">
-  import { nodeRefPreview } from '$lib/services/node-ref-preview.svelte';
+  import { nodeRefPreview, PREVIEW_CARD_ID } from '$lib/services/node-ref-preview.svelte';
 
   const preview = $derived(nodeRefPreview.state);
 
@@ -23,9 +23,18 @@
   let coords = $state<{ top: number; left: number } | null>(null);
 
   $effect(() => {
-    // Recompute placement whenever the card shows or re-anchors. getBoundingClientRect
-    // isn't reactive, but these deps change exactly when a fresh measurement is needed,
-    // and app-shell hides the card on scroll so a stale rect can't linger.
+    // Register the resolved-content fields as dependencies so the effect re-runs
+    // (and re-measures) when the card grows from its loading size to its final
+    // title + snippet size — otherwise the flip-above/clamp decision would be made
+    // against the short loading card and a tall card near the viewport bottom would
+    // overflow. getBoundingClientRect isn't reactive, but these deps change exactly
+    // when a fresh measurement is needed, and app-shell hides on scroll so a stale
+    // rect can't linger.
+    void preview.loading;
+    void preview.notFound;
+    void preview.title;
+    void preview.snippet;
+
     if (!preview.visible || !preview.anchor || !cardEl) {
       coords = null;
       return;
@@ -55,6 +64,7 @@
 {#if preview.visible}
   <div
     bind:this={cardEl}
+    id={PREVIEW_CARD_ID}
     class="node-ref-preview"
     class:node-ref-preview--placed={coords !== null}
     role="tooltip"

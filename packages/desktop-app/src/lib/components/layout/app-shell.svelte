@@ -554,7 +554,11 @@
       if (anchor) nodeRefPreview.requestPreview(anchor);
     };
 
-    const handleRefFocusOut = () => nodeRefPreview.hide();
+    const handleRefFocusOut = (event: FocusEvent) => {
+      // Only dismiss when focus actually leaves a reference — a card shown via
+      // hover must not be torn down by an unrelated element losing focus.
+      if (nodeRefAnchor(event.target)) nodeRefPreview.hide();
+    };
 
     const handleRefDismiss = (event: KeyboardEvent) => {
       if (event.key === 'Escape') nodeRefPreview.hide();
