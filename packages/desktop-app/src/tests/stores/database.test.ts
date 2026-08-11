@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({
@@ -128,6 +128,13 @@ describe('Database Store', () => {
     databaseStore.activeDatabaseId = null;
     databaseStore.defaultDatabaseId = null;
     databaseStore.error = null;
+  });
+
+  afterEach(() => {
+    // The bridge marker is installed for every test here, and several production
+    // modules branch on its presence. Files share a vitest fork, so leaving it set
+    // makes every later file run as though it were inside Tauri.
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
   describe('load', () => {
