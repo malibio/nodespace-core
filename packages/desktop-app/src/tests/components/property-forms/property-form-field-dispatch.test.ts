@@ -89,21 +89,9 @@ async function editStreetThroughModal(): Promise<void> {
   await fireEvent.input(screen.getByLabelText('Street'), { target: { value: '1 Main' } });
 }
 
-// bits-ui Collapsible/Dialog mount effects run through requestAnimationFrame.
-// Another suite (position-cursor) installs a SYNCHRONOUS rAF global and never
-// restores it, which makes those mount effects recurse and overflow the stack.
-// Guarantee a well-behaved async rAF regardless of suite ordering.
-let originalRaf: typeof globalThis.requestAnimationFrame;
-let originalCancelRaf: typeof globalThis.cancelAnimationFrame;
 let updateNodeSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  originalRaf = globalThis.requestAnimationFrame;
-  originalCancelRaf = globalThis.cancelAnimationFrame;
-  globalThis.requestAnimationFrame = ((cb: (time: number) => void) =>
-    setTimeout(() => cb(performance.now()), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-  globalThis.cancelAnimationFrame = ((id: number) =>
-    clearTimeout(id as unknown as ReturnType<typeof setTimeout>)) as typeof globalThis.cancelAnimationFrame;
 
   // Spy (never module-mock) the shared singletons so nothing leaks across the fork.
   updateNodeSpy = vi.fn();
@@ -115,8 +103,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  globalThis.requestAnimationFrame = originalRaf;
-  globalThis.cancelAnimationFrame = originalCancelRaf;
 });
 
 describe('GenericSchemaForm — nested values persist FLAT', () => {
