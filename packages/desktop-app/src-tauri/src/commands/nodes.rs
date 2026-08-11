@@ -125,6 +125,10 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
         tonic::Code::Aborted => "VERSION_CONFLICT",
         tonic::Code::AlreadyExists => "COLLECTION_EXISTS",
         tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        // A cascade delete refused by the ADR-041 subtree access gate. Distinct from
+        // ordinary validation so the frontend can restore the optimistically-removed
+        // node and show a dedicated refusal modal.
+        tonic::Code::FailedPrecondition => "SUBTREE_ACCESS_DENIED",
         _ => "GRPC_ERROR",
     }
     .to_string();
@@ -135,6 +139,17 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
             .get("x-version-conflict")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| serde_json::from_str(s).ok())
+    } else if status.code() == tonic::Code::FailedPrecondition {
+        // Surface the inaccessible-node count the daemon attached, so the modal can
+        // report "N item(s) not visible to you". Mirrors the x-version-conflict path.
+        status
+            .metadata()
+            .get("x-subtree-inaccessible-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(
+                |inaccessible_count| serde_json::json!({ "inaccessibleCount": inaccessible_count }),
+            )
     } else {
         None
     };

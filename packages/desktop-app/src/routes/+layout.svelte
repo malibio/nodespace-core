@@ -5,6 +5,7 @@
   import AppShell from '$lib/components/layout/app-shell.svelte';
   import DiagnosticPanel from '$lib/design/components/diagnostic-panel.svelte';
   import DeleteConfirmationModal from '$lib/components/delete-confirmation-modal.svelte';
+  import SubtreeAccessDeniedModal from '$lib/components/subtree-access-denied-modal.svelte';
   import VersionBadge from '$lib/components/dev/version-badge.svelte';
   import { initializeSchemaPluginSystem } from '$lib/plugins/schema-plugin-loader';
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
@@ -156,6 +157,9 @@
 
 <!-- Delete confirmation modal - mounted globally so services can trigger it -->
 <DeleteConfirmationModal />
+
+<!-- Subtree-access-denied refusal modal - mounted globally so the delete path can trigger it -->
+<SubtreeAccessDeniedModal />
 
 <!-- Dev-only build/version badge - hidden unless localStorage['ns:show-build-badge']==='1' -->
 <VersionBadge />

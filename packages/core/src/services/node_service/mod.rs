@@ -4014,8 +4014,13 @@ mod tests {
         let result = service.delete_node(&project_id, project.version).await;
 
         assert!(
-            matches!(result, Err(NodeServiceError::HierarchyViolation(_))),
-            "expected HierarchyViolation, got {:?}",
+            matches!(
+                result,
+                Err(NodeServiceError::SubtreeAccessDenied {
+                    inaccessible_count: 1
+                })
+            ),
+            "expected SubtreeAccessDenied {{ inaccessible_count: 1 }}, got {:?}",
             result
         );
 

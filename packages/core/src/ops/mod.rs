@@ -35,6 +35,9 @@ pub enum OpsError {
         current_node: Option<serde_json::Value>,
     },
 
+    #[error("Delete refused: subtree contains {inaccessible_count} node(s) not accessible to the current actor")]
+    SubtreeAccessDenied { inaccessible_count: u64 },
+
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
 
@@ -62,6 +65,9 @@ impl From<NodeServiceError> for OpsError {
                 // resyncNodeFromServer for task-node conflicts.
                 current_node: None,
             },
+            NodeServiceError::SubtreeAccessDenied { inaccessible_count } => {
+                OpsError::SubtreeAccessDenied { inaccessible_count }
+            }
             NodeServiceError::ValidationFailed(e) => OpsError::ValidationFailed(e.to_string()),
             NodeServiceError::InvalidParent { parent_id } => {
                 OpsError::ValidationFailed(format!("Invalid parent: {}", parent_id))
