@@ -560,8 +560,16 @@ describe('SlashCommandDropdown', () => {
   });
 
   describe('Smart Positioning - Viewport Edge Detection', () => {
+    // Captured so the pinned dimensions are handed back afterwards. Test files share a
+    // vitest fork, so a window size left overridden here silently becomes the viewport
+    // every later file measures against.
+    let originalInnerWidth: PropertyDescriptor | undefined;
+    let originalInnerHeight: PropertyDescriptor | undefined;
+
     beforeEach(() => {
       // Mock window dimensions for viewport calculations
+      originalInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+      originalInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
       Object.defineProperty(window, 'innerWidth', {
         writable: true,
         configurable: true,
@@ -572,6 +580,19 @@ describe('SlashCommandDropdown', () => {
         configurable: true,
         value: 768
       });
+    });
+
+    afterEach(() => {
+      if (originalInnerWidth) {
+        Object.defineProperty(window, 'innerWidth', originalInnerWidth);
+      } else {
+        Reflect.deleteProperty(window, 'innerWidth');
+      }
+      if (originalInnerHeight) {
+        Object.defineProperty(window, 'innerHeight', originalInnerHeight);
+      } else {
+        Reflect.deleteProperty(window, 'innerHeight');
+      }
     });
 
     it('should position below cursor when space available', () => {

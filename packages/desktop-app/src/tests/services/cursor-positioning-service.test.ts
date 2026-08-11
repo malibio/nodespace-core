@@ -25,6 +25,10 @@ describe('CursorPositioningService', () => {
   });
 
   afterEach(() => {
+    // A test that fakes timers restores them at the end of its body, which a failing
+    // assertion skips — leaving the fake clock installed for every later file in this
+    // fork. Restoring here covers that. It is a no-op when timers aren't faked.
+    vi.useRealTimers();
     document.body.innerHTML = '';
   });
 
