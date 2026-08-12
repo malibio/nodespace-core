@@ -552,6 +552,7 @@ pub fn run() {
             commands::database::rename_database,
             commands::database::remove_database,
             commands::database::set_active_database,
+            commands::database::initial_database_id,
             // Local agent commands
             commands::local_agent::local_agent_status,
             commands::local_agent::local_agent_cancel_turn,

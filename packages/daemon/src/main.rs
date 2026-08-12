@@ -281,6 +281,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // Reap idle non-default databases so a switched-away database stops consuming
     // compute (ADR-053: per-database compute scoping).
     manager.spawn_idle_reaper();
+    // Fill the tray's Databases submenu. The registry is built here, after the
+    // tray loop is already running, so the tray cannot be handed it at startup —
+    // it is told instead. Safe if the tray hasn't finished initializing: the
+    // snapshot is held and applied when it does.
+    controller.databases_changed(manager.list().await);
     let shared_model = shared.context.model.clone();
     let shutdown_manager = manager.clone();
 
@@ -477,6 +482,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // Reap idle non-default databases so a switched-away database stops consuming
     // compute (ADR-053: per-database compute scoping).
     manager.spawn_idle_reaper();
+    // Fill the tray's Databases submenu. The registry is built here, after the
+    // tray loop is already running, so the tray cannot be handed it at startup —
+    // it is told instead. Safe if the tray hasn't finished initializing: the
+    // snapshot is held and applied when it does.
+    controller.databases_changed(manager.list().await);
     let shared_model = shared.context.model.clone();
     let shutdown_manager = manager.clone();
 

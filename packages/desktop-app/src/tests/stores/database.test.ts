@@ -117,9 +117,16 @@ async function flushMicrotasks(): Promise<void> {
 
 describe('Database Store', () => {
   beforeEach(() => {
+    // mockReset, not clearAllMocks: tests that install a persistent
+    // mockImplementation would otherwise keep answering for every later test in
+    // the file. clearAllMocks only clears recorded calls.
+    mockInvoke.mockReset();
     vi.clearAllMocks();
     mockGetNode.mockReset();
     mockGetNode.mockResolvedValue(null);
+    // The remembered-database id is read from localStorage at load(); a value
+    // left behind by one test silently steers the next one.
+    localStorage.clear();
     epochValue = 0;
     // The store gates `load()` on the Tauri bridge; present it so these tests
     // exercise the invoke path. The browser-mode describe removes it.
@@ -173,6 +180,70 @@ describe('Database Store', () => {
       await databaseStore.load();
 
       expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
+    it('opens the database this launch was told to open, over the remembered one', async () => {
+      // The tray sets a launch-time selection when the user picks a specific
+      // database from its submenu; that is a more specific instruction than
+      // "whatever was open last time".
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('b'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('b');
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.load();
+
+      expect(databaseStore.activeDatabaseId).toBe('b');
+    });
+
+    it('ignores a launch selection naming a database that is not registered', async () => {
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('gone');
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.load();
+
+      expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
+    it('does not let a concurrent load overwrite the selection already made', async () => {
+      // A second load() runs on every launch (the daemon-reconnect listener
+      // fires one), and both can pass the "no selection yet" check before
+      // either assigns. What keeps them agreeing is that the launch id answers
+      // the same thing to both — an earlier attempt to consume it on first read
+      // made the second load resolve to the remembered database and overwrite
+      // the tray's pick. This pins the outcome, so re-introducing a
+      // consume-once read fails here rather than silently in the product.
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('b'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('b');
+        return Promise.resolve(undefined);
+      });
+
+      await Promise.all([databaseStore.load(), databaseStore.load()]);
+
+      expect(databaseStore.activeDatabaseId).toBe('b');
     });
 
     it('records an error when the list fails', async () => {

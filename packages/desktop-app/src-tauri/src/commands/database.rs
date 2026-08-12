@@ -186,6 +186,31 @@ pub async fn remove_database(
     Ok(response.id)
 }
 
+/// The database this launch was asked to open, if any.
+///
+/// The daemon's tray sets `NODESPACE_INITIAL_DATABASE` on the process it spawns
+/// when the user picks a specific database from the Databases submenu (the name
+/// is `nodespace_daemon::tray::INITIAL_DATABASE_ENV`; the desktop app has no
+/// dependency on the daemon crate, so it is spelled out here — keep the two in
+/// step).
+///
+/// Answers the same value for the life of the process, deliberately. Consuming
+/// it on first read is tempting — it describes a launch, not a preference — but
+/// the store calls this from `load()`, and a second `load()` runs on every
+/// launch (the daemon-reconnect listener fires one). A consumed second read
+/// returns nothing, and that load then resolves to the remembered database and
+/// overwrites the tray's pick. A stable answer keeps concurrent loads agreeing.
+///
+/// The cost is that a webview reload would re-apply the launch selection over a
+/// database the user switched to in-app. Nothing reloads the webview today; if
+/// something does, consume it at *apply* time in the store rather than here.
+#[tauri::command]
+pub fn initial_database_id() -> Option<String> {
+    std::env::var("NODESPACE_INITIAL_DATABASE")
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+}
+
 /// Select which database the desktop app is viewing. Rebuilds the routed
 /// data-plane clients so subsequent node/import/embeddings/agent-session
 /// requests target `id` (or the daemon default when `id` is `None`), and

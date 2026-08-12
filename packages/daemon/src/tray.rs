@@ -17,13 +17,21 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
+
+use crate::services::database_manager::{DatabaseId, DatabaseStatus, RegistrySnapshot};
 
 /// PNG used for the menu-bar icon. 32×32 is large enough that macOS, Windows
 /// and Linux all downscale gracefully; we keep one asset rather than shipping
 /// a per-platform set since the daemon's footprint should stay small.
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+
+/// Set on the spawned UI process when the user opens a specific database from
+/// the tray. The app treats it as the highest-precedence choice for that
+/// launch only; a plain "Open NodeSpace" leaves it unset so the app restores
+/// whatever it last had.
+pub const INITIAL_DATABASE_ENV: &str = "NODESPACE_INITIAL_DATABASE";
 
 /// Events the tonic side of the daemon can push into the tray event loop.
 ///
@@ -33,6 +41,10 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
 enum TrayEvent {
     Menu(MenuEvent),
     RpcStateChanged,
+    /// A fresh view of the database registry, rendered into the Databases
+    /// submenu. Carries owned data because it crosses from the tokio runtime
+    /// into the `!Send` tray loop.
+    DatabasesChanged(Box<RegistrySnapshot>),
 }
 
 /// Handle the gRPC side of the daemon uses to talk to the tray.
@@ -70,6 +82,81 @@ impl TrayController {
         self.active_rpcs.fetch_sub(1, Ordering::Relaxed);
         let _ = self.proxy.send_event(TrayEvent::RpcStateChanged);
     }
+
+    /// Publish the current database registry to the tray so the Databases
+    /// submenu can be (re)rendered.
+    ///
+    /// The registry lives behind the gRPC runtime and is built well after the
+    /// tray loop starts, so it cannot be handed over at seed time — it arrives
+    /// here instead. A snapshot that lands before the tray finishes
+    /// initializing is retained and applied once it does, so ordering between
+    /// the two does not matter.
+    pub fn databases_changed(&self, snapshot: RegistrySnapshot) {
+        // Ignore send errors: the loop may have exited during shutdown.
+        let _ = self
+            .proxy
+            .send_event(TrayEvent::DatabasesChanged(Box::new(snapshot)));
+    }
+}
+
+/// One database as rendered in the tray submenu.
+///
+/// Kept separate from the menu objects so the labelling rules — which is
+/// open, which syncs, which cannot be opened — are decided in a plain
+/// function that tests can call without a display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DatabaseMenuEntry {
+    pub id: DatabaseId,
+    pub label: String,
+    /// False for a registry entry whose file is gone — shown, but not
+    /// selectable, so the menu still explains why it can't be opened.
+    pub enabled: bool,
+}
+
+/// Render a registry snapshot into tray entries, in registry order.
+///
+/// The label carries the facts the registry persists — which database is the
+/// default, and which sync to a cloud tenant. Those change only when the user
+/// explicitly changes them, so a menu rendered once survives them better than
+/// it would runtime state. Deliberately NOT whether a database is currently
+/// *open*: the idle reaper closes databases minutes into
+/// normal use, and this menu is only refreshed when the daemon pushes a new
+/// snapshot, so an open marker would be confidently wrong most of the time. A
+/// live open indicator belongs with live refresh, tracked separately.
+///
+/// A missing file replaces the other markers, since neither is meaningful once
+/// the file is gone.
+pub(crate) fn database_menu_entries(snapshot: &RegistrySnapshot) -> Vec<DatabaseMenuEntry> {
+    snapshot
+        .databases
+        .iter()
+        .map(|listing| {
+            let mut markers: Vec<&str> = Vec::new();
+            let missing = listing.status == DatabaseStatus::Missing;
+            if missing {
+                markers.push("missing");
+            } else {
+                if listing.is_default {
+                    markers.push("default");
+                }
+                if listing.entry.bound_tenant_schema.is_some() {
+                    markers.push("synced");
+                }
+            }
+
+            let label = if markers.is_empty() {
+                listing.entry.name.clone()
+            } else {
+                format!("{} — {}", listing.entry.name, markers.join(" · "))
+            };
+
+            DatabaseMenuEntry {
+                id: listing.entry.id.clone(),
+                label,
+                enabled: !missing,
+            }
+        })
+        .collect()
 }
 
 /// Tray runtime state. Constructed inside the event loop's `Init` callback
@@ -86,6 +173,11 @@ struct TrayState {
     ui_child: Option<Child>,
     open_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
+    /// Databases submenu, repopulated whenever a registry snapshot arrives.
+    databases_menu: Submenu,
+    /// Menu items currently in that submenu, retained so they can be removed
+    /// on the next rebuild, paired with the database each one opens.
+    database_items: Vec<(MenuItem, DatabaseId)>,
 }
 
 /// Build the tray menu. Status starts at "0 active calls" because the daemon
@@ -93,15 +185,22 @@ struct TrayState {
 fn build_menu() -> Result<(
     Menu,
     MenuItem,
+    Submenu,
     tray_icon::menu::MenuId,
     tray_icon::menu::MenuId,
 )> {
     let menu = Menu::new();
     let open = MenuItem::new("Open NodeSpace", true, None);
+    // Starts empty and disabled; the first registry snapshot fills it. The
+    // daemon builds the registry after the tray is already up, so an empty
+    // submenu is the honest state until then rather than a missing one.
+    let databases = Submenu::new("Databases", false);
     let status = MenuItem::new("Status: 0 active calls", false, None);
     let quit = MenuItem::new("Quit", true, None);
 
     menu.append(&open).context("append Open item")?;
+    menu.append(&databases)
+        .context("append Databases submenu")?;
     menu.append(&PredefinedMenuItem::separator())
         .context("append separator")?;
     menu.append(&status).context("append Status item")?;
@@ -109,7 +208,13 @@ fn build_menu() -> Result<(
         .context("append separator")?;
     menu.append(&quit).context("append Quit item")?;
 
-    Ok((menu, status, open.id().clone(), quit.id().clone()))
+    Ok((
+        menu,
+        status,
+        databases,
+        open.id().clone(),
+        quit.id().clone(),
+    ))
 }
 
 fn load_icon() -> Result<Icon> {
@@ -174,6 +279,10 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
 
     let ui_binary = resolve_ui_binary();
     let mut state: Option<TrayState> = None;
+    // The registry is built after the tray loop starts, so a snapshot can
+    // arrive before `Init`. Hold the most recent one and apply it as soon as
+    // there is a tray to apply it to.
+    let mut pending_databases: Option<RegistrySnapshot> = None;
 
     event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -181,7 +290,12 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
                 match initialize_tray(ui_binary.clone()) {
-                    Ok(s) => state = Some(s),
+                    Ok(mut s) => {
+                        if let Some(snapshot) = pending_databases.take() {
+                            s.rebuild_databases_menu(&snapshot);
+                        }
+                        state = Some(s);
+                    }
                     Err(e) => {
                         tracing::error!(
                             error = ?e,
@@ -196,7 +310,12 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
             Event::UserEvent(TrayEvent::Menu(menu_event)) => {
                 let Some(s) = state.as_mut() else { return };
                 if menu_event.id == s.open_id {
-                    if let Err(e) = s.open_ui() {
+                    if let Err(e) = s.open_ui(None) {
+                        tracing::error!(error = ?e, "Failed to spawn UI binary");
+                    }
+                } else if let Some(database) = s.database_for_menu_id(&menu_event.id) {
+                    tracing::info!(database = %database.as_str(), "Tray: opening UI on database");
+                    if let Err(e) = s.open_ui(Some(database)) {
                         tracing::error!(error = ?e, "Failed to spawn UI binary");
                     }
                 } else if menu_event.id == s.quit_id {
@@ -211,6 +330,12 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
                     *control_flow = ControlFlow::Exit;
                 }
             }
+
+            Event::UserEvent(TrayEvent::DatabasesChanged(snapshot)) => match state.as_mut() {
+                Some(s) => s.rebuild_databases_menu(&snapshot),
+                // Tray not up yet (or failed to initialize) — keep the latest.
+                None => pending_databases = Some(*snapshot),
+            },
 
             Event::UserEvent(TrayEvent::RpcStateChanged) => {
                 if let Some(s) = state.as_ref() {
@@ -229,7 +354,7 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
 
 fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
     let icon = load_icon()?;
-    let (menu, status_item, open_id, quit_id) = build_menu()?;
+    let (menu, status_item, databases_menu, open_id, quit_id) = build_menu()?;
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("NodeSpace")
@@ -244,18 +369,68 @@ fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
         ui_child: None,
         open_id,
         quit_id,
+        databases_menu,
+        database_items: Vec::new(),
     })
 }
 
 impl TrayState {
-    /// Spawn the Tauri UI binary, or — if a previous spawn is still alive —
-    /// leave it alone and rely on the OS to focus an existing window.
+    /// Replace the Databases submenu contents with `snapshot`.
     ///
-    /// True cross-process window focus needs platform-specific calls
-    /// (`NSRunningApplication::activate` etc.) and a focus signal over gRPC
-    /// to the UI; both are tracked separately. For now "open if absent" is
-    /// the smallest correct behavior.
-    fn open_ui(&mut self) -> Result<()> {
+    /// Removes the previously-appended items rather than the whole submenu, so
+    /// the submenu's own handle (held by the live menu) stays valid.
+    fn rebuild_databases_menu(&mut self, snapshot: &RegistrySnapshot) {
+        // Clear the tracking list unconditionally, whatever removal reports: an
+        // item left in the native submenu but dropped from the list is
+        // unreachable (clicks stop resolving) AND gets a duplicate appended
+        // beside it on the next rebuild. Forgetting one is the worse failure,
+        // so log and keep going rather than bail mid-rebuild.
+        for (item, _) in self.database_items.iter() {
+            if let Err(e) = self.databases_menu.remove(item) {
+                tracing::warn!(error = ?e, "Failed to remove a stale database menu item");
+            }
+        }
+        self.database_items.clear();
+
+        let mut failed = 0usize;
+        for entry in database_menu_entries(snapshot) {
+            let item = MenuItem::new(&entry.label, entry.enabled, None);
+            match self.databases_menu.append(&item) {
+                Ok(()) => self.database_items.push((item, entry.id)),
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!(error = ?e, "Failed to append a database menu item");
+                }
+            }
+        }
+        if failed > 0 {
+            tracing::warn!(failed, "Databases submenu is incomplete");
+        }
+
+        // Computed on the way out, not only on the success path, so a partial
+        // rebuild never leaves reachable items behind a greyed-out parent.
+        self.databases_menu
+            .set_enabled(!self.database_items.is_empty());
+    }
+
+    /// The database a menu id belongs to, if it is one of ours.
+    fn database_for_menu_id(&self, id: &tray_icon::menu::MenuId) -> Option<DatabaseId> {
+        self.database_items
+            .iter()
+            .find(|(item, _)| item.id() == id)
+            .map(|(_, db)| db.clone())
+    }
+
+    /// Spawn the Tauri UI binary, optionally pointing it at `database`, or — if
+    /// a previous spawn is still alive — leave it alone and rely on the OS to
+    /// focus an existing window.
+    ///
+    /// That last case makes picking a database while the app is already running
+    /// a no-op, and when the app was started outside the tray we have no child
+    /// to notice, so the same click spawns a second window instead. Re-pointing
+    /// a running app needs cross-process focus (`NSRunningApplication::activate`
+    /// etc.) plus a select signal over gRPC; tracked separately.
+    fn open_ui(&mut self, database: Option<DatabaseId>) -> Result<()> {
         let Some(path) = self.ui_binary.as_ref() else {
             tracing::warn!(
                 "Open NodeSpace selected but NODESPACE_UI_BINARY is unset; \
@@ -271,7 +446,13 @@ impl TrayState {
                     self.ui_child = None;
                 }
                 Ok(None) => {
-                    tracing::info!("UI binary already running; leaving it to OS to focus");
+                    // A running UI cannot be re-pointed from here: the initial
+                    // database is read at startup. Switching an open window
+                    // needs a focus/select signal over gRPC, tracked separately.
+                    tracing::info!(
+                        requested_database = database.as_ref().map(|d| d.as_str()),
+                        "UI binary already running; leaving it to OS to focus"
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -281,7 +462,13 @@ impl TrayState {
             }
         }
 
-        let child = Command::new(path)
+        let mut command = Command::new(path);
+        if let Some(id) = database.as_ref() {
+            // Only set when the user picked a specific database, so a plain
+            // "Open NodeSpace" still honours whatever the app last remembered.
+            command.env(INITIAL_DATABASE_ENV, id.as_str());
+        }
+        let child = command
             .spawn()
             .with_context(|| format!("spawn UI binary {}", path.display()))?;
         self.ui_child = Some(child);
@@ -292,6 +479,112 @@ impl TrayState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::database_manager::{DatabaseEntry, DatabaseListing};
+
+    fn listing_with_default(
+        name: &str,
+        status: DatabaseStatus,
+        tenant: Option<&str>,
+        is_default: bool,
+    ) -> DatabaseListing {
+        DatabaseListing {
+            entry: DatabaseEntry {
+                id: DatabaseId::from(format!("id-{name}")),
+                name: name.to_string(),
+                path: PathBuf::from(format!("/tmp/{name}.db")),
+                created_at: chrono::Utc::now(),
+                last_opened_at: None,
+                bound_tenant_schema: tenant.map(str::to_string),
+                bound_tenant_collection: None,
+            },
+            status,
+            is_default,
+        }
+    }
+
+    fn listing(name: &str, status: DatabaseStatus, tenant: Option<&str>) -> DatabaseListing {
+        listing_with_default(name, status, tenant, false)
+    }
+
+    fn snapshot(databases: Vec<DatabaseListing>) -> RegistrySnapshot {
+        RegistrySnapshot {
+            databases,
+            default_database: None,
+        }
+    }
+
+    /// The two facts the submenu conveys — which database is the default, and
+    /// which sync — with a plain name when neither applies.
+    #[test]
+    fn labels_carry_default_and_synced_state() {
+        let entries = database_menu_entries(&snapshot(vec![
+            listing_with_default("Both", DatabaseStatus::Closed, Some("tenant_demo"), true),
+            listing_with_default("DefaultOnly", DatabaseStatus::Closed, None, true),
+            listing("SyncedOnly", DatabaseStatus::Closed, Some("tenant_demo")),
+            listing("Plain", DatabaseStatus::Closed, None),
+        ]));
+
+        let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Both — default · synced",
+                "DefaultOnly — default",
+                "SyncedOnly — synced",
+                "Plain",
+            ]
+        );
+        assert!(entries.iter().all(|e| e.enabled));
+    }
+
+    /// Whether a database happens to be open right now is deliberately absent:
+    /// the idle reaper closes databases during normal use and this menu is not
+    /// refreshed live, so an open marker would be wrong more often than right.
+    #[test]
+    fn open_state_is_not_reflected_in_the_label() {
+        let entries = database_menu_entries(&snapshot(vec![
+            listing("Alpha", DatabaseStatus::Closed, None),
+            listing("Beta", DatabaseStatus::Open, None),
+        ]));
+
+        // Identical labels despite differing status — the open one gains nothing.
+        assert_eq!(entries[0].label, "Alpha");
+        assert_eq!(entries[1].label, "Beta");
+    }
+
+    /// A registry entry whose file is gone is still listed — silently dropping it
+    /// would leave the user wondering where the database went — but it cannot be
+    /// opened, and neither open nor synced is meaningful for it.
+    #[test]
+    fn missing_database_is_shown_but_not_selectable() {
+        let entries = database_menu_entries(&snapshot(vec![listing(
+            "Gone",
+            DatabaseStatus::Missing,
+            Some("tenant_demo"),
+        )]));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "Gone — missing");
+        assert!(!entries[0].enabled);
+    }
+
+    /// Registry order is preserved and every entry keeps its own id, so a click
+    /// opens the database the user actually picked.
+    #[test]
+    fn entries_keep_registry_order_and_ids() {
+        let entries = database_menu_entries(&snapshot(vec![
+            listing("First", DatabaseStatus::Closed, None),
+            listing("Second", DatabaseStatus::Closed, None),
+        ]));
+
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["id-First", "id-Second"]);
+    }
+
+    #[test]
+    fn empty_registry_renders_no_entries() {
+        assert!(database_menu_entries(&snapshot(vec![])).is_empty());
+    }
 
     #[test]
     fn embedded_icon_decodes() {
