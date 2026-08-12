@@ -61,6 +61,7 @@ fn test_context() -> SharedContext {
         model,
         has_model: false,
         scheduler: Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
+        subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
     }
 }
 

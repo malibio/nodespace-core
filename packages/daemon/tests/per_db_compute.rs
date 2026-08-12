@@ -38,6 +38,7 @@ fn test_context() -> (SharedContext, Arc<EmbeddingScheduler>) {
         model,
         has_model: false,
         scheduler: scheduler.clone(),
+        subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
     };
     (context, scheduler)
 }
