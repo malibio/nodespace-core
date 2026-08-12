@@ -139,6 +139,13 @@ pub(crate) fn database_menu_entries(snapshot: &RegistrySnapshot) -> Vec<Database
                 if listing.is_default {
                     markers.push("default");
                 }
+                // Safe to show only because the submenu is now rebuilt on every
+                // registry/open-set change. Pushed once at boot it would be
+                // confidently wrong within minutes: the idle reaper closes
+                // databases and in-app switching opens others.
+                if listing.status == DatabaseStatus::Open {
+                    markers.push("open");
+                }
                 if listing.entry.bound_tenant_schema.is_some() {
                     markers.push("synced");
                 }
@@ -537,19 +544,49 @@ mod tests {
         assert!(entries.iter().all(|e| e.enabled));
     }
 
-    /// Whether a database happens to be open right now is deliberately absent:
-    /// the idle reaper closes databases during normal use and this menu is not
-    /// refreshed live, so an open marker would be wrong more often than right.
+    /// Which database is open now IS shown. It was omitted while the submenu was
+    /// built once at boot, because the idle reaper closes databases and in-app
+    /// switching opens others — a marker pushed once would be wrong within minutes
+    /// of normal use. The menu is rebuilt on every registry/open-set change now,
+    /// so the marker tracks reality.
     #[test]
-    fn open_state_is_not_reflected_in_the_label() {
+    fn open_state_is_reflected_in_the_label() {
         let entries = database_menu_entries(&snapshot(vec![
             listing("Alpha", DatabaseStatus::Closed, None),
             listing("Beta", DatabaseStatus::Open, None),
         ]));
 
-        // Identical labels despite differing status — the open one gains nothing.
         assert_eq!(entries[0].label, "Alpha");
-        assert_eq!(entries[1].label, "Beta");
+        assert_eq!(entries[1].label, "Beta — open");
+    }
+
+    /// Marker order is fixed so a label does not reshuffle between refreshes,
+    /// which under live updates would read as flicker rather than information.
+    #[test]
+    fn markers_render_in_a_stable_order() {
+        let entries = database_menu_entries(&snapshot(vec![listing_with_default(
+            "All",
+            DatabaseStatus::Open,
+            Some("tenant_demo"),
+            true,
+        )]));
+
+        assert_eq!(entries[0].label, "All — default · open · synced");
+    }
+
+    /// A missing entry never gains an open marker: its file is gone, so "open"
+    /// would be nonsense even though the status enum can only hold one value.
+    #[test]
+    fn missing_beats_every_other_marker() {
+        let entries = database_menu_entries(&snapshot(vec![listing_with_default(
+            "Gone",
+            DatabaseStatus::Missing,
+            Some("tenant_demo"),
+            true,
+        )]));
+
+        assert_eq!(entries[0].label, "Gone — missing");
+        assert!(!entries[0].enabled);
     }
 
     /// A registry entry whose file is gone is still listed — silently dropping it

@@ -55,6 +55,27 @@ use tonic::transport::Server;
 /// means the *same* cached service set backs both header-less requests and
 /// requests that name the default id explicitly — the file is never opened
 /// twice.
+/// Keep the tray's Databases submenu in step with the registry for the life of
+/// the daemon.
+///
+/// Pushes the current registry once, then again on every registry or open-set
+/// change. Without the follow-ups the submenu shows the registry exactly as it
+/// was at daemon boot, so a database created, renamed or removed afterwards — or
+/// opened by a switch, or closed by the idle reaper — reads wrong until the
+/// daemon restarts.
+///
+/// The snapshot is re-read after each wake rather than carried on the channel,
+/// so a burst of changes collapses into a single refresh.
+fn spawn_tray_database_sync(controller: tray::TrayController, manager: Arc<DatabaseManager>) {
+    tokio::spawn(async move {
+        let mut changes = manager.subscribe_changes();
+        controller.databases_changed(manager.list().await);
+        while changes.changed().await.is_ok() {
+            controller.databases_changed(manager.list().await);
+        }
+    });
+}
+
 async fn open_default_database(
     db_path: &std::path::Path,
     context: SharedContext,
@@ -281,11 +302,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // Reap idle non-default databases so a switched-away database stops consuming
     // compute (ADR-053: per-database compute scoping).
     manager.spawn_idle_reaper();
-    // Fill the tray's Databases submenu. The registry is built here, after the
-    // tray loop is already running, so the tray cannot be handed it at startup —
-    // it is told instead. Safe if the tray hasn't finished initializing: the
-    // snapshot is held and applied when it does.
-    controller.databases_changed(manager.list().await);
+    // Fill the tray's Databases submenu and keep it in step. The registry is built
+    // here, after the tray loop is already running, so the tray cannot be handed it
+    // at startup — it is told instead. Safe if the tray hasn't finished
+    // initializing: the snapshot is held and applied when it does.
+    spawn_tray_database_sync(controller.clone(), manager.clone());
     let shared_model = shared.context.model.clone();
     let shutdown_manager = manager.clone();
 
@@ -482,11 +503,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     // Reap idle non-default databases so a switched-away database stops consuming
     // compute (ADR-053: per-database compute scoping).
     manager.spawn_idle_reaper();
-    // Fill the tray's Databases submenu. The registry is built here, after the
-    // tray loop is already running, so the tray cannot be handed it at startup —
-    // it is told instead. Safe if the tray hasn't finished initializing: the
-    // snapshot is held and applied when it does.
-    controller.databases_changed(manager.list().await);
+    // Fill the tray's Databases submenu and keep it in step. The registry is built
+    // here, after the tray loop is already running, so the tray cannot be handed it
+    // at startup — it is told instead. Safe if the tray hasn't finished
+    // initializing: the snapshot is held and applied when it does.
+    spawn_tray_database_sync(controller.clone(), manager.clone());
     let shared_model = shared.context.model.clone();
     let shutdown_manager = manager.clone();
 
