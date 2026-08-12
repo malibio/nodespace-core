@@ -117,9 +117,16 @@ async function flushMicrotasks(): Promise<void> {
 
 describe('Database Store', () => {
   beforeEach(() => {
+    // mockReset, not clearAllMocks: tests that install a persistent
+    // mockImplementation would otherwise keep answering for every later test in
+    // the file. clearAllMocks only clears recorded calls.
+    mockInvoke.mockReset();
     vi.clearAllMocks();
     mockGetNode.mockReset();
     mockGetNode.mockResolvedValue(null);
+    // The remembered-database id is read from localStorage at load(); a value
+    // left behind by one test silently steers the next one.
+    localStorage.clear();
     epochValue = 0;
     // The store gates `load()` on the Tauri bridge; present it so these tests
     // exercise the invoke path. The browser-mode describe removes it.

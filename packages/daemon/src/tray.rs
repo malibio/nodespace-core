@@ -115,9 +115,15 @@ pub(crate) struct DatabaseMenuEntry {
 
 /// Render a registry snapshot into tray entries, in registry order.
 ///
-/// The label carries the two facts the menu is for: whether the database is
-/// currently open, and whether it syncs to a cloud tenant. A missing file
-/// replaces both, since neither is meaningful once the file is gone.
+/// The label carries facts that are stable in the registry — which database is
+/// the default, and which sync to a cloud tenant. Deliberately NOT whether a
+/// database is currently *open*: the idle reaper closes databases minutes into
+/// normal use, and this menu is only refreshed when the daemon pushes a new
+/// snapshot, so an open marker would be confidently wrong most of the time. A
+/// live open indicator belongs with live refresh, tracked separately.
+///
+/// A missing file replaces the other markers, since neither is meaningful once
+/// the file is gone.
 pub(crate) fn database_menu_entries(snapshot: &RegistrySnapshot) -> Vec<DatabaseMenuEntry> {
     snapshot
         .databases
@@ -128,8 +134,8 @@ pub(crate) fn database_menu_entries(snapshot: &RegistrySnapshot) -> Vec<Database
             if missing {
                 markers.push("missing");
             } else {
-                if listing.status == DatabaseStatus::Open {
-                    markers.push("open");
+                if listing.is_default {
+                    markers.push("default");
                 }
                 if listing.entry.bound_tenant_schema.is_some() {
                     markers.push("synced");
@@ -288,7 +294,7 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
                                 tracing::error!(error = ?e, "Failed to render Databases submenu");
                             }
                         }
-                        state = Some(s)
+                        state = Some(s);
                     }
                     Err(e) => {
                         tracing::error!(
@@ -373,35 +379,40 @@ fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
 }
 
 impl TrayState {
-    /// Spawn the Tauri UI binary, or — if a previous spawn is still alive —
-    /// leave it alone and rely on the OS to focus an existing window.
-    ///
-    /// True cross-process window focus needs platform-specific calls
-    /// (`NSRunningApplication::activate` etc.) and a focus signal over gRPC
-    /// to the UI; both are tracked separately. For now "open if absent" is
-    /// the smallest correct behavior.
     /// Replace the Databases submenu contents with `snapshot`.
     ///
     /// Removes the previously-appended items rather than the whole submenu, so
     /// the submenu's own handle (held by the live menu) stays valid.
     fn rebuild_databases_menu(&mut self, snapshot: &RegistrySnapshot) -> Result<()> {
-        for (item, _) in self.database_items.drain(..) {
-            self.databases_menu
-                .remove(&item)
-                .context("remove stale database item")?;
+        // Clear the tracking list unconditionally, whatever removal reports: an
+        // item left in the native submenu but dropped from the list is
+        // unreachable (clicks stop resolving) AND gets a duplicate appended
+        // beside it on the next rebuild. Forgetting one is the worse failure,
+        // so log and keep going rather than bail mid-rebuild.
+        for (item, _) in self.database_items.iter() {
+            if let Err(e) = self.databases_menu.remove(item) {
+                tracing::warn!(error = ?e, "Failed to remove a stale database menu item");
+            }
         }
+        self.database_items.clear();
 
-        let entries = database_menu_entries(snapshot);
-        for entry in entries {
+        let mut failed = 0usize;
+        for entry in database_menu_entries(snapshot) {
             let item = MenuItem::new(&entry.label, entry.enabled, None);
-            self.databases_menu
-                .append(&item)
-                .context("append database item")?;
-            self.database_items.push((item, entry.id));
+            match self.databases_menu.append(&item) {
+                Ok(()) => self.database_items.push((item, entry.id)),
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!(error = ?e, "Failed to append a database menu item");
+                }
+            }
+        }
+        if failed > 0 {
+            tracing::warn!(failed, "Databases submenu is incomplete");
         }
 
-        // A submenu with nothing in it is unhelpful to open; disable it until
-        // there is something to show.
+        // Computed on the way out, not only on the success path, so a partial
+        // rebuild never leaves reachable items behind a greyed-out parent.
         self.databases_menu
             .set_enabled(!self.database_items.is_empty());
         Ok(())
@@ -415,6 +426,15 @@ impl TrayState {
             .map(|(_, db)| db.clone())
     }
 
+    /// Spawn the Tauri UI binary, optionally pointing it at `database`, or — if
+    /// a previous spawn is still alive — leave it alone and rely on the OS to
+    /// focus an existing window.
+    ///
+    /// That last case makes picking a database while the app is already running
+    /// a no-op, and when the app was started outside the tray we have no child
+    /// to notice, so the same click spawns a second window instead. Re-pointing
+    /// a running app needs cross-process focus (`NSRunningApplication::activate`
+    /// etc.) plus a select signal over gRPC; tracked separately.
     fn open_ui(&mut self, database: Option<DatabaseId>) -> Result<()> {
         let Some(path) = self.ui_binary.as_ref() else {
             tracing::warn!(
@@ -466,7 +486,12 @@ mod tests {
     use super::*;
     use crate::services::database_manager::{DatabaseEntry, DatabaseListing};
 
-    fn listing(name: &str, status: DatabaseStatus, tenant: Option<&str>) -> DatabaseListing {
+    fn listing_with_default(
+        name: &str,
+        status: DatabaseStatus,
+        tenant: Option<&str>,
+        is_default: bool,
+    ) -> DatabaseListing {
         DatabaseListing {
             entry: DatabaseEntry {
                 id: DatabaseId::from(format!("id-{name}")),
@@ -478,8 +503,12 @@ mod tests {
                 bound_tenant_collection: None,
             },
             status,
-            is_default: false,
+            is_default,
         }
+    }
+
+    fn listing(name: &str, status: DatabaseStatus, tenant: Option<&str>) -> DatabaseListing {
+        listing_with_default(name, status, tenant, false)
     }
 
     fn snapshot(databases: Vec<DatabaseListing>) -> RegistrySnapshot {
@@ -489,13 +518,13 @@ mod tests {
         }
     }
 
-    /// The two facts the submenu exists to convey — open, and syncing — with a
-    /// plain name when neither applies.
+    /// The two facts the submenu conveys — which database is the default, and
+    /// which sync — with a plain name when neither applies.
     #[test]
-    fn labels_carry_open_and_synced_state() {
+    fn labels_carry_default_and_synced_state() {
         let entries = database_menu_entries(&snapshot(vec![
-            listing("Both", DatabaseStatus::Open, Some("tenant_demo")),
-            listing("OpenOnly", DatabaseStatus::Open, None),
+            listing_with_default("Both", DatabaseStatus::Closed, Some("tenant_demo"), true),
+            listing_with_default("DefaultOnly", DatabaseStatus::Closed, None, true),
             listing("SyncedOnly", DatabaseStatus::Closed, Some("tenant_demo")),
             listing("Plain", DatabaseStatus::Closed, None),
         ]));
@@ -504,13 +533,27 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Both — open · synced",
-                "OpenOnly — open",
+                "Both — default · synced",
+                "DefaultOnly — default",
                 "SyncedOnly — synced",
                 "Plain",
             ]
         );
         assert!(entries.iter().all(|e| e.enabled));
+    }
+
+    /// Whether a database happens to be open right now is deliberately absent:
+    /// the idle reaper closes databases during normal use and this menu is not
+    /// refreshed live, so an open marker would be wrong more often than right.
+    #[test]
+    fn open_state_is_not_reflected_in_the_label() {
+        let entries = database_menu_entries(&snapshot(vec![
+            listing("Closed", DatabaseStatus::Closed, None),
+            listing("Open", DatabaseStatus::Open, None),
+        ]));
+
+        assert_eq!(entries[0].label, "Closed");
+        assert_eq!(entries[1].label, "Open");
     }
 
     /// A registry entry whose file is gone is still listed — silently dropping it

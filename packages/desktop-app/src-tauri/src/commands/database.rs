@@ -189,11 +189,21 @@ pub async fn remove_database(
 /// The database this launch was asked to open, if any.
 ///
 /// The daemon's tray sets `NODESPACE_INITIAL_DATABASE` on the process it spawns
-/// when the user picks a specific database from the Databases submenu. It is a
-/// per-launch instruction, not a persisted preference: a plain "Open NodeSpace"
-/// leaves it unset so the app restores whatever it had before.
+/// when the user picks a specific database from the Databases submenu (the name
+/// is `nodespace_daemon::tray::INITIAL_DATABASE_ENV`; the desktop app has no
+/// dependency on the daemon crate, so it is spelled out here — keep the two in
+/// step).
+///
+/// Answered **once per process**. It is an instruction about this launch, not a
+/// preference: after the app has acted on it, a later reload must fall back to
+/// whatever the user last selected, or switching database in-app and reloading
+/// would snap back to the tray's choice.
 #[tauri::command]
 pub fn initial_database_id() -> Option<String> {
+    static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if TAKEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
     std::env::var("NODESPACE_INITIAL_DATABASE")
         .ok()
         .filter(|id| !id.trim().is_empty())
