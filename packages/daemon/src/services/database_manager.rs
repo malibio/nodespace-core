@@ -21,7 +21,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use nodespace_core::models::EmbeddingConfig;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 use ulid::Ulid;
 
 use super::assembly::{build_database_services, DatabaseServices, SharedContext};
@@ -198,6 +198,15 @@ pub struct DatabaseManager {
     /// Process-global build context (PTY manager + embedding model) every
     /// per-database service set is assembled from.
     context: SharedContext,
+    /// Bumped whenever the registry or the open set changes, so observers can
+    /// re-read [`DatabaseManager::list`] instead of polling it.
+    ///
+    /// A counter rather than the snapshot itself: building a snapshot takes the
+    /// same locks the mutation is holding, so publishing one from inside a
+    /// mutation would invite a deadlock. Observers re-read after waking, which
+    /// also means a burst of changes collapses into one refresh — `watch` keeps
+    /// only the latest value.
+    change_tx: watch::Sender<u64>,
 }
 
 /// True if `path` lives under a system temporary directory. macOS purges
@@ -240,7 +249,26 @@ impl DatabaseManager {
             open: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             context,
+            change_tx: watch::channel(0).0,
         })
+    }
+
+    /// Observe registry/open-set changes. Wake, then call
+    /// [`DatabaseManager::list`] for the current state.
+    ///
+    /// Used by the tray's Databases submenu, which would otherwise keep showing
+    /// the registry as it was when the daemon booted.
+    pub fn subscribe_changes(&self) -> watch::Receiver<u64> {
+        self.change_tx.subscribe()
+    }
+
+    /// Signal that the registry or the open set changed.
+    ///
+    /// Deliberately takes no locks: callers invoke it *after* releasing theirs,
+    /// so a woken observer calling `list()` cannot deadlock against the mutation
+    /// that woke it.
+    fn notify_changed(&self) {
+        self.change_tx.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     /// Default registry path `<nodespace_dir>/databases.toml`.
@@ -404,7 +432,12 @@ impl DatabaseManager {
             .find(|e| &e.id == id)
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
         entry.name = name;
-        registry.save(&self.registry_path).await
+        let saved = registry.save(&self.registry_path).await;
+        drop(registry);
+        if saved.is_ok() {
+            self.notify_changed();
+        }
+        saved
     }
 
     /// Mirror a database's bound cloud tenant into the registry (ADR-053
@@ -613,6 +646,8 @@ impl DatabaseManager {
         open.insert(id.clone(), services.clone());
         drop(open);
         self.touch(id).await;
+        // The open set changed: observers showing an open/closed marker need this.
+        self.notify_changed();
         Ok(services)
     }
 
@@ -646,6 +681,7 @@ impl DatabaseManager {
         if let Some(ready) = services.embedding_state.write().await.take() {
             drop(ready.processor);
         }
+        self.notify_changed();
         true
     }
 
@@ -765,6 +801,8 @@ impl DatabaseManager {
             }
             return Err(e);
         }
+        drop(registry);
+        self.notify_changed();
         Ok(entry)
     }
 }

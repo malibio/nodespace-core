@@ -258,3 +258,61 @@ async fn ai_chat_nodes_do_not_leak_across_databases() {
         "ai-chat node created in one database must not leak into another"
     );
 }
+
+/// The registry publishes a change signal on every mutation.
+///
+/// The tray's Databases submenu subscribes to this; without it the menu shows the
+/// registry as it was at daemon boot, so a database created, renamed or removed
+/// afterwards reads wrong until the daemon restarts.
+#[tokio::test]
+async fn registry_mutations_emit_a_change_signal() {
+    let (manager, _scheduler, dir) = manager_with_two_dbs().await;
+    let mut changes = manager.subscribe_changes();
+    // Consume anything emitted during setup so each assertion below observes only
+    // the mutation it performs.
+    changes.mark_unchanged();
+
+    let created = manager
+        .create("Third".into(), Some(dir.path().join("third.db")))
+        .await
+        .unwrap();
+    assert!(changes.has_changed().unwrap(), "create must signal");
+    changes.mark_unchanged();
+
+    manager.rename(&created.id, "Renamed".into()).await.unwrap();
+    assert!(changes.has_changed().unwrap(), "rename must signal");
+    changes.mark_unchanged();
+
+    manager.remove(&created.id).await.unwrap();
+    assert!(changes.has_changed().unwrap(), "remove must signal");
+}
+
+/// Opening and evicting also signal — those change which database reads as open,
+/// which is exactly what the menu's open marker reports.
+#[tokio::test]
+async fn open_and_evict_emit_a_change_signal() {
+    let (manager, _scheduler, _dir) = manager_with_two_dbs().await;
+    let second_id = manager
+        .list()
+        .await
+        .databases
+        .iter()
+        .find(|d| d.entry.name == "Second")
+        .unwrap()
+        .entry
+        .id
+        .clone();
+
+    let mut changes = manager.subscribe_changes();
+    changes.mark_unchanged();
+
+    // `create` already opened Second, so evict first — a `get_or_open` here would
+    // be a cache hit and legitimately signal nothing.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    manager.evict_idle_databases(Duration::from_millis(1)).await;
+    assert!(changes.has_changed().unwrap(), "eviction must signal");
+    changes.mark_unchanged();
+
+    manager.get_or_open(&second_id).await.unwrap();
+    assert!(changes.has_changed().unwrap(), "reopen must signal");
+}
