@@ -186,6 +186,19 @@ pub async fn remove_database(
     Ok(response.id)
 }
 
+/// The database this launch was asked to open, if any.
+///
+/// The daemon's tray sets `NODESPACE_INITIAL_DATABASE` on the process it spawns
+/// when the user picks a specific database from the Databases submenu. It is a
+/// per-launch instruction, not a persisted preference: a plain "Open NodeSpace"
+/// leaves it unset so the app restores whatever it had before.
+#[tauri::command]
+pub fn initial_database_id() -> Option<String> {
+    std::env::var("NODESPACE_INITIAL_DATABASE")
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+}
+
 /// Select which database the desktop app is viewing. Rebuilds the routed
 /// data-plane clients so subsequent node/import/embeddings/agent-session
 /// requests target `id` (or the daemon default when `id` is `None`), and

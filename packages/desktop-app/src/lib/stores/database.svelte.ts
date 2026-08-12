@@ -167,16 +167,19 @@ class DatabaseStore {
       if (this.activeDatabaseId === null) {
         // Restore the last-active database across webview reloads / restarts.
         // Fall back to the daemon default, then the first registered database, so
-        // the switcher always shows a concrete selection. Ignore a remembered id
-        // that is no longer registered (e.g. the database was deleted).
-        const remembered = readRememberedActiveDatabaseId();
-        const rememberedValid =
-          remembered !== null && this.databases.some((db) => db.id === remembered);
+        // the switcher always shows a concrete selection. Ignore ids that are no
+        // longer registered (e.g. the database was deleted).
+        //
+        // A database named for *this launch* wins over the remembered one: it is
+        // set only when the user picked that database from the tray, which is a
+        // more specific instruction than "whatever you had open last time".
+        const registered = (id: string | null): string | null =>
+          id !== null && this.databases.some((db) => db.id === id) ? id : null;
+
+        const requested = registered(await this.readInitialDatabaseId());
+        const remembered = registered(readRememberedActiveDatabaseId());
         this.activeDatabaseId =
-          (rememberedValid ? remembered : null) ??
-          this.defaultDatabaseId ??
-          this.databases[0]?.id ??
-          null;
+          requested ?? remembered ?? this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
         // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
         // variant machine can read sync_enabled/auth_status.
         this.refreshDatabaseSettings();
@@ -186,6 +189,22 @@ class DatabaseStore {
       log.error('Failed to load databases', err);
     } finally {
       this.loading = false;
+    }
+  }
+
+  /**
+   * The database this launch was told to open, if any.
+   *
+   * Set by the daemon tray when the user picks a database from its submenu.
+   * A failure here is not worth surfacing — it only means we fall through to
+   * the remembered/default selection, which is the normal path anyway.
+   */
+  private async readInitialDatabaseId(): Promise<string | null> {
+    try {
+      return (await invoke<string | null>('initial_database_id')) ?? null;
+    } catch (err) {
+      log.debug('No launch-time database selection available', err);
+      return null;
     }
   }
 

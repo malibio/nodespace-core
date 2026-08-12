@@ -175,6 +175,45 @@ describe('Database Store', () => {
       expect(databaseStore.activeDatabaseId).toBe('a');
     });
 
+    it('opens the database this launch was told to open, over the remembered one', async () => {
+      // The tray sets a launch-time selection when the user picks a specific
+      // database from its submenu; that is a more specific instruction than
+      // "whatever was open last time".
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('b'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('b');
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.load();
+
+      expect(databaseStore.activeDatabaseId).toBe('b');
+    });
+
+    it('ignores a launch selection naming a database that is not registered', async () => {
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('gone');
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.load();
+
+      expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
     it('records an error when the list fails', async () => {
       mockInvoke.mockRejectedValueOnce(new Error('boom'));
       await databaseStore.load();
