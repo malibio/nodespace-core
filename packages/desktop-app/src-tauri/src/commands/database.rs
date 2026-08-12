@@ -194,16 +194,18 @@ pub async fn remove_database(
 /// dependency on the daemon crate, so it is spelled out here — keep the two in
 /// step).
 ///
-/// Answered **once per process**. It is an instruction about this launch, not a
-/// preference: after the app has acted on it, a later reload must fall back to
-/// whatever the user last selected, or switching database in-app and reloading
-/// would snap back to the tray's choice.
+/// Answers the same value for the life of the process, deliberately. Consuming
+/// it on first read is tempting — it describes a launch, not a preference — but
+/// the store calls this from `load()`, and a second `load()` runs on every
+/// launch (the daemon-reconnect listener fires one). A consumed second read
+/// returns nothing, and that load then resolves to the remembered database and
+/// overwrites the tray's pick. A stable answer keeps concurrent loads agreeing.
+///
+/// The cost is that a webview reload would re-apply the launch selection over a
+/// database the user switched to in-app. Nothing reloads the webview today; if
+/// something does, consume it at *apply* time in the store rather than here.
 #[tauri::command]
 pub fn initial_database_id() -> Option<String> {
-    static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if TAKEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return None;
-    }
     std::env::var("NODESPACE_INITIAL_DATABASE")
         .ok()
         .filter(|id| !id.trim().is_empty())

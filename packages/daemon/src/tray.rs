@@ -115,9 +115,11 @@ pub(crate) struct DatabaseMenuEntry {
 
 /// Render a registry snapshot into tray entries, in registry order.
 ///
-/// The label carries facts that are stable in the registry — which database is
-/// the default, and which sync to a cloud tenant. Deliberately NOT whether a
-/// database is currently *open*: the idle reaper closes databases minutes into
+/// The label carries the facts the registry persists — which database is the
+/// default, and which sync to a cloud tenant. Those change only when the user
+/// explicitly changes them, so a menu rendered once survives them better than
+/// it would runtime state. Deliberately NOT whether a database is currently
+/// *open*: the idle reaper closes databases minutes into
 /// normal use, and this menu is only refreshed when the daemon pushes a new
 /// snapshot, so an open marker would be confidently wrong most of the time. A
 /// live open indicator belongs with live refresh, tracked separately.
@@ -290,9 +292,7 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
                 match initialize_tray(ui_binary.clone()) {
                     Ok(mut s) => {
                         if let Some(snapshot) = pending_databases.take() {
-                            if let Err(e) = s.rebuild_databases_menu(&snapshot) {
-                                tracing::error!(error = ?e, "Failed to render Databases submenu");
-                            }
+                            s.rebuild_databases_menu(&snapshot);
                         }
                         state = Some(s);
                     }
@@ -332,11 +332,7 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
             }
 
             Event::UserEvent(TrayEvent::DatabasesChanged(snapshot)) => match state.as_mut() {
-                Some(s) => {
-                    if let Err(e) = s.rebuild_databases_menu(&snapshot) {
-                        tracing::error!(error = ?e, "Failed to render Databases submenu");
-                    }
-                }
+                Some(s) => s.rebuild_databases_menu(&snapshot),
                 // Tray not up yet (or failed to initialize) — keep the latest.
                 None => pending_databases = Some(*snapshot),
             },
@@ -383,7 +379,7 @@ impl TrayState {
     ///
     /// Removes the previously-appended items rather than the whole submenu, so
     /// the submenu's own handle (held by the live menu) stays valid.
-    fn rebuild_databases_menu(&mut self, snapshot: &RegistrySnapshot) -> Result<()> {
+    fn rebuild_databases_menu(&mut self, snapshot: &RegistrySnapshot) {
         // Clear the tracking list unconditionally, whatever removal reports: an
         // item left in the native submenu but dropped from the list is
         // unreachable (clicks stop resolving) AND gets a duplicate appended
@@ -415,7 +411,6 @@ impl TrayState {
         // rebuild never leaves reachable items behind a greyed-out parent.
         self.databases_menu
             .set_enabled(!self.database_items.is_empty());
-        Ok(())
     }
 
     /// The database a menu id belongs to, if it is one of ours.
@@ -548,12 +543,13 @@ mod tests {
     #[test]
     fn open_state_is_not_reflected_in_the_label() {
         let entries = database_menu_entries(&snapshot(vec![
-            listing("Closed", DatabaseStatus::Closed, None),
-            listing("Open", DatabaseStatus::Open, None),
+            listing("Alpha", DatabaseStatus::Closed, None),
+            listing("Beta", DatabaseStatus::Open, None),
         ]));
 
-        assert_eq!(entries[0].label, "Closed");
-        assert_eq!(entries[1].label, "Open");
+        // Identical labels despite differing status — the open one gains nothing.
+        assert_eq!(entries[0].label, "Alpha");
+        assert_eq!(entries[1].label, "Beta");
     }
 
     /// A registry entry whose file is gone is still listed — silently dropping it

@@ -178,11 +178,19 @@ class DatabaseStore {
 
         const requested = registered(await this.readInitialDatabaseId());
         const remembered = registered(readRememberedActiveDatabaseId());
-        this.activeDatabaseId =
+        const resolved =
           requested ?? remembered ?? this.defaultDatabaseId ?? this.databases[0]?.id ?? null;
-        // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
-        // variant machine can read sync_enabled/auth_status.
-        this.refreshDatabaseSettings();
+
+        // Re-check after the awaits above. A second `load()` runs on every
+        // launch — the daemon-reconnect listener fires one — and both can pass
+        // the outer check before either assigns. Assigning unconditionally lets
+        // whichever finishes last overwrite a selection already made.
+        if (this.activeDatabaseId === null) {
+          this.activeDatabaseId = resolved;
+          // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
+          // variant machine can read sync_enabled/auth_status.
+          this.refreshDatabaseSettings();
+        }
       }
     } catch (err) {
       this.error = String(err);

@@ -221,6 +221,31 @@ describe('Database Store', () => {
       expect(databaseStore.activeDatabaseId).toBe('a');
     });
 
+    it('does not let a concurrent load overwrite the selection already made', async () => {
+      // A second load() runs on every launch (the daemon-reconnect listener
+      // fires one), and both can pass the "no selection yet" check before
+      // either assigns. What keeps them agreeing is that the launch id answers
+      // the same thing to both — an earlier attempt to consume it on first read
+      // made the second load resolve to the remembered database and overwrite
+      // the tray's pick. This pins the outcome, so re-introducing a
+      // consume-once read fails here rather than silently in the product.
+      localStorage.setItem('nodespace.activeDatabaseId', 'a');
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('b'), db('c', { isDefault: true })],
+            defaultDatabaseId: 'c'
+          });
+        }
+        if (cmd === 'initial_database_id') return Promise.resolve('b');
+        return Promise.resolve(undefined);
+      });
+
+      await Promise.all([databaseStore.load(), databaseStore.load()]);
+
+      expect(databaseStore.activeDatabaseId).toBe('b');
+    });
+
     it('records an error when the list fails', async () => {
       mockInvoke.mockRejectedValueOnce(new Error('boom'));
       await databaseStore.load();
