@@ -1329,6 +1329,7 @@ mod tests {
             model,
             has_model: false,
             scheduler: Arc::new(EmbeddingScheduler::new()),
+            subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
         }
     }
 

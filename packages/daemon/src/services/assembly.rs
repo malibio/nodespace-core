@@ -6,7 +6,7 @@
 //! build and cache per-database service sets, and the `nodespaced` binary just
 //! calls these entry points.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use nodespace_agent::acp::context_assembly::GraphContextAssembler;
@@ -14,6 +14,7 @@ use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_agent::skill_pipeline::{seed_skill_nodes, seed_tool_nodes};
 use nodespace_core::markdown::prepare_nodes_from_template;
+use nodespace_core::services::node_service::access_gate::SubtreeAccessGate;
 use nodespace_core::services::{
     EmbeddingProcessor, EmbeddingScheduler, NodeAccessor, NodeEmbeddingService,
 };
@@ -48,7 +49,29 @@ pub struct SharedContext {
     /// other open databases so foreground work is not blocked by another
     /// database's backlog. Shared by every database's `EmbeddingProcessor`.
     pub scheduler: Arc<EmbeddingScheduler>,
+    /// Builds the pre-delete subtree access gate (ADR-041) for a database as it
+    /// is opened. Empty in community builds, where every database keeps
+    /// `NodeService`'s always-allow default.
+    ///
+    /// A factory rather than a single gate because a gate is bound to the one
+    /// database it guards: `NodeService::set_subtree_access_gate` ignores a
+    /// second call, so sharing one instance across databases would pin the first
+    /// database's identity and then answer every other database against the
+    /// wrong tenant — worse than not gating them at all.
+    ///
+    /// `OnceLock` because the Pro daemon cannot build this until after its cloud
+    /// service exists, which in turn needs the `DatabaseManager` that holds this
+    /// context. Startup therefore hands over the context first and fills the
+    /// factory in immediately after; databases opened on demand (always later
+    /// than that) see it. The boot database, opened before the hand-over, is
+    /// gated explicitly by the Pro daemon instead.
+    pub subtree_gate_factory: Arc<OnceLock<SubtreeGateFactory>>,
 }
+
+/// Builds the subtree access gate guarding `database_id`. See
+/// [`SharedContext::subtree_gate_factory`].
+pub type SubtreeGateFactory =
+    Arc<dyn Fn(&str) -> Arc<dyn SubtreeAccessGate> + Send + Sync + 'static>;
 
 /// Process-global services shared across every database the daemon serves
 /// (ADR-053: one daemon, multiple local databases). Built once by
@@ -113,6 +136,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
                 pty_manager,
                 model: model_rx,
                 has_model,
+                subtree_gate_factory: Arc::new(OnceLock::new()),
                 scheduler,
             },
         },
@@ -150,6 +174,14 @@ pub async fn build_database_services(
         .context("Failed to initialize NodeService")?;
 
     seed_agent_nodes(&mut node_service).await;
+
+    // ADR-041: gate this database's cascade deletes against its OWN tenant. Every
+    // database gets a gate built for its own id, because a request routed here by
+    // `x-ns-database-id` would otherwise reach a service still carrying the
+    // always-allow default. Absent in community builds.
+    if let Some(build_gate) = shared.subtree_gate_factory.get() {
+        node_service.set_subtree_access_gate(build_gate(database_id));
+    }
 
     let embedding_state: Arc<RwLock<Option<EmbeddingReady>>> = Arc::new(RwLock::new(None));
     // Separate handle for consumers that only need Arc<NodeEmbeddingService> (assembler, etc.)

@@ -75,4 +75,5 @@ pub use services::{
     build_database_services, build_shared_services, AgentSessionHandler, DatabaseManager,
     DatabaseServiceImpl, DatabaseServices, EmbeddingsServiceImpl, ImportServiceImpl,
     LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl, SharedContext, SharedServices,
+    SubtreeGateFactory,
 };
