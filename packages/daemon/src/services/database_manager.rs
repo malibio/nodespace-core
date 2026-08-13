@@ -450,23 +450,21 @@ impl DatabaseManager {
         // and preserves the index needed to restore it in place, rather than
         // at the end, if the save below fails.
         let removed = registry.databases.remove(index);
-        // `take_if` clears `default_database` only when it matches `id`,
-        // leaving it untouched otherwise — `was_default` records which case
-        // happened so the rollback below restores conditionally rather than
-        // unconditionally assigning (a previous version of this code always
-        // assigned in the rollback, which wiped an unrelated, untouched
-        // default back to `None` on a failed save of a non-default removal).
-        let was_default = registry
-            .default_database
-            .take_if(|current| *current == *id)
-            .is_some();
+        // `was_default` records whether `id` was the current default *before*
+        // this call touches it, matching `insert_entry`'s own `adopted_default`
+        // guard for the identical shape: both the clear below and the restore
+        // in the rollback closure are conditioned on it, so a failed save of a
+        // *non*-default removal leaves an untouched, unrelated default alone
+        // (an earlier version of this code restored unconditionally, which
+        // wiped such a default back to `None`).
+        let was_default = registry.default_database.as_ref() == Some(id);
+        if was_default {
+            registry.default_database = None;
+        }
         self.persist_or_rollback(registry, |registry| {
             // The write lock is held throughout, so `index` still points at
             // the pre-call slot — insert restores exactly the pre-call state.
             registry.databases.insert(index, removed);
-            // Only restore the default when the apply phase actually cleared
-            // it above — otherwise this would wipe out an unrelated default
-            // that this call never touched.
             if was_default {
                 registry.default_database = Some(id.clone());
             }
