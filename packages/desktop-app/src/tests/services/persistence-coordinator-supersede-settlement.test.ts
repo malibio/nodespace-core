@@ -101,4 +101,44 @@ describe('SimplePersistenceCoordinator - promise settlement on supersede', () =>
     expect(op1Calls).toBe(1);
     expect(op3Calls).toBe(1);
   }, 5000);
+
+  it('does not settle an in-flight write as cancelled when cancelPending() races it, so the real outcome still lands', async () => {
+    const nodeId = 'node-inflight-cancel-1';
+
+    let rejectOp1: (error: Error) => void = () => {};
+    let op1Calls = 0;
+    const realFailure = new Error('backend write actually failed');
+    const op1 = () =>
+      new Promise<void>((_resolve, reject) => {
+        op1Calls++;
+        rejectOp1 = reject;
+      });
+
+    // op1 starts executing immediately (mirrors persistBatchedChanges'
+    // immediate-mode batch commit) and stays in flight until rejected below.
+    const handle1 = coordinator.persist(nodeId, op1, { mode: 'immediate' });
+    expect(coordinator.isExecuting(nodeId)).toBe(true);
+
+    // startBatch() calls cancelPending() unconditionally, with no isExecuting
+    // guard, while this write is still in flight. It must NOT settle
+    // handle1.promise as cancelled: op1 is still genuinely running, and a
+    // premature "cancelled" settlement here would mask op1's real outcome
+    // (a later resolve/reject on an already-settled promise is a silent
+    // no-op) — turning a real write failure into a silently swallowed one.
+    coordinator.cancelPending(nodeId);
+
+    let settled = false;
+    void handle1.promise.catch(() => {}).finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // The real outcome (here, a genuine failure) still reaches the caller
+    // once op1 actually completes — not masked as OperationCancelledError.
+    rejectOp1(realFailure);
+    await expect(handle1.promise).rejects.toBe(realFailure);
+    expect(op1Calls).toBe(1);
+  }, 2000);
 });

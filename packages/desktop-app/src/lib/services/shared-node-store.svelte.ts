@@ -330,11 +330,23 @@ export class SimplePersistenceCoordinator {
           `isExecuting=${isExecuting} (cancel ${isExecuting ? 'INEFFECTIVE' : 'effective'})`
       );
       clearTimeout(pending.timeoutId);
-      // Settle the superseded write's promise before dropping the entry —
-      // mirrors clearQueued's rule. Without this, a debounced write cancelled
-      // by a newer one (e.g. via a fresh persist() call or startBatch())
-      // leaves pending.promise unsettled forever.
-      pending.reject(new OperationCancelledError('Superseded by a newer write'));
+      if (!isExecuting) {
+        // Settle the superseded write's promise before dropping the entry —
+        // mirrors clearQueued's rule. Without this, a debounced write
+        // cancelled by a newer one (e.g. via a fresh persist() call or
+        // startBatch()) leaves pending.promise unsettled forever.
+        //
+        // Only when NOT executing: while a write is in flight, this entry's
+        // resolve/reject either belong to that real RPC (settling here would
+        // report a false "cancelled" to any awaiter, then get silently
+        // no-op'd when the real outcome lands — masking a genuine failure)
+        // or are the dead no-op placeholder for a write collapsed behind it
+        // (its real promise lives in queuedOperations, untouched here, and
+        // still runs and settles normally once the in-flight write's finally
+        // block dispatches it). Either way, settling is a no-op or a lie —
+        // leave it to the real completion path.
+        pending.reject(new OperationCancelledError('Superseded by a newer write'));
+      }
       this.pendingOperations.delete(nodeId);
     }
   }
