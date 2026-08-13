@@ -95,7 +95,7 @@ impl SqliteStore {
             .collect();
 
         // Batch into multi-row INSERTs, chunked so each statement's bound
-        // parameter count stays under SQLite's ~999 ceiling.
+        // parameter count stays under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const EMBEDDING_CHUNK: usize = 60; // 14 params/row
         for chunk in rows.chunks(EMBEDDING_CHUNK) {
             let placeholders: Vec<String> = (0..chunk.len())
@@ -653,46 +653,54 @@ impl SqliteStore {
         // content was silently unfindable. The parity of this list with the
         // non-embeddable child-bearing behaviors is enforced by
         // `container_type_parity_tests::non_embeddable_container_types_match_behaviors`.
-        let placeholders: Vec<String> = (1..=matching_ids.len())
-            .map(|i| format!("?{}", i))
-            .collect();
         // Container types come from a hardcoded const of static identifiers — no
         // user input — so inlining them as SQL literals is injection-safe.
         let container_types: Vec<String> = crate::behaviors::NON_EMBEDDABLE_CONTAINER_TYPES
             .iter()
             .map(|t| format!("'{t}'"))
             .collect();
-        let sql = format!(
-            r#"WITH RECURSIVE ancestors(seed_id, node_id, depth) AS (
-                SELECT id, id, 0 FROM node WHERE id IN ({})
-                UNION ALL
-                SELECT a.seed_id, r.in_node, a.depth + 1 FROM relationship r
-                JOIN ancestors a ON r.out_node = a.node_id
-                JOIN node pn ON pn.id = r.in_node
-                WHERE r.relationship_type = 'has_child' AND a.depth < 100
-                  AND pn.node_type NOT IN ({})
-            )
-            SELECT seed_id, node_id FROM ancestors a
-            WHERE a.depth = (SELECT MAX(depth) FROM ancestors WHERE seed_id = a.seed_id)"#,
-            placeholders.join(", "),
-            container_types.join(", ")
-        );
 
-        let params: Vec<libsql::Value> = matching_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-
-        let mut rows = self
-            .db
-            .query(&sql, params)
-            .await
-            .context("Failed to resolve BM25 roots")?;
-
+        // Chunk the seed list under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER
+        // (32766). Each chunk's recursive walk resolves only its own seeds — the
+        // base case selects `id IN (chunk)` and every recursive step stays
+        // within that seed's own ancestor chain — so running the CTE once per
+        // chunk and merging into `candidate_roots` is equivalent to one
+        // unchunked query over the whole match set.
+        const ID_CHUNK: usize = 900;
         let mut candidate_roots: HashSet<String> = HashSet::new();
-        while let Some(row) = rows.next().await? {
-            let root_id: String = row.get(1)?;
-            candidate_roots.insert(root_id);
+        for chunk in matching_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                r#"WITH RECURSIVE ancestors(seed_id, node_id, depth) AS (
+                    SELECT id, id, 0 FROM node WHERE id IN ({})
+                    UNION ALL
+                    SELECT a.seed_id, r.in_node, a.depth + 1 FROM relationship r
+                    JOIN ancestors a ON r.out_node = a.node_id
+                    JOIN node pn ON pn.id = r.in_node
+                    WHERE r.relationship_type = 'has_child' AND a.depth < 100
+                      AND pn.node_type NOT IN ({})
+                )
+                SELECT seed_id, node_id FROM ancestors a
+                WHERE a.depth = (SELECT MAX(depth) FROM ancestors WHERE seed_id = a.seed_id)"#,
+                placeholders.join(", "),
+                container_types.join(", ")
+            );
+
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+
+            let mut rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to resolve BM25 roots")?;
+
+            while let Some(row) = rows.next().await? {
+                let root_id: String = row.get(1)?;
+                candidate_roots.insert(root_id);
+            }
         }
 
         if candidate_roots.is_empty() {
@@ -744,7 +752,7 @@ impl SqliteStore {
             .context("Failed to begin markers transaction")?;
 
         // Batch into multi-row INSERTs, chunked so each statement's bound
-        // parameter count stays under SQLite's ~999 ceiling (5 params/row).
+        // parameter count stays under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766) (5 params/row).
         const ID_CHUNK: usize = 180;
         for chunk in node_ids.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (0..chunk.len())

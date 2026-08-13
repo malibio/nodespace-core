@@ -183,9 +183,9 @@ impl SqliteStore {
             return Ok(HashMap::new());
         }
 
-        // Chunk under SQLite's ~999 bound-parameter ceiling; a large `IN (...)`
-        // would otherwise fail outright (a directory import can list thousands
-        // of files). Mirrors the chunking in the other bulk store queries.
+        // Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766); a large
+        // `IN (...)` would otherwise fail outright (a directory import can list
+        // thousands of files). Mirrors the chunking in the other bulk store queries.
         const ID_CHUNK: usize = 900;
         let mut result = HashMap::new();
         for chunk in ids.chunks(ID_CHUNK) {
@@ -590,24 +590,31 @@ impl SqliteStore {
 
         let all_ids: Vec<String> = subtree_ids.to_vec();
 
-        // Fetch all node records (needed for post-commit notifications).
-        let placeholders: Vec<String> = (1..=all_ids.len()).map(|i| format!("?{}", i)).collect();
-        let fetch_sql = format!(
-            "SELECT * FROM node WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-        let fetch_params: Vec<libsql::Value> = all_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        let mut node_rows = self
-            .db
-            .query(&fetch_sql, fetch_params)
-            .await
-            .context("Failed to fetch subtree nodes for deletion")?;
+        // Fetch all node records (needed for post-commit notifications). Chunk
+        // under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766) — an
+        // unchunked IN (...) over a whole subtree's ids fails to prepare once
+        // the subtree crosses that count. 900 mirrors the chunk size used by
+        // the other bulk store queries.
+        const ID_CHUNK: usize = 900;
         let mut nodes_to_delete: Vec<Node> = Vec::new();
-        while let Some(row) = node_rows.next().await? {
-            nodes_to_delete.push(Self::row_to_node(&row)?);
+        for chunk in all_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let fetch_sql = format!(
+                "SELECT * FROM node WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let fetch_params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut node_rows = self
+                .db
+                .query(&fetch_sql, fetch_params)
+                .await
+                .context("Failed to fetch subtree nodes for deletion")?;
+            while let Some(row) = node_rows.next().await? {
+                nodes_to_delete.push(Self::row_to_node(&row)?);
+            }
         }
 
         // Single-transaction delete — FK CASCADE cleans relationship and embedding rows.
@@ -639,19 +646,25 @@ impl SqliteStore {
             ));
         }
 
-        let del_placeholders: Vec<String> =
-            (1..=all_ids.len()).map(|i| format!("?{}", i)).collect();
-        let del_sql = format!(
-            "DELETE FROM node WHERE id IN ({})",
-            del_placeholders.join(", ")
-        );
-        let del_params: Vec<libsql::Value> = all_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        tx.execute(&del_sql, del_params)
-            .await
-            .context("Failed to delete subtree nodes")?;
+        // Chunked, but every chunk executes against the same `tx` opened above —
+        // one transaction covers the OCC re-check and all delete chunks, so a
+        // failure partway through rolls back everything already deleted in this
+        // call rather than leaving the subtree half-deleted.
+        for chunk in all_ids.chunks(ID_CHUNK) {
+            let del_placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let del_sql = format!(
+                "DELETE FROM node WHERE id IN ({})",
+                del_placeholders.join(", ")
+            );
+            let del_params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            tx.execute(&del_sql, del_params)
+                .await
+                .context("Failed to delete subtree nodes")?;
+        }
 
         tx.commit()
             .await
@@ -711,7 +724,7 @@ impl SqliteStore {
         if ids.is_empty() {
             return Ok(());
         }
-        // Chunk under SQLite's ~999 bound-parameter ceiling.
+        // Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const ID_CHUNK: usize = 900;
         for chunk in ids.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
@@ -1234,52 +1247,56 @@ impl SqliteStore {
             return Ok((vec![root], vec![]));
         }
 
-        // Fetch all nodes
-        let placeholders: Vec<String> = (1..=descendant_ids.len())
-            .map(|i| format!("?{}", i))
-            .collect();
-        let sql = format!(
-            "SELECT * FROM node WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-        let params: Vec<libsql::Value> = descendant_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        let mut node_rows = self
-            .db
-            .query(&sql, params)
-            .await
-            .context("Failed to fetch subtree nodes")?;
+        // Fetch all nodes. Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER
+        // (32766) — a subtree with more descendants than that would otherwise fail
+        // to prepare, making a subtree too large to delete also too large to open.
+        const ID_CHUNK: usize = 900;
         let mut all_nodes = Vec::new();
-        while let Some(row) = node_rows.next().await? {
-            all_nodes.push(Self::row_to_node(&row)?);
+        for chunk in descendant_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT * FROM node WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut node_rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to fetch subtree nodes")?;
+            while let Some(row) = node_rows.next().await? {
+                all_nodes.push(Self::row_to_node(&row)?);
+            }
         }
 
         if all_nodes.is_empty() {
             return Ok((vec![], vec![]));
         }
 
-        // Fetch relationships within subtree
-        let rel_placeholders: Vec<String> = (1..=descendant_ids.len())
-            .map(|i| format!("?{}", i))
-            .collect();
-        let rel_sql = format!(
-            "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node IN ({}) AND relationship_type = 'has_child'",
-            rel_placeholders.join(", ")
-        );
-        let rel_params: Vec<libsql::Value> = descendant_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        let mut rel_rows = self
-            .db
-            .query(&rel_sql, rel_params)
-            .await
-            .context("Failed to fetch subtree relationships")?;
+        // Fetch relationships within subtree, same chunking.
         let mut relationships = Vec::new();
-        while let Some(row) = rel_rows.next().await? {
-            relationships.push(Self::row_to_relationship(&row)?);
+        for chunk in descendant_ids.chunks(ID_CHUNK) {
+            let rel_placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let rel_sql = format!(
+                "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node IN ({}) AND relationship_type = 'has_child'",
+                rel_placeholders.join(", ")
+            );
+            let rel_params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut rel_rows = self
+                .db
+                .query(&rel_sql, rel_params)
+                .await
+                .context("Failed to fetch subtree relationships")?;
+            while let Some(row) = rel_rows.next().await? {
+                relationships.push(Self::row_to_relationship(&row)?);
+            }
         }
 
         tracing::debug!(
@@ -1431,7 +1448,7 @@ impl SqliteStore {
         unique.sort_unstable();
         unique.dedup();
 
-        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        // Chunk the `IN (...)` under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const ID_CHUNK: usize = 900;
         for chunk in unique.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
@@ -2677,5 +2694,229 @@ mod title_contains_stem_fallback_tests {
             SqliteStore::stem_word("dates"),
             SqliteStore::stem_word("date")
         );
+    }
+}
+
+/// Regression coverage for a subtree whose descendant count crosses SQLite's
+/// compiled `SQLITE_MAX_VARIABLE_NUMBER` (32766, verified against the vendored
+/// `libsql-ffi` build — see the `ID_CHUNK` comments throughout this module).
+/// Below the fix, `delete_subtree_atomic` and `get_subtree_with_relationships`
+/// each built one `IN (...)` with a bound parameter per subtree id; past the
+/// ceiling the statement fails to *prepare* (not merely to bind), so the whole
+/// operation aborted before touching a single row — a subtree that large was
+/// permanently undeletable and unopenable.
+///
+/// **Gated behind `RUN_LONG_TESTS=1`** (the env var `rust:test:long` already
+/// wires up) and skipped otherwise: creating 30k+ nodes and deleting them
+/// again runs each `node` INSERT/DELETE through the `node_fts` FTS5 sync
+/// triggers (`v001_initial_schema`), which dominates the cost at this row
+/// count — measured ~90-390s per test depending on machine load, far past
+/// what belongs in the default `cargo test` / `bun run test:all` / pre-push
+/// path. Run explicitly before merging a change to this chunking:
+/// `RUN_LONG_TESTS=1 cargo test --lib -p nodespace-core large_subtree_chunking_tests -- --nocapture`.
+#[cfg(test)]
+mod large_subtree_chunking_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Skip unless explicitly opted in — see the module doc comment.
+    macro_rules! require_long_tests {
+        () => {
+            if std::env::var("RUN_LONG_TESTS").is_err() {
+                eprintln!(
+                    "skipping {}: set RUN_LONG_TESTS=1 to run (creates 30k+ nodes; slow)",
+                    module_path!()
+                );
+                return Ok(());
+            }
+        };
+    }
+
+    async fn bare_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = Arc::new(SqliteStore::new(db_path).await?);
+        Ok((store, temp_dir))
+    }
+
+    /// One past SQLite's compiled ceiling, so a single unchunked `IN (...)`
+    /// over `root + descendants` (32767 + 1 = 32768 bound params) cannot
+    /// possibly succeed — proving the fix actually chunks rather than merely
+    /// happening to stay under the line by coincidence of test size.
+    const DESCENDANT_COUNT: usize = 32_767;
+
+    /// Create `root_id` plus `count` flat `has_child` descendants directly
+    /// with large multi-row `INSERT`s, bypassing the store's node-by-node
+    /// `bulk_create_hierarchy` (too slow at this scale for a test — it does
+    /// two round trips per node plus a `get_node` per id for notification).
+    /// All descendants are direct children of the root: this is the same
+    /// "wide" shape `import dir` produces for a large flat folder, and it
+    /// keeps every recursive CTE well under its own depth cap (`depth < 100`)
+    /// while still exercising the exact `IN (...)` chunking under test.
+    async fn seed_flat_subtree(
+        store: &SqliteStore,
+        root_id: &str,
+        count: usize,
+    ) -> Result<Vec<String>> {
+        let now = Utc::now().to_rfc3339();
+        let child_ids: Vec<String> = (0..count)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .collect();
+
+        // created_at/modified_at and the root id are embedded as SQL literals
+        // rather than bound params — they're constant across every row, and
+        // both are values this test generates itself (a UUID and an RFC3339
+        // timestamp), never external input, so literal-embedding carries no
+        // injection risk. Only the per-row id varies, which keeps the bound
+        // parameter count low enough to insert thousands of rows per
+        // statement instead of one per round trip.
+        const SEED_CHUNK: usize = 5_000;
+
+        for chunk in child_ids.chunks(SEED_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("(?{i}, 'text', '', '{{}}', NULL, 'active', 1, '{now}', '{now}')"))
+                .collect();
+            let sql = format!(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            store
+                .db
+                .execute(&sql, params)
+                .await
+                .context("Failed to seed subtree node chunk")?;
+        }
+
+        for chunk in child_ids.chunks(SEED_CHUNK) {
+            // `relationship.id` has a `DEFAULT (lower(hex(randomblob(16))))` —
+            // omitting it from the column list lets SQLite mint it, so only
+            // `out_node` needs a bound param per row.
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("('{root_id}', ?{i}, 'has_child', '{{}}', 1, '{now}', '{now}')"))
+                .collect();
+            let sql = format!(
+                "INSERT INTO relationship (in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            store
+                .db
+                .execute(&sql, params)
+                .await
+                .context("Failed to seed subtree relationship chunk")?;
+        }
+
+        Ok(child_ids)
+    }
+
+    #[tokio::test]
+    async fn get_subtree_with_relationships_survives_over_ceiling_descendant_count() -> Result<()> {
+        require_long_tests!();
+        let (store, _t) = bare_store().await?;
+        let root = store
+            .create_node(
+                Node::new(
+                    "text".to_string(),
+                    "root".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
+        let child_ids = seed_flat_subtree(&store, &root.id, DESCENDANT_COUNT).await?;
+
+        // Pre-fix, this failed to prepare the unchunked `SELECT * FROM node
+        // WHERE id IN (...)` once `descendant_ids.len()` (root + descendants)
+        // crossed 32766 — surfacing as "Failed to fetch subtree nodes" and
+        // making the subtree unopenable.
+        let (all_nodes, relationships) = store.get_subtree_with_relationships(&root.id).await?;
+
+        assert_eq!(
+            all_nodes.len(),
+            DESCENDANT_COUNT + 1,
+            "root + every descendant"
+        );
+        assert_eq!(
+            relationships.len(),
+            DESCENDANT_COUNT,
+            "one has_child edge per descendant"
+        );
+        let returned_ids: HashSet<String> = all_nodes.iter().map(|n| n.id.clone()).collect();
+        assert!(returned_ids.contains(&root.id));
+        for id in &child_ids {
+            assert!(
+                returned_ids.contains(id),
+                "descendant {id} missing from subtree load"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_subtree_atomic_survives_over_ceiling_descendant_count() -> Result<()> {
+        require_long_tests!();
+        let (store, _t) = bare_store().await?;
+        let root = store
+            .create_node(
+                Node::new(
+                    "text".to_string(),
+                    "root".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
+        let child_ids = seed_flat_subtree(&store, &root.id, DESCENDANT_COUNT).await?;
+
+        let subtree_ids = store.collect_subtree_ids(&root.id).await?;
+        assert_eq!(subtree_ids.len(), DESCENDANT_COUNT + 1);
+
+        // Pre-fix, both the pre-delete fetch and the DELETE itself built one
+        // unchunked `IN (...)` over `subtree_ids` — past the ceiling neither
+        // statement could even prepare, and the whole call failed with
+        // "Failed to fetch subtree nodes for deletion" / "Failed to delete
+        // subtree nodes" without deleting anything.
+        let (existed, deleted_nodes) = store
+            .delete_subtree_atomic(&root.id, root.version, &subtree_ids, None)
+            .await?;
+
+        assert!(existed);
+        assert_eq!(deleted_nodes.len(), DESCENDANT_COUNT + 1);
+
+        // The whole subtree — root and every descendant — is actually gone,
+        // not partially deleted by a chunk loop that ran outside the
+        // transaction and aborted partway through.
+        assert!(store.get_node(&root.id).await?.is_none());
+        for id in [
+            &child_ids[0],
+            &child_ids[child_ids.len() / 2],
+            &child_ids[child_ids.len() - 1],
+        ] {
+            assert!(
+                !store.node_exists(id).await?,
+                "descendant {id} survived the delete"
+            );
+        }
+
+        // Chunking the DELETE didn't split it out of the transaction that
+        // holds the OCC re-check: a second delete attempt against the same
+        // (now-nonexistent) target is the documented idempotent no-op, not a
+        // version-conflict error, which is only possible if the very first
+        // call's chunks committed together as one unit.
+        let (existed_again, _) = store
+            .delete_subtree_atomic(&root.id, root.version, &subtree_ids, None)
+            .await?;
+        assert!(!existed_again);
+
+        Ok(())
     }
 }

@@ -156,31 +156,35 @@ impl SqliteStore {
             return Ok(Vec::new());
         }
 
-        // Batch fetch containers
-        let placeholders: Vec<String> = (1..=container_ids.len())
-            .map(|i| format!("?{}", i))
-            .collect();
-        let sql = format!(
-            "SELECT id, title, node_type FROM node WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-        let params: Vec<libsql::Value> = container_ids
-            .iter()
-            .map(|id| libsql::Value::Text(id.clone()))
-            .collect();
-        let mut container_rows = self
-            .db
-            .query(&sql, params)
-            .await
-            .context("Failed to fetch containers")?;
-
+        // Batch fetch containers. Chunk under SQLite's compiled
+        // SQLITE_MAX_VARIABLE_NUMBER (32766) — a node mentioned from a very large
+        // number of sources would otherwise blow the ceiling in one `IN (...)`.
+        const ID_CHUNK: usize = 900;
+        let container_id_list: Vec<String> = container_ids.into_iter().collect();
         let mut result = Vec::new();
-        while let Some(row) = container_rows.next().await? {
-            result.push(crate::models::NodeReference {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                node_type: row.get(2)?,
-            });
+        for chunk in container_id_list.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT id, title, node_type FROM node WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            let mut container_rows = self
+                .db
+                .query(&sql, params)
+                .await
+                .context("Failed to fetch containers")?;
+
+            while let Some(row) = container_rows.next().await? {
+                result.push(crate::models::NodeReference {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    node_type: row.get(2)?,
+                });
+            }
         }
 
         tracing::debug!(
@@ -296,7 +300,7 @@ impl SqliteStore {
         unique.sort_unstable();
         unique.dedup();
 
-        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        // Chunk the `IN (...)` under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const ID_CHUNK: usize = 900;
         for chunk in unique.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
@@ -957,7 +961,7 @@ impl SqliteStore {
             endpoints.insert(m.1.clone());
         }
         let endpoint_ids: Vec<String> = endpoints.into_iter().collect();
-        // Chunk the `IN (...)` under SQLite's ~999 bound-parameter ceiling.
+        // Chunk the `IN (...)` under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const ID_CHUNK: usize = 900;
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         for chunk in endpoint_ids.chunks(ID_CHUNK) {
