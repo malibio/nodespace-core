@@ -84,7 +84,10 @@ interface QueuedOperation {
   promise: Promise<void>;
 }
 
-class SimplePersistenceCoordinator {
+// Exported so tests can exercise the coordinator's supersede/settlement
+// behavior directly, without going through SharedNodeStore's full update
+// pipeline (backend RPC mocking, node-store bookkeeping, etc.).
+export class SimplePersistenceCoordinator {
   private static instance: SimplePersistenceCoordinator | null = null;
   private pendingOperations = new Map<string, PendingOperation>();
   private executingOperations = new Set<string>(); // Track in-flight operations
@@ -93,6 +96,12 @@ class SimplePersistenceCoordinator {
   private queuedOperations = new Map<string, QueuedOperation>();
   private readonly DEBOUNCE_MS = 500;
   private operationCounter = 0; // For tracking operation IDs
+
+  // Private: enforces the singleton. Exporting the class (for direct testing)
+  // would otherwise let external code `new` a second, uncoordinated instance
+  // whose maps are disjoint from the real one — defeating the per-node
+  // serial-writer guarantee. Always go through getInstance()/resetInstance().
+  private constructor() {}
 
   static getInstance(): SimplePersistenceCoordinator {
     if (!SimplePersistenceCoordinator.instance) {
@@ -136,6 +145,15 @@ class SimplePersistenceCoordinator {
       // Queue the new operation - it supersedes any previously queued operation
       // (single-slot Map so DELETE isn't lost behind a re-run UPDATE, and a
       // burst of keystrokes collapses to the single latest edit).
+      //
+      // CRITICAL: Reject any previously-queued entry's promise before it's
+      // overwritten below. Without this, a burst of keystrokes during an
+      // in-flight write leaves one never-settled promise per superseded
+      // queued edit — mirrors clearQueued's settlement rule.
+      const previouslyQueued = this.queuedOperations.get(nodeId);
+      if (previouslyQueued) {
+        previouslyQueued.reject(new OperationCancelledError('Superseded by a newer write'));
+      }
       let queuedResolve: () => void = () => {};
       let queuedReject: (error: Error) => void = () => {};
       const queuedPromise = new Promise<void>((res, rej) => {
@@ -318,6 +336,23 @@ class SimplePersistenceCoordinator {
           `isExecuting=${isExecuting} (cancel ${isExecuting ? 'INEFFECTIVE' : 'effective'})`
       );
       clearTimeout(pending.timeoutId);
+      if (!isExecuting) {
+        // Settle the superseded write's promise before dropping the entry —
+        // mirrors clearQueued's rule. Without this, a debounced write
+        // cancelled by a newer one (e.g. via a fresh persist() call or
+        // startBatch()) leaves pending.promise unsettled forever.
+        //
+        // Only when NOT executing: while a write is in flight, this entry's
+        // resolve/reject either belong to that real RPC (settling here would
+        // report a false "cancelled" to any awaiter, then get silently
+        // no-op'd when the real outcome lands — masking a genuine failure)
+        // or are the dead no-op placeholder for a write collapsed behind it
+        // (its real promise lives in queuedOperations, untouched here, and
+        // still runs and settles normally once the in-flight write's finally
+        // block dispatches it). Either way, settling is a no-op or a lie —
+        // leave it to the real completion path.
+        pending.reject(new OperationCancelledError('Superseded by a newer write'));
+      }
       this.pendingOperations.delete(nodeId);
     }
   }
@@ -520,11 +555,13 @@ class SimplePersistenceCoordinator {
   }
 }
 
-// Use simple coordinator
+// All production call sites in this file go through this alias rather than
+// the class name directly — kept as-is (not worth a ~20-call-site rename) now
+// that SimplePersistenceCoordinator is separately exported for direct testing.
 const PersistenceCoordinator = SimplePersistenceCoordinator;
 
 // Simple error class for cancelled operations
-class OperationCancelledError extends Error {
+export class OperationCancelledError extends Error {
   constructor(message = 'Operation cancelled') {
     super(message);
     this.name = 'OperationCancelledError';
@@ -3405,7 +3442,7 @@ export class SharedNodeStore {
     const dependencies: Array<string | (() => Promise<void>)> = [];
 
     // Persist with immediate mode (batches should not be debounced)
-    PersistenceCoordinator.getInstance().persist(
+    const handle = PersistenceCoordinator.getInstance().persist(
       nodeId,
       async () => {
         try {
@@ -3552,6 +3589,31 @@ export class SharedNodeStore {
         dependencies: dependencies.length > 0 ? dependencies : undefined
       }
     );
+
+    // Handle cancellation errors (expected when operations are superseded) —
+    // matches the other persist() call sites. Without this, a superseded
+    // batch write's rejection (e.g. via cancelPending() when a re-batch
+    // supersedes an in-flight batch operation) becomes an unhandled promise
+    // rejection instead of being tolerated like elsewhere in this file.
+    //
+    // Unlike updateNode()/updateTaskNodeStatus(), the operation closure above
+    // has no OCC-specific handling (no rollback, no resync, no notification)
+    // — it only logs and re-throws. So a VERSION_CONFLICT here must NOT be
+    // silently swallowed the way it is at those other call sites (where it's
+    // already been handled internally): every non-cancellation failure,
+    // including OCC, falls through to the write-failure notification below.
+    handle.promise.catch((err) => {
+      if (err instanceof OperationCancelledError) {
+        // Operation was cancelled by a newer operation - this is expected
+        return;
+      }
+      // Surface write failures visibly so users know their change didn't save
+      conflictNotifications.add({
+        nodeId,
+        message: CONFLICT_MESSAGE['write-failure'],
+        conflictType: 'write-failure'
+      });
+    });
   }
 
   // ========================================================================

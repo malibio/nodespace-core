@@ -14,6 +14,7 @@ import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 import { backendAdapter } from '../../lib/services/backend-adapter';
+import { conflictNotifications } from '../../lib/stores/conflict-notifications.svelte';
 
 describe('SharedNodeStore - Coverage Completion', () => {
   let store: SharedNodeStore;
@@ -42,6 +43,7 @@ describe('SharedNodeStore - Coverage Completion', () => {
     SharedNodeStore.resetInstance();
     store = SharedNodeStore.getInstance();
     store.clearTestErrors();
+    conflictNotifications.dismissAll();
   });
 
   afterEach(async () => {
@@ -58,6 +60,7 @@ describe('SharedNodeStore - Coverage Completion', () => {
     }
     store.clearAll();
     SharedNodeStore.resetInstance();
+    conflictNotifications.dismissAll();
     vi.clearAllMocks();
     // Wait for any remaining async operations
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -445,6 +448,42 @@ describe('SharedNodeStore - Coverage Completion', () => {
 
       const updated = store.getNode('race-version');
       expect(updated?.version).toBe(7);
+    });
+
+    it('surfaces a write-failure notification when a batch commit hits a VERSION_CONFLICT, instead of silently swallowing it', async () => {
+      // persistBatchedChanges() has no OCC-specific handling of its own (no
+      // rollback, no resync, no notification) — unlike updateNode()'s and
+      // updateTaskNodeStatus()'s persist() closures, which handle
+      // VERSION_CONFLICT internally before their outer .catch runs. A batch
+      // commit's OCC failure must therefore reach the standard write-failure
+      // notification, not be dropped as if it were an "expected" cancellation.
+      const occError = new Error('VERSION_CONFLICT: optimistic concurrency failure') as Error & {
+        code: string;
+        conflictData: { node_id: string; expected: number; actual: number; current_node: null };
+      };
+      occError.code = 'VERSION_CONFLICT';
+      occError.conflictData = {
+        node_id: 'batch-occ',
+        expected: 1,
+        actual: 2,
+        current_node: null
+      };
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValue(occError);
+
+      const node = { ...mockNode, id: 'batch-occ', nodeType: 'quote-block', content: '> Test' };
+      store.setNode(node, databaseSource);
+
+      store.startBatch('batch-occ');
+      store.addToBatch('batch-occ', { content: '> Updated' });
+      store.commitBatch('batch-occ');
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const writeFailures = conflictNotifications.notifications.filter(
+        (n) => n.conflictType === 'write-failure'
+      );
+      expect(writeFailures).toHaveLength(1);
+      expect(writeFailures[0]?.nodeId).toBe('batch-occ');
     });
   });
 
