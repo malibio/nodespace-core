@@ -107,6 +107,12 @@ pub async fn daemon_status_body() -> String {
 #[cfg(test)]
 mod tests;
 
+// Regression coverage for the CloseRequested-veto shutdown race — its own
+// module (rather than folded into `tests`) since it needs `tauri::test`'s
+// MockRuntime to drive real RunEvent delivery, not just plain unit tests.
+#[cfg(test)]
+mod shutdown_tests;
+
 /// Shared shutdown token for graceful background task termination.
 ///
 /// Managed as Tauri state so it can be accessed from both the setup phase
@@ -114,29 +120,59 @@ mod tests;
 /// shutdown is triggered). When cancelled, all background tasks exit their
 /// loops before the Tokio runtime drops.
 #[derive(Clone)]
-pub struct ShutdownToken(tokio_util::sync::CancellationToken);
+pub struct ShutdownToken {
+    cancellation: tokio_util::sync::CancellationToken,
+    /// Guards the one-shot shutdown sequence in [`graceful_shutdown`]. Lives
+    /// on the token itself rather than a function-local `static`: a `static`
+    /// is process-global, so it would (a) leak across every test in this
+    /// binary instead of resetting per `ShutdownToken` instance, and (b) — for
+    /// the window-per-database work — trip on the first window's close and
+    /// silently no-op every other window's teardown. One token per app today
+    /// still means one guard per app; this just puts it in a place that
+    /// scales to one-per-window later without another rewrite.
+    shutdown_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
 
 impl ShutdownToken {
     fn new() -> Self {
-        Self(tokio_util::sync::CancellationToken::new())
+        Self {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            shutdown_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     /// Create a child token for a background task.
     /// Cancelling the parent automatically cancels all children.
     pub fn child_token(&self) -> tokio_util::sync::CancellationToken {
-        self.0.child_token()
+        self.cancellation.child_token()
     }
 
     /// Signal all background tasks to shut down.
     /// Idempotent - safe to call multiple times.
     pub fn cancel(&self) {
-        self.0.cancel();
+        self.cancellation.cancel();
+    }
+
+    /// True once [`Self::cancel`] has run.
+    #[cfg(test)]
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    /// Marks the one-shot shutdown sequence as started. Returns `true` the
+    /// first time it's called on this token, `false` on every later call —
+    /// [`graceful_shutdown`] uses this to run its teardown exactly once even
+    /// though both `ExitRequested` and `Exit` drive it.
+    fn begin_shutdown_once(&self) -> bool {
+        !self
+            .shutdown_started
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri::{menu::*, Emitter, Manager, RunEvent};
+    use tauri::{menu::*, Emitter, Manager};
 
     // Initialize tracing — respects RUST_LOG env var, defaults to info for nodespace_app
     tracing_subscriber::fmt()
@@ -147,9 +183,11 @@ pub fn run() {
         .try_init()
         .ok();
 
-    // Create shutdown token for coordinating graceful background task termination
-    let shutdown_token = ShutdownToken::new();
-    let shutdown_token_for_setup = shutdown_token.clone();
+    // Create shutdown token for coordinating graceful background task
+    // termination. `app.run`'s event handler (`handle_run_event`) no longer
+    // needs its own clone — it looks the token up via managed state instead,
+    // the same way `graceful_shutdown` always has.
+    let shutdown_token_for_setup = ShutdownToken::new();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -588,55 +626,94 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Run with event handler for graceful shutdown
-    let shutdown_token_for_events = shutdown_token.clone();
-    app.run(move |app_handle, event| match event {
-        RunEvent::WindowEvent {
+    // Run with event handler for graceful shutdown. Routing lives in
+    // `handle_run_event` (module-level, not inlined here) so it can be
+    // exercised directly against `tauri::test`'s MockRuntime without a real
+    // window — see `shutdown_tests`.
+    app.run(move |app_handle, event| handle_run_event(app_handle, &event));
+}
+
+/// Route one `RunEvent` to the right shutdown action.
+///
+/// `WindowEvent::CloseRequested` deliberately does NOT call
+/// [`graceful_shutdown`]. Tauri fires it the instant the OS asks to close a
+/// window — before the frontend (`app-initialization.ts`'s
+/// `onCloseRequested`) has had any chance to decide whether to veto it and
+/// flush pending writes first. Whenever a frontend listener is registered
+/// for that event, which ours always is, Tauri's own manager holds the
+/// window open pending that decision regardless of what the listener
+/// ultimately does (confirmed against the `tauri` 2.11 source —
+/// `manager/window.rs`'s `on_window_event` calls `api.prevent_close()`
+/// unconditionally whenever `has_js_listener` is true, before the frontend
+/// callback has even run). The window only actually closes once the
+/// frontend explicitly calls `currentWindow.destroy()` — immediately when
+/// there's nothing to flush, or after `flushAllPending()` resolves (that
+/// call self-bounds to 5s, so this never waits unboundedly). `destroy()`
+/// bypasses `CloseRequested` entirely and is what drives `ExitRequested`
+/// then `Exit`, so gating `graceful_shutdown` on those two instead means it
+/// can only run once the flush has already finished or hit its own timeout —
+/// never mid-flush, and never before a vetoed close's later retry.
+///
+/// A single-window assumption is baked into this today (one `ShutdownToken`
+/// per app). Window-per-database work will need a per-window token instead —
+/// not built here, see `ShutdownToken::shutdown_started`'s doc comment for
+/// why the one-shot guard already lives somewhere that scales to that.
+fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: &tauri::RunEvent) {
+    match event {
+        tauri::RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::CloseRequested { .. },
             ..
         } => {
-            tracing::info!(
-                "Window '{}' close requested, performing graceful shutdown...",
+            tracing::debug!(
+                "Window '{}' close requested — deferring shutdown to ExitRequested/Exit so a \
+                 frontend flush-before-close veto isn't cut short",
                 label
             );
-            graceful_shutdown(app_handle);
         }
-        RunEvent::ExitRequested { code, .. } => {
+        tauri::RunEvent::ExitRequested { code, .. } => {
             tracing::info!(
                 "App exit requested (code: {:?}), performing graceful shutdown...",
                 code
             );
             graceful_shutdown(app_handle);
         }
-        RunEvent::Exit => {
+        tauri::RunEvent::Exit => {
+            // Safety net in case ExitRequested was ever skipped — cancel()
+            // and graceful_shutdown's guard are both idempotent, so this is
+            // a no-op on the (expected) common path where ExitRequested
+            // already ran it.
             tracing::info!("App exiting, ensuring shutdown signal sent...");
-            shutdown_token_for_events.cancel();
+            graceful_shutdown(app_handle);
         }
         _ => {}
-    });
+    }
 }
 
-/// Perform graceful shutdown: cancel background tasks and exit cleanly.
+/// Perform graceful shutdown: cancel background tasks.
 ///
-/// Guarded by an `AtomicBool` because Tauri may fire both `CloseRequested` and
-/// `ExitRequested` events, and we must only run the shutdown sequence once.
-pub(crate) fn graceful_shutdown(app_handle: &tauri::AppHandle) {
-    use std::sync::atomic::{AtomicBool, Ordering};
+/// Guarded by [`ShutdownToken::begin_shutdown_once`] so the sequence runs
+/// exactly once per token even though `ExitRequested` and `Exit` can both
+/// drive it for the same exit (see `handle_run_event`).
+///
+/// No blocking sleep here: the previous 200ms `std::thread::sleep` ran on
+/// the Tauri event-loop thread — the same thread that services the webview —
+/// which stalls the UI at exactly the moment a flush needs to make progress.
+/// It also couldn't have helped the background tasks it was meant to give
+/// time to: they run on the async runtime's own worker threads and react to
+/// `cancel()` independently of how long this thread blocks afterward.
+pub(crate) fn graceful_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
     use tauri::Manager;
 
-    static SHUTDOWN_ONCE: AtomicBool = AtomicBool::new(false);
-    if SHUTDOWN_ONCE.swap(true, Ordering::SeqCst) {
+    let Some(shutdown_token) = app_handle.try_state::<ShutdownToken>() else {
+        return;
+    };
+
+    if !shutdown_token.begin_shutdown_once() {
         tracing::debug!("Graceful shutdown already in progress, skipping duplicate call");
         return;
     }
 
-    if let Some(shutdown_token) = app_handle.try_state::<ShutdownToken>() {
-        shutdown_token.cancel();
-    }
-    // Grace period for background tasks (watcher) to exit their tokio::select!
-    // loops and drop their Arc references before the runtime drops.
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
+    shutdown_token.cancel();
     tracing::info!("Shutdown: complete");
 }
