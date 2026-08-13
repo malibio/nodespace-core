@@ -23,6 +23,7 @@ import type {
   CreateContainerInput
 } from '$lib/services/backend-adapter';
 import type { SchemaNode } from '$lib/types/schema-node';
+import { isSubtreeAccessDenied, isVersionConflict } from '$lib/types/errors';
 
 // Declare globals for eslint (these are available in Happy-DOM/browser environment)
 declare const Headers: typeof globalThis.Headers;
@@ -948,6 +949,120 @@ describe('Backend Adapter - HttpAdapter (Browser Dev Mode)', () => {
       const result = await adapter.createMention('source', 'target');
 
       expect(result).toBeUndefined();
+    });
+
+    it('should throw a BackendError carrying code and status for a coded error body', async () => {
+      const { getBackendAdapter, BackendError } = await import('$lib/services/backend-adapter');
+      const adapter = getBackendAdapter();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        json: async () => ({
+          message: 'Version conflict',
+          code: 'VERSION_CONFLICT',
+          conflictData: { node_id: 'node-1', expected: 1, actual: 2, current_node: null }
+        })
+      });
+
+      let caught: unknown;
+      try {
+        await adapter.updateNode('node-1', 1, { content: 'x' });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(BackendError);
+      const backendError = caught as InstanceType<typeof BackendError>;
+      expect(backendError.message).toBe('Version conflict');
+      expect(backendError.code).toBe('VERSION_CONFLICT');
+      expect(backendError.status).toBe(409);
+      // The type guard is structural (reads code/conflictData off the thrown
+      // error, not an `instanceof` check), so a well-formed coded body is
+      // classified correctly through the HTTP adapter — previously
+      // impossible, since `code` was always discarded.
+      expect(isVersionConflict(backendError)).toBe(true);
+    });
+
+    it('lets isSubtreeAccessDenied resolve correctly through the HTTP adapter', async () => {
+      const { getBackendAdapter } = await import('$lib/services/backend-adapter');
+      const adapter = getBackendAdapter();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 412,
+        statusText: 'Precondition Failed',
+        json: async () => ({
+          message: 'Delete refused: subtree contains inaccessible nodes',
+          code: 'SUBTREE_ACCESS_DENIED',
+          conflictData: { inaccessibleCount: 3 }
+        })
+      });
+
+      let caught: unknown;
+      try {
+        await adapter.deleteNode('node-1', 1);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(isSubtreeAccessDenied(caught)).toBe(true);
+      if (isSubtreeAccessDenied(caught)) {
+        expect(caught.conflictData.inaccessibleCount).toBe(3);
+      }
+    });
+
+    it('should throw a BackendError with status but no code for an uncoded error body', async () => {
+      const { getBackendAdapter, BackendError } = await import('$lib/services/backend-adapter');
+      const adapter = getBackendAdapter();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        json: async () => ({ message: 'Invalid node data' })
+      });
+
+      let caught: unknown;
+      try {
+        await adapter.createNode({ id: 'test', nodeType: 'text', content: 'Test' });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(BackendError);
+      const backendError = caught as InstanceType<typeof BackendError>;
+      expect(backendError.message).toBe('Invalid node data');
+      expect(backendError.status).toBe(400);
+      expect(backendError.code).toBeUndefined();
+    });
+
+    it('should throw a BackendError with a fallback message and no code for a non-JSON error body', async () => {
+      const { getBackendAdapter, BackendError } = await import('$lib/services/backend-adapter');
+      const adapter = getBackendAdapter();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        json: async () => {
+          throw new SyntaxError('Unexpected token < in JSON');
+        }
+      });
+
+      let caught: unknown;
+      try {
+        await adapter.getNode('test-id');
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(BackendError);
+      const backendError = caught as InstanceType<typeof BackendError>;
+      expect(backendError.message).toBe('HTTP 502: Bad Gateway');
+      expect(backendError.status).toBe(502);
+      expect(backendError.code).toBeUndefined();
     });
   });
 });
