@@ -67,6 +67,9 @@ async fn current_version(conn: &libsql::Connection) -> Result<i64> {
 /// ascending order. Each migration runs in its own transaction that also bumps
 /// `user_version` to that migration's version, so a database is never left
 /// between two versions.
+///
+/// Errors if `current_version > target_version` — a database written by a
+/// newer build than this one — rather than silently doing nothing.
 pub async fn run_up_to(conn: &libsql::Connection, target_version: i64) -> Result<()> {
     let start_version = current_version(conn).await?;
 
