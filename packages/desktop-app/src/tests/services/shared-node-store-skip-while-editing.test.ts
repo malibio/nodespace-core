@@ -11,11 +11,12 @@
  * node is actively focused OR has unsaved local changes pending.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import { focusManager } from '../../lib/services/focus-manager.svelte';
 import { structureTree } from '../../lib/stores/reactive-structure-tree.svelte';
 import { conflictNotifications } from '../../lib/stores/conflict-notifications.svelte';
+import { backendAdapter } from '../../lib/services/backend-adapter';
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 
@@ -54,6 +55,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     store.clearAll();
     focusManager.clearEditing();
     SharedNodeStore.resetInstance();
+    vi.restoreAllMocks();
   });
 
   it('skips clobbering the content of a focused node on a database event', () => {
@@ -336,6 +338,140 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(versionMismatchFor('hydrated2')).toHaveLength(1);
       // The local content is still protected (the clobber was skipped).
       expect(store.getNode('hydrated2')?.content).toBe('hello world');
+    });
+  });
+
+  // resyncNodeFromServer() writes the fetched row via the same guard-free
+  // path a `database`-sourced setNode() would, but historically bypassed
+  // the skip-while-editing guard entirely (it calls the private `nodesSet`
+  // directly). It's the fallback `updateNode()` uses when an OCC (version-
+  // conflict) failure arrives without an embedded authoritative node —
+  // rarer than an ordinary write failure, but a real user could still be
+  // actively typing in the conflicting node when one lands, and an
+  // unguarded resync would silently revert their in-progress edit to
+  // whatever the server had at conflict time.
+  //
+  // Guards on `isFocused` only — deliberately NOT `hasPending`, unlike
+  // `setNode()`'s use of the same underlying policy. `PersistenceCoordinator
+  // .hasPending()` is true while an operation is executing, and there is
+  // only one executing slot per node: when resyncNodeFromServer is called
+  // from a failed write's own catch handler, that very write still occupies
+  // it (its `finally` hasn't run yet) — so `hasPending` at that moment is
+  // this failing write's own not-yet-cleared bookkeeping, not evidence of a
+  // genuinely different pending edit. That's self-referential and racy
+  // (depends on mock-vs-real network timing), and checking it would defeat
+  // this recovery path for its single most common case: an isolated
+  // failure with nothing else in flight. `isFocused` has no such
+  // self-reference and covers the scenario the guard exists for. A separate,
+  // non-racy check (the fetched-node identity comparison inside
+  // resyncNodeFromServer itself) additionally bails if some other write
+  // landed for this node while the fetch was in flight.
+  describe('resyncNodeFromServer guard', () => {
+    it("does not clobber a focused node's optimistic content with a stale server snapshot", async () => {
+      store.setNode(makeNode('resync-1', 'server-old', 1), databaseSource);
+      focusManager.focusNode('resync-1', 'default');
+      // User keeps typing locally (optimistic, not yet confirmed).
+      store.updateNode('resync-1', { content: 'user is typing this' }, viewerSource, {
+        skipPersistence: true
+      });
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-1', 'server-old', 1));
+
+      await store.resyncNodeFromServer('resync-1');
+
+      const after = store.getNode('resync-1');
+      expect(after?.content).toBe('user is typing this');
+    });
+
+    it('still marks the node as persisted on a guard-skip, mirroring setNode()', async () => {
+      // A node whose local persisted-bookkeeping has drifted (e.g. after a
+      // reload) but is actively focused — the skip must protect content,
+      // not silently leave persistedNodeIds out of sync too.
+      store.setNode(makeNode('resync-1b', 'server-old', 1), viewerSource, true);
+      focusManager.focusNode('resync-1b', 'default');
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-1b', 'server-old', 1));
+
+      expect(store.isNodePersisted('resync-1b')).toBe(false);
+      await store.resyncNodeFromServer('resync-1b');
+      expect(store.isNodePersisted('resync-1b')).toBe(true);
+    });
+
+    it('does not clobber a different write that lands locally while the fetch is in flight', async () => {
+      // Not a focus/pending scenario — this is the identity-based guard:
+      // regardless of focus state, if the node this resync is about to
+      // apply to has been replaced by ANY other write since the fetch
+      // started, the fetch reflects state from before that write and must
+      // not overwrite it.
+      store.setNode(makeNode('resync-race', 'server-old', 1), databaseSource);
+
+      let resolveFetch!: (node: Node) => void;
+      vi.spyOn(backendAdapter, 'getNode').mockImplementation(
+        () => new Promise((resolve) => (resolveFetch = resolve))
+      );
+
+      const resyncPromise = store.resyncNodeFromServer('resync-race');
+
+      // A second, unrelated write lands for the same node while the fetch
+      // above is still pending.
+      store.updateNode(
+        'resync-race',
+        { content: 'a different write landed' },
+        viewerSource,
+        { skipPersistence: true }
+      );
+
+      // The fetch now resolves with what the server had *before* that
+      // second write happened.
+      resolveFetch(makeNode('resync-race', 'server-old', 1));
+      await resyncPromise;
+
+      expect(store.getNode('resync-race')?.content).toBe('a different write landed');
+    });
+
+    // Documents the scope boundary above, rather than asserting protection
+    // that (deliberately) doesn't exist here: an unfocused node with an
+    // unrelated pending debounced write is NOT shielded from a resync by
+    // this guard — only `setNode()` gets that (via the real, non-racy
+    // `hasPending` check, safe there because setNode is never called from
+    // inside the very operation it might be racing against).
+    it('does NOT protect a merely-pending (not focused) node — known scope limit, see guard comment above', async () => {
+      store.setNode(makeNode('resync-2', 'server-old', 1), databaseSource);
+      store.updateNode('resync-2', { content: 'debounced-edit-in-flight' }, viewerSource);
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-2', 'server-fresh', 5));
+
+      await store.resyncNodeFromServer('resync-2');
+
+      expect(store.getNode('resync-2')?.content).toBe('server-fresh');
+    });
+
+    it('still resyncs normally for a non-focused, non-pending node (regression check)', async () => {
+      store.setNode(makeNode('resync-3', 'local-stale', 1), databaseSource);
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-3', 'server-fresh', 9));
+
+      await store.resyncNodeFromServer('resync-3');
+
+      const after = store.getNode('resync-3');
+      expect(after?.content).toBe('server-fresh');
+      expect(after?.version).toBe(9);
+    });
+
+    it('applies normally once the user blurs (guard only fires while actively editing)', async () => {
+      store.setNode(makeNode('resync-4', 'server-old', 1), databaseSource);
+      focusManager.focusNode('resync-4', 'default');
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-4', 'server-fresh', 4));
+
+      // Still focused — the resync must be skipped.
+      await store.resyncNodeFromServer('resync-4');
+      expect(store.getNode('resync-4')?.content).toBe('server-old');
+
+      // User blurs — the same resync call now applies normally.
+      focusManager.clearEditing();
+      await store.resyncNodeFromServer('resync-4');
+      expect(store.getNode('resync-4')?.content).toBe('server-fresh');
     });
   });
 });

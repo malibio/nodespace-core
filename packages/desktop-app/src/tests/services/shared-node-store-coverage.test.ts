@@ -982,7 +982,7 @@ describe('SharedNodeStore - Coverage Completion', () => {
   // ========================================================================
 
   describe('Concurrent Resync Prevention', () => {
-    it('should return early on concurrent resync attempts', async () => {
+    it('returns early on a concurrent resync attempt, then runs one queued follow-up', async () => {
       let callCount = 0;
       vi.spyOn(backendAdapter, 'getNode').mockImplementation(async () => {
         callCount++;
@@ -997,10 +997,16 @@ describe('SharedNodeStore - Coverage Completion', () => {
       const p2 = store.resyncNodeFromServer(mockNode.id);
       const p3 = store.resyncNodeFromServer(mockNode.id);
 
-      await Promise.all([p1, p2, p3]);
-
-      // Should only call once
+      // p2/p3 arrive while p1's fetch is in flight, so both return early
+      // (queuing at most one follow-up) well before p1's own mocked fetch does.
+      await Promise.all([p2, p3]);
       expect(callCount).toBe(1);
+
+      // p1 settling runs its finally block, which fires the single queued
+      // follow-up — a second, sequential (not concurrent) fetch, not a
+      // silently dropped request.
+      await p1;
+      expect(callCount).toBe(2);
     });
   });
 });

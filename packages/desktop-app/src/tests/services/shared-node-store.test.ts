@@ -2133,6 +2133,106 @@ describe('SharedNodeStore', () => {
       });
     });
 
+    describe('write-failure recovery (non-OCC)', () => {
+      // `rollbackUpdate` (above) only rewinds bookkeeping — it has no snapshot
+      // of the node's pre-update field values to restore, so a rejected write
+      // leaves the optimistic value in place with only a generic toast. An
+      // earlier version of this fix resynced the whole node from the server
+      // on any non-OCC failure; review found that store-wide mechanism raced
+      // a second in-flight write to the same node, could leave a permanent
+      // phantom node behind a failed create, and had no retry once skipped
+      // for an actively-edited node — see the write-failure branch's own
+      // comment. Replaced with `onPersistError`: an opt-in callback that lets
+      // the *caller who made this specific write* apply its own narrowly-
+      // scoped correction — see kanban-view.svelte's `moveCard` for the real
+      // consumer. These tests cover the store's side of that contract: the
+      // callback fires (only) for a non-OCC failure, and the store's own
+      // generic handling (metrics, the write-failure notification) still
+      // happens regardless of whether a caller opted in.
+      it('invokes onPersistError with the failure when a non-OCC persist rejects', async () => {
+        const testNode = createTestNode('write-fail-callback-1', 'Original content');
+        // `databaseSource` marks the node as already persisted, so the
+        // subsequent edit takes the real update-and-persist path instead of
+        // the create path.
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        const failure = new Error('network error');
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(failure);
+
+        const onPersistError = vi.fn();
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource, {
+          onPersistError
+        });
+
+        await vi.waitFor(() => {
+          expect(onPersistError).toHaveBeenCalledTimes(1);
+        });
+        expect(onPersistError).toHaveBeenCalledWith(failure);
+      });
+
+      it('does not invoke onPersistError for an OCC (version-conflict) failure', async () => {
+        const testNode = createTestNode('write-fail-callback-2', 'Original content');
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        const occError = new Error('VERSION_CONFLICT: optimistic concurrency failure') as Error & {
+          code: string;
+          conflictData: { node_id: string; expected: number; actual: number; current_node: null };
+        };
+        occError.code = 'VERSION_CONFLICT';
+        occError.conflictData = {
+          node_id: testNode.id,
+          expected: 1,
+          actual: 2,
+          current_node: null
+        };
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(occError);
+        vi.spyOn(backendAdapter, 'getNode').mockResolvedValueOnce({
+          ...testNode,
+          version: 2
+        });
+
+        const onPersistError = vi.fn();
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource, {
+          onPersistError
+        });
+
+        await vi.waitFor(() => {
+          expect(
+            conflictNotifications.notifications.some(
+              (n) => n.nodeId === testNode.id && n.conflictType === 'version-mismatch'
+            )
+          ).toBe(true);
+        });
+        // OCC conflicts already have their own resync/hydration handling —
+        // onPersistError is specifically for the non-OCC branch.
+        expect(onPersistError).not.toHaveBeenCalled();
+      });
+
+      it('surfaces the generic write-failure notification whether or not a caller passes onPersistError', async () => {
+        const testNode = createTestNode('write-fail-callback-3', 'Original content');
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(new Error('offline'));
+
+        // No onPersistError passed — a caller that doesn't opt in gets
+        // exactly the pre-existing generic handling, nothing more, nothing
+        // less.
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource);
+
+        await vi.waitFor(() => {
+          expect(
+            conflictNotifications.notifications.some(
+              (n) => n.nodeId === testNode.id && n.conflictType === 'write-failure'
+            )
+          ).toBe(true);
+        });
+        // And the optimistic value is left in place — this is the store's
+        // own generic behavior, unchanged; correcting it is now the opted-in
+        // caller's job, not this test's node.
+        expect(store.getNode(testNode.id)?.content).toBe('Optimistic edit');
+      });
+    });
+
     describe('markUpdatePersisted', () => {
       it('should mark update as persisted', () => {
         const testNode = createTestNode('persist-test-1');
@@ -2388,7 +2488,14 @@ describe('SharedNodeStore', () => {
     });
 
     describe('idempotent resync', () => {
-      it('should prevent concurrent resync operations', async () => {
+      it('collapses a concurrent second call into one queued follow-up — not a dropped no-op', async () => {
+        // Two resyncs racing must not fire two simultaneous fetches (that part
+        // of "idempotent" still holds), but the second call is NOT simply
+        // ignored: it's a distinct request — e.g. a second failed write for
+        // this node — and dropping it outright would leave that write's
+        // divergence uncorrected. It queues a single follow-up fetch, run
+        // once the in-flight one settles, so both requests are eventually
+        // honored, just sequentially instead of concurrently.
         const testNode = createTestNode('concurrent-resync-test');
         store.setNode(testNode, viewerSource);
 
@@ -2405,10 +2512,17 @@ describe('SharedNodeStore', () => {
         const resync1 = store.resyncNodeFromServer('concurrent-resync-test');
         const resync2 = store.resyncNodeFromServer('concurrent-resync-test');
 
-        await Promise.all([resync1, resync2]);
-
-        // Only one should have actually called getNode
+        // resync2 arrives while resync1's fetch is still in flight, so it
+        // resolves immediately (it only queued a follow-up) — well before
+        // resync1's own 50ms mocked fetch does. At that point exactly one
+        // fetch has started.
+        await resync2;
         expect(callCount).toBe(1);
+
+        // resync1 settling runs its finally block, which kicks off the
+        // queued follow-up — a second (sequential, not concurrent) fetch.
+        await resync1;
+        expect(callCount).toBe(2);
 
         getNodeSpy.mockRestore();
       });

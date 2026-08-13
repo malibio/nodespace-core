@@ -285,12 +285,15 @@ export default [
         // DOM types for tests
         HTMLElement: 'readonly',
         HTMLInputElement: 'readonly',
+        HTMLSelectElement: 'readonly',
         Element: 'readonly',
         Node: 'readonly',
         Text: 'readonly',
         MouseEvent: 'readonly',
         FocusEvent: 'readonly',
         KeyboardEvent: 'readonly',
+        DragEvent: 'readonly',
+        DataTransfer: 'readonly',
         Event: 'readonly',
         InputEvent: 'readonly'
       }
