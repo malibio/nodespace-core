@@ -495,15 +495,22 @@ impl SqliteStore {
             .transaction()
             .await
             .context("Failed to begin bulk delete transaction")?;
-        let placeholders: Vec<String> = (1..=to_delete.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
-        let params: Vec<libsql::Value> = to_delete
-            .iter()
-            .map(|n| libsql::Value::Text(n.id.clone()))
-            .collect();
-        tx.execute(&sql, params)
-            .await
-            .context("Failed to delete nodes in bulk")?;
+        // Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766) — same
+        // ceiling and pattern as delete_subtree_atomic above. All chunks execute
+        // against this same `tx`, so a failure partway through rolls back the
+        // whole batch rather than leaving it half-deleted.
+        const ID_CHUNK: usize = 900;
+        for chunk in to_delete.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|n| libsql::Value::Text(n.id.clone()))
+                .collect();
+            tx.execute(&sql, params)
+                .await
+                .context("Failed to delete nodes in bulk")?;
+        }
         tx.commit()
             .await
             .context("Failed to commit bulk delete transaction")?;
