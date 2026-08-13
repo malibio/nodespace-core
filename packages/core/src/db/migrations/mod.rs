@@ -17,7 +17,7 @@ mod v002_embedding_origin;
 mod v003_property_indexes;
 mod v004_schema_relationship_edges;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Highest migration version known to this build. Bump when adding a migration.
@@ -69,6 +69,18 @@ async fn current_version(conn: &libsql::Connection) -> Result<i64> {
 /// between two versions.
 pub async fn run_up_to(conn: &libsql::Connection, target_version: i64) -> Result<()> {
     let start_version = current_version(conn).await?;
+
+    // A version higher than we know how to migrate means this database was last
+    // written by a newer build. Without this check the range below is empty, the
+    // loop never runs, and `run` returns `Ok(())` — silently opening the store
+    // against a schema this build doesn't understand instead of failing loudly.
+    if start_version > target_version {
+        bail!(
+            "Database schema version {start_version} is newer than this build supports \
+             ({target_version}). Update NodeSpace, or reopen this store with the version \
+             that wrote it."
+        );
+    }
 
     for version in (start_version + 1)..=target_version {
         let tx = conn
@@ -420,6 +432,43 @@ mod tests {
             .unwrap();
         let remaining: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(remaining, 0, "no schema node may keep a relationships key");
+    }
+
+    /// Opening a store whose `user_version` is ahead of what this build knows
+    /// (e.g. a newer release wrote it, then an older build — or an older CLI —
+    /// opens the same file) must fail loudly rather than silently no-op: without
+    /// the guard in `run_up_to`, `(start_version + 1)..=target_version` is an
+    /// empty range, the loop never runs, and the caller gets `Ok(())` while
+    /// proceeding against a schema it doesn't understand.
+    #[tokio::test]
+    async fn run_up_to_rejects_a_database_newer_than_this_build() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("from_the_future.db");
+        let conn = open(&db_path).await;
+        // Simulate a database written by a future build one version ahead of
+        // what this build knows about.
+        run_up_to(&conn, LATEST_VERSION).await.unwrap();
+        let future_version = LATEST_VERSION + 1;
+        conn.execute(&format!("PRAGMA user_version = {future_version}"), ())
+            .await
+            .unwrap();
+        assert_eq!(user_version(&conn).await, future_version);
+
+        let err = run_up_to(&conn, LATEST_VERSION)
+            .await
+            .expect_err("opening a newer-than-supported database must fail, not no-op");
+        let message = err.to_string();
+        assert!(
+            message.contains(&future_version.to_string()),
+            "error must name the database's version: {message}"
+        );
+        assert!(
+            message.contains(&LATEST_VERSION.to_string()),
+            "error must name the version this build supports: {message}"
+        );
+
+        // The database must be left untouched — no migration ran, no partial state.
+        assert_eq!(user_version(&conn).await, future_version);
     }
 
     #[tokio::test]
