@@ -1070,6 +1070,51 @@ mod tests {
         Ok(())
     }
 
+    /// `bulk_delete`'s `DELETE FROM node WHERE id IN (...)` used to build one
+    /// unchunked placeholder list sized to the whole input — the same
+    /// unchunked-past-SQLite's-32766-ceiling defect fixed elsewhere in this
+    /// module (see `nodes::large_subtree_chunking_tests`), just missed in
+    /// that sweep because `get_nodes_by_ids` a few lines above it in the same
+    /// function was already correctly chunked and easy to mistake for
+    /// covering the whole function. 1,000 ids (> the production `ID_CHUNK` =
+    /// 900, so the DELETE spans 2 chunks: 900 + 100) is enough to exercise
+    /// the chunk-loop without paying the 30k-row FTS5 cost the full
+    /// ceiling-proving tests need — seeded via a single multi-row INSERT
+    /// rather than 1,000 individual `create_node` round trips, so this stays
+    /// fast enough to run unconditionally.
+    #[tokio::test]
+    async fn test_bulk_delete_spans_multiple_chunks() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let ids: Vec<String> = (0..1_000)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .collect();
+        let now = Utc::now().to_rfc3339();
+        let placeholders: Vec<String> = (1..=ids.len())
+            .map(|i| format!("(?{i}, 'text', '', '{{}}', NULL, 'active', 1, '{now}', '{now}')"))
+            .collect();
+        let sql = format!(
+            "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES {}",
+            placeholders.join(", ")
+        );
+        let params: Vec<libsql::Value> = ids
+            .iter()
+            .map(|id| libsql::Value::Text(id.clone()))
+            .collect();
+        store.db.execute(&sql, params).await?;
+
+        let deleted = store.bulk_delete(&ids, None).await?;
+        assert_eq!(deleted.len(), 1_000, "every seeded node reported deleted");
+
+        for id in &ids {
+            assert!(
+                !store.node_exists(id).await?,
+                "node {id} survived the delete — a chunk's DELETE was skipped"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_create_and_get_node() -> Result<()> {
         let (store, _temp_dir) = create_test_store().await?;
