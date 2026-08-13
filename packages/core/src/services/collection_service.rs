@@ -1062,7 +1062,7 @@ mod tests {
         assert_eq!(build_path_string(&[]), "");
     }
 
-    // ---- deterministic collection ids (issue #1703 dedup) -------------------
+    // ---- deterministic collection ids (name-derived, dedupes across imports/devices) ----
 
     #[test]
     fn deterministic_collection_id_is_stable_and_case_insensitive() {
