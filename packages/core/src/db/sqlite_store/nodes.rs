@@ -2919,4 +2919,87 @@ mod large_subtree_chunking_tests {
 
         Ok(())
     }
+
+    /// Twice the production `ID_CHUNK` (900); the id list is `root +
+    /// MULTI_CHUNK_COUNT` (1801), which `.chunks(900)` splits into 3 (900,
+    /// 900, 1) — big enough to actually exercise the chunk-loop accumulation
+    /// across more than one chunk (merge-across-chunks, not just a single
+    /// chunk that happens to hold everything), nowhere near SQLite's 32766
+    /// ceiling.
+    /// Unlike `DESCENDANT_COUNT` above, this runs unconditionally in the
+    /// default suite: the two ceiling-proving tests are the only ones slow
+    /// enough to need `RUN_LONG_TESTS`, and a bug in the loop-and-merge logic
+    /// itself (wrong accumulator, an off-by-one on the last chunk, a chunk's
+    /// results overwriting instead of extending) would otherwise ship
+    /// undetected by every test that runs by default.
+    const MULTI_CHUNK_COUNT: usize = 1_800;
+
+    #[tokio::test]
+    async fn get_subtree_with_relationships_merges_results_across_multiple_chunks() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let root = store
+            .create_node(
+                Node::new(
+                    "text".to_string(),
+                    "root".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
+        let child_ids = seed_flat_subtree(&store, &root.id, MULTI_CHUNK_COUNT).await?;
+
+        let (all_nodes, relationships) = store.get_subtree_with_relationships(&root.id).await?;
+
+        assert_eq!(
+            all_nodes.len(),
+            MULTI_CHUNK_COUNT + 1,
+            "root + every descendant"
+        );
+        assert_eq!(relationships.len(), MULTI_CHUNK_COUNT);
+        let returned_ids: HashSet<String> = all_nodes.iter().map(|n| n.id.clone()).collect();
+        for id in &child_ids {
+            assert!(
+                returned_ids.contains(id),
+                "descendant {id} missing — a chunk's results were dropped, not merged"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_subtree_atomic_deletes_across_multiple_chunks() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let root = store
+            .create_node(
+                Node::new(
+                    "text".to_string(),
+                    "root".to_string(),
+                    serde_json::json!({}),
+                ),
+                None,
+                None,
+            )
+            .await?;
+        let child_ids = seed_flat_subtree(&store, &root.id, MULTI_CHUNK_COUNT).await?;
+        let subtree_ids = store.collect_subtree_ids(&root.id).await?;
+        assert_eq!(subtree_ids.len(), MULTI_CHUNK_COUNT + 1);
+
+        let (existed, deleted_nodes) = store
+            .delete_subtree_atomic(&root.id, root.version, &subtree_ids, None)
+            .await?;
+
+        assert!(existed);
+        assert_eq!(deleted_nodes.len(), MULTI_CHUNK_COUNT + 1);
+        assert!(store.get_node(&root.id).await?.is_none());
+        for id in &child_ids {
+            assert!(
+                !store.node_exists(id).await?,
+                "descendant {id} survived the delete — a chunk's DELETE was skipped or its \
+                 result silently dropped"
+            );
+        }
+        Ok(())
+    }
 }
