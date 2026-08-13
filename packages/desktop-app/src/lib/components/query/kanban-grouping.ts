@@ -2,7 +2,7 @@
  * Pure helpers for the Kanban view (query-node-viewer).
  *
  * Kept DOM-free and side-effect-free so the grouping / eligibility / write-shape
- * / per-column reveal-count rules can be unit-tested directly, following the
+ * / per-column reveal-set rules can be unit-tested directly, following the
  * project convention of testing extracted logic rather than rendering Svelte
  * components.
  */
@@ -129,12 +129,30 @@ export function resolveActiveGroupBy(
 }
 
 /**
- * How many cards a column should reveal after a "+N more" click: grow by one
- * `batch`, clamped to the column's actual card count. Used to bound Kanban's
- * per-column render — unlike List/Table's flip-page pagination, a column
- * keeps everything already revealed and only grows, so a card never
- * disappears out from under an in-progress drag the way a page change would.
+ * Grow a column's revealed-id set by up to `batch` more ids, in `ids` order,
+ * preserving every id already in `revealed` regardless of where it now sits
+ * in `ids`. Used to bound Kanban's per-column render (a "+N more" control)
+ * without List/Table's flip-page pagination: capping by *position* alone
+ * (`ids.slice(0, n)`) can't guarantee an already-shown card stays shown,
+ * because a different card joining the column ahead of it in `ids` order
+ * would push it past a plain positional cutoff — exactly the "card vanishes
+ * out from under an in-progress drag" failure this exists to avoid. Tracking
+ * by id instead means a card, once revealed, stays revealed for as long as
+ * it remains in this column, independent of how the column's order churns.
  */
-export function nextVisibleCount(current: number, batch: number, total: number): number {
-  return Math.min(current + batch, total);
+export function growRevealed(
+  revealed: ReadonlySet<string>,
+  ids: string[],
+  batch: number
+): Set<string> {
+  const next = new Set(revealed);
+  let added = 0;
+  for (const id of ids) {
+    if (added >= batch) break;
+    if (!next.has(id)) {
+      next.add(id);
+      added++;
+    }
+  }
+  return next;
 }

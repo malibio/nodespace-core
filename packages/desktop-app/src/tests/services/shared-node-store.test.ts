@@ -2446,7 +2446,14 @@ describe('SharedNodeStore', () => {
     });
 
     describe('idempotent resync', () => {
-      it('should prevent concurrent resync operations', async () => {
+      it('collapses a concurrent second call into one queued follow-up — not a dropped no-op', async () => {
+        // Two resyncs racing must not fire two simultaneous fetches (that part
+        // of "idempotent" still holds), but the second call is NOT simply
+        // ignored: it's a distinct request — e.g. a second failed write for
+        // this node — and dropping it outright would leave that write's
+        // divergence uncorrected. It queues a single follow-up fetch, run
+        // once the in-flight one settles, so both requests are eventually
+        // honored, just sequentially instead of concurrently.
         const testNode = createTestNode('concurrent-resync-test');
         store.setNode(testNode, viewerSource);
 
@@ -2463,10 +2470,17 @@ describe('SharedNodeStore', () => {
         const resync1 = store.resyncNodeFromServer('concurrent-resync-test');
         const resync2 = store.resyncNodeFromServer('concurrent-resync-test');
 
-        await Promise.all([resync1, resync2]);
-
-        // Only one should have actually called getNode
+        // resync2 arrives while resync1's fetch is still in flight, so it
+        // resolves immediately (it only queued a follow-up) — well before
+        // resync1's own 50ms mocked fetch does. At that point exactly one
+        // fetch has started.
+        await resync2;
         expect(callCount).toBe(1);
+
+        // resync1 settling runs its finally block, which kicks off the
+        // queued follow-up — a second (sequential, not concurrent) fetch.
+        await resync1;
+        expect(callCount).toBe(2);
 
         getNodeSpy.mockRestore();
       });

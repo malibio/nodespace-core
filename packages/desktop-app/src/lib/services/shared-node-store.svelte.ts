@@ -721,6 +721,10 @@ export class SharedNodeStore {
   // Track nodes currently being resynced to prevent concurrent resync operations
   private resyncingNodes = new Set<string>();
 
+  // Nodes with a follow-up resync requested while one was already in flight
+  // for them — see resyncNodeFromServer()'s idempotency guard.
+  private resyncQueued = new Set<string>();
+
   /**
    * Monotonic database generation. ADR-053 ("One Daemon, Multiple Local
    * Databases") lets the desktop hot-swap the active database; `clearAll()`
@@ -2387,6 +2391,7 @@ export class SharedNodeStore {
     this.activeBatches.clear();
     this.pendingTreeLoads.clear();
     this.resyncingNodes.clear();
+    this.resyncQueued.clear();
     this.notifyAllSubscribers();
   }
 
@@ -2791,22 +2796,39 @@ export class SharedNodeStore {
   }
 
   /**
-   * Resync node from server after OCC error
+   * Resync a node from the server — used both after an OCC conflict and
+   * after a non-OCC write failure (see the write-failure recovery path in
+   * `updateNode()`).
    *
    * Implements a "server-wins" conflict resolution strategy:
    * - Fetches the current server state and replaces the local node entirely
+   *   (unless the node is actively being edited — see the skip-while-editing
+   *   guard below)
    * - User's pending edits are discarded in favor of server state
-   * - This ensures the node is no longer stuck after a version conflict
+   * - This ensures the node is no longer stuck after a version conflict or a
+   *   failed write
    *
-   * Idempotent: Safe to call multiple times for the same node.
-   * Concurrent calls for the same node will be ignored.
+   * Safe to call multiple times for the same node: only one fetch runs at a
+   * time, but a call that arrives while one is already in flight is not
+   * dropped — it queues exactly one follow-up, run once the in-flight fetch
+   * settles, so a second failure's correction is never silently lost.
    *
    * Future enhancement: Implement conflict merge UI
    */
   async resyncNodeFromServer(nodeId: string): Promise<void> {
-    // Idempotency guard: prevent concurrent resync operations on same node
+    // Idempotency guard: prevent concurrent resync operations on same node.
+    // A second caller while one is already in flight doesn't get dropped
+    // outright, though — it queues exactly one follow-up (single-slot,
+    // latest-wins, mirroring PersistenceCoordinator's own queued-write
+    // pattern above). Without that follow-up, two failures landing close
+    // together for the same node — e.g. two rapid Kanban drags, or a drag
+    // plus a property edit, both failing during a short daemon outage —
+    // would silently drop the second correction: the in-flight fetch can
+    // easily have already been issued before the second failure's optimistic
+    // write even landed locally, so it isn't guaranteed to reflect it.
     if (this.resyncingNodes.has(nodeId)) {
-      log.debug(`Resync already in progress for node ${nodeId}`);
+      log.debug(`Resync already in progress for node ${nodeId}, queuing a follow-up`);
+      this.resyncQueued.add(nodeId);
       return;
     }
 
@@ -2822,6 +2844,47 @@ export class SharedNodeStore {
       if (this.databaseEpoch !== epoch) return;
 
       if (serverNode) {
+        // This writes the fetched row straight into the store, same as a
+        // `database`-sourced broadcast — so it must respect the same
+        // skip-while-editing guard `setNode()` enforces (`decideRemoteUpdate`).
+        // Without this check, a resync racing an in-progress edit (e.g. a
+        // debounced content persist that failed for an unrelated reason while
+        // the user kept typing) would silently overwrite the optimistic,
+        // actively-edited content with this now-stale server snapshot —
+        // exactly the clobber `setNode()` was built to prevent, just reached
+        // through a different write path.
+        // Deliberately NOT `PersistenceCoordinator.hasPending(nodeId)` here,
+        // unlike `setNode()`'s use of the same guard. `hasPending()` is OR'd
+        // across pending/executing/queued, and there is only ever one
+        // executing slot per node — which the write whose *failure* is what
+        // got us here still occupies for the rest of its own microtask
+        // (its `finally` hasn't cleared `executingOperations` yet when this
+        // runs, since we're called from inside that same operation's catch
+        // handler). Checking `hasPending` here would therefore almost always
+        // read this failing write's own not-yet-cleared bookkeeping as "a
+        // pending edit exists" and skip the resync outright — self-referential,
+        // racy (depends on exact microtask ordering / mocked-vs-real network
+        // timing rather than anything meaningful), and it would defeat this
+        // recovery path for its single most common case: an isolated failure
+        // with no concurrent edit at all. `isFocused` has no such
+        // self-reference (it's a plain read of `focusManager`, set by real UI
+        // focus, never by this write path) and already covers the scenario
+        // this guard exists for — the user actively typing when a save fails.
+        const existingNode = this.nodes.get(nodeId);
+        const isFocused = focusManager.editingNodeId === nodeId;
+        const decision = decideRemoteUpdate(
+          serverNode,
+          existingNode,
+          { type: 'database', reason: 'occ-resync' },
+          { isFocused, hasPending: false }
+        );
+        if (!decision.apply) {
+          log.debug(
+            `resyncNodeFromServer: skipping clobber of actively-edited node ${nodeId} (focused=${isFocused})`
+          );
+          return;
+        }
+
         // Replace in-memory node with server state
         this.nodesSet(nodeId, serverNode);
 
@@ -2853,6 +2916,15 @@ export class SharedNodeStore {
     } finally {
       // Always clean up tracking set, even on error
       this.resyncingNodes.delete(nodeId);
+      // A second caller arrived while this fetch was in flight and queued a
+      // follow-up (see the idempotency guard above) — run one more resync so
+      // its correction isn't dropped. Fire-and-forget: this method's own
+      // caller is only waiting on THIS resync, not a chain of them.
+      if (this.resyncQueued.delete(nodeId)) {
+        void this.resyncNodeFromServer(nodeId).catch((followUpError) => {
+          log.error(`Follow-up resync failed for node ${nodeId}:`, followUpError);
+        });
+      }
     }
   }
 

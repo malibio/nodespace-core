@@ -12,16 +12,21 @@
   Each column renders at most a capped batch of cards (matching List/Table's
   PAGE_SIZE) rather than every matching node — a column with thousands of
   cards would otherwise render thousands of card-plus-full-options-<select>
-  pairs regardless of scroll position. A "+N more" control grows that column's
-  visible count by one more batch; it only ever adds, never removes, so a card
-  already on screen can't vanish out from under an in-progress drag. True
-  virtualization (windowing) was considered and rejected here: this view's
-  drag source is the rendered DOM node itself (native HTML5 drag-and-drop),
-  and a windowed list unmounts off-screen rows — a card scrolled out of the
-  window mid-drag would be destroyed out from under its own drag operation.
+  pairs regardless of scroll position. A "+N more" control grows that
+  column's *set* of revealed cards by one more batch; revealing is tracked by
+  node id, not by position, so a card already on screen can't vanish because
+  some other card's bucket membership changed elsewhere in the result order
+  (slicing by position alone can't make that guarantee — inserting a card
+  ahead of an already-shown one would push the shown one past a plain
+  positional cutoff). True virtualization (windowing) was considered and
+  rejected here: this view's drag source is the rendered DOM node itself
+  (native HTML5 drag-and-drop), and a windowed list unmounts off-screen rows —
+  a card scrolled out of the window mid-drag would be destroyed out from
+  under its own drag operation.
 -->
 
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { createLogger } from '$lib/utils/logger';
@@ -35,7 +40,7 @@
     resolveFieldWrite,
     groupByColumn,
     resolveActiveGroupBy,
-    nextVisibleCount
+    growRevealed
   } from '$lib/components/query/kanban-grouping';
 
   const log = createLogger('KanbanView');
@@ -95,25 +100,56 @@
     return groupByColumn(items, columns.map((c) => c.value));
   });
 
-  // How many cards are currently revealed per column — see CARDS_PER_BATCH
-  // above. Keyed by column value; a column not yet in the map shows the first
-  // batch. Reset when the grouping field itself changes (a different field's
-  // column values are a different vocabulary — stale counts keyed by a value
-  // string that happens to collide, e.g. two fields both having "open", would
-  // otherwise carry over a meaningless reveal count).
-  let visibleCounts = new SvelteMap<string, number>();
+  // The set of node ids currently revealed per column — see CARDS_PER_BATCH
+  // above. Keyed by column value. Seeded with the first batch (by current
+  // bucket order) whenever the grouping field changes — a different field's
+  // column values are a different vocabulary, so both the columns themselves
+  // and any prior reveal state keyed by value string (e.g. two fields both
+  // having "open") must reset together. `buckets` is read `untrack`-ed here
+  // deliberately: seeding must run once per grouping choice, not on every
+  // bucket recompute (a card move recomputes buckets on every drag) — the
+  // whole point of tracking ids instead of a count is that routine bucket
+  // churn must NOT reseed/reshuffle what's already been revealed.
+  let revealedIds = new SvelteMap<string, Set<string>>();
   $effect(() => {
-    const _activeGroupByDep = activeGroupBy;
-    void _activeGroupByDep;
-    visibleCounts.clear();
+    const cols = displayColumns;
+    const currentBuckets = untrack(() => buckets);
+    revealedIds.clear();
+    for (const col of cols) {
+      const ids = currentBuckets.get(col.value) ?? [];
+      revealedIds.set(col.value, growRevealed(new Set(), ids, CARDS_PER_BATCH));
+    }
   });
 
-  function visibleCountFor(columnValue: string): number {
-    return visibleCounts.get(columnValue) ?? CARDS_PER_BATCH;
+  /**
+   * The visible cards for a column: everything, if the column doesn't
+   * currently exceed one batch — the common case, and the one that matters
+   * for the interactive drag/drop and keyboard-move flows: a card just
+   * moved into a small column must appear immediately, not sit hidden
+   * behind "+N more" pending a click nobody asked for. Only once a column
+   * genuinely exceeds the batch size does the revealed set take over,
+   * showing whichever of its current members are in that set, in current
+   * bucket order — `moveCard` below separately ensures a card THIS view
+   * just placed is always in that set, so a drop into an already-oversized
+   * column is visible too, not just the under-cap case this function
+   * special-cases directly.
+   *
+   * Before the seeding effect above has run for a brand-new column (e.g.
+   * the render that follows a groupBy switch, same tick), fall back to a
+   * plain positional slice — `growRevealed` from an empty set produces the
+   * identical result, so the effect's write that follows changes nothing
+   * the user can see.
+   */
+  function visibleIdsFor(columnValue: string, ids: string[]): string[] {
+    if (ids.length <= CARDS_PER_BATCH) return ids;
+    const revealed = revealedIds.get(columnValue);
+    if (!revealed) return ids.slice(0, CARDS_PER_BATCH);
+    return ids.filter((id) => revealed.has(id));
   }
 
-  function showMore(columnValue: string, total: number): void {
-    visibleCounts.set(columnValue, nextVisibleCount(visibleCountFor(columnValue), CARDS_PER_BATCH, total));
+  function showMore(columnValue: string, ids: string[]): void {
+    const revealed = revealedIds.get(columnValue) ?? new Set<string>();
+    revealedIds.set(columnValue, growRevealed(revealed, ids, CARDS_PER_BATCH));
   }
 
   function fieldLabel(f: SchemaField): string {
@@ -154,6 +190,25 @@
     const changes = resolveFieldWrite(node, activeGroupBy, target ?? '');
     log.debug('KanbanView: moving card', { id, field: activeGroupBy, toColumn });
     sharedNodeStore.updateNode(id, changes, { type: 'viewer', viewerId: 'kanban-view' });
+
+    // Reveal the card in its destination column immediately, regardless of
+    // that column's current cap — the user just explicitly placed it there
+    // (by drag or the "Move to" select), so it must be visible right where
+    // they put it, cap or no cap. Without this, a card dropped into an
+    // already-capped (or even empty-but-unseeded) column would silently land
+    // behind a "+N more" control instead of where the user just dropped it —
+    // the same "moved card isn't where the user put it" failure this whole
+    // cap design exists to avoid, just via the reveal-tracking path instead
+    // of the position-slicing one Finding 2 already covers. This only
+    // affects the card THIS view just moved; an unrelated card arriving via
+    // some other cause (another pane, a background resync) still respects
+    // the cap normally.
+    const revealed = revealedIds.get(toColumn) ?? new Set<string>();
+    if (!revealed.has(id)) {
+      const next = new Set(revealed);
+      next.add(id);
+      revealedIds.set(toColumn, next);
+    }
   }
 
   function onDragStart(e: DragEvent, id: string): void {
@@ -208,8 +263,7 @@
     <div class="kanban-board">
       {#each displayColumns as col (col.value)}
         {@const ids = buckets.get(col.value) ?? []}
-        {@const visibleCount = visibleCountFor(col.value)}
-        {@const visibleIds = ids.slice(0, visibleCount)}
+        {@const visibleIds = visibleIdsFor(col.value, ids)}
         {@const hiddenCount = ids.length - visibleIds.length}
         <section
           class="kanban-column"
@@ -255,7 +309,7 @@
             {#if hiddenCount > 0}
               <button
                 class="kanban-show-more"
-                onclick={() => showMore(col.value, ids.length)}
+                onclick={() => showMore(col.value, ids)}
               >+{hiddenCount} more</button>
             {/if}
           </div>

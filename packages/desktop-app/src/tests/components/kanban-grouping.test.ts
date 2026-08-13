@@ -15,7 +15,7 @@ import {
   resolveFieldWrite,
   groupByColumn,
   resolveActiveGroupBy,
-  nextVisibleCount
+  growRevealed
 } from '$lib/components/query/kanban-grouping';
 
 function field(name: string, type: string, extra: Partial<SchemaField> = {}): SchemaField {
@@ -151,20 +151,43 @@ describe('resolveActiveGroupBy', () => {
   });
 });
 
-describe('nextVisibleCount', () => {
-  it('grows by one batch', () => {
-    expect(nextVisibleCount(25, 25, 100)).toBe(50);
+describe('growRevealed', () => {
+  const ids = Array.from({ length: 10 }, (_, i) => `n${i}`);
+
+  it('reveals the first batch from an empty set, in ids order', () => {
+    const revealed = growRevealed(new Set(), ids, 3);
+    expect([...revealed]).toEqual(['n0', 'n1', 'n2']);
   });
 
-  it('clamps to the column total when the last batch would overshoot', () => {
-    expect(nextVisibleCount(75, 25, 90)).toBe(90);
+  it('grows by one more batch of NEW ids, keeping everything already revealed', () => {
+    const first = growRevealed(new Set(), ids, 3);
+    const second = growRevealed(first, ids, 3);
+    expect([...second]).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5']);
   });
 
-  it('is a no-op once everything is already visible', () => {
-    expect(nextVisibleCount(90, 25, 90)).toBe(90);
+  it('stops at the end of ids even if the batch would overshoot', () => {
+    const revealed = growRevealed(new Set(), ids.slice(0, 4), 25);
+    expect([...revealed]).toEqual(['n0', 'n1', 'n2', 'n3']);
   });
 
-  it('handles a column smaller than one batch', () => {
-    expect(nextVisibleCount(0, 25, 3)).toBe(3);
+  it('is a no-op once every id is already revealed', () => {
+    const all = new Set(ids);
+    expect(growRevealed(all, ids, 3)).toEqual(all);
+  });
+
+  it('keeps an already-revealed id even when it now sits later in ids order (position-independent)', () => {
+    // n0 was revealed while it was first in the column; the column's order
+    // has since shifted (e.g. another card was reassigned ahead of it), but
+    // n0's membership hasn't changed, so it must stay revealed.
+    const revealed = new Set(['n0']);
+    const reordered = ['nNew1', 'nNew2', 'n0', ...ids.slice(1)];
+    const grown = growRevealed(revealed, reordered, 3);
+    expect(grown.has('n0')).toBe(true);
+  });
+
+  it('does not mutate the input set', () => {
+    const revealed = new Set(['n0']);
+    growRevealed(revealed, ids, 3);
+    expect(revealed).toEqual(new Set(['n0']));
   });
 });

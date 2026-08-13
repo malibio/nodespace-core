@@ -582,7 +582,7 @@ describe('SharedNodeStore - Extended Coverage', () => {
   // ========================================================================
 
   describe('resyncNodeFromServer - Idempotency', () => {
-    it('should prevent concurrent resync operations on same node', async () => {
+    it('runs one fetch at a time, then exactly one queued follow-up for any callers that raced it', async () => {
       let callCount = 0;
       vi.spyOn(backendAdapter, 'getNode').mockImplementation(async () => {
         callCount++;
@@ -597,10 +597,24 @@ describe('SharedNodeStore - Extended Coverage', () => {
       const promise2 = store.resyncNodeFromServer(mockNode.id);
       const promise3 = store.resyncNodeFromServer(mockNode.id);
 
-      await Promise.all([promise1, promise2, promise3]);
-
-      // Should only call getNode once (idempotency)
+      // promise2 and promise3 both arrive while promise1's fetch is still in
+      // flight, so both resolve immediately (each just queues a follow-up —
+      // a single slot, so the second one is a no-op add to the same queued
+      // set) — well before promise1's own 50ms mocked fetch does.
+      await Promise.all([promise2, promise3]);
       expect(callCount).toBe(1);
+
+      // promise1 settling runs its finally block, which kicks off the single
+      // queued follow-up — matching PersistenceCoordinator's own
+      // single-slot, latest-wins queued-write behavior: one follow-up total,
+      // not one per caller that raced it, but never silently dropped either.
+      await promise1;
+      expect(callCount).toBe(2);
+
+      // Give an (incorrect) third fetch a chance to fire before asserting
+      // its absence.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(callCount).toBe(2);
     });
   });
 

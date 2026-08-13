@@ -4,8 +4,11 @@
  * kanban-view.svelte buckets and rendered ALL matching nodes per column (a
  * card plus a full-options <select> each) with no bound, while List/Table
  * paginate at PAGE_SIZE = 25. These tests cover the fix: each column renders
- * at most a batch of cards, with a "+N more" control that grows the visible
- * count (never shrinks it, so an on-screen card can't disappear mid-drag).
+ * at most a batch of cards, with a "+N more" control that grows the *set* of
+ * revealed cards (tracked by id, not position) — a card already on screen
+ * can't disappear because a different card's bucket membership shifted
+ * elsewhere in the result order, which a plain positional cutoff can't
+ * guarantee (see "keeps an already-visible card visible" below).
  *
  * DnD, rollback, and keyboard-move coverage live under the browser tier
  * (src/tests/browser/kanban-dnd.test.ts) — this file only covers the cap
@@ -165,5 +168,122 @@ describe('KanbanView — per-column cap', () => {
     // unrecognized status) is not.
     expect(getByText('+5 more')).toBeTruthy();
     expect(container.querySelectorAll('.kanban-card').length).toBe(25 + 5);
+  });
+
+  it('keeps an already-visible card visible when a different card joins the column ahead of it', async () => {
+    // n1..n25 (25 nodes) start "open" — exactly at the cap, all visible.
+    // n0 starts "closed" (out of the Open bucket), positioned FIRST in
+    // nodeIds. A positional cutoff (`ids.slice(0, 25)`) would, once n0 joins
+    // Open, place n0 first and push the *last* already-visible card (n25)
+    // out — even though n25's own bucket membership never changed. The fix
+    // must keep n25 visible and treat n0 (the actual new arrival) as hidden.
+    const openNodes = makeNodes(25).map((n, i) => ({ ...n, id: `open-${i}` }));
+    const outsider: Node = {
+      id: 'outsider',
+      nodeType: 'widget',
+      content: 'Outsider',
+      createdAt: '2026-01-01T00:00:00Z',
+      modifiedAt: '2026-01-01T00:00:00Z',
+      version: 1,
+      properties: { status: 'unassigned-column-probe' },
+      mentions: []
+    };
+    seed([outsider, ...openNodes]);
+
+    const { container, getByText } = render(KanbanView, {
+      props: {
+        // `outsider` sorts FIRST — its later move into Open must not
+        // displace any of the already-visible open-* cards.
+        nodeIds: [outsider.id, ...openNodes.map((n) => n.id)],
+        schema: schema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    // All 25 "open" cards visible at the cap (Open itself shows no "+more"
+    // yet); "outsider" sits alone, uncapped, in Unassigned.
+    expect(container.querySelectorAll('.kanban-card').length).toBe(25 + 1);
+    expect(container.querySelector('.kanban-show-more')).toBeNull();
+    const lastCardTitle = openNodes[openNodes.length - 1].content;
+    expect(getByText(lastCardTitle)).toBeTruthy();
+
+    // `outsider` moves into Open, sorting ahead of every open-* card.
+    sharedNodeStore.updateNode(
+      outsider.id,
+      { properties: { status: 'open' } },
+      { type: 'viewer', viewerId: 'test' },
+      { skipPersistence: true }
+    );
+    await Promise.resolve();
+
+    // The already-visible last card is still visible — it did not get
+    // pushed out by outsider's insertion ahead of it.
+    expect(getByText(lastCardTitle)).toBeTruthy();
+    // outsider itself — the actual new arrival — is the one hidden behind
+    // the cap control instead.
+    expect(getByText('+1 more')).toBeTruthy();
+    expect(container.querySelectorAll('.kanban-card').length).toBe(25);
+  });
+
+  it('reveals a card moved (via the keyboard select) into an already-oversized column immediately', async () => {
+    const schemaWithTwoColumns: SchemaNode = {
+      id: 'widget',
+      content: 'Widget',
+      createdAt: '2026-01-01T00:00:00Z',
+      modifiedAt: '2026-01-01T00:00:00Z',
+      version: 1,
+      isCore: false,
+      schemaVersion: 1,
+      fields: [
+        {
+          name: 'status',
+          type: 'enum',
+          protection: 'user',
+          indexed: false,
+          coreValues: [
+            { value: 'open', label: 'Open' },
+            { value: 'closed', label: 'Closed' }
+          ],
+          userValues: []
+        }
+      ]
+    };
+    // Open is already over the cap (30 members, 25 shown); mover starts
+    // Closed, alone.
+    const openNodes = makeNodes(30);
+    const mover: Node = {
+      id: 'mover',
+      nodeType: 'widget',
+      content: 'Mover',
+      createdAt: '2026-01-01T00:00:00Z',
+      modifiedAt: '2026-01-01T00:00:00Z',
+      version: 1,
+      properties: { status: 'closed' },
+      mentions: []
+    };
+    seed([...openNodes, mover]);
+
+    const { getByText, getByRole } = render(KanbanView, {
+      props: {
+        nodeIds: [...openNodes.map((n) => n.id), mover.id],
+        schema: schemaWithTwoColumns,
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    expect(getByText('+5 more')).toBeTruthy(); // Open: 30 total, 25 shown
+
+    const moveSelect = getByRole('combobox', {
+      name: 'Move Mover to another column'
+    }) as HTMLSelectElement;
+    await fireEvent.change(moveSelect, { target: { value: 'open' } });
+
+    // The card the user just placed into Open is visible immediately — not
+    // waiting behind a "+6 more" nobody clicked.
+    expect(getByText('Mover')).toBeTruthy();
   });
 });
