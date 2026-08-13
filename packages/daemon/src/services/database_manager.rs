@@ -450,19 +450,26 @@ impl DatabaseManager {
         // and preserves the index needed to restore it in place, rather than
         // at the end, if the save below fails.
         let removed = registry.databases.remove(index);
-        // `take` (rather than reading + cloning `id`) reuses the `DatabaseId`
-        // already owned by the registry instead of cloning the caller's
-        // borrowed one.
-        let previous_default = if registry.default_database.as_ref() == Some(id) {
-            registry.default_database.take()
-        } else {
-            None
-        };
+        // `take_if` clears `default_database` only when it matches `id`,
+        // leaving it untouched otherwise — `was_default` records which case
+        // happened so the rollback below restores conditionally rather than
+        // unconditionally assigning (a previous version of this code always
+        // assigned in the rollback, which wiped an unrelated, untouched
+        // default back to `None` on a failed save of a non-default removal).
+        let was_default = registry
+            .default_database
+            .take_if(|current| *current == *id)
+            .is_some();
         self.persist_or_rollback(registry, |registry| {
             // The write lock is held throughout, so `index` still points at
             // the pre-call slot — insert restores exactly the pre-call state.
             registry.databases.insert(index, removed);
-            registry.default_database = previous_default;
+            // Only restore the default when the apply phase actually cleared
+            // it above — otherwise this would wipe out an unrelated default
+            // that this call never touched.
+            if was_default {
+                registry.default_database = Some(id.clone());
+            }
         })
         .await?;
         // Tear down the database's compute (processor + event watcher) as well as
@@ -505,7 +512,7 @@ impl DatabaseManager {
             .position(|e| &e.id == id)
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
         let previous_name = std::mem::replace(&mut registry.databases[index].name, name);
-        self.persist_or_rollback(registry, move |registry| {
+        self.persist_or_rollback(registry, |registry| {
             // The write lock is held throughout, so `index` still points at
             // the same entry — restore the previous name on a failed save
             // without re-scanning for it.
@@ -535,7 +542,7 @@ impl DatabaseManager {
         let entry = &mut registry.databases[index];
         let previous_schema = std::mem::replace(&mut entry.bound_tenant_schema, schema);
         let previous_collection = std::mem::replace(&mut entry.bound_tenant_collection, collection);
-        self.persist_or_rollback(registry, move |registry| {
+        self.persist_or_rollback(registry, |registry| {
             // The write lock is held throughout, so `index` still points at
             // the same entry — restore the previous binding on a failed save
             // without re-scanning for it.
@@ -1325,6 +1332,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remove_of_a_non_default_entry_rolls_back_without_touching_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+
+        // `first` becomes the default (first entry ever registered); `second`
+        // is not. This is the scenario `remove_rolls_back_when_save_fails`
+        // does not cover — it only removes the entry that IS the default, so
+        // the apply phase there always clears `default_database` and a bug
+        // that instead unconditionally *assigns* `default_database` in the
+        // rollback (rather than restoring it only when the apply phase
+        // touched it) would go unnoticed.
+        let first = mgr
+            .ensure_default_registered("First".into(), dir.path().join("first.db"))
+            .await
+            .unwrap();
+        let second_path = dir.path().join("second.db");
+        std::fs::write(&second_path, b"").unwrap();
+        let second = mgr.register(second_path).await.unwrap();
+        assert_eq!(mgr.list().await.default_database.as_ref(), Some(&first));
+
+        break_registry_persistence(&registry_path).await;
+
+        // Remove the NON-default database. The apply phase never touches
+        // `default_database` at all in this case.
+        mgr.remove(&second.id).await.unwrap_err();
+
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 2, "removed entry must be restored");
+        assert_eq!(
+            snap.default_database.as_ref(),
+            Some(&first),
+            "the default must be untouched by a failed removal of a different, non-default entry"
+        );
+    }
+
+    #[tokio::test]
     async fn remove_of_an_open_database_notifies_exactly_once() {
         let (mgr, dir) = temp_manager().await;
         let entry = mgr
@@ -1571,11 +1617,9 @@ mod tests {
             .unwrap();
         mgr.get_or_open(&default_id).await.unwrap();
 
-        // Break registry persistence by replacing the registry file with a
-        // directory, so create fails at the registration step — after the
-        // database file has already been created.
-        tokio::fs::remove_file(&registry_path).await.unwrap();
-        tokio::fs::create_dir(&registry_path).await.unwrap();
+        // Break registry persistence, so create fails at the registration
+        // step — after the database file has already been created.
+        break_registry_persistence(&registry_path).await;
 
         let fresh_path = dir.path().join("fresh.db");
         mgr.create("Fresh".into(), Some(fresh_path.clone()))
