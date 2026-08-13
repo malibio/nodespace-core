@@ -385,6 +385,8 @@ export class HttpAdapter implements BackendAdapter {
 
   private async handleResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {
+      const fallbackMessage = `HTTP ${response.status}: ${response.statusText}`;
+
       // This try only guards the JSON parse itself — a genuinely malformed
       // (non-JSON) error body takes the SyntaxError branch below. A
       // well-formed body, whatever its content, falls through to error
@@ -394,17 +396,13 @@ export class HttpAdapter implements BackendAdapter {
         errorData = await response.json();
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
-          throw new BackendError(
-            `HTTP ${response.status}: ${response.statusText}`,
-            undefined,
-            response.status
-          );
+          throw new BackendError(fallbackMessage, undefined, response.status);
         }
         throw parseError;
       }
 
       throw new BackendError(
-        errorData?.message || `HTTP ${response.status}: ${response.statusText}`,
+        errorData?.message || fallbackMessage,
         errorData?.code,
         response.status,
         errorData?.conflictData
