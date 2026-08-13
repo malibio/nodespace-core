@@ -804,7 +804,7 @@ impl NodeService {
         // Unified relationship deletion - ALL relationships use the `relationship` table
         // The relationship_type field distinguishes between different relationship types
 
-        // Required-relationship last-edge protection (issue #1918): a schema
+        // Required-relationship last-edge protection: a schema
         // relationship declared `required: true` must always retain at least one
         // edge — deleting its final edge would leave the node violating its own
         // schema. Reject only when the targeted edge actually exists AND it is the
@@ -912,7 +912,8 @@ impl NodeService {
     /// already exist — updating a nonexistent edge is a caller error, surfaced
     /// as `invalid_update`, not a silent no-op. Edits values only: it neither
     /// creates, moves, nor deletes the edge, and never changes its endpoints
-    /// (issue #1918, relationship-viewer editing). Emits `RelationshipUpdated`
+    /// — this is the relationship viewer's in-place edge-attribute edit
+    /// endpoint. Emits `RelationshipUpdated`
     /// so the change syncs like any other edge write.
     pub async fn update_relationship_properties(
         &self,
@@ -1054,7 +1055,7 @@ impl NodeService {
     /// returns the `relationship.properties` JSON for each edge, so callers can
     /// display edge attributes (e.g. a `role`/`assigned_at` carried on an
     /// `assigned_to` edge). Used by the relationship viewer aggregation
-    /// (`rel_ops::get_node_relationships`, issue #1918). Returns `(node,
+    /// (`rel_ops::get_node_relationships`). Returns `(node,
     /// edge_properties)` pairs.
     pub async fn get_related_nodes_with_edges(
         &self,

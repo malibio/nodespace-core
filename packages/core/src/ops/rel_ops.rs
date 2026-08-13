@@ -146,7 +146,7 @@ pub async fn get_related_nodes(
 }
 
 // ============================================================================
-// Relationship viewer aggregation (issue #1918 — read-only LIST)
+// Relationship viewer aggregation (read-only LIST)
 // ============================================================================
 
 /// A single related node on one end of a typed relationship, carrying enough
@@ -248,7 +248,8 @@ async fn collect_related(
 }
 
 /// List a node's schema-declared typed relationships, grouped by name and
-/// covering BOTH directions (read-only; issue #1918 first slice).
+/// covering BOTH directions (read-only — edge creation/edit/deletion live on
+/// `NodeService::create_relationship`/`update_relationship_properties`/`delete_relationship`).
 ///
 /// - **Outbound** groups come from the node's own schema's `relationships`
 ///   (queried with direction `"out"`; the node is the edge source).

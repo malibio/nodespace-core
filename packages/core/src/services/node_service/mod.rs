@@ -4793,7 +4793,7 @@ mod tests {
         assert_eq!(edge.properties["status"], "active");
     }
 
-    /// Relationship viewer aggregation (issue #1918): an outbound relationship
+    /// Relationship viewer aggregation: an outbound relationship
     /// (with edge_fields + edge properties) and its inbound reverse must both
     /// surface, carrying the edge data, from opposite ends of the SAME edge.
     #[tokio::test]

@@ -801,8 +801,8 @@ impl NodeService {
         Ok(())
     }
 
-    /// Batched sibling of [`Self::create_parent_edge`] for the reconnect edge sweep
-    /// (issue #345): attach many genuinely-unparented children under their parents in
+    /// Batched sibling of [`Self::create_parent_edge`] for the sync-apply cold-sweep's
+    /// reconnect path: attach many genuinely-unparented children under their parents in
     /// ONE store transaction, then emit one `RelationshipCreated` per created edge —
     /// exactly as the per-row `create_parent_edge` does. (Relationship events are not
     /// node-keyed, so `begin_batch_emit` does NOT coalesce them; they broadcast

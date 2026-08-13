@@ -694,7 +694,7 @@ impl SqliteStore {
     }
 
     /// Bulk-create `has_child` edges (parent → child) in ONE transaction, for the
-    /// batched reconnect edge sweep (issue #345). Each tuple is `(parent, child,
+    /// sync-apply cold-sweep's batched reconnect path. Each tuple is `(parent, child,
     /// order)` where `order` is the sender's sibling order; `get_children` sorts by
     /// `json_extract(properties, '$.order')` ASC, so a fresh parent's children
     /// reproduce that order exactly.
@@ -1206,7 +1206,7 @@ impl SqliteStore {
     ///
     /// The plain `get_nodes_by_relationship` selects only node columns (`SELECT
     /// n.*`) and drops the edge data on the `relationship` row. The relationship
-    /// viewer (issue #1918) needs the edge attributes — a Task→Person
+    /// viewer needs the edge attributes — a Task→Person
     /// `assigned_to` edge might carry `role`/`assigned_at` — so this also selects
     /// `r.properties`. `n.*` expands to the ten `node` columns (indices 0-9,
     /// matching [`row_to_node`](Self::row_to_node)); the trailing `r.properties`
