@@ -9,7 +9,6 @@
   import VersionBadge from '$lib/components/dev/version-badge.svelte';
   import { initializeSchemaPluginSystem } from '$lib/plugins/schema-plugin-loader';
   import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener';
-  import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { initializeApp } from '$lib/services/app-initialization';
   import { onDaemonReconnect } from '$lib/services/daemon-status';
   import {
@@ -110,29 +109,9 @@
     return unsubscribe;
   });
 
-  // Flush pending saves on window close to prevent data loss
-  onMount(() => {
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      // Check if there are pending writes
-      if (sharedNodeStore.hasPendingWrites()) {
-        // Try to flush pending operations
-        // Note: beforeunload has limited async support, but we try our best
-        event.preventDefault();
-        // returnValue assignment is required for Chrome
-        event.returnValue = '';
-
-        // Flush pending operations synchronously if possible
-        // Note: async operations may not complete in beforeunload, but we try
-        sharedNodeStore.flushAllPending();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  });
+  // Flushing pending saves on window close is handled by
+  // registerShutdownHandlers() in app-initialization.ts, which owns the
+  // single Tauri-aware beforeunload/close-request registration.
 </script>
 
 {#if isInitialized}
