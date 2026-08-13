@@ -390,19 +390,34 @@ impl DatabaseManager {
 
     /// Unregister a database. This only removes the registry entry — it never
     /// deletes the underlying database file. If the removed database was the
-    /// default, the default is cleared.
+    /// default, the default is cleared. If persisting fails, the in-memory
+    /// removal is rolled back (same pattern as [`DatabaseManager::insert_entry`])
+    /// so `list()` never reports a database as gone when it is still on disk.
     pub async fn remove(&self, id: &DatabaseId) -> Result<()> {
         {
             let mut registry = self.registry.write().await;
-            let before = registry.databases.len();
-            registry.databases.retain(|e| &e.id != id);
-            if registry.databases.len() == before {
-                return Err(anyhow!("no database registered with id {id}"));
-            }
-            if registry.default_database.as_ref() == Some(id) {
+            let index = registry
+                .databases
+                .iter()
+                .position(|e| &e.id == id)
+                .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
+            // `Vec::remove` (unlike `retain`) both hands back the removed entry
+            // and preserves the index needed to restore it in place, rather
+            // than at the end, if the save below fails.
+            let removed = registry.databases.remove(index);
+            let was_default = registry.default_database.as_ref() == Some(id);
+            if was_default {
                 registry.default_database = None;
             }
-            registry.save(&self.registry_path).await?;
+            if let Err(e) = registry.save(&self.registry_path).await {
+                // The write lock is held throughout, so `index` still points at
+                // the pre-call slot — insert restores exactly the pre-call state.
+                registry.databases.insert(index, removed);
+                if was_default {
+                    registry.default_database = Some(id.clone());
+                }
+                return Err(e);
+            }
         }
         // Tear down the database's compute (processor + event watcher) as well as
         // its registry entry — unregistering must not leave a detached watcher
@@ -412,18 +427,27 @@ impl DatabaseManager {
     }
 
     /// Mark a registered database as the default served for header-less
-    /// requests.
+    /// requests. If persisting fails, the previous default is restored (same
+    /// pattern as [`DatabaseManager::insert_entry`]).
     pub async fn set_default(&self, id: &DatabaseId) -> Result<()> {
         let mut registry = self.registry.write().await;
         if registry.find(id).is_none() {
             return Err(anyhow!("no database registered with id {id}"));
         }
+        let previous_default = registry.default_database.clone();
         registry.default_database = Some(id.clone());
-        registry.save(&self.registry_path).await
+        if let Err(e) = registry.save(&self.registry_path).await {
+            // The write lock is held throughout, so restoring the previous
+            // value here exactly undoes the mutation above.
+            registry.default_database = previous_default;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Rename the human-facing label of a registered database. Does not touch
-    /// the underlying file.
+    /// the underlying file. If persisting fails, the previous name is restored
+    /// (same pattern as [`DatabaseManager::insert_entry`]).
     pub async fn rename(&self, id: &DatabaseId, name: String) -> Result<()> {
         let mut registry = self.registry.write().await;
         let entry = registry
@@ -431,8 +455,15 @@ impl DatabaseManager {
             .iter_mut()
             .find(|e| &e.id == id)
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-        entry.name = name;
+        let previous_name = std::mem::replace(&mut entry.name, name);
         let saved = registry.save(&self.registry_path).await;
+        if saved.is_err() {
+            // The write lock is held throughout, so the entry is still exactly
+            // where we left it — restore the previous name on a failed save.
+            if let Some(entry) = registry.databases.iter_mut().find(|e| &e.id == id) {
+                entry.name = previous_name;
+            }
+        }
         drop(registry);
         if saved.is_ok() {
             self.notify_changed();
@@ -444,7 +475,8 @@ impl DatabaseManager {
     /// per-database cloud sync) so the binding can be shown before the database
     /// is opened. Pass `None` to clear it on unbind. The authoritative record is
     /// the database's DatabaseSettingsNode; this registry field is a display
-    /// mirror kept in step with it.
+    /// mirror kept in step with it. If persisting fails, the previous binding is
+    /// restored (same pattern as [`DatabaseManager::insert_entry`]).
     pub async fn set_bound_tenant(
         &self,
         id: &DatabaseId,
@@ -457,9 +489,18 @@ impl DatabaseManager {
             .iter_mut()
             .find(|e| &e.id == id)
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-        entry.bound_tenant_schema = schema;
-        entry.bound_tenant_collection = collection;
-        registry.save(&self.registry_path).await
+        let previous_schema = std::mem::replace(&mut entry.bound_tenant_schema, schema);
+        let previous_collection = std::mem::replace(&mut entry.bound_tenant_collection, collection);
+        if let Err(e) = registry.save(&self.registry_path).await {
+            // The write lock is held throughout, so the entry is still exactly
+            // where we left it — restore the previous binding on a failed save.
+            if let Some(entry) = registry.databases.iter_mut().find(|e| &e.id == id) {
+                entry.bound_tenant_schema = previous_schema;
+                entry.bound_tenant_collection = previous_collection;
+            }
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Ensure a default database is registered, returning its id.
@@ -1012,6 +1053,162 @@ mod tests {
         let snap = mgr.list().await;
         assert_eq!(snap.databases[0].entry.bound_tenant_schema, None);
         assert_eq!(snap.databases[0].entry.bound_tenant_collection, None);
+    }
+
+    /// Replace an already-saved registry file with a directory, so any
+    /// subsequent `Registry::save` fails at the `tokio::fs::write` step. Mirrors
+    /// the technique `failed_create_rolls_back_and_leaves_the_daemon_serviceable`
+    /// uses to break persistence without touching in-memory state.
+    async fn break_registry_persistence(registry_path: &Path) {
+        tokio::fs::remove_file(registry_path).await.unwrap();
+        tokio::fs::create_dir(registry_path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_rolls_back_when_save_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+
+        // Two entries, so removing the first also exercises index-preserving
+        // restoration rather than a trivial single-element case.
+        let first = mgr
+            .ensure_default_registered("First".into(), dir.path().join("first.db"))
+            .await
+            .unwrap();
+        let second_path = dir.path().join("second.db");
+        std::fs::write(&second_path, b"").unwrap();
+        let second = mgr.register(second_path).await.unwrap();
+
+        break_registry_persistence(&registry_path).await;
+
+        mgr.remove(&first).await.unwrap_err();
+
+        // Pre-call state fully restored: both entries present, in their
+        // original order (not the removed one pushed to the end), and the
+        // default — cleared in memory as part of the same mutation — back in
+        // place.
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 2, "removed entry must be restored");
+        assert_eq!(
+            snap.databases[0].entry.id, first,
+            "restored entry must be back at its original index"
+        );
+        assert_eq!(snap.databases[1].entry.id, second.id);
+        assert_eq!(
+            snap.default_database.as_ref(),
+            Some(&first),
+            "default cleared in memory must be restored on a failed save"
+        );
+
+        // With persistence restored, the same removal succeeds cleanly.
+        tokio::fs::remove_dir(&registry_path).await.unwrap();
+        mgr.remove(&first).await.unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.databases[0].entry.id, second.id);
+    }
+
+    #[tokio::test]
+    async fn rename_rolls_back_when_save_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+        let id = mgr
+            .ensure_default_registered("Original".into(), dir.path().join("db"))
+            .await
+            .unwrap();
+
+        break_registry_persistence(&registry_path).await;
+
+        mgr.rename(&id, "Renamed".into()).await.unwrap_err();
+
+        // list() must still report the pre-call name — a rename that only
+        // "succeeded" in memory would silently revert on the next restart.
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases[0].entry.name, "Original");
+
+        // With persistence restored, the same rename succeeds cleanly.
+        tokio::fs::remove_dir(&registry_path).await.unwrap();
+        mgr.rename(&id, "Renamed".into()).await.unwrap();
+        assert_eq!(mgr.list().await.databases[0].entry.name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn set_default_rolls_back_when_save_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+        let first = mgr
+            .ensure_default_registered("First".into(), dir.path().join("first.db"))
+            .await
+            .unwrap();
+        let second_path = dir.path().join("second.db");
+        std::fs::write(&second_path, b"").unwrap();
+        let second = mgr.register(second_path).await.unwrap();
+
+        break_registry_persistence(&registry_path).await;
+
+        mgr.set_default(&second.id).await.unwrap_err();
+
+        // The previous default must still be reported — not the one that only
+        // got as far as being written into memory before the save failed.
+        assert_eq!(mgr.list().await.default_database.as_ref(), Some(&first));
+
+        // With persistence restored, the same call succeeds cleanly.
+        tokio::fs::remove_dir(&registry_path).await.unwrap();
+        mgr.set_default(&second.id).await.unwrap();
+        assert_eq!(mgr.list().await.default_database.as_ref(), Some(&second.id));
+    }
+
+    #[tokio::test]
+    async fn set_bound_tenant_rolls_back_when_save_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
+            .await
+            .unwrap();
+        let id = mgr
+            .ensure_default_registered("Default".into(), dir.path().join("db"))
+            .await
+            .unwrap();
+        mgr.set_bound_tenant(&id, Some("tenant_a".into()), Some("c0".into()))
+            .await
+            .unwrap();
+
+        break_registry_persistence(&registry_path).await;
+
+        mgr.set_bound_tenant(&id, Some("tenant_b".into()), Some("c1".into()))
+            .await
+            .unwrap_err();
+
+        // The previous binding must still be reported after a failed save.
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_schema.as_deref(),
+            Some("tenant_a")
+        );
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_collection.as_deref(),
+            Some("c0")
+        );
+
+        // With persistence restored, the same call succeeds cleanly.
+        tokio::fs::remove_dir(&registry_path).await.unwrap();
+        mgr.set_bound_tenant(&id, Some("tenant_b".into()), Some("c1".into()))
+            .await
+            .unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases[0].entry.bound_tenant_schema.as_deref(),
+            Some("tenant_b")
+        );
     }
 
     #[tokio::test]
