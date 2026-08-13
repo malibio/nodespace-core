@@ -2,8 +2,9 @@
  * Pure helpers for the Kanban view (query-node-viewer).
  *
  * Kept DOM-free and side-effect-free so the grouping / eligibility / write-shape
- * rules can be unit-tested directly, following the project convention of testing
- * extracted logic rather than rendering Svelte components.
+ * / per-column reveal-count rules can be unit-tested directly, following the
+ * project convention of testing extracted logic rather than rendering Svelte
+ * components.
  */
 
 import type { Node } from '$lib/types';
@@ -125,4 +126,15 @@ export function resolveActiveGroupBy(
 ): string | null {
   if (stored && eligible.some((f) => f.name === stored)) return stored;
   return eligible[0]?.name ?? null;
+}
+
+/**
+ * How many cards a column should reveal after a "+N more" click: grow by one
+ * `batch`, clamped to the column's actual card count. Used to bound Kanban's
+ * per-column render — unlike List/Table's flip-page pagination, a column
+ * keeps everything already revealed and only grows, so a card never
+ * disappears out from under an in-progress drag the way a page change would.
+ */
+export function nextVisibleCount(current: number, batch: number, total: number): number {
+  return Math.min(current + batch, total);
 }

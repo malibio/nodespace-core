@@ -1529,6 +1529,27 @@ export class SharedNodeStore {
                     message: CONFLICT_MESSAGE['version-mismatch'],
                     conflictType: 'version-mismatch'
                   });
+                } else {
+                  // Non-OCC failure (network error, validation error, daemon
+                  // offline, etc.): the optimistic write above never landed
+                  // server-side. `rollbackUpdate()` only rewinds bookkeeping
+                  // (metrics, the version counter, the pending-update list) —
+                  // `NodeUpdate` carries no previous-value snapshot, so it
+                  // cannot restore the field values `updateNode` already
+                  // applied to `this.nodes`. Left alone, the local node stays
+                  // permanently diverged from the persisted truth (e.g. a
+                  // Kanban card stuck in the column it was dragged to even
+                  // though the move was never saved). Resync from the server
+                  // — the same authoritative-refetch this function already
+                  // uses for the OCC fallback above — corrects it back to
+                  // whatever is actually persisted, which (since this write
+                  // never landed) is the pre-optimistic state.
+                  this.resyncNodeFromServer(nodeId).catch((resyncError) => {
+                    log.error(
+                      `Failed to resync after write failure for node ${nodeId}:`,
+                      resyncError
+                    );
+                  });
                 }
 
                 throw error; // Re-throw to mark operation as failed in coordinator

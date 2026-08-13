@@ -14,7 +14,8 @@ import {
   readGroupValue,
   resolveFieldWrite,
   groupByColumn,
-  resolveActiveGroupBy
+  resolveActiveGroupBy,
+  nextVisibleCount
 } from '$lib/components/query/kanban-grouping';
 
 function field(name: string, type: string, extra: Partial<SchemaField> = {}): SchemaField {
@@ -147,5 +148,23 @@ describe('resolveActiveGroupBy', () => {
 
   it('returns null when there are no eligible fields', () => {
     expect(resolveActiveGroupBy([], 'status')).toBeNull();
+  });
+});
+
+describe('nextVisibleCount', () => {
+  it('grows by one batch', () => {
+    expect(nextVisibleCount(25, 25, 100)).toBe(50);
+  });
+
+  it('clamps to the column total when the last batch would overshoot', () => {
+    expect(nextVisibleCount(75, 25, 90)).toBe(90);
+  });
+
+  it('is a no-op once everything is already visible', () => {
+    expect(nextVisibleCount(90, 25, 90)).toBe(90);
+  });
+
+  it('handles a column smaller than one batch', () => {
+    expect(nextVisibleCount(0, 25, 3)).toBe(3);
   });
 });

@@ -2133,6 +2133,64 @@ describe('SharedNodeStore', () => {
       });
     });
 
+    describe('write-failure recovery (non-OCC)', () => {
+      // `rollbackUpdate` (above) only rewinds bookkeeping — it has no snapshot
+      // of the node's pre-update field values to restore. A rejected write must
+      // still leave the store consistent with the server, or every optimistic
+      // consumer (Kanban drag-to-move, any property edit, …) is left silently
+      // stuck on a value that was never actually saved. `updateNode`'s failure
+      // path covers this by resyncing from the server on any non-OCC rejection.
+      it('resyncs the node back to server state when a non-OCC persist rejects', async () => {
+        const testNode = createTestNode('write-fail-resync-1', 'Original content');
+        // `databaseSource` marks the node as already persisted, so the
+        // subsequent edit takes the real update-and-persist path instead of
+        // the create path.
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+          new Error('network error')
+        );
+        const getNodeSpy = vi
+          .spyOn(backendAdapter, 'getNode')
+          .mockResolvedValueOnce({ ...testNode, content: 'Original content', version: 1 });
+
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource);
+
+        // The optimistic apply is synchronous — it lands before persistence
+        // even starts.
+        expect(store.getNode(testNode.id)?.content).toBe('Optimistic edit');
+
+        // Once the rejected write is caught, the store resyncs from the
+        // (mocked) server and the node reverts to what is actually persisted.
+        await vi.waitFor(() => {
+          expect(store.getNode(testNode.id)?.content).toBe('Original content');
+        });
+        expect(getNodeSpy).toHaveBeenCalledWith(testNode.id);
+      });
+
+      it('surfaces a write-failure notification alongside the resync', async () => {
+        const testNode = createTestNode('write-fail-resync-2', 'Original content');
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(new Error('offline'));
+        vi.spyOn(backendAdapter, 'getNode').mockResolvedValueOnce({
+          ...testNode,
+          content: 'Original content',
+          version: 1
+        });
+
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource);
+
+        await vi.waitFor(() => {
+          expect(
+            conflictNotifications.notifications.some(
+              (n) => n.nodeId === testNode.id && n.conflictType === 'write-failure'
+            )
+          ).toBe(true);
+        });
+      });
+    });
+
     describe('markUpdatePersisted', () => {
       it('should mark update as persisted', () => {
         const testNode = createTestNode('persist-test-1');

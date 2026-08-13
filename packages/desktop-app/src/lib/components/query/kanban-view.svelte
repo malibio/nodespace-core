@@ -8,9 +8,21 @@
   another column — or choosing a column from the card's keyboard-accessible
   "Move to" control — writes that column's value onto the node. Nodes with no
   value land in an "Unassigned" column.
+
+  Each column renders at most a capped batch of cards (matching List/Table's
+  PAGE_SIZE) rather than every matching node — a column with thousands of
+  cards would otherwise render thousands of card-plus-full-options-<select>
+  pairs regardless of scroll position. A "+N more" control grows that column's
+  visible count by one more batch; it only ever adds, never removes, so a card
+  already on screen can't vanish out from under an in-progress drag. True
+  virtualization (windowing) was considered and rejected here: this view's
+  drag source is the rendered DOM node itself (native HTML5 drag-and-drop),
+  and a windowed list unmounts off-screen rows — a card scrolled out of the
+  window mid-drag would be destroyed out from under its own drag operation.
 -->
 
 <script lang="ts">
+  import { SvelteMap } from 'svelte/reactivity';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { createLogger } from '$lib/utils/logger';
   import type { Node } from '$lib/types';
@@ -22,10 +34,15 @@
     readGroupValue,
     resolveFieldWrite,
     groupByColumn,
-    resolveActiveGroupBy
+    resolveActiveGroupBy,
+    nextVisibleCount
   } from '$lib/components/query/kanban-grouping';
 
   const log = createLogger('KanbanView');
+
+  // Matches List/Table's PAGE_SIZE — the number of cards a column shows
+  // initially and grows by per "+N more" click.
+  const CARDS_PER_BATCH = 25;
 
   let {
     nodeIds,
@@ -77,6 +94,27 @@
       .filter((it): it is { id: string; value: string | null } => it !== null);
     return groupByColumn(items, columns.map((c) => c.value));
   });
+
+  // How many cards are currently revealed per column — see CARDS_PER_BATCH
+  // above. Keyed by column value; a column not yet in the map shows the first
+  // batch. Reset when the grouping field itself changes (a different field's
+  // column values are a different vocabulary — stale counts keyed by a value
+  // string that happens to collide, e.g. two fields both having "open", would
+  // otherwise carry over a meaningless reveal count).
+  let visibleCounts = new SvelteMap<string, number>();
+  $effect(() => {
+    const _activeGroupByDep = activeGroupBy;
+    void _activeGroupByDep;
+    visibleCounts.clear();
+  });
+
+  function visibleCountFor(columnValue: string): number {
+    return visibleCounts.get(columnValue) ?? CARDS_PER_BATCH;
+  }
+
+  function showMore(columnValue: string, total: number): void {
+    visibleCounts.set(columnValue, nextVisibleCount(visibleCountFor(columnValue), CARDS_PER_BATCH, total));
+  }
 
   function fieldLabel(f: SchemaField): string {
     if (f.description) return f.description;
@@ -170,6 +208,9 @@
     <div class="kanban-board">
       {#each displayColumns as col (col.value)}
         {@const ids = buckets.get(col.value) ?? []}
+        {@const visibleCount = visibleCountFor(col.value)}
+        {@const visibleIds = ids.slice(0, visibleCount)}
+        {@const hiddenCount = ids.length - visibleIds.length}
         <section
           class="kanban-column"
           class:drag-over={dragOverColumn === col.value}
@@ -184,7 +225,7 @@
             <span class="kanban-column-count">{ids.length}</span>
           </header>
           <div class="kanban-cards">
-            {#each ids as id (id)}
+            {#each visibleIds as id (id)}
               {@const node = sharedNodeStore.getNode(id)}
               {#if node}
                 {@const title = titleOf(node)}
@@ -211,6 +252,12 @@
                 </article>
               {/if}
             {/each}
+            {#if hiddenCount > 0}
+              <button
+                class="kanban-show-more"
+                onclick={() => showMore(col.value, ids.length)}
+              >+{hiddenCount} more</button>
+            {/if}
           </div>
         </section>
       {/each}
@@ -348,6 +395,22 @@
     border-radius: 0.25rem;
     background: hsl(var(--background));
     color: hsl(var(--muted-foreground));
+  }
+
+  .kanban-show-more {
+    text-align: left;
+    background: transparent;
+    border: 1px dashed hsl(var(--border));
+    border-radius: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+  }
+
+  .kanban-show-more:hover {
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary));
   }
 
   .kanban-empty {
