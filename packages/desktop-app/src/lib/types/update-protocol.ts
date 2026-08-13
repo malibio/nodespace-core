@@ -178,4 +178,12 @@ export interface UpdateOptions {
    * particular call changed, rather than any store-wide mechanism).
    */
   onPersistError?: (_error: Error) => void;
+  /**
+   * Called when this specific write's persistence succeeds. Opt-in,
+   * symmetric with `onPersistError` — for a caller that needs to know its
+   * own write settled (e.g. to stop tracking a since-superseded revert
+   * target once a later write in a chain is confirmed), not for general
+   * "did it save" UI, which reads the store's resulting state instead.
+   */
+  onPersistSuccess?: () => void;
 }

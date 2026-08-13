@@ -36,9 +36,26 @@ function toCamelCase(name: string): string {
  * complete column set and the display labels. Non-enum fields have unbounded
  * value sets, so columns could only be inferred from values that happen to
  * exist and dragging could not offer a valid target set.
+ *
+ * Also excludes an enum field if any of its values is literally `UNASSIGNED`
+ * (`"__unassigned__"`) — the internal sentinel `groupByColumn` below uses for
+ * the "no value" bucket. Nothing stops a schema author from choosing that
+ * exact string as a real enum value, but if one did, that value and every
+ * genuinely-unset node would collide into the same bucket (indistinguishable,
+ * and unreachable by name — the display column is always labeled
+ * "Unassigned", never that value's own label) and `displayColumns` would carry
+ * two entries with the same key. Rather than a bucketing scheme that has to
+ * reconcile that collision, the simpler and safer rule is: a field that could
+ * produce it isn't offered as a Kanban grouping choice at all — this field's
+ * other values are still visible via List/Table, just not this board.
  */
 export function eligibleGroupByFields(schema: SchemaNode | null): SchemaField[] {
-  return (schema?.fields ?? []).filter((f) => f.type === 'enum');
+  return (schema?.fields ?? []).filter(
+    (f) =>
+      f.type === 'enum' &&
+      !(f.coreValues ?? []).some((v) => v.value === UNASSIGNED) &&
+      !(f.userValues ?? []).some((v) => v.value === UNASSIGNED)
+  );
 }
 
 /**
@@ -56,12 +73,29 @@ export function enumColumns(field: SchemaField | undefined | null): KanbanColumn
  * resolution order: camelCase top-level (typed core fields) → snake_case
  * top-level → `properties[field]` (user-defined schema fields). Returns `null`
  * for unset/empty values.
+ *
+ * Precedence here must exactly mirror `resolveFieldWrite`'s below — both
+ * gate the top-level branches on the field NOT also being present in
+ * `properties`, not just on the top-level slot being defined. A user-defined
+ * type is free to use a bare field name that shadows a core property (e.g.
+ * "status" — CLAUDE.md documents this as discouraged but not forbidden); for
+ * such a node, an unconditional `rec[camel] ?? …` would read a stale/unset
+ * top-level slot while every write still lands in `properties[field]` (the
+ * slot `resolveFieldWrite` actually targets, since `field in props` there),
+ * so the board would never reflect its own writes — reads and writes must
+ * agree on which slot is authoritative for a given node, not just default to
+ * the same *kind* of slot independently.
  */
 export function readGroupValue(node: Node, field: string): string | null {
   const rec = node as unknown as Record<string, unknown>;
   const camel = toCamelCase(field);
-  const props = node.properties as Record<string, unknown> | undefined;
-  const raw = rec[camel] ?? rec[field] ?? props?.[field];
+  const props = (node.properties ?? {}) as Record<string, unknown>;
+  const raw =
+    rec[camel] !== undefined && !(camel in props)
+      ? rec[camel]
+      : rec[field] !== undefined && !(field in props)
+        ? rec[field]
+        : props[field];
   if (raw === null || raw === undefined || raw === '') return null;
   return String(raw);
 }

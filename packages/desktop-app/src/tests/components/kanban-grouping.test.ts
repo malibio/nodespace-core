@@ -53,6 +53,23 @@ describe('eligibleGroupByFields', () => {
     expect(eligibleGroupByFields(null)).toEqual([]);
     expect(eligibleGroupByFields({ fields: [field('name', 'string')] } as SchemaNode)).toEqual([]);
   });
+
+  it('excludes an enum field whose values include the UNASSIGNED sentinel', () => {
+    // Nothing in the schema system forbids an enum value literally named
+    // "__unassigned__" — groupByColumn's bucketing can't tell that value
+    // apart from a genuinely-unset node if it were allowed through, so the
+    // field itself is excluded rather than ever reaching that bucketing.
+    const collidingCore = field('stage', 'enum', {
+      coreValues: [{ value: UNASSIGNED, label: 'Somehow Unassigned' }]
+    });
+    const collidingUser = field('phase', 'enum', {
+      userValues: [{ value: UNASSIGNED, label: 'Also Unassigned' }]
+    });
+    const schema = {
+      fields: [statusField, collidingCore, collidingUser]
+    } as SchemaNode;
+    expect(eligibleGroupByFields(schema).map((f) => f.name)).toEqual(['status']);
+  });
 });
 
 describe('enumColumns', () => {
@@ -87,6 +104,25 @@ describe('readGroupValue', () => {
     expect(readGroupValue(node('n1', { properties: {} }), 'status')).toBeNull();
     expect(readGroupValue(node('n1', { properties: { status: null } }), 'status')).toBeNull();
     expect(readGroupValue(node('n1', { properties: { status: '' } }), 'status')).toBeNull();
+  });
+
+  it('prefers properties over a same-named top-level field, mirroring resolveFieldWrite (shadowed core property name)', () => {
+    // A user-defined type is allowed a bare field name that shadows a core
+    // property (CLAUDE.md: discouraged, not forbidden). resolveFieldWrite
+    // already treats `field in props` as authoritative over a same-named
+    // top-level slot when deciding where to WRITE — this asserts the READ
+    // side agrees, so the board reflects its own writes instead of reading a
+    // stale/unrelated top-level value forever.
+    const n = node('n1', { status: 'stale-top-level', properties: { status: 'current' } });
+    expect(readGroupValue(n, 'status')).toBe('current');
+    expect(resolveFieldWrite(n, 'status', 'next')).toEqual({
+      properties: { status: 'next' }
+    });
+  });
+
+  it('still reads a genuine typed top-level field when properties has no same-named key', () => {
+    const n = node('n1', { stage: 'lead', properties: { note: 'hi' } });
+    expect(readGroupValue(n, 'stage')).toBe('lead');
   });
 });
 

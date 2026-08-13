@@ -1221,6 +1221,7 @@ export class SharedNodeStore {
           // `options` itself doesn't change, but naming it here keeps it next
           // to the rest of what this closure reads from the outer scope.
           const onPersistError = options.onPersistError;
+          const onPersistSuccess = options.onPersistSuccess;
           const handle = PersistenceCoordinator.getInstance().persist(
             nodeId,
             async () => {
@@ -1450,6 +1451,7 @@ export class SharedNodeStore {
 
                 // Mark update as persisted
                 this.markUpdatePersisted(nodeId, update);
+                onPersistSuccess?.();
               } catch (dbError) {
                 const error = dbError instanceof Error ? dbError : new Error(String(dbError));
 
@@ -2841,7 +2843,7 @@ export class SharedNodeStore {
    *
    * Future enhancement: Implement conflict merge UI
    */
-  async resyncNodeFromServer(nodeId: string): Promise<void> {
+  async resyncNodeFromServer(nodeId: string, _isQueuedFollowUp = false): Promise<void> {
     // Idempotency guard: prevent concurrent resync operations on same node.
     // A second caller while one is already in flight doesn't get dropped
     // outright, though — it queues exactly one follow-up (single-slot,
@@ -2863,11 +2865,16 @@ export class SharedNodeStore {
     try {
       // ADR-053: capture the database generation before the daemon read.
       const epoch = this.databaseEpoch;
-      // Nodes are always replaced wholesale in this store, never mutated in
-      // place (see setNode's comment on why) — so an identity change here
-      // means some OTHER write landed for this node while our own fetch was
-      // in flight. Captured before the fetch so it can be compared after.
+      // Snapshot by VALUE, not by reference: several other write-success
+      // paths in this file (e.g. the `Object.assign(localNode, ...)` +
+      // `nodesSet(nodeId, localNode)` pattern used to apply a confirmed
+      // backend response) mutate the existing node object in place and then
+      // re-set the *same* reference — `this.nodes.get(nodeId)` afterward is
+      // `===` its pre-mutation self, so a reference check here would miss
+      // exactly the case it exists to catch. Serializing sidesteps that
+      // entirely: it only cares whether the data changed, never how.
       const nodeBeforeFetch = this.nodes.get(nodeId);
+      const snapshotBeforeFetch = nodeBeforeFetch ? JSON.stringify(nodeBeforeFetch) : undefined;
       const serverNode = await backendAdapter.getNode(nodeId);
 
       // The active database switched while this resync was in flight — the
@@ -2883,7 +2890,8 @@ export class SharedNodeStore {
         // to persist successfully moments later, which this resync has no
         // way to know. Bail and let that write's own success/failure path
         // (or its own resync, if it also fails) be the one to reconcile.
-        if (this.nodes.get(nodeId) !== nodeBeforeFetch) {
+        const currentSnapshot = JSON.stringify(this.nodes.get(nodeId));
+        if (currentSnapshot !== snapshotBeforeFetch) {
           log.debug(
             `resyncNodeFromServer: local node ${nodeId} changed while fetching — skipping to avoid clobbering a newer local write`
           );
@@ -2898,31 +2906,33 @@ export class SharedNodeStore {
         // actively-edited content with this now-stale server snapshot —
         // exactly the clobber `setNode()` was built to prevent, just reached
         // through a different write path.
-        // Deliberately NOT `PersistenceCoordinator.hasPending(nodeId)` here,
-        // unlike `setNode()`'s use of the same guard. `hasPending()` is OR'd
-        // across pending/executing/queued, and there is only ever one
-        // executing slot per node — which the write whose *failure* is what
-        // got us here still occupies for the rest of its own microtask
-        // (its `finally` hasn't cleared `executingOperations` yet when this
-        // runs, since we're called from inside that same operation's catch
-        // handler). Checking `hasPending` here would therefore almost always
-        // read this failing write's own not-yet-cleared bookkeeping as "a
-        // pending edit exists" and skip the resync outright — self-referential,
-        // racy (depends on exact microtask ordering / mocked-vs-real network
-        // timing rather than anything meaningful), and it would defeat this
-        // recovery path for its single most common case: an isolated failure
-        // with no concurrent edit at all. `isFocused` has no such
-        // self-reference (it's a plain read of `focusManager`, set by real UI
-        // focus, never by this write path) and already covers the scenario
-        // this guard exists for — the user actively typing when a save fails.
-        // (nodeBeforeFetch is still the current node here — the identity
-        // check above already confirmed nothing replaced it during the fetch.)
-        const isFocused = focusManager.editingNodeId === nodeId;
+        // `hasPending` is deliberately NOT `PersistenceCoordinator
+        // .hasPending(nodeId)` when this is the DIRECT call from inside a
+        // failing write's own catch handler (`_isQueuedFollowUp` false):
+        // `hasPending()` is OR'd across pending/executing/queued, and there
+        // is only one executing slot per node — which the write whose
+        // *failure* is what got us here still occupies for the rest of its
+        // own microtask (its `finally` hasn't cleared `executingOperations`
+        // yet when this runs). Checking it there would almost always read
+        // that failing write's own not-yet-cleared bookkeeping as "a pending
+        // edit exists" and skip the resync outright — self-referential,
+        // racy, and it would defeat this recovery path for its single most
+        // common case. For the QUEUED follow-up, though, that self-reference
+        // doesn't apply — it fires from resyncNodeFromServer's own `finally`,
+        // strictly after the direct call's fetch (and so also after the
+        // triggering write's `executingOperations` entry) has settled, so a
+        // real `hasPending` reading here reflects a genuinely different,
+        // still-in-flight write, not this method's own residue — worth
+        // protecting for real.
+        const isFocused = focusManager.isNodeEditing(nodeId);
+        const hasPending = _isQueuedFollowUp
+          ? PersistenceCoordinator.getInstance().hasPending(nodeId)
+          : false;
         const decision = decideRemoteUpdate(
           serverNode,
           nodeBeforeFetch,
           { type: 'database', reason: 'occ-resync' },
-          { isFocused, hasPending: false }
+          { isFocused, hasPending }
         );
         if (!decision.apply) {
           // Still mark as persisted, same as `setNode()`'s equivalent skip
@@ -2935,8 +2945,28 @@ export class SharedNodeStore {
           // self-correct — with nothing else positioned to fix it.
           this.persistedNodeIds.add(nodeId);
           log.debug(
-            `resyncNodeFromServer: skipping clobber of actively-edited node ${nodeId} (focused=${isFocused})`
+            `resyncNodeFromServer: skipping clobber of actively-edited node ${nodeId} (focused=${isFocused}, pending=${hasPending})`
           );
+          // Mirrors `setNode()`'s identical-shaped guard: a skip caused by a
+          // genuinely newer incoming version is a real foreign-write signal
+          // and must not be silent. Deduped per node so a caller that
+          // already raised its own conflict notification for this same
+          // event (every current OCC call site does, unconditionally, right
+          // after invoking this method) doesn't produce a second toast — but
+          // the queued follow-up, which has no such external caller, still
+          // gets one.
+          if (decision.notifyConflict) {
+            const alreadyFlagged = conflictNotifications.notifications.some(
+              (n) => n.nodeId === nodeId && n.conflictType === 'version-mismatch'
+            );
+            if (!alreadyFlagged) {
+              conflictNotifications.add({
+                nodeId,
+                message: CONFLICT_MESSAGE['version-mismatch'],
+                conflictType: 'version-mismatch'
+              });
+            }
+          }
           return;
         }
 
@@ -2976,7 +3006,7 @@ export class SharedNodeStore {
       // its correction isn't dropped. Fire-and-forget: this method's own
       // caller is only waiting on THIS resync, not a chain of them.
       if (this.resyncQueued.delete(nodeId)) {
-        void this.resyncNodeFromServer(nodeId).catch((followUpError) => {
+        void this.resyncNodeFromServer(nodeId, true).catch((followUpError) => {
           log.error(`Follow-up resync failed for node ${nodeId}:`, followUpError);
         });
       }

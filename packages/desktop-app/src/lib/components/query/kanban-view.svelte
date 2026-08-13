@@ -101,18 +101,26 @@
   });
 
   // The set of node ids currently revealed per column — see CARDS_PER_BATCH
-  // above. Keyed by column value. Seeded with the first batch (by current
-  // bucket order) whenever the grouping field changes — a different field's
+  // above. Keyed by column value. Reseeded with the first batch (by current
+  // bucket order) whenever the grouping field changes (a different field's
   // column values are a different vocabulary, so both the columns themselves
-  // and any prior reveal state keyed by value string (e.g. two fields both
-  // having "open") must reset together. `buckets` is read `untrack`-ed here
-  // deliberately: seeding must run once per grouping choice, not on every
-  // bucket recompute (a card move recomputes buckets on every drag) — the
-  // whole point of tracking ids instead of a count is that routine bucket
-  // churn must NOT reseed/reshuffle what's already been revealed.
+  // and any prior reveal state keyed by value string — e.g. two fields both
+  // having "open" — must reset together) OR whenever `nodeIds` itself
+  // changes (the query re-executed against a disjoint result set — reveal
+  // state keyed to the OLD set's ids would otherwise reveal nothing for an
+  // over-cap column of all-new ids, behind a stale "+N more" count).
+  // `buckets` is read `untrack`-ed here deliberately: seeding must run once
+  // per grouping choice / result set, not on every bucket recompute (a card
+  // move recomputes buckets on every drag) — the whole point of tracking ids
+  // instead of a count is that routine bucket churn from moves within the
+  // SAME result set must NOT reseed/reshuffle what's already been revealed.
   let revealedIds = new SvelteMap<string, Set<string>>();
   $effect(() => {
     const cols = displayColumns;
+    // Tracked dependency: reseed whenever the result set itself changes,
+    // even though buckets (derived from it) is read untracked below.
+    const _nodeIdsDep = nodeIds;
+    void _nodeIdsDep;
     const currentBuckets = untrack(() => buckets);
     revealedIds.clear();
     for (const col of cols) {
@@ -189,6 +197,22 @@
     onGroupByChange(name);
   }
 
+  // The value a node's group-by field held before the start of a *chain* of
+  // still-unsettled moves — not necessarily what the most recent move in
+  // that chain itself read, which can be an earlier move's own optimistic
+  // (and, if this one also fails, equally unconfirmed) value. Without this,
+  // two rapid moves of the same card that BOTH fail would revert to the
+  // first move's target instead of the last confirmed value: move 1 (A→B)
+  // fails and reverts correctly to A, but move 2 (queued behind it, reading
+  // B before move 1's failure was known) fails too and — reverting to
+  // *its own* `from` of "B" — would stomp move 1's already-correct revert
+  // back to a value ("B") that was never actually persisted by anyone.
+  // Chained through `onPersistSuccess`/`onPersistError`: the origin is set
+  // once per chain (on the first move) and cleared once the chain resolves
+  // either way, so a later move's revert always targets the true starting
+  // point instead of an intermediate.
+  let chainOrigin = new Map<string, string | null>();
+
   /** Move a card into the column identified by `toColumn` (UNASSIGNED clears it). */
   function moveCard(id: string, toColumn: string): void {
     const node = sharedNodeStore.getNode(id);
@@ -202,6 +226,7 @@
     const from = readGroupValue(node, field);
     const target = toColumn === UNASSIGNED ? null : toColumn;
     if (from === target) return; // dropping into its own column is a no-op — no write
+    if (!chainOrigin.has(id)) chainOrigin.set(id, from);
     const changes = resolveFieldWrite(node, field, target ?? '');
     log.debug('KanbanView: moving card', { id, field, toColumn });
     sharedNodeStore.updateNode(
@@ -211,25 +236,37 @@
       {
         // Optimistic store write: the card moves as soon as the value
         // changes. If the persisted write is rejected, revert just this
-        // field back to what it read before the move — a correction scoped
-        // to this one write, not a store-wide mechanism (an earlier version
-        // routed this through a general server-resync path; review surfaced
-        // real races in using that store-wide mechanism for an arbitrary
-        // write failure — see onPersistError's doc comment in
+        // field back to the chain's origin value — a correction scoped
+        // to this node's field, not a store-wide mechanism (an earlier
+        // version routed this through a general server-resync path; review
+        // surfaced real races in using that store-wide mechanism for an
+        // arbitrary write failure — see onPersistError's doc comment in
         // update-protocol.ts). The store still raises its own generic
         // write-failure notification regardless; this only handles putting
         // the card back where it was.
+        onPersistSuccess: () => {
+          // This write's value is now the confirmed baseline — any chain
+          // that was in flight for this node is resolved.
+          chainOrigin.delete(id);
+        },
         onPersistError: () => {
           const currentNode = sharedNodeStore.getNode(id);
-          if (!currentNode) return; // node no longer exists locally — nothing to revert
+          if (!currentNode) {
+            chainOrigin.delete(id);
+            return; // node no longer exists locally — nothing to revert
+          }
           // Only revert if the field still holds exactly the value this
           // move set. If it doesn't, something else changed it since — most
           // likely the user dragged the same card again before this write's
           // failure was known — and reverting now would stomp on that
           // newer, unrelated intent instead of just undoing this write.
+          // Leave chainOrigin alone in that case: that newer move is still
+          // part of the same unresolved chain and will settle it itself.
           if (readGroupValue(currentNode, field) !== target) return;
-          log.debug('KanbanView: reverting failed move', { id, field, from, target });
-          const revertChanges = resolveFieldWrite(currentNode, field, from ?? '');
+          const revertTo = chainOrigin.get(id) ?? from;
+          chainOrigin.delete(id); // this failure settles the chain
+          log.debug('KanbanView: reverting failed move', { id, field, revertTo, target });
+          const revertChanges = resolveFieldWrite(currentNode, field, revertTo ?? '');
           sharedNodeStore.updateNode(
             id,
             revertChanges,
