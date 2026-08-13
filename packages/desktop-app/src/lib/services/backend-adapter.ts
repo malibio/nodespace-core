@@ -329,6 +329,45 @@ class TauriAdapter implements BackendAdapter {
 // HTTP Adapter (Browser Dev Mode - fetch to dev-proxy)
 // ============================================================================
 
+/**
+ * Shape of the JSON error body dev-proxy sends for a failed request —
+ * mirrors the Tauri command layer's `CommandError` (see
+ * packages/desktop-app/src-tauri/src/commands/nodes.rs) closely enough that
+ * a well-formed body carries the same `code`/`conflictData` a Tauri
+ * CommandError would.
+ */
+interface BackendErrorBody {
+  message?: string;
+  code?: string;
+  conflictData?: unknown;
+}
+
+/**
+ * Typed error thrown by `HttpAdapter.handleResponse` for a failed request.
+ *
+ * Unlike a bare `Error(message)`, this preserves the wire-level detail a
+ * caller needs to classify the failure: the backend's structured error
+ * `code` (e.g. `"SUBTREE_ACCESS_DENIED"`, `"VERSION_CONFLICT"`), the HTTP
+ * `status`, and — when the body carries one — the structured `conflictData`
+ * payload the daemon attaches to OCC-conflict and subtree-access refusals.
+ *
+ * `code`/`conflictData` are read structurally (not via `instanceof`) by
+ * `isSubtreeAccessDenied` / `isVersionConflict` in `$lib/types/errors`, so a
+ * `BackendError` shaped like a `SUBTREE_ACCESS_DENIED` or `VERSION_CONFLICT`
+ * CommandError is classified the same way regardless of transport.
+ */
+export class BackendError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly status?: number,
+    readonly conflictData?: unknown
+  ) {
+    super(message);
+    this.name = 'BackendError';
+  }
+}
+
 export class HttpAdapter implements BackendAdapter {
   private readonly baseUrl: string;
 
@@ -346,15 +385,30 @@ export class HttpAdapter implements BackendAdapter {
 
   private async handleResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {
+      // This try only guards the JSON parse itself — a genuinely malformed
+      // (non-JSON) error body takes the SyntaxError branch below. A
+      // well-formed body, whatever its content, falls through to error
+      // construction OUTSIDE the try so it can't be caught by its own catch.
+      let errorData: BackendErrorBody | undefined;
       try {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+        errorData = await response.json();
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          throw new BackendError(
+            `HTTP ${response.status}: ${response.statusText}`,
+            undefined,
+            response.status
+          );
         }
         throw parseError;
       }
+
+      throw new BackendError(
+        errorData?.message || `HTTP ${response.status}: ${response.statusText}`,
+        errorData?.code,
+        response.status,
+        errorData?.conflictData
+      );
     }
 
     if (response.status === 204 || response.headers.get('content-length') === '0') {
