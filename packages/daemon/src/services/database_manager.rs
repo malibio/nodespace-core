@@ -21,7 +21,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use nodespace_core::models::EmbeddingConfig;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{watch, RwLock, RwLockWriteGuard};
 use ulid::Ulid;
 
 use super::assembly::{build_database_services, DatabaseServices, SharedContext};
@@ -388,56 +388,72 @@ impl DatabaseManager {
         self.insert_entry(id, name, path).await
     }
 
+    /// Persist the registry, notifying observers on success. If the save
+    /// fails, `restore` is invoked — with the write lock still held — to undo
+    /// the in-memory mutation the caller already applied, so `list()` never
+    /// reports a change that did not make it to disk.
+    ///
+    /// Every registry mutator below follows the same two-part shape (roll
+    /// back on failure, notify on success); centralizing it here means a
+    /// future mutator can't copy the rollback half and forget the notify
+    /// half, which is exactly how `set_default`/`set_bound_tenant` first
+    /// shipped.
+    async fn persist_or_rollback(
+        &self,
+        mut registry: RwLockWriteGuard<'_, Registry>,
+        restore: impl FnOnce(&mut Registry),
+    ) -> Result<()> {
+        if let Err(e) = registry.save(&self.registry_path).await {
+            restore(&mut registry);
+            return Err(e);
+        }
+        drop(registry);
+        self.notify_changed();
+        Ok(())
+    }
+
     /// Unregister a database. This only removes the registry entry — it never
     /// deletes the underlying database file. If the removed database was the
     /// default, the default is cleared. If persisting fails, the in-memory
     /// removal is rolled back (same pattern as [`DatabaseManager::insert_entry`])
     /// so `list()` never reports a database as gone when it is still on disk.
-    /// On success, notifies unconditionally — the database may have been
-    /// Closed (never opened, or idle-evicted), in which case [`Self::close`]'s
-    /// own notification below is a no-op.
     pub async fn remove(&self, id: &DatabaseId) -> Result<()> {
-        {
-            let mut registry = self.registry.write().await;
-            let index = registry
-                .databases
-                .iter()
-                .position(|e| &e.id == id)
-                .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-            // `Vec::remove` (unlike `retain`) both hands back the removed entry
-            // and preserves the index needed to restore it in place, rather
-            // than at the end, if the save below fails.
-            let removed = registry.databases.remove(index);
-            let was_default = registry.default_database.as_ref() == Some(id);
-            if was_default {
-                registry.default_database = None;
-            }
-            if let Err(e) = registry.save(&self.registry_path).await {
-                // The write lock is held throughout, so `index` still points at
-                // the pre-call slot — insert restores exactly the pre-call state.
-                registry.databases.insert(index, removed);
-                if was_default {
-                    registry.default_database = Some(id.clone());
-                }
-                return Err(e);
-            }
+        let mut registry = self.registry.write().await;
+        let index = registry
+            .databases
+            .iter()
+            .position(|e| &e.id == id)
+            .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
+        // `Vec::remove` (unlike `retain`) both hands back the removed entry
+        // and preserves the index needed to restore it in place, rather than
+        // at the end, if the save below fails.
+        let removed = registry.databases.remove(index);
+        let was_default = registry.default_database.as_ref() == Some(id);
+        if was_default {
+            registry.default_database = None;
         }
-        // The registry changed (an entry disappeared, possibly the default) —
-        // notify unconditionally rather than relying on `close` below, which
-        // only notifies when the database was actually open; a closed or
-        // never-opened database must still wake the tray's change subscriber.
-        self.notify_changed();
+        self.persist_or_rollback(registry, |registry| {
+            // The write lock is held throughout, so `index` still points at
+            // the pre-call slot — insert restores exactly the pre-call state.
+            registry.databases.insert(index, removed);
+            if was_default {
+                registry.default_database = Some(id.clone());
+            }
+        })
+        .await?;
         // Tear down the database's compute (processor + event watcher) as well as
         // its registry entry — unregistering must not leave a detached watcher
-        // running (ADR-053: per-database compute scoping).
+        // running (ADR-053: per-database compute scoping). `persist_or_rollback`
+        // already notified observers of the registry change above, so a
+        // database that was never opened (where `close` below is a no-op)
+        // still wakes the tray instead of only refreshing on daemon restart.
         self.close(id).await;
         Ok(())
     }
 
     /// Mark a registered database as the default served for header-less
     /// requests. If persisting fails, the previous default is restored (same
-    /// pattern as [`DatabaseManager::insert_entry`], which also notifies
-    /// subscribers on success).
+    /// pattern as [`DatabaseManager::insert_entry`]).
     pub async fn set_default(&self, id: &DatabaseId) -> Result<()> {
         let mut registry = self.registry.write().await;
         if registry.find(id).is_none() {
@@ -445,15 +461,12 @@ impl DatabaseManager {
         }
         let previous_default = registry.default_database.clone();
         registry.default_database = Some(id.clone());
-        if let Err(e) = registry.save(&self.registry_path).await {
+        self.persist_or_rollback(registry, |registry| {
             // The write lock is held throughout, so restoring the previous
             // value here exactly undoes the mutation above.
             registry.default_database = previous_default;
-            return Err(e);
-        }
-        drop(registry);
-        self.notify_changed();
-        Ok(())
+        })
+        .await
     }
 
     /// Rename the human-facing label of a registered database. Does not touch
@@ -467,19 +480,15 @@ impl DatabaseManager {
             .find(|e| &e.id == id)
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
         let previous_name = std::mem::replace(&mut entry.name, name);
-        let saved = registry.save(&self.registry_path).await;
-        if saved.is_err() {
-            // The write lock is held throughout, so the entry is still exactly
-            // where we left it — restore the previous name on a failed save.
+        self.persist_or_rollback(registry, |registry| {
+            // The write lock is held throughout, so the entry is still
+            // exactly where we left it — restore the previous name on a
+            // failed save.
             if let Some(entry) = registry.databases.iter_mut().find(|e| &e.id == id) {
                 entry.name = previous_name;
             }
-        }
-        drop(registry);
-        if saved.is_ok() {
-            self.notify_changed();
-        }
-        saved
+        })
+        .await
     }
 
     /// Mirror a database's bound cloud tenant into the registry (ADR-053
@@ -487,8 +496,7 @@ impl DatabaseManager {
     /// is opened. Pass `None` to clear it on unbind. The authoritative record is
     /// the database's DatabaseSettingsNode; this registry field is a display
     /// mirror kept in step with it. If persisting fails, the previous binding is
-    /// restored (same pattern as [`DatabaseManager::insert_entry`], which also
-    /// notifies subscribers on success).
+    /// restored (same pattern as [`DatabaseManager::insert_entry`]).
     pub async fn set_bound_tenant(
         &self,
         id: &DatabaseId,
@@ -503,18 +511,16 @@ impl DatabaseManager {
             .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
         let previous_schema = std::mem::replace(&mut entry.bound_tenant_schema, schema);
         let previous_collection = std::mem::replace(&mut entry.bound_tenant_collection, collection);
-        if let Err(e) = registry.save(&self.registry_path).await {
-            // The write lock is held throughout, so the entry is still exactly
-            // where we left it — restore the previous binding on a failed save.
+        self.persist_or_rollback(registry, |registry| {
+            // The write lock is held throughout, so the entry is still
+            // exactly where we left it — restore the previous binding on a
+            // failed save.
             if let Some(entry) = registry.databases.iter_mut().find(|e| &e.id == id) {
                 entry.bound_tenant_schema = previous_schema;
                 entry.bound_tenant_collection = previous_collection;
             }
-            return Err(e);
-        }
-        drop(registry);
-        self.notify_changed();
-        Ok(())
+        })
+        .await
     }
 
     /// Ensure a default database is registered, returning its id.
