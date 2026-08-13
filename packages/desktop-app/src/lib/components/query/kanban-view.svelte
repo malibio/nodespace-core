@@ -147,9 +147,23 @@
     return ids.filter((id) => revealed.has(id));
   }
 
+  /**
+   * Read-modify-write a column's revealed set: look it up (or start from
+   * empty), hand it to `compute`, store whatever comes back. `compute` must
+   * treat its input as immutable and return a new `Set` (or the same
+   * instance, unchanged, for a no-op) — `SvelteMap` only picks up reactivity
+   * on `.set()`, not on mutating a `Set` already inside it.
+   */
+  function updateRevealed(
+    columnValue: string,
+    compute: (_revealed: Set<string>) => Set<string>
+  ): void {
+    const current = revealedIds.get(columnValue) ?? new Set<string>();
+    revealedIds.set(columnValue, compute(current));
+  }
+
   function showMore(columnValue: string, ids: string[]): void {
-    const revealed = revealedIds.get(columnValue) ?? new Set<string>();
-    revealedIds.set(columnValue, growRevealed(revealed, ids, CARDS_PER_BATCH));
+    updateRevealed(columnValue, (revealed) => growRevealed(revealed, ids, CARDS_PER_BATCH));
   }
 
   function fieldLabel(f: SchemaField): string {
@@ -179,36 +193,68 @@
   function moveCard(id: string, toColumn: string): void {
     const node = sharedNodeStore.getNode(id);
     if (!node || !activeGroupBy) return;
-    const from = readGroupValue(node, activeGroupBy);
+    // Captured now, for the onPersistError closure below — activeGroupBy is
+    // reactive and could pick a different field by the time a failure
+    // callback fires (e.g. the user switches the group-by picker while this
+    // write is still in flight); the revert must always target the field
+    // this specific move actually changed.
+    const field = activeGroupBy;
+    const from = readGroupValue(node, field);
     const target = toColumn === UNASSIGNED ? null : toColumn;
     if (from === target) return; // dropping into its own column is a no-op — no write
-    // Optimistic store write: the card moves as soon as the value changes. If the
-    // persisted write is later rejected, the store rolls the value back — returning
-    // the card to its original column — and raises its global conflict notification.
-    // This is the same fire-and-forget path generic-schema-form uses; error
-    // surfacing is the store's responsibility, not a per-view banner.
-    const changes = resolveFieldWrite(node, activeGroupBy, target ?? '');
-    log.debug('KanbanView: moving card', { id, field: activeGroupBy, toColumn });
-    sharedNodeStore.updateNode(id, changes, { type: 'viewer', viewerId: 'kanban-view' });
+    const changes = resolveFieldWrite(node, field, target ?? '');
+    log.debug('KanbanView: moving card', { id, field, toColumn });
+    sharedNodeStore.updateNode(
+      id,
+      changes,
+      { type: 'viewer', viewerId: 'kanban-view' },
+      {
+        // Optimistic store write: the card moves as soon as the value
+        // changes. If the persisted write is rejected, revert just this
+        // field back to what it read before the move — a correction scoped
+        // to this one write, not a store-wide mechanism (an earlier version
+        // routed this through a general server-resync path; review surfaced
+        // real races in using that store-wide mechanism for an arbitrary
+        // write failure — see onPersistError's doc comment in
+        // update-protocol.ts). The store still raises its own generic
+        // write-failure notification regardless; this only handles putting
+        // the card back where it was.
+        onPersistError: () => {
+          const currentNode = sharedNodeStore.getNode(id);
+          if (!currentNode) return; // node no longer exists locally — nothing to revert
+          // Only revert if the field still holds exactly the value this
+          // move set. If it doesn't, something else changed it since — most
+          // likely the user dragged the same card again before this write's
+          // failure was known — and reverting now would stomp on that
+          // newer, unrelated intent instead of just undoing this write.
+          if (readGroupValue(currentNode, field) !== target) return;
+          log.debug('KanbanView: reverting failed move', { id, field, from, target });
+          const revertChanges = resolveFieldWrite(currentNode, field, from ?? '');
+          sharedNodeStore.updateNode(
+            id,
+            revertChanges,
+            { type: 'viewer', viewerId: 'kanban-view' },
+            { skipPersistence: true }
+          );
+        }
+      }
+    );
 
     // Reveal the card in its destination column immediately, regardless of
     // that column's current cap — the user just explicitly placed it there
     // (by drag or the "Move to" select), so it must be visible right where
     // they put it, cap or no cap. Without this, a card dropped into an
     // already-capped (or even empty-but-unseeded) column would silently land
-    // behind a "+N more" control instead of where the user just dropped it —
-    // the same "moved card isn't where the user put it" failure this whole
-    // cap design exists to avoid, just via the reveal-tracking path instead
-    // of the position-slicing one Finding 2 already covers. This only
-    // affects the card THIS view just moved; an unrelated card arriving via
-    // some other cause (another pane, a background resync) still respects
-    // the cap normally.
-    const revealed = revealedIds.get(toColumn) ?? new Set<string>();
-    if (!revealed.has(id)) {
+    // behind a "+N more" control instead of where the user just dropped it.
+    // This only affects the card THIS view just moved; an unrelated card
+    // arriving via some other cause (another pane, a background resync)
+    // still respects the cap normally.
+    updateRevealed(toColumn, (revealed) => {
+      if (revealed.has(id)) return revealed;
       const next = new Set(revealed);
       next.add(id);
-      revealedIds.set(toColumn, next);
-    }
+      return next;
+    });
   }
 
   function onDragStart(e: DragEvent, id: string): void {

@@ -166,4 +166,16 @@ export interface UpdateOptions {
    * })
    */
   markAsPersistedOnly?: boolean;
+  /**
+   * Called when this specific write's persistence fails for a non-OCC reason
+   * (network error, daemon offline, validation error — anything that isn't a
+   * version conflict; OCC conflicts already have their own resync/hydration
+   * handling and do not invoke this). The store still applies its own
+   * generic handling regardless (metrics, a `write-failure` conflict
+   * notification) — this is an *additional*, opt-in hook for a caller that
+   * knows how to make a more specific, narrowly-scoped correction than the
+   * store's generic handling can (e.g. reverting just the one field this
+   * particular call changed, rather than any store-wide mechanism).
+   */
+  onPersistError?: (_error: Error) => void;
 }

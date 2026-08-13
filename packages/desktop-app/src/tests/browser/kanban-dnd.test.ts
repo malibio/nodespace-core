@@ -1,11 +1,11 @@
 /**
- * KanbanView — real drag-and-drop, rollback, and keyboard-move coverage (#1985).
+ * KanbanView — real drag-and-drop, rollback, and keyboard-move coverage.
  *
- * PR #1984 unit-tested the extracted grouping/write-shape logic
- * (kanban-grouping.test.ts) but left the drag/drop → store-write →
- * reactive-regroup → rollback flow, and the keyboard move-select, uncovered.
- * Happy-DOM cannot originate real `DragEvent`s with a working `DataTransfer`,
- * so this exercises the actual component against a real Chromium DOM: a real
+ * `kanban-grouping.test.ts` unit-tests the extracted grouping/write-shape
+ * logic, but the drag/drop → store-write → reactive-regroup → rollback flow,
+ * and the keyboard move-select, need a real browser: Happy-DOM cannot
+ * originate real `DragEvent`s with a working `DataTransfer`. This exercises
+ * the actual component against a real Chromium DOM: a real
  * `dragstart`/`dragover`/`drop` sequence, dispatched with a real
  * `DataTransfer`, driving the same handlers a real drag would.
  *
@@ -185,10 +185,6 @@ describe('KanbanView — drag-and-drop (browser mode)', () => {
     seed(ticket('t1', 'open', 'Fix the bug'));
 
     vi.spyOn(backendAdapter, 'updateNode').mockRejectedValue(new Error('daemon offline'));
-    // The write never landed — the server still has the pre-drag state. This
-    // is what the store's failure-path resync fetches to correct the local
-    // optimistic state back to the truth.
-    vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(ticket('t1', 'open', 'Fix the bug'));
 
     const { container } = render(KanbanView, {
       props: {
@@ -224,6 +220,64 @@ describe('KanbanView — drag-and-drop (browser mode)', () => {
         )
       ).toBe(true);
     });
+  });
+
+  it('does not let a late-arriving revert stomp a newer move to the same card', async () => {
+    seed(ticket('t1', 'open', 'Fix the bug'));
+
+    // Hold the first write pending so its failure can be triggered on
+    // demand, after the second move has already landed.
+    let rejectFirstWrite: (error: Error) => void = () => {};
+    const firstWrite = new Promise<never>((_resolve, reject) => {
+      rejectFirstWrite = reject;
+    });
+    const updateSpy = vi
+      .spyOn(backendAdapter, 'updateNode')
+      .mockImplementationOnce(() => firstWrite)
+      .mockResolvedValueOnce({ ...ticket('t1', '', 'Fix the bug'), version: 2 });
+
+    const { container, getByRole } = render(KanbanView, {
+      props: {
+        nodeIds: ['t1'],
+        schema: schema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    // First move: Open -> Closed. Its write never settles until triggered below.
+    await dragAndDrop(cardFor(container, 'Fix the bug'), columnFor(container, 'Closed'));
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Closed'))).toEqual(['Fix the bug']);
+    });
+
+    // Second move, before the first write is known to have failed: Closed ->
+    // Unassigned, via the keyboard select. The persistence coordinator
+    // collapses this behind the still-executing first write, but the
+    // optimistic apply — and this view's reveal bookkeeping — land
+    // immediately regardless of when its own RPC actually runs.
+    const moveSelect = getByRole('combobox', {
+      name: 'Move Fix the bug to another column'
+    }) as HTMLSelectElement;
+    await fireEvent.change(moveSelect, { target: { value: '__unassigned__' } });
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual(['Fix the bug']);
+    });
+
+    // Now the first move's write fails. Its revert target (Closed) no
+    // longer matches the card's current column (Unassigned, set by the
+    // second move) — the revert must recognize that and no-op, not stomp
+    // the second move's result back to its own original column (Open).
+    rejectFirstWrite(new Error('daemon offline'));
+
+    // Give the (would-be, incorrect) revert a chance to fire before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual(['Fix the bug']);
+    expect(cardsIn(columnFor(container, 'Open'))).toEqual([]);
+    expect(cardsIn(columnFor(container, 'Closed'))).toEqual([]);
+    expect(updateSpy).toHaveBeenCalledTimes(2);
   });
 });
 

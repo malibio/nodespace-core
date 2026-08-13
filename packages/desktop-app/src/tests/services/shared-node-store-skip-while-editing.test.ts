@@ -344,12 +344,12 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   // resyncNodeFromServer() writes the fetched row via the same guard-free
   // path a `database`-sourced setNode() would, but historically bypassed
   // the skip-while-editing guard entirely (it calls the private `nodesSet`
-  // directly). It's used both by the pre-existing OCC-conflict fallback and
-  // by the non-OCC write-failure recovery path (core#1985 follow-up) — the
-  // latter fires on ordinary transient failures (network blips, timeouts),
-  // far more common than a genuine version conflict, so an unguarded resync
-  // there would routinely revert a user's in-progress typing to stale
-  // server content on nothing more than a brief network hiccup.
+  // directly). It's the fallback `updateNode()` uses when an OCC (version-
+  // conflict) failure arrives without an embedded authoritative node —
+  // rarer than an ordinary write failure, but a real user could still be
+  // actively typing in the conflicting node when one lands, and an
+  // unguarded resync would silently revert their in-progress edit to
+  // whatever the server had at conflict time.
   //
   // Guards on `isFocused` only — deliberately NOT `hasPending`, unlike
   // `setNode()`'s use of the same underlying policy. `PersistenceCoordinator
@@ -362,7 +362,10 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   // (depends on mock-vs-real network timing), and checking it would defeat
   // this recovery path for its single most common case: an isolated
   // failure with nothing else in flight. `isFocused` has no such
-  // self-reference and covers the scenario the guard exists for.
+  // self-reference and covers the scenario the guard exists for. A separate,
+  // non-racy check (the fetched-node identity comparison inside
+  // resyncNodeFromServer itself) additionally bails if some other write
+  // landed for this node while the fetch was in flight.
   describe('resyncNodeFromServer guard', () => {
     it("does not clobber a focused node's optimistic content with a stale server snapshot", async () => {
       store.setNode(makeNode('resync-1', 'server-old', 1), databaseSource);
@@ -378,6 +381,52 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
 
       const after = store.getNode('resync-1');
       expect(after?.content).toBe('user is typing this');
+    });
+
+    it('still marks the node as persisted on a guard-skip, mirroring setNode()', async () => {
+      // A node whose local persisted-bookkeeping has drifted (e.g. after a
+      // reload) but is actively focused — the skip must protect content,
+      // not silently leave persistedNodeIds out of sync too.
+      store.setNode(makeNode('resync-1b', 'server-old', 1), viewerSource, true);
+      focusManager.focusNode('resync-1b', 'default');
+
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeNode('resync-1b', 'server-old', 1));
+
+      expect(store.isNodePersisted('resync-1b')).toBe(false);
+      await store.resyncNodeFromServer('resync-1b');
+      expect(store.isNodePersisted('resync-1b')).toBe(true);
+    });
+
+    it('does not clobber a different write that lands locally while the fetch is in flight', async () => {
+      // Not a focus/pending scenario — this is the identity-based guard:
+      // regardless of focus state, if the node this resync is about to
+      // apply to has been replaced by ANY other write since the fetch
+      // started, the fetch reflects state from before that write and must
+      // not overwrite it.
+      store.setNode(makeNode('resync-race', 'server-old', 1), databaseSource);
+
+      let resolveFetch!: (node: Node) => void;
+      vi.spyOn(backendAdapter, 'getNode').mockImplementation(
+        () => new Promise((resolve) => (resolveFetch = resolve))
+      );
+
+      const resyncPromise = store.resyncNodeFromServer('resync-race');
+
+      // A second, unrelated write lands for the same node while the fetch
+      // above is still pending.
+      store.updateNode(
+        'resync-race',
+        { content: 'a different write landed' },
+        viewerSource,
+        { skipPersistence: true }
+      );
+
+      // The fetch now resolves with what the server had *before* that
+      // second write happened.
+      resolveFetch(makeNode('resync-race', 'server-old', 1));
+      await resyncPromise;
+
+      expect(store.getNode('resync-race')?.content).toBe('a different write landed');
     });
 
     // Documents the scope boundary above, rather than asserting protection

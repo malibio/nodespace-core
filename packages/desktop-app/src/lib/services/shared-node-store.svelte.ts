@@ -1217,6 +1217,10 @@ export class SharedNodeStore {
               ];
             }
           }
+          // Captured at schedule time alongside the other options above —
+          // `options` itself doesn't change, but naming it here keeps it next
+          // to the rest of what this closure reads from the outer scope.
+          const onPersistError = options.onPersistError;
           const handle = PersistenceCoordinator.getInstance().persist(
             nodeId,
             async () => {
@@ -1533,27 +1537,49 @@ export class SharedNodeStore {
                     message: CONFLICT_MESSAGE['version-mismatch'],
                     conflictType: 'version-mismatch'
                   });
-                } else {
+                } else if (onPersistError) {
                   // Non-OCC failure (network error, validation error, daemon
                   // offline, etc.): the optimistic write above never landed
                   // server-side. `rollbackUpdate()` only rewinds bookkeeping
                   // (metrics, the version counter, the pending-update list) —
                   // `NodeUpdate` carries no previous-value snapshot, so it
                   // cannot restore the field values `updateNode` already
-                  // applied to `this.nodes`. Left alone, the local node stays
-                  // permanently diverged from the persisted truth (e.g. a
-                  // Kanban card stuck in the column it was dragged to even
-                  // though the move was never saved). Resync from the server
-                  // — the same authoritative-refetch this function already
-                  // uses for the OCC fallback above — corrects it back to
-                  // whatever is actually persisted, which (since this write
-                  // never landed) is the pre-optimistic state.
-                  this.resyncNodeFromServer(nodeId).catch((resyncError) => {
-                    log.error(
-                      `Failed to resync after write failure for node ${nodeId}:`,
-                      resyncError
-                    );
-                  });
+                  // applied to `this.nodes`.
+                  //
+                  // An earlier version of this fix called `resyncNodeFromServer`
+                  // here unconditionally — refetching the whole node from the
+                  // server to correct the divergence, the same authoritative
+                  // refetch the OCC fallback below uses. Review surfaced three
+                  // real problems specific to using that store-wide mechanism
+                  // for an arbitrary non-OCC failure (as opposed to its
+                  // original, narrower OCC-conflict use): a failed *create*
+                  // (server has nothing to return) leaves a permanent phantom
+                  // node with no correction possible; the skip-while-editing
+                  // guard it needs (see `resyncNodeFromServer`) has no
+                  // meaningful "hasPending" signal available to it (see that
+                  // method's own comment) and so can't tell this failing
+                  // write's optimistic content apart from a second, genuinely
+                  // different, still-in-flight write to the same node — and
+                  // can clobber the latter; and a resync skipped because the
+                  // node was actively focused has no retry, so a divergence
+                  // caught mid-edit can stay uncorrected indefinitely. All
+                  // three trace back to the same root cause: a full-node
+                  // server round-trip is the wrong grain of correction for
+                  // "one specific write, to one specific field, failed" — it
+                  // can only either replace everything or nothing, and
+                  // "everything" is exactly what creates the races above.
+                  //
+                  // `onPersistError` instead lets the *caller that made this
+                  // specific write* — which already knows exactly which
+                  // field(s) it changed and what the prior value was — make a
+                  // narrowly-scoped local correction (see kanban-view.svelte's
+                  // `moveCard`) with none of that: no server round-trip, no
+                  // guard needed, no reliance on a fetch racing an unrelated
+                  // write to the same node. Opt-in and additive: a caller that
+                  // doesn't pass it gets exactly the pre-existing behavior
+                  // (rollbackUpdate's bookkeeping + the write-failure
+                  // notification below), same as before this callback existed.
+                  onPersistError(error);
                 }
 
                 throw error; // Re-throw to mark operation as failed in coordinator
@@ -2837,6 +2863,11 @@ export class SharedNodeStore {
     try {
       // ADR-053: capture the database generation before the daemon read.
       const epoch = this.databaseEpoch;
+      // Nodes are always replaced wholesale in this store, never mutated in
+      // place (see setNode's comment on why) — so an identity change here
+      // means some OTHER write landed for this node while our own fetch was
+      // in flight. Captured before the fetch so it can be compared after.
+      const nodeBeforeFetch = this.nodes.get(nodeId);
       const serverNode = await backendAdapter.getNode(nodeId);
 
       // The active database switched while this resync was in flight — the
@@ -2844,6 +2875,20 @@ export class SharedNodeStore {
       if (this.databaseEpoch !== epoch) return;
 
       if (serverNode) {
+        // A second, unrelated write for this same node (e.g. a Kanban drag
+        // to a different column, fired from another pane, anything) landed
+        // locally while we were fetching. Our fetch reflects state from
+        // *before* that write even happened, so applying it now would
+        // silently discard that write's optimistic value — it might go on
+        // to persist successfully moments later, which this resync has no
+        // way to know. Bail and let that write's own success/failure path
+        // (or its own resync, if it also fails) be the one to reconcile.
+        if (this.nodes.get(nodeId) !== nodeBeforeFetch) {
+          log.debug(
+            `resyncNodeFromServer: local node ${nodeId} changed while fetching — skipping to avoid clobbering a newer local write`
+          );
+          return;
+        }
         // This writes the fetched row straight into the store, same as a
         // `database`-sourced broadcast — so it must respect the same
         // skip-while-editing guard `setNode()` enforces (`decideRemoteUpdate`).
@@ -2870,15 +2915,25 @@ export class SharedNodeStore {
         // self-reference (it's a plain read of `focusManager`, set by real UI
         // focus, never by this write path) and already covers the scenario
         // this guard exists for — the user actively typing when a save fails.
-        const existingNode = this.nodes.get(nodeId);
+        // (nodeBeforeFetch is still the current node here — the identity
+        // check above already confirmed nothing replaced it during the fetch.)
         const isFocused = focusManager.editingNodeId === nodeId;
         const decision = decideRemoteUpdate(
           serverNode,
-          existingNode,
+          nodeBeforeFetch,
           { type: 'database', reason: 'occ-resync' },
           { isFocused, hasPending: false }
         );
         if (!decision.apply) {
+          // Still mark as persisted, same as `setNode()`'s equivalent skip
+          // branch and for the same reason: a *successful* fetch of
+          // `serverNode` is itself proof the node exists server-side,
+          // independent of whether we go on to apply its content. Skipping
+          // this would leave `persistedNodeIds` out of sync for a node
+          // whose local bookkeeping had drifted (e.g. after a page reload
+          // or database reset) — the exact case that bookkeeping exists to
+          // self-correct — with nothing else positioned to fix it.
+          this.persistedNodeIds.add(nodeId);
           log.debug(
             `resyncNodeFromServer: skipping clobber of actively-edited node ${nodeId} (focused=${isFocused})`
           );

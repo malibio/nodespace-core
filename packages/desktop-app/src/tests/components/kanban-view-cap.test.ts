@@ -1,5 +1,5 @@
 /**
- * KanbanView — per-column render cap (#1985).
+ * KanbanView — per-column render cap.
  *
  * kanban-view.svelte buckets and rendered ALL matching nodes per column (a
  * card plus a full-options <select> each) with no bound, while List/Table

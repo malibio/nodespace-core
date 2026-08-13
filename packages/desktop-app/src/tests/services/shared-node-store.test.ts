@@ -2135,50 +2135,88 @@ describe('SharedNodeStore', () => {
 
     describe('write-failure recovery (non-OCC)', () => {
       // `rollbackUpdate` (above) only rewinds bookkeeping — it has no snapshot
-      // of the node's pre-update field values to restore. A rejected write must
-      // still leave the store consistent with the server, or every optimistic
-      // consumer (Kanban drag-to-move, any property edit, …) is left silently
-      // stuck on a value that was never actually saved. `updateNode`'s failure
-      // path covers this by resyncing from the server on any non-OCC rejection.
-      it('resyncs the node back to server state when a non-OCC persist rejects', async () => {
-        const testNode = createTestNode('write-fail-resync-1', 'Original content');
+      // of the node's pre-update field values to restore, so a rejected write
+      // leaves the optimistic value in place with only a generic toast. An
+      // earlier version of this fix resynced the whole node from the server
+      // on any non-OCC failure; review found that store-wide mechanism raced
+      // a second in-flight write to the same node, could leave a permanent
+      // phantom node behind a failed create, and had no retry once skipped
+      // for an actively-edited node — see the write-failure branch's own
+      // comment. Replaced with `onPersistError`: an opt-in callback that lets
+      // the *caller who made this specific write* apply its own narrowly-
+      // scoped correction — see kanban-view.svelte's `moveCard` for the real
+      // consumer. These tests cover the store's side of that contract: the
+      // callback fires (only) for a non-OCC failure, and the store's own
+      // generic handling (metrics, the write-failure notification) still
+      // happens regardless of whether a caller opted in.
+      it('invokes onPersistError with the failure when a non-OCC persist rejects', async () => {
+        const testNode = createTestNode('write-fail-callback-1', 'Original content');
         // `databaseSource` marks the node as already persisted, so the
         // subsequent edit takes the real update-and-persist path instead of
         // the create path.
         store.setNode(testNode, { type: 'database', reason: 'seed' });
 
-        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
-          new Error('network error')
-        );
-        const getNodeSpy = vi
-          .spyOn(backendAdapter, 'getNode')
-          .mockResolvedValueOnce({ ...testNode, content: 'Original content', version: 1 });
+        const failure = new Error('network error');
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(failure);
 
-        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource);
-
-        // The optimistic apply is synchronous — it lands before persistence
-        // even starts.
-        expect(store.getNode(testNode.id)?.content).toBe('Optimistic edit');
-
-        // Once the rejected write is caught, the store resyncs from the
-        // (mocked) server and the node reverts to what is actually persisted.
-        await vi.waitFor(() => {
-          expect(store.getNode(testNode.id)?.content).toBe('Original content');
+        const onPersistError = vi.fn();
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource, {
+          onPersistError
         });
-        expect(getNodeSpy).toHaveBeenCalledWith(testNode.id);
+
+        await vi.waitFor(() => {
+          expect(onPersistError).toHaveBeenCalledTimes(1);
+        });
+        expect(onPersistError).toHaveBeenCalledWith(failure);
       });
 
-      it('surfaces a write-failure notification alongside the resync', async () => {
-        const testNode = createTestNode('write-fail-resync-2', 'Original content');
+      it('does not invoke onPersistError for an OCC (version-conflict) failure', async () => {
+        const testNode = createTestNode('write-fail-callback-2', 'Original content');
+        store.setNode(testNode, { type: 'database', reason: 'seed' });
+
+        const occError = new Error('VERSION_CONFLICT: optimistic concurrency failure') as Error & {
+          code: string;
+          conflictData: { node_id: string; expected: number; actual: number; current_node: null };
+        };
+        occError.code = 'VERSION_CONFLICT';
+        occError.conflictData = {
+          node_id: testNode.id,
+          expected: 1,
+          actual: 2,
+          current_node: null
+        };
+        vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(occError);
+        vi.spyOn(backendAdapter, 'getNode').mockResolvedValueOnce({
+          ...testNode,
+          version: 2
+        });
+
+        const onPersistError = vi.fn();
+        store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource, {
+          onPersistError
+        });
+
+        await vi.waitFor(() => {
+          expect(
+            conflictNotifications.notifications.some(
+              (n) => n.nodeId === testNode.id && n.conflictType === 'version-mismatch'
+            )
+          ).toBe(true);
+        });
+        // OCC conflicts already have their own resync/hydration handling —
+        // onPersistError is specifically for the non-OCC branch.
+        expect(onPersistError).not.toHaveBeenCalled();
+      });
+
+      it('surfaces the generic write-failure notification whether or not a caller passes onPersistError', async () => {
+        const testNode = createTestNode('write-fail-callback-3', 'Original content');
         store.setNode(testNode, { type: 'database', reason: 'seed' });
 
         vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(new Error('offline'));
-        vi.spyOn(backendAdapter, 'getNode').mockResolvedValueOnce({
-          ...testNode,
-          content: 'Original content',
-          version: 1
-        });
 
+        // No onPersistError passed — a caller that doesn't opt in gets
+        // exactly the pre-existing generic handling, nothing more, nothing
+        // less.
         store.updateNode(testNode.id, { content: 'Optimistic edit' }, viewerSource);
 
         await vi.waitFor(() => {
@@ -2188,6 +2226,10 @@ describe('SharedNodeStore', () => {
             )
           ).toBe(true);
         });
+        // And the optimistic value is left in place — this is the store's
+        // own generic behavior, unchanged; correcting it is now the opted-in
+        // caller's job, not this test's node.
+        expect(store.getNode(testNode.id)?.content).toBe('Optimistic edit');
       });
     });
 
