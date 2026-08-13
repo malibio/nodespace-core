@@ -393,6 +393,9 @@ impl DatabaseManager {
     /// default, the default is cleared. If persisting fails, the in-memory
     /// removal is rolled back (same pattern as [`DatabaseManager::insert_entry`])
     /// so `list()` never reports a database as gone when it is still on disk.
+    /// On success, notifies unconditionally — the database may have been
+    /// Closed (never opened, or idle-evicted), in which case [`Self::close`]'s
+    /// own notification below is a no-op.
     pub async fn remove(&self, id: &DatabaseId) -> Result<()> {
         {
             let mut registry = self.registry.write().await;
@@ -419,6 +422,11 @@ impl DatabaseManager {
                 return Err(e);
             }
         }
+        // The registry changed (an entry disappeared, possibly the default) —
+        // notify unconditionally rather than relying on `close` below, which
+        // only notifies when the database was actually open; a closed or
+        // never-opened database must still wake the tray's change subscriber.
+        self.notify_changed();
         // Tear down the database's compute (processor + event watcher) as well as
         // its registry entry — unregistering must not leave a detached watcher
         // running (ADR-053: per-database compute scoping).
@@ -428,7 +436,8 @@ impl DatabaseManager {
 
     /// Mark a registered database as the default served for header-less
     /// requests. If persisting fails, the previous default is restored (same
-    /// pattern as [`DatabaseManager::insert_entry`]).
+    /// pattern as [`DatabaseManager::insert_entry`], which also notifies
+    /// subscribers on success).
     pub async fn set_default(&self, id: &DatabaseId) -> Result<()> {
         let mut registry = self.registry.write().await;
         if registry.find(id).is_none() {
@@ -442,6 +451,8 @@ impl DatabaseManager {
             registry.default_database = previous_default;
             return Err(e);
         }
+        drop(registry);
+        self.notify_changed();
         Ok(())
     }
 
@@ -476,7 +487,8 @@ impl DatabaseManager {
     /// is opened. Pass `None` to clear it on unbind. The authoritative record is
     /// the database's DatabaseSettingsNode; this registry field is a display
     /// mirror kept in step with it. If persisting fails, the previous binding is
-    /// restored (same pattern as [`DatabaseManager::insert_entry`]).
+    /// restored (same pattern as [`DatabaseManager::insert_entry`], which also
+    /// notifies subscribers on success).
     pub async fn set_bound_tenant(
         &self,
         id: &DatabaseId,
@@ -500,6 +512,8 @@ impl DatabaseManager {
             }
             return Err(e);
         }
+        drop(registry);
+        self.notify_changed();
         Ok(())
     }
 
@@ -1103,9 +1117,16 @@ mod tests {
             "default cleared in memory must be restored on a failed save"
         );
 
-        // With persistence restored, the same removal succeeds cleanly.
+        // With persistence restored, the same removal succeeds cleanly. `first`
+        // was never opened (Closed), so `close()`'s own notify is a no-op —
+        // this exercises `remove`'s unconditional notify on success.
         tokio::fs::remove_dir(&registry_path).await.unwrap();
+        let changes = mgr.subscribe_changes();
         mgr.remove(&first).await.unwrap();
+        assert!(
+            changes.has_changed().unwrap(),
+            "a successful remove must notify subscribers even for a database that was never opened"
+        );
         let snap = mgr.list().await;
         assert_eq!(snap.databases.len(), 1);
         assert_eq!(snap.databases[0].entry.id, second.id);
@@ -1161,9 +1182,15 @@ mod tests {
         // got as far as being written into memory before the save failed.
         assert_eq!(mgr.list().await.default_database.as_ref(), Some(&first));
 
-        // With persistence restored, the same call succeeds cleanly.
+        // With persistence restored, the same call succeeds cleanly and
+        // notifies subscribers (matching insert_entry/rename).
         tokio::fs::remove_dir(&registry_path).await.unwrap();
+        let changes = mgr.subscribe_changes();
         mgr.set_default(&second.id).await.unwrap();
+        assert!(
+            changes.has_changed().unwrap(),
+            "a successful set_default must notify subscribers"
+        );
         assert_eq!(mgr.list().await.default_database.as_ref(), Some(&second.id));
     }
 
@@ -1199,11 +1226,17 @@ mod tests {
             Some("c0")
         );
 
-        // With persistence restored, the same call succeeds cleanly.
+        // With persistence restored, the same call succeeds cleanly and
+        // notifies subscribers (matching insert_entry/rename).
         tokio::fs::remove_dir(&registry_path).await.unwrap();
+        let changes = mgr.subscribe_changes();
         mgr.set_bound_tenant(&id, Some("tenant_b".into()), Some("c1".into()))
             .await
             .unwrap();
+        assert!(
+            changes.has_changed().unwrap(),
+            "a successful set_bound_tenant must notify subscribers"
+        );
         let snap = mgr.list().await;
         assert_eq!(
             snap.databases[0].entry.bound_tenant_schema.as_deref(),
