@@ -97,6 +97,12 @@ export class SimplePersistenceCoordinator {
   private readonly DEBOUNCE_MS = 500;
   private operationCounter = 0; // For tracking operation IDs
 
+  // Private: enforces the singleton. Exporting the class (for direct testing)
+  // would otherwise let external code `new` a second, uncoordinated instance
+  // whose maps are disjoint from the real one — defeating the per-node
+  // serial-writer guarantee. Always go through getInstance()/resetInstance().
+  private constructor() {}
+
   static getInstance(): SimplePersistenceCoordinator {
     if (!SimplePersistenceCoordinator.instance) {
       SimplePersistenceCoordinator.instance = new SimplePersistenceCoordinator();
@@ -549,7 +555,9 @@ export class SimplePersistenceCoordinator {
   }
 }
 
-// Use simple coordinator
+// All production call sites in this file go through this alias rather than
+// the class name directly — kept as-is (not worth a ~20-call-site rename) now
+// that SimplePersistenceCoordinator is separately exported for direct testing.
 const PersistenceCoordinator = SimplePersistenceCoordinator;
 
 // Simple error class for cancelled operations
@@ -3587,13 +3595,19 @@ export class SharedNodeStore {
     // batch write's rejection (e.g. via cancelPending() when a re-batch
     // supersedes an in-flight batch operation) becomes an unhandled promise
     // rejection instead of being tolerated like elsewhere in this file.
+    //
+    // Unlike updateNode()/updateTaskNodeStatus(), the operation closure above
+    // has no OCC-specific handling (no rollback, no resync, no notification)
+    // — it only logs and re-throws. So a VERSION_CONFLICT here must NOT be
+    // silently swallowed the way it is at those other call sites (where it's
+    // already been handled internally): every non-cancellation failure,
+    // including OCC, falls through to the write-failure notification below.
     handle.promise.catch((err) => {
       if (err instanceof OperationCancelledError) {
         // Operation was cancelled by a newer operation - this is expected
         return;
       }
-      if (isVersionConflict(err)) return;
-      // Surface non-OCC write failures visibly so users know their change didn't save
+      // Surface write failures visibly so users know their change didn't save
       conflictNotifications.add({
         nodeId,
         message: CONFLICT_MESSAGE['write-failure'],
