@@ -344,6 +344,73 @@ describe('KanbanView — drag-and-drop (browser mode)', () => {
     expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual([]);
     expect(updateSpy).toHaveBeenCalledTimes(2);
   });
+
+  it('reverts to Unassigned (not an intermediate column) when a card that started Unassigned has two chained moves both fail', async () => {
+    // The chain-origin map stores `null` for a card that started in
+    // Unassigned — a real, meaningful value, not "nothing recorded". A
+    // revert that treats a stored `null` the same as a missing map entry
+    // (e.g. via `??`) would silently fall back to the wrong thing.
+    seed(ticket('t1', '', 'Fix the bug'));
+
+    let rejectFirstWrite: (error: Error) => void = () => {};
+    const firstWrite = new Promise<never>((_resolve, reject) => {
+      rejectFirstWrite = reject;
+    });
+    let rejectSecondWrite: (error: Error) => void = () => {};
+    const secondWrite = new Promise<never>((_resolve, reject) => {
+      rejectSecondWrite = reject;
+    });
+    const updateSpy = vi
+      .spyOn(backendAdapter, 'updateNode')
+      .mockImplementationOnce(() => firstWrite)
+      .mockImplementationOnce(() => secondWrite);
+
+    const { container, getByRole } = render(KanbanView, {
+      props: {
+        nodeIds: ['t1'],
+        schema: schema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual(['Fix the bug']);
+
+    // First move: Unassigned -> Open.
+    await dragAndDrop(cardFor(container, 'Fix the bug'), columnFor(container, 'Open'));
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Open'))).toEqual(['Fix the bug']);
+    });
+
+    // Second move, before the first write's outcome is known: Open -> Closed.
+    const moveSelect = getByRole('combobox', {
+      name: 'Move Fix the bug to another column'
+    }) as HTMLSelectElement;
+    await fireEvent.change(moveSelect, { target: { value: 'closed' } });
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Closed'))).toEqual(['Fix the bug']);
+    });
+
+    // First move fails: its revert target (Open) no longer matches the
+    // card's current column (Closed), so it correctly no-ops.
+    rejectFirstWrite(new Error('daemon offline'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(cardsIn(columnFor(container, 'Closed'))).toEqual(['Fix the bug']);
+
+    // Second move ALSO fails. The true origin — Unassigned, stored as
+    // `null` — must win, not "Open" (the first move's own intermediate
+    // target) and not a `??`-induced fallback to "Closed" (the second
+    // move's own `from`, since a stored `null` is not the same as "no
+    // origin recorded").
+    rejectSecondWrite(new Error('daemon offline'));
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual(['Fix the bug']);
+    });
+    expect(cardsIn(columnFor(container, 'Open'))).toEqual([]);
+    expect(cardsIn(columnFor(container, 'Closed'))).toEqual([]);
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('KanbanView — keyboard-accessible move (browser mode)', () => {

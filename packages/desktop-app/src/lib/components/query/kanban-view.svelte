@@ -211,6 +211,13 @@
   // once per chain (on the first move) and cleared once the chain resolves
   // either way, so a later move's revert always targets the true starting
   // point instead of an intermediate.
+  //
+  // Keyed by `${id}:${field}`, not just `id`: switching the "Group by"
+  // picker mid-chain changes which field `moveCard` targets, and a chain
+  // keyed only by node id would let a later move for a DIFFERENT field
+  // reuse — and on failure, write — an origin value that belongs to the
+  // field the FIRST move in the chain was for, corrupting the second
+  // field with a value from a completely different vocabulary.
   let chainOrigin = new Map<string, string | null>();
 
   /** Move a card into the column identified by `toColumn` (UNASSIGNED clears it). */
@@ -226,7 +233,8 @@
     const from = readGroupValue(node, field);
     const target = toColumn === UNASSIGNED ? null : toColumn;
     if (from === target) return; // dropping into its own column is a no-op — no write
-    if (!chainOrigin.has(id)) chainOrigin.set(id, from);
+    const chainKey = `${id}:${field}`;
+    if (!chainOrigin.has(chainKey)) chainOrigin.set(chainKey, from);
     const changes = resolveFieldWrite(node, field, target ?? '');
     log.debug('KanbanView: moving card', { id, field, toColumn });
     sharedNodeStore.updateNode(
@@ -246,13 +254,13 @@
         // the card back where it was.
         onPersistSuccess: () => {
           // This write's value is now the confirmed baseline — any chain
-          // that was in flight for this node is resolved.
-          chainOrigin.delete(id);
+          // that was in flight for this (node, field) is resolved.
+          chainOrigin.delete(chainKey);
         },
         onPersistError: () => {
           const currentNode = sharedNodeStore.getNode(id);
           if (!currentNode) {
-            chainOrigin.delete(id);
+            chainOrigin.delete(chainKey);
             return; // node no longer exists locally — nothing to revert
           }
           // Only revert if the field still holds exactly the value this
@@ -263,8 +271,14 @@
           // Leave chainOrigin alone in that case: that newer move is still
           // part of the same unresolved chain and will settle it itself.
           if (readGroupValue(currentNode, field) !== target) return;
-          const revertTo = chainOrigin.get(id) ?? from;
-          chainOrigin.delete(id); // this failure settles the chain
+          // `.has()`, not `??`: a card that started in "Unassigned" has a
+          // genuinely-stored origin of `null` — `chainOrigin.get(chainKey)
+          // ?? from` would treat that stored `null` as "nothing recorded"
+          // (same as a missing key) and silently fall back to `from`
+          // instead, which for a chain of 2+ moves is an intermediate,
+          // unconfirmed value, exactly what this map exists to avoid.
+          const revertTo = chainOrigin.has(chainKey) ? chainOrigin.get(chainKey)! : from;
+          chainOrigin.delete(chainKey); // this failure settles the chain
           log.debug('KanbanView: reverting failed move', { id, field, revertTo, target });
           const revertChanges = resolveFieldWrite(currentNode, field, revertTo ?? '');
           sharedNodeStore.updateNode(
