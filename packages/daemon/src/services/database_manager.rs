@@ -1293,11 +1293,13 @@ mod tests {
 
     /// Put a directory at `registry_path`, so any subsequent `Registry::save`
     /// fails at the `tokio::fs::write` step, without touching any in-memory
-    /// state. The one shared way every save-failure/cancellation test below
-    /// (and `failed_create_rolls_back_and_leaves_the_daemon_serviceable`)
-    /// breaks persistence. Tolerates `registry_path` not existing yet — a
-    /// manager that has never successfully saved has no file there to remove
-    /// first.
+    /// state. The one shared way every save-*failure* test below (and
+    /// `failed_create_rolls_back_and_leaves_the_daemon_serviceable`) breaks
+    /// persistence — distinct from the cancellation tests further down,
+    /// which suspend a real save mid-flight via `SaveGate` rather than
+    /// making it fail outright. Tolerates `registry_path` not existing yet —
+    /// a manager that has never successfully saved has no file there to
+    /// remove first.
     async fn break_registry_persistence(registry_path: &Path) {
         match tokio::fs::remove_file(registry_path).await {
             Ok(()) => {}
