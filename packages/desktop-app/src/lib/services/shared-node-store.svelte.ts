@@ -2600,14 +2600,56 @@ export class SharedNodeStore {
               ? normalizeNodeData(occError.conflictData.current_node)
               : null;
             if (currentNode) {
-              this.nodesSet(nodeId, currentNode);
-              this.versions.set(nodeId, currentNode.version ?? 1);
-              this.persistedNodeIds.add(nodeId);
-              this.pendingUpdates.delete(nodeId);
-              this.notifySubscribers(nodeId, currentNode, {
-                type: 'database',
-                reason: 'occ-resync'
-              });
+              // This writes the conflict payload straight into the store,
+              // same as a `database`-sourced broadcast, so it must respect
+              // the same skip-while-editing guard `setNode()`/
+              // `resyncNodeFromServer()` enforce (`decideRemoteUpdate`) —
+              // the identical clobber class #2071 closed for `updateNode()`'s
+              // sibling handler, applied here to the task-property path.
+              //
+              // `hasPending` is `hadQueuedWrite` (captured above, BEFORE
+              // `clearQueued()` ran) rather than a live
+              // `PersistenceCoordinator.hasPending()` read, for the same
+              // reason `updateNode()`'s direct-hydration branch uses it: this
+              // fires from inside the very write's own catch handler, before
+              // its `executingOperations` entry has cleared, so a live
+              // `hasPending()` read here would just see that same failing
+              // write's own not-yet-cleared bookkeeping and treat it as "an
+              // edit is pending" every time — self-referential and racy, not
+              // a signal of a genuinely different in-flight write.
+              const isFocused = focusManager.isNodeEditing(nodeId);
+              const decision = decideRemoteUpdate(
+                currentNode,
+                this.nodes.get(nodeId),
+                { type: 'database', reason: 'occ-resync' },
+                { isFocused, hasPending: hadQueuedWrite }
+              );
+
+              if (decision.apply) {
+                this.nodesSet(nodeId, currentNode);
+                this.versions.set(nodeId, currentNode.version ?? 1);
+                this.persistedNodeIds.add(nodeId);
+                this.pendingUpdates.delete(nodeId);
+                this.notifySubscribers(nodeId, currentNode, {
+                  type: 'database',
+                  reason: 'occ-resync'
+                });
+              } else {
+                // Node is actively being edited — keep the local,
+                // in-progress content and skip the clobber. The conflict
+                // response fetch still proves the node exists server-side,
+                // so mark it persisted the same way the apply branch would;
+                // only the content/version overwrite is skipped. This call
+                // site always raises its own conflict notification
+                // unconditionally below regardless of branch, so no
+                // separate notify here (unlike `resyncNodeFromServer`'s skip
+                // branch, which has no such external caller for its
+                // queued-follow-up case).
+                this.persistedNodeIds.add(nodeId);
+                log.debug(
+                  `OCC direct hydration for task node ${nodeId} skipped — node is actively being edited (focused=${isFocused})`
+                );
+              }
             } else {
               this.resyncNodeFromServer(nodeId, false, hadQueuedWrite).catch((resyncError) => {
                 log.error(`Failed to resync after OCC error for task node ${nodeId}:`, resyncError);

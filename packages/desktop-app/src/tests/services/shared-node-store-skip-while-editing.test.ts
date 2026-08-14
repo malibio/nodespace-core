@@ -638,4 +638,153 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(store.getNode('occ-5')?.content).toBe('B-edit-still-queued');
     }, 10000);
   });
+
+  // updateTaskNode()'s OCC-conflict catch handler has the identical
+  // direct-hydration shape updateNode() had before #2071: a DIRECT path when
+  // the daemon embeds `current_node` in the conflict payload
+  // (`this.nodesSet(nodeId, currentNode)`), unguarded against a node the
+  // user is actively editing. This block is the task-node counterpart to the
+  // `OCC direct-hydration guard (#2068)` block above.
+  describe('updateTaskNode OCC direct-hydration guard (#2072)', () => {
+    type TaskLikeNode = Node & {
+      status: string;
+      priority?: string;
+      dueDate?: string | null;
+      assignee?: string | null;
+      startedAt?: string | null;
+      completedAt?: string | null;
+    };
+
+    const makeTaskNode = (id: string, content: string, version = 1): TaskLikeNode => ({
+      id,
+      nodeType: 'task',
+      content,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      version,
+      properties: {},
+      mentions: [],
+      status: 'todo'
+    });
+
+    const makeVersionConflictError = (currentNode: TaskLikeNode | null) => ({
+      message: 'Version conflict',
+      code: 'VERSION_CONFLICT' as const,
+      details: 'Aborted',
+      conflictData: {
+        node_id: currentNode?.id ?? 'unknown',
+        expected: 1,
+        actual: 2,
+        current_node: currentNode
+      }
+    });
+
+    // Same double-setNode rationale as seedPersisted above, adapted for a
+    // task node: the first call marks it seen, the second marks it
+    // persisted, so updateTaskNode's own persist attempt goes through
+    // backendAdapter.updateTaskNode (the path under test) rather than a
+    // create fallback.
+    function seedPersistedTask(id: string, content: string, version = 1): void {
+      const node = makeTaskNode(id, content, version);
+      store.setNode(node, databaseSource);
+      store.setNode(node, databaseSource);
+    }
+
+    it("does not apply the daemon's conflicting current_node onto a focused task node", async () => {
+      seedPersistedTask('t-occ-1', 'server-old', 1);
+      focusManager.focusNode('t-occ-1', 'default');
+
+      const daemonCurrentNode = makeTaskNode('t-occ-1', 'daemon-conflict-content', 2);
+      daemonCurrentNode.status = 'done';
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateTaskNode('t-occ-1', { status: 'in-progress' }, viewerSource);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const after = store.getNode('t-occ-1') as unknown as TaskLikeNode | undefined;
+      // Unlike updateNode()'s catch handler (which leaves the optimistic edit
+      // in place on any failure via the no-op-on-content rollbackUpdate()),
+      // updateTaskNode()'s catch handler unconditionally reverts to the
+      // pre-edit existingNode snapshot BEFORE this guard ever runs — so the
+      // guard here is not protecting the specific optimistic edit value, it
+      // is protecting against the DAEMON's conflicting snapshot landing on
+      // top of that reverted state while the node is still being edited.
+      // What must hold either way: the daemon's conflicting version/status
+      // ("done", v2) must not apply while focused — that would silently
+      // advance the node's version out from under an in-progress edit.
+      expect(after?.status).not.toBe('done');
+      expect(after?.version).not.toBe(2);
+      expect(after?.status).toBe('todo');
+      expect(after?.version).toBe(1);
+    });
+
+    it('still marks the task node as persisted on a guard-skip, mirroring updateNode', async () => {
+      seedPersistedTask('t-occ-2', 'server-old', 1);
+      focusManager.focusNode('t-occ-2', 'default');
+
+      const daemonCurrentNode = makeTaskNode('t-occ-2', 'daemon-conflict-content', 2);
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateTaskNode('t-occ-2', { status: 'in-progress' }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(store.isNodePersisted('t-occ-2')).toBe(true);
+    });
+
+    it('still applies the OCC hydration normally for a non-focused, non-pending task node (regression check)', async () => {
+      seedPersistedTask('t-occ-3', 'server-old', 1);
+      // Not focused, nothing else pending.
+
+      const daemonCurrentNode = makeTaskNode('t-occ-3', 'daemon-conflict-content', 2);
+      daemonCurrentNode.status = 'done';
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateTaskNode('t-occ-3', { status: 'in-progress' }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const after = store.getNode('t-occ-3') as unknown as TaskLikeNode | undefined;
+      expect(after?.status).toBe('done');
+      expect(after?.version).toBe(2);
+    });
+
+    it('raises exactly one version-mismatch conflict notification on a task-node guard-skip', async () => {
+      seedPersistedTask('t-occ-4', 'server-old', 1);
+      focusManager.focusNode('t-occ-4', 'default');
+
+      const daemonCurrentNode = makeTaskNode('t-occ-4', 'daemon-conflict-content', 2);
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateTaskNode('t-occ-4', { status: 'in-progress' }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const notifications = conflictNotifications.notifications.filter(
+        (n) => n.nodeId === 't-occ-4' && n.conflictType === 'version-mismatch'
+      );
+      expect(notifications).toHaveLength(1);
+    });
+
+    // Unlike updateNode()'s OCC direct-hydration branch, this describe block
+    // does not include a "does not discard a genuinely queued second write"
+    // test mirroring #2069. updateTaskNode()'s catch handler unconditionally
+    // does `this.nodesSet(nodeId, existingNode)` BEFORE this guard runs (on
+    // ANY failure, OCC or not) — unlike updateNode(), whose rollbackUpdate()
+    // never touches node content. That means a write A's failure can clobber
+    // a later write B's optimistic value regardless of this guard; it is a
+    // separate, pre-existing bug in the unconditional rollback line itself,
+    // not the direct-hydration branch this fix is scoped to. Left as an
+    // explicit todo (rather than a comment alone) so it stays visible in
+    // verbose test output until #2088 fixes the underlying rollback.
+    it.todo(
+      '#2088: does not discard a genuinely queued second write when an earlier write fails (unconditional existingNode rollback clobbers it)'
+    );
+  });
 });
