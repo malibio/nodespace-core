@@ -772,15 +772,19 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(notifications).toHaveLength(1);
     });
 
-    // NOTE: unlike updateNode()'s OCC direct-hydration branch, this describe
-    // block does not include a "does not discard a genuinely queued second
-    // write" test mirroring #2069. updateTaskNode()'s catch handler
-    // unconditionally does `this.nodesSet(nodeId, existingNode)` BEFORE this
-    // guard runs (on ANY failure, OCC or not) — unlike updateNode(), whose
-    // rollbackUpdate() never touches node content. That means a write A's
-    // failure can clobber a later write B's optimistic value regardless of
-    // this guard; it is a separate, pre-existing bug in the unconditional
-    // rollback line itself, not the direct-hydration branch #2072 scoped
-    // this fix to. Filed as a follow-up rather than folded in here.
+    // Unlike updateNode()'s OCC direct-hydration branch, this describe block
+    // does not include a "does not discard a genuinely queued second write"
+    // test mirroring #2069. updateTaskNode()'s catch handler unconditionally
+    // does `this.nodesSet(nodeId, existingNode)` BEFORE this guard runs (on
+    // ANY failure, OCC or not) — unlike updateNode(), whose rollbackUpdate()
+    // never touches node content. That means a write A's failure can clobber
+    // a later write B's optimistic value regardless of this guard; it is a
+    // separate, pre-existing bug in the unconditional rollback line itself,
+    // not the direct-hydration branch this fix is scoped to. Left as an
+    // explicit todo (rather than a comment alone) so it stays visible in
+    // verbose test output until #2088 fixes the underlying rollback.
+    it.todo(
+      '#2088: does not discard a genuinely queued second write when an earlier write fails (unconditional existingNode rollback clobbers it)'
+    );
   });
 });
