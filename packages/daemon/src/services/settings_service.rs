@@ -200,6 +200,142 @@ pub async fn find_openai_compat_config(
     }
 }
 
+/// Which step of [`write_config_atomic`]'s temp-file-then-rename sequence
+/// failed, so each caller can report a step-appropriate message while
+/// sharing the identical crash-safety mechanics.
+enum WriteConfigAtomicError {
+    Write(std::io::Error),
+    #[cfg(unix)]
+    Chmod(std::io::Error),
+    Rename(std::io::Error),
+}
+
+/// Write `contents` to `config_path` via a temp file created in the same
+/// directory (so the final rename is an atomic same-filesystem move),
+/// followed by an atomic rename over the real path — rather than truncating
+/// `config_path` in place. This guarantees `config_path` always holds
+/// either its previous complete content or the new complete content, never
+/// a partial write, even if the process crashes or loses power mid-write.
+///
+/// Shared by `SettingsServiceImpl::write_config` (the RPC-driven
+/// read-modify-write, serialized under `write_lock`) and
+/// `record_routing_probe_verdict` (a best-effort, unlocked write from
+/// outside any RPC — see that function's own doc comment for why it's
+/// intentionally not coordinated with `write_lock`): both persist
+/// `daemon.toml` and both need the same crash-safety guarantee, independent
+/// of that locking question.
+///
+/// On Unix, the temp file is created already restricted to owner-only via
+/// `OpenOptions::mode(0o600)` (see `SettingsServiceImpl::
+/// create_tmp_file_owner_only`), since `daemon.toml` can hold real
+/// third-party API keys — with an explicit `set_permissions` backstop
+/// afterward for the case where a stale temp file from an interrupted prior
+/// attempt already exists at `tmp_path`.
+///
+/// The temp filename is unique per *call*, not just per process
+/// (`std::process::id()` alone is not enough): `write_config` and
+/// `record_routing_probe_verdict` both resolve to the same
+/// `~/.nodespace/daemon.toml` and can run concurrently on the daemon's
+/// multi-threaded runtime — `record_routing_probe_verdict` is deliberately
+/// unlocked (see its doc comment). A per-process-only name would let two
+/// concurrent calls open, write, and rename the *same* temp path
+/// (`create_tmp_file_owner_only` uses `truncate(true)`, not
+/// `create_new(true)`, so a second opener silently reuses/truncates the
+/// first's in-flight file), which could surface a spurious error on an
+/// unrelated save or interleave mixed content before either side renames.
+/// The monotonic counter guarantees distinct paths across concurrent calls
+/// within one process; the pid keeps them distinct across process restarts
+/// too, matching the original intent.
+async fn write_config_atomic(
+    config_path: &std::path::Path,
+    contents: &str,
+) -> Result<(), WriteConfigAtomicError> {
+    static CALL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call_id = CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_file_name = format!(
+        "{}.tmp-{}-{}",
+        config_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("daemon.toml"),
+        std::process::id(),
+        call_id,
+    );
+    let tmp_path = config_path.with_file_name(tmp_file_name);
+
+    #[cfg(unix)]
+    let write_result: std::io::Result<()> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = SettingsServiceImpl::create_tmp_file_owner_only(&tmp_path).await?;
+        file.write_all(contents.as_bytes()).await?;
+        file.flush().await?;
+        Ok(())
+    }
+    .await;
+    #[cfg(not(unix))]
+    let write_result = tokio::fs::write(&tmp_path, contents).await;
+
+    // A failure partway through this write (e.g. ENOSPC) can still leave a
+    // partial file at `tmp_path` — clean it up rather than leaving a stray,
+    // possibly secret-bearing file behind.
+    if let Err(e) = write_result {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(WriteConfigAtomicError::Write(e));
+    }
+
+    // Defensive backstop, not the primary mechanism (see
+    // `create_tmp_file_owner_only`): the kernel only applies
+    // `OpenOptions::mode` when `open(2)` actually creates the file. If a
+    // stale temp file from an interrupted prior attempt already exists at
+    // `tmp_path` with different permissions, `create(true)` opens it as-is
+    // and the mode argument is silently ignored — so this explicit
+    // `set_permissions` call still runs to cover that case. Owner-only:
+    // other local accounts on a shared machine must not be able to read the
+    // API keys this file can contain. Unix-only; this is a macOS/Linux
+    // desktop app.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let result = tokio::fs::set_permissions(&tmp_path, perms).await;
+        #[cfg(test)]
+        let result = if FAIL_NEXT_CHMOD.with(|f| f.replace(false)) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected chmod failure (test)",
+            ))
+        } else {
+            result
+        };
+        if let Err(e) = result {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(WriteConfigAtomicError::Chmod(e));
+        }
+    }
+
+    // Unlike the chmod injection above, this must skip the *real* rename
+    // syscall entirely when firing — POSIX rename is atomic, so a real
+    // failure never moves anything; overriding a real (successful) rename's
+    // `Ok` after the fact would leave the new content live under
+    // `config_path` while this function still reported failure, which is
+    // not what a genuine rename failure looks like and would defeat the
+    // point of the test using this flag.
+    #[cfg(all(test, unix))]
+    let rename_result = if FAIL_NEXT_RENAME.with(|f| f.replace(false)) {
+        Err(std::io::Error::other("injected rename failure (test)"))
+    } else {
+        tokio::fs::rename(&tmp_path, config_path).await
+    };
+    #[cfg(not(all(test, unix)))]
+    let rename_result = tokio::fs::rename(&tmp_path, config_path).await;
+    if let Err(e) = rename_result {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(WriteConfigAtomicError::Rename(e));
+    }
+
+    Ok(())
+}
+
 /// Persist a routing-probe verdict for one OpenAI-compatible config.
 ///
 /// Called by `LocalAgentService` after a model load runs the routing probe —
@@ -253,9 +389,20 @@ pub async fn record_routing_probe_verdict(
     }
     let serialized = toml::to_string_pretty(&config)
         .map_err(|e| anyhow::anyhow!("failed to serialize daemon config: {e}"))?;
-    tokio::fs::write(config_path, serialized)
+    write_config_atomic(config_path, &serialized)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to write daemon config: {e}"))?;
+        .map_err(|e| match e {
+            WriteConfigAtomicError::Write(e) => {
+                anyhow::anyhow!("failed to write daemon config: {e}")
+            }
+            #[cfg(unix)]
+            WriteConfigAtomicError::Chmod(e) => {
+                anyhow::anyhow!("failed to set daemon config permissions: {e}")
+            }
+            WriteConfigAtomicError::Rename(e) => {
+                anyhow::anyhow!("failed to finalize daemon config write: {e}")
+            }
+        })?;
     Ok(())
 }
 
@@ -266,14 +413,15 @@ pub struct SettingsServiceImpl {
     write_lock: Arc<Mutex<()>>,
 }
 
-// Test-only fault injection for `write_config`'s permissions and rename
-// steps. When set, the *next* `set_permissions` (resp. `rename`) call in
-// `write_config` on this thread fails as if the OS had rejected it, then
-// clears itself. A `thread_local` (not a process-global `static`) because
-// `#[tokio::test]` gives each test its own current-thread runtime —
-// everything a test awaits, including nested `write_config` calls, runs on
-// that one OS thread — so this stays isolated per test even though
-// `cargo test` runs many tests concurrently.
+// Test-only fault injection for `write_config_atomic`'s permissions and
+// rename steps, shared by both its callers (`write_config` and
+// `record_routing_probe_verdict`). When set, the *next* `set_permissions`
+// (resp. `rename`) call in `write_config_atomic` on this thread fails as if
+// the OS had rejected it, then clears itself. A `thread_local` (not a
+// process-global `static`) because `#[tokio::test]` gives each test its own
+// current-thread runtime — everything a test awaits, including nested
+// `write_config_atomic` calls, runs on that one OS thread — so this stays
+// isolated per test even though `cargo test` runs many tests concurrently.
 #[cfg(all(test, unix))]
 thread_local! {
     static FAIL_NEXT_CHMOD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -348,119 +496,34 @@ impl SettingsServiceImpl {
         let contents = toml::to_string_pretty(config)
             .map_err(|e| Status::internal(format!("Failed to serialize daemon config: {}", e)))?;
 
-        // Write to a temp file next to `config_path` (same directory, so the
-        // final rename is an atomic same-filesystem move), restrict its
-        // permissions, and only then rename it over the real path. This
-        // ordering — chmod the not-yet-live temp file, *then* make it live —
-        // matters because daemon.toml can hold real third-party API keys
-        // (openai_compat.configs): chmod'ing the real path only after writing
-        // to it (the old order) meant a chmod failure was reported to the
-        // caller as "save failed" while the new content was already
-        // durably live and would be read back on the next daemon restart —
-        // the caller's retry/error-toast has no way to know that. With the
-        // temp file, a failure at either the write or the chmod step aborts
-        // before the rename, so `config_path` and its permissions are left
-        // exactly as they were and the reported failure matches what's
-        // actually on disk.
-        let tmp_file_name = format!(
-            "{}.tmp-{}",
-            self.config_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("daemon.toml"),
-            std::process::id(),
-        );
-        let tmp_path = self.config_path.with_file_name(tmp_file_name);
-
-        // On Unix, create the temp file already restricted to owner-only via
-        // `OpenOptions::mode(0o600)` rather than `tokio::fs::write` (which
-        // opens at default, typically world/group-readable, permissions)
-        // followed by a separate `set_permissions` call. The mode is applied
-        // atomically by the `open(2)` syscall itself at the moment the file
-        // is created, so there is no window — however brief — where the
-        // fully-written new content (which can include real third-party API
-        // keys) sits on disk at default permissions. See
-        // `create_tmp_file_owner_only` for why the explicit
-        // `set_permissions` backstop below still runs after this.
-        #[cfg(unix)]
-        let write_result: std::io::Result<()> = async {
-            use tokio::io::AsyncWriteExt;
-            let mut file = Self::create_tmp_file_owner_only(&tmp_path).await?;
-            file.write_all(contents.as_bytes()).await?;
-            file.flush().await?;
-            Ok(())
-        }
-        .await;
-        #[cfg(not(unix))]
-        let write_result = tokio::fs::write(&tmp_path, &contents).await;
-
-        // A failure partway through this write (e.g. ENOSPC) can still leave
-        // a partial file at `tmp_path` — clean it up rather than leaving a
-        // stray, possibly secret-bearing file behind.
-        if let Err(e) = write_result {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(Status::internal(format!(
-                "Failed to write daemon config: {}",
-                e
-            )));
-        }
-
-        // Defensive backstop, not the primary mechanism (see above): the
-        // kernel only applies `OpenOptions::mode` when `open(2)` actually
-        // creates the file. If a stale temp file from an interrupted prior
-        // attempt already exists at `tmp_path` with different permissions,
-        // `create(true)` opens it as-is and the mode argument is silently
-        // ignored — so this explicit `set_permissions` call still runs to
-        // cover that case. Owner-only: other local accounts on a shared
-        // machine must not be able to read the API keys this file can
-        // contain. Unix-only; this is a macOS/Linux desktop app.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            let result = tokio::fs::set_permissions(&tmp_path, perms).await;
-            #[cfg(test)]
-            let result = if FAIL_NEXT_CHMOD.with(|f| f.replace(false)) {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "injected chmod failure (test)",
-                ))
-            } else {
-                result
-            };
-            if let Err(e) = result {
-                let _ = tokio::fs::remove_file(&tmp_path).await;
-                return Err(Status::internal(format!(
-                    "Failed to set daemon config permissions: {}",
-                    e
-                )));
-            }
-        }
-
-        // Unlike the chmod injection above, this must skip the *real* rename
-        // syscall entirely when firing — POSIX rename is atomic, so a real
-        // failure never moves anything; overriding a real (successful)
-        // rename's `Ok` after the fact would leave the new content live
-        // under `config_path` while this function still reported failure,
-        // which is not what a genuine rename failure looks like and would
-        // defeat the point of the test using this flag.
-        #[cfg(all(test, unix))]
-        let rename_result = if FAIL_NEXT_RENAME.with(|f| f.replace(false)) {
-            Err(std::io::Error::other("injected rename failure (test)"))
-        } else {
-            tokio::fs::rename(&tmp_path, &self.config_path).await
-        };
-        #[cfg(not(all(test, unix)))]
-        let rename_result = tokio::fs::rename(&tmp_path, &self.config_path).await;
-        if let Err(e) = rename_result {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(Status::internal(format!(
-                "Failed to finalize daemon config write: {}",
-                e
-            )));
-        }
-
-        Ok(())
+        // Delegate to the shared temp-file-then-atomic-rename helper (also
+        // used by `record_routing_probe_verdict`) rather than writing
+        // `config_path` in place. This ordering — chmod the not-yet-live
+        // temp file, *then* make it live — matters because daemon.toml can
+        // hold real third-party API keys (openai_compat.configs): chmod'ing
+        // the real path only after writing to it (the old order) meant a
+        // chmod failure was reported to the caller as "save failed" while
+        // the new content was already durably live and would be read back
+        // on the next daemon restart — the caller's retry/error-toast has
+        // no way to know that. With the temp file, a failure at any step
+        // aborts before the rename, so `config_path` and its permissions
+        // are left exactly as they were and the reported failure matches
+        // what's actually on disk. See `write_config_atomic` for the full
+        // mechanics.
+        write_config_atomic(&self.config_path, &contents)
+            .await
+            .map_err(|e| match e {
+                WriteConfigAtomicError::Write(e) => {
+                    Status::internal(format!("Failed to write daemon config: {}", e))
+                }
+                #[cfg(unix)]
+                WriteConfigAtomicError::Chmod(e) => {
+                    Status::internal(format!("Failed to set daemon config permissions: {}", e))
+                }
+                WriteConfigAtomicError::Rename(e) => {
+                    Status::internal(format!("Failed to finalize daemon config write: {}", e))
+                }
+            })
     }
 
     fn capture_to_response(capture: &CaptureConfig) -> CaptureSettingsResponse {
@@ -993,6 +1056,166 @@ mod tests {
         .await
         .expect("record should succeed");
 
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert_eq!(found.routing_ok.get("mistral:7b"), Some(&false));
+    }
+
+    /// Regression test for a collision introduced (and fixed) while sharing
+    /// `write_config_atomic` between `write_config` and
+    /// `record_routing_probe_verdict`: in production both resolve to the
+    /// same `~/.nodespace/daemon.toml`, and `record_routing_probe_verdict`
+    /// is deliberately unlocked (see its doc comment), so the two can run
+    /// concurrently on the daemon's real multi-threaded runtime. Keying the
+    /// temp filename on `std::process::id()` alone would let concurrent
+    /// calls target the *same* temp path — `create_tmp_file_owner_only`
+    /// opens with `truncate(true)`, not `create_new(true)`, so a second
+    /// opener silently reuses/truncates the first's in-flight file, which
+    /// can surface a spurious error on an unrelated save. Firing many
+    /// concurrent `write_config_atomic` calls against the same path proves
+    /// every call either succeeds cleanly or fails for a real reason, never
+    /// because it collided with a sibling call's temp file, and that the
+    /// file that lands is always one complete write — never truncated or
+    /// mixed content from two writers, and no temp file is left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_write_config_atomic_calls_do_not_collide_on_tmp_path() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tempdir.path().join("daemon.toml");
+
+        let mut handles = Vec::new();
+        for i in 0..20 {
+            let path = config_path.clone();
+            let contents = format!("value = {i}\n");
+            handles.push(tokio::spawn(async move {
+                write_config_atomic(&path, &contents).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("task should not panic")
+                .map_err(|_| ())
+                .expect(
+                    "a concurrent write_config_atomic call must not fail from colliding with \
+                     a sibling call's temp file",
+                );
+        }
+
+        // The file must hold exactly one complete write, never a mix of two.
+        let final_contents = tokio::fs::read_to_string(&config_path)
+            .await
+            .expect("final file should exist");
+        assert!(
+            (0..20).any(|i| final_contents == format!("value = {i}\n")),
+            "final content must be exactly one complete write, got: {:?}",
+            final_contents
+        );
+
+        // No leftover temp files once every concurrent writer has finished.
+        let mut entries = tokio::fs::read_dir(tempdir.path())
+            .await
+            .expect("read_dir should succeed");
+        let mut leftover_tmp_files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".tmp-") {
+                leftover_tmp_files.push(name);
+            }
+        }
+        assert!(
+            leftover_tmp_files.is_empty(),
+            "no temp files should remain after concurrent writers finish, found {:?}",
+            leftover_tmp_files
+        );
+    }
+
+    /// Regression test for the crash-safety gap this issue fixes:
+    /// `record_routing_probe_verdict` used to write `daemon.toml` in place
+    /// via a plain `tokio::fs::write`, so a crash or power loss mid-write
+    /// could leave the file truncated/corrupt. It now shares
+    /// `write_config_atomic` with `write_config`, so a failure finalizing
+    /// the write (the atomic rename) must leave the previously-saved config
+    /// completely intact — not truncated, not partially updated — exactly
+    /// like the equivalent guarantee already proven for `write_config` in
+    /// `rename_failure_after_chmod_leaves_previous_config_intact_and_reports_the_error`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn record_routing_probe_verdict_rename_failure_leaves_previous_config_intact() {
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config("a", "http://localhost:11434/v1", "mistral:7b")],
+        }))
+        .await
+        .expect("set should succeed");
+
+        FAIL_NEXT_RENAME.with(|f| f.set(true));
+
+        let failed = record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await;
+
+        assert!(
+            failed.is_err(),
+            "a rename failure finalizing the write must surface as an error"
+        );
+        let err_message = failed.unwrap_err().to_string();
+        assert!(
+            err_message.contains("finalize"),
+            "rename failure should be reported distinctly from a plain write failure, got: {}",
+            err_message
+        );
+        assert!(
+            !FAIL_NEXT_RENAME.with(|f| f.get()),
+            "injected failure should have been consumed by the write attempt"
+        );
+
+        // The verdict must NOT have been recorded — the previous config
+        // (with no verdict yet) must survive untouched.
+        let found = find_openai_compat_config(&config_path, "a")
+            .await
+            .expect("read should succeed")
+            .expect("config exists");
+        assert!(
+            found.routing_ok.is_empty(),
+            "a failed finalize must not leave a partial or new verdict live"
+        );
+
+        // No temp file left behind.
+        let mut entries = tokio::fs::read_dir(tempdir.path())
+            .await
+            .expect("read_dir should succeed");
+        let mut leftover_tmp_files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".tmp-") {
+                leftover_tmp_files.push(name);
+            }
+        }
+        assert!(
+            leftover_tmp_files.is_empty(),
+            "a failed rename must not leave a temp file behind, found {:?}",
+            leftover_tmp_files
+        );
+
+        // A subsequent record with no injected failure succeeds normally,
+        // proving the atomic-write machinery itself still works.
+        record_routing_probe_verdict(
+            &config_path,
+            "a",
+            "http://localhost:11434/v1",
+            "mistral:7b",
+            false,
+        )
+        .await
+        .expect("record without injected failure should succeed");
         let found = find_openai_compat_config(&config_path, "a")
             .await
             .expect("read should succeed")
