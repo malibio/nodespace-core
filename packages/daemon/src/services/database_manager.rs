@@ -163,6 +163,25 @@ impl Registry {
     }
 
     /// Persist the registry to `path`, creating the parent directory if needed.
+    ///
+    /// Known residual gap: `tokio::fs::write` below persists via
+    /// `spawn_blocking` under the hood, dispatching the actual write to a
+    /// blocking-pool thread. Tokio does not retract an already-dispatched
+    /// blocking closure when the task polling this `.await` is aborted or
+    /// dropped — so if a caller (e.g.
+    /// [`DatabaseManager::mutate_and_save`]) is cancelled while parked
+    /// here, the write can still complete on disk moments later, after the
+    /// caller has already given up on it. This is deliberately left as-is
+    /// rather than made abort-aware: every caller only swaps its candidate
+    /// into live state after this call has already resolved `Ok` with no
+    /// further `.await` in between, so a stray completed write here can
+    /// never surface as a false success — it only means the in-memory view
+    /// can lag the file by one write until the next `load()` (e.g. process
+    /// restart) re-reads it. Closing that lag for real would mean making
+    /// this write atomic against cancellation at the OS/thread-pool level
+    /// (for example, a temp-file-plus-rename with the reconciliation itself
+    /// detached from the caller's lifetime) — a materially larger change
+    /// than the narrow, self-healing gap it would close.
     pub async fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -468,6 +487,13 @@ impl DatabaseManager {
     /// property holds everywhere, not just in whichever mutator happened to
     /// get it right — which is exactly how `set_default`/`set_bound_tenant`
     /// first shipped without it.
+    ///
+    /// One residual gap this does not close: cancellation *inside*
+    /// `candidate.save(..)` itself, below — see the note on
+    /// [`Registry::save`]. That gap can only ever leave a stray write
+    /// completing on disk after the fact, never a false success, so it is
+    /// out of scope for the "no half-applied mutation" guarantee this
+    /// helper exists to provide.
     async fn mutate_and_save(
         &self,
         mut registry: RwLockWriteGuard<'_, Registry>,
@@ -1838,5 +1864,93 @@ mod tests {
         assert_eq!(snap.databases.len(), 1);
         assert_eq!(snap.databases[0].entry.id, entry.id);
         assert_eq!(snap.default_database.as_ref(), Some(&entry.id));
+    }
+
+    /// Proves the residual gap documented on [`Registry::save`]: a
+    /// `spawn_blocking`-dispatched write is not retracted when the task
+    /// polling its `.await` is aborted, so it can complete on disk after the
+    /// caller has already given up on it — and that this is at worst
+    /// self-healing, never a false success.
+    ///
+    /// `Registry::save`'s own write is ordinarily too fast (a few hundred
+    /// bytes to a local temp dir) to reliably abort mid-flight without a
+    /// test-only hook — and `Registry` is a plain `Serialize`/`Deserialize`
+    /// on-disk mirror with no business carrying test-only synchronization
+    /// state (unlike [`DatabaseManager`], which already has exactly that in
+    /// [`SaveGate`], gating a different, earlier point: *before*
+    /// `candidate.save(..)` is even called, which is what the
+    /// `dropping_the_future_mid_persist_*` tests above exercise). So this
+    /// test reproduces the exact primitive `tokio::fs::write` uses
+    /// internally — `spawn_blocking` wrapping a synchronous `std::fs::write`
+    /// — with an artificial delay standing in for slower disk I/O, purely so
+    /// the abort below deterministically lands while the write is still
+    /// in-flight rather than racing one that's already finished. Everything
+    /// downstream of the dispatch (spawn_blocking's non-cancellability, the
+    /// caller never swapping a candidate into live state until after this
+    /// call resolves `Ok`) is identical to the real code path.
+    #[tokio::test]
+    async fn aborting_the_awaiting_task_does_not_retract_a_dispatched_blocking_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("databases.toml");
+
+        let old = Registry::default();
+        old.save(&path).await.unwrap();
+
+        let new = Registry {
+            databases: vec![],
+            default_database: Some(DatabaseId::from("stray-write".to_string())),
+        };
+        let contents = toml::to_string_pretty(&new).unwrap();
+
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_writer = started.clone();
+        let write_path = path.clone();
+        let driver = tokio::spawn(async move {
+            // Mirrors `tokio::fs::write`'s own shape (and thus
+            // `Registry::save`'s): the actual write is dispatched to the
+            // blocking pool, and this task merely awaits its `JoinHandle`.
+            tokio::task::spawn_blocking(move || {
+                started_writer.notify_one();
+                // Stand-in for slower disk I/O, so the write is still
+                // running when the abort below fires.
+                std::thread::sleep(Duration::from_millis(50));
+                std::fs::write(write_path, contents)
+            })
+            .await
+            .unwrap()
+        });
+
+        // Wait until the write has genuinely started running on the blocking
+        // pool — not merely "spawned" — before aborting.
+        started.notified().await;
+        driver.abort();
+        let outcome = driver.await;
+        assert!(
+            outcome.unwrap_err().is_cancelled(),
+            "the driving task must have been cancelled, not completed"
+        );
+
+        // Immediately after the abort, the blocking write is still asleep
+        // (it hasn't reached `std::fs::write` yet). A `load()` right now —
+        // standing in for whatever a real caller's `list()` would report
+        // right after giving up on a cancelled `mutate_and_save` — must
+        // still reflect the pre-call content: never a false success.
+        let immediately_after = Registry::load(&path).await.unwrap();
+        assert_eq!(
+            immediately_after.default_database, old.default_database,
+            "a load() taken right after the abort must not observe the stray write"
+        );
+
+        // Give the detached blocking write, unaffected by the abort above,
+        // time to actually finish.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Self-healing: the stray write did land on disk, and a subsequent
+        // load — standing in for the daemon's next restart — picks it up.
+        let after_restart = Registry::load(&path).await.unwrap();
+        assert_eq!(
+            after_restart.default_database, new.default_database,
+            "the stray completed write must be visible to the next load()"
+        );
     }
 }
