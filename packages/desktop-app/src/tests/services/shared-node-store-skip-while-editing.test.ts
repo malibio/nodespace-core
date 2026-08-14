@@ -474,4 +474,115 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(store.getNode('resync-4')?.content).toBe('server-fresh');
     });
   });
+
+  // `updateNode()`'s OCC-conflict catch handler has two hydration paths: a
+  // DIRECT one when the daemon embeds `current_node` in the conflict payload
+  // (`this.nodesSet(nodeId, currentNode)`), and a FALLBACK
+  // (`resyncNodeFromServer`, tested above) when it doesn't. #2066 added the
+  // skip-while-editing guard to the fallback only — the direct path wrote
+  // straight into the store with no equivalent check. This block is the
+  // direct-path counterpart to the `resyncNodeFromServer guard` block above.
+  describe('OCC direct-hydration guard (#2068)', () => {
+    const makeVersionConflictError = (currentNode: Node | null) => ({
+      message: 'Version conflict',
+      code: 'VERSION_CONFLICT' as const,
+      details: 'Aborted',
+      conflictData: {
+        node_id: currentNode?.id ?? 'unknown',
+        expected: 1,
+        actual: 2,
+        current_node: currentNode
+      }
+    });
+
+    // Mirrors ai-chat-occ-conflict-regression.test.ts's seeding helper:
+    // `setNode` only marks a database-sourced node persisted once the store
+    // has already seen it, so this must happen twice — otherwise the write
+    // routes to `createNode` and the mocked `updateNode` rejection never
+    // fires (the OCC catch handler under test is on the UPDATE path only).
+    function seedPersisted(id: string, content: string, version = 1): void {
+      const node = makeNode(id, content, version);
+      store.setNode(node, databaseSource);
+      store.setNode(node, databaseSource);
+    }
+
+    it("does not clobber a focused node's optimistic content when the OCC conflict response embeds current_node", async () => {
+      seedPersisted('occ-1', 'server-old', 1);
+      focusManager.focusNode('occ-1', 'default');
+
+      const daemonCurrentNode = makeNode('occ-1', 'daemon-conflict-content', 2);
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateNode('occ-1', { content: 'user is typing this', properties: {} }, viewerSource);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const after = store.getNode('occ-1');
+      expect(after?.content).toBe('user is typing this');
+      // Local `.version` is also untouched — same reactivity-safety reason
+      // as the setNode guard above (mutating it would remount a focused
+      // editor mid-keystroke).
+      expect(after?.version).toBe(1);
+    });
+
+    it('still marks the node as persisted on a guard-skip, mirroring resyncNodeFromServer', async () => {
+      seedPersisted('occ-2', 'server-old', 1);
+      focusManager.focusNode('occ-2', 'default');
+
+      const daemonCurrentNode = makeNode('occ-2', 'daemon-conflict-content', 2);
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateNode('occ-2', { content: 'still typing', properties: {} }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(store.isNodePersisted('occ-2')).toBe(true);
+    });
+
+    it('still applies the OCC hydration normally for a non-focused, non-pending node (regression check)', async () => {
+      seedPersisted('occ-3', 'server-old', 1);
+      // Not focused, nothing else pending.
+
+      const daemonCurrentNode = makeNode('occ-3', 'daemon-conflict-content', 2);
+      const getNodeSpy = vi.spyOn(backendAdapter, 'getNode');
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateNode(
+        'occ-3',
+        { content: 'a write from this client', properties: {} },
+        viewerSource
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const after = store.getNode('occ-3');
+      expect(after?.content).toBe('daemon-conflict-content');
+      expect(after?.version).toBe(2);
+      // Direct-hydration path applied — the fallback (resyncNodeFromServer,
+      // which calls backendAdapter.getNode) never fires.
+      expect(getNodeSpy).not.toHaveBeenCalled();
+    });
+
+    it('raises exactly one version-mismatch conflict notification on a guard-skip', async () => {
+      seedPersisted('occ-4', 'server-old', 1);
+      focusManager.focusNode('occ-4', 'default');
+
+      const daemonCurrentNode = makeNode('occ-4', 'daemon-conflict-content', 2);
+      vi.spyOn(backendAdapter, 'updateNode').mockRejectedValueOnce(
+        makeVersionConflictError(daemonCurrentNode)
+      );
+
+      store.updateNode('occ-4', { content: 'user is typing this', properties: {} }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const notifications = conflictNotifications.notifications.filter(
+        (n) => n.nodeId === 'occ-4' && n.conflictType === 'version-mismatch'
+      );
+      expect(notifications).toHaveLength(1);
+    });
+  });
 });
