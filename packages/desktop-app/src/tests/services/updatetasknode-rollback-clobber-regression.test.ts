@@ -129,8 +129,8 @@ describe('updateTaskNode failure-path rollback — queued-write regression', () 
   );
 
   it(
-    'still surfaces the generic write-failure notification for an isolated non-OCC ' +
-      'failure with nothing else queued (regression check: the fix must not silence it)',
+    'leaves the optimistic edit in place for an isolated non-OCC failure with ' +
+      'nothing else queued, instead of force-reverting it (matches updateNode())',
     async () => {
       const nodeId = 'task-rollback-isolated-1';
       store.setNode(makeTaskNode(nodeId, 'open', 1), dbSource);
@@ -139,6 +139,10 @@ describe('updateTaskNode failure-path rollback — queued-write regression', () 
 
       store.updateTaskNode(nodeId, { status: 'in_progress' }, viewerSource);
 
+      // Confirms the failure was actually caught and handled (not that a
+      // user-visible notification fired — updateTaskNode()'s outer catch has
+      // no such fallback for a non-OCC failure at all; that gap is tracked
+      // separately, not asserted here).
       await vi.waitFor(() => {
         expect(store.getTestErrors().length).toBeGreaterThan(0);
       });
