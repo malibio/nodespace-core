@@ -584,5 +584,58 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       );
       expect(notifications).toHaveLength(1);
     });
+
+    // #2069 fixed resyncNodeFromServer's direct call (the fallback branch
+    // above this guard) to stop discarding a genuinely queued second write.
+    // This guard's `hasPending` was the identical hardcoded-`false` bug on
+    // the DIRECT-HYDRATION branch (this describe block) — sharing the exact
+    // same `hadQueuedWrite` value the OCC handler now captures before
+    // `clearQueued()` runs, just previously not wired into this branch's own
+    // `decideRemoteUpdate` call.
+    it('does not discard a genuinely queued second write when the daemon embeds current_node (direct-hydration branch)', async () => {
+      seedPersisted('occ-5', 'seed', 1);
+      // Not focused — the ONLY thing protecting the queued write here is the
+      // hasPending signal, not the isFocused one already covered above.
+
+      let updateCallCount = 0;
+      vi.spyOn(backendAdapter, 'updateNode').mockImplementation(async (_id, version, node) => {
+        updateCallCount++;
+        if (updateCallCount === 1) {
+          // Write A: delayed enough that write B is guaranteed to land and
+          // collapse into queuedOperations while A is still executing.
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          throw makeVersionConflictError(makeNode('occ-5', 'daemon-conflict-content', 2));
+        }
+        // Write B's own eventual real persist attempt, once promoted.
+        return {
+          id: 'occ-5',
+          nodeType: 'text',
+          content: String(node.content ?? ''),
+          createdAt: '2024-01-01T00:00:00.000Z',
+          modifiedAt: new Date().toISOString(),
+          version: version + 1,
+          properties: {},
+          mentions: []
+        };
+      });
+
+      // Write A: a property change -> immediate mode, starts executing
+      // synchronously (no debounce wait needed to get it "in flight").
+      store.updateNode('occ-5', { content: 'A-edit', properties: {} }, viewerSource);
+
+      // Write B: submitted synchronously while A is still executing (A's
+      // mocked RPC hasn't settled yet) -> collapses into queuedOperations.
+      // B's optimistic content lands immediately.
+      store.updateNode('occ-5', { content: 'B-edit-still-queued', properties: {} }, viewerSource);
+      expect(store.getNode('occ-5')?.content).toBe('B-edit-still-queued');
+
+      // Let A's OCC failure (direct-hydration branch) and B's eventual real
+      // persist attempt settle.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // B's optimistic value must not have been silently clobbered by the
+      // direct-hydration branch's stale (pre-B) conflict payload.
+      expect(store.getNode('occ-5')?.content).toBe('B-edit-still-queued');
+    }, 10000);
   });
 });

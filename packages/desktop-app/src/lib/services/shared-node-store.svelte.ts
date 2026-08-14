@@ -1554,13 +1554,15 @@ export class SharedNodeStore {
                     // content, exactly the class of bug #2066 closed for the
                     // fallback (`resyncNodeFromServer`) path.
                     //
-                    // `hasPending` is deliberately `false` here for the same
-                    // reason `resyncNodeFromServer`'s direct call keeps it
-                    // `false` (see that method's comment): this fires from
-                    // inside the very write's own catch handler, before its
-                    // `executingOperations` entry has cleared, so a real
-                    // `PersistenceCoordinator.hasPending()` read here would
-                    // just see that same failing write's own not-yet-cleared
+                    // `hasPending` here is `hadQueuedWrite` (captured above,
+                    // BEFORE `clearQueued()` ran) rather than a live
+                    // `PersistenceCoordinator.hasPending()` read, for the same
+                    // reason `resyncNodeFromServer`'s direct call uses it (see
+                    // that method's `directCallHadQueuedWrite` param doc):
+                    // this fires from inside the very write's own catch
+                    // handler, before its `executingOperations` entry has
+                    // cleared, so a live `hasPending()` read here would just
+                    // see that same failing write's own not-yet-cleared
                     // bookkeeping and treat it as "an edit is pending" every
                     // time — self-referential and racy, not a signal of a
                     // genuinely different in-flight write.
@@ -1569,7 +1571,7 @@ export class SharedNodeStore {
                       currentNode,
                       this.nodes.get(nodeId),
                       { type: 'database', reason: 'occ-resync' },
-                      { isFocused, hasPending: false }
+                      { isFocused, hasPending: hadQueuedWrite }
                     );
 
                     if (decision.apply) {
