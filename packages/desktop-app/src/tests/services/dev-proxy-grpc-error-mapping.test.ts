@@ -113,4 +113,18 @@ describe('dev-proxy grpc-error-mapping: mapGrpcError', () => {
     expect(mapped.code).toBe('VERSION_CONFLICT');
     expect(mapped.conflictData).toBeUndefined();
   });
+
+  it.each(['+3', '3abc', '-1', '3.5', ''])(
+    'rejects a non-plain-digits x-subtree-inaccessible-count value (%s) like Rust str::parse::<u64>() would',
+    (raw) => {
+      const err = makeServiceError(grpc.status.FAILED_PRECONDITION, 'refused', {
+        'x-subtree-inaccessible-count': raw
+      });
+
+      const mapped = mapGrpcError(err);
+
+      expect(mapped.code).not.toBe('SUBTREE_ACCESS_DENIED');
+      expect(mapped.conflictData).toBeUndefined();
+    }
+  );
 });

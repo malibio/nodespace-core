@@ -75,9 +75,17 @@ export function mapGrpcError(err: grpc.ServiceError): MappedGrpcError {
 
   if (err.code === grpc.status.FAILED_PRECONDITION) {
     const raw = firstMetadataString(metadata, 'x-subtree-inaccessible-count');
-    const inaccessibleCount = raw !== undefined ? Number.parseInt(raw, 10) : NaN;
-    if (Number.isFinite(inaccessibleCount)) {
-      return { code: 'SUBTREE_ACCESS_DENIED', conflictData: { inaccessibleCount } };
+    // Match Rust's `str::parse::<u64>()` exactly: the whole trailer value must
+    // be plain ASCII digits — no sign, no leading '+', no trailing garbage.
+    // The daemon only ever emits `inaccessible_count.to_string()` (a bare
+    // unsigned decimal), so this never rejects a real trailer; it just keeps
+    // a malformed/adversarial one from silently coercing (e.g. Number.parseInt
+    // would accept "+3", "3abc", or "-1", none of which Rust's parser would).
+    if (raw !== undefined && /^\d+$/.test(raw)) {
+      const inaccessibleCount = Number.parseInt(raw, 10);
+      if (Number.isFinite(inaccessibleCount)) {
+        return { code: 'SUBTREE_ACCESS_DENIED', conflictData: { inaccessibleCount } };
+      }
     }
   }
 
