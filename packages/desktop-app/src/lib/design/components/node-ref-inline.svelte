@@ -32,11 +32,14 @@
   // Written only from the fetch callback, never from an effect.
   let resolved = $state(false);
 
-  // One-shot load on mount if the node isn't already cached. ensureNode is
-  // cache-first and synthesizes virtual date nodes, so valid date ids always
-  // resolve; a UUID with no backing row resolves to undefined (not found).
+  // One-shot load on mount if the node isn't already cached, or is cached but
+  // possibly stale from a daemon reconnect (a WatchNodes outage can silently
+  // drop the update that would have kept it current — see
+  // SharedNodeStore.isPossiblyStale). ensureNode is cache-first and
+  // synthesizes virtual date nodes, so valid date ids always resolve; a UUID
+  // with no backing row resolves to undefined (not found).
   onMount(() => {
-    if (sharedNodeStore.getNode(id)) {
+    if (sharedNodeStore.getNode(id) && !sharedNodeStore.isPossiblyStale(id)) {
       resolved = true;
       return;
     }

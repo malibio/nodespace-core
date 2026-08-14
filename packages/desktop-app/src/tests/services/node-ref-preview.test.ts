@@ -113,6 +113,24 @@ describe('nodeRefPreview controller', () => {
     expect(ensure).not.toHaveBeenCalled(); // cache hit skips the fetch
   });
 
+  it('re-confirms a cached-but-possibly-stale node instead of trusting the cache (#1979)', async () => {
+    // A daemon reconnect can leave a cached node's title/snippet stale (a
+    // WatchNodes outage silently drops the update that would have kept it
+    // current) — the preview must re-fetch, not just serve the cache hit.
+    const staleCached = makeNode({ id: 'abc', title: 'Stale', content: 'Stale\nold body' });
+    const refreshed = makeNode({ id: 'abc', title: 'Fresh', content: 'Fresh\nnew body' });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(staleCached);
+    vi.spyOn(sharedNodeStore, 'isPossiblyStale').mockReturnValue(true);
+    const ensure = vi.spyOn(sharedNodeStore, 'ensureNode').mockResolvedValue(refreshed);
+
+    nodeRefPreview.requestPreview(anchor('nodespace://abc'));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(ensure).toHaveBeenCalledWith('abc');
+    expect(nodeRefPreview.state.title).toBe('Fresh');
+    expect(nodeRefPreview.state.snippet).toBe('new body');
+  });
+
   it('fetches an uncached node then reveals it', async () => {
     const node = makeNode({ id: 'xyz', title: 'Fetched', content: 'Fetched\nfrom store' });
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(undefined);

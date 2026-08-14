@@ -4105,10 +4105,13 @@ export class SharedNodeStore {
    * @param snapshotMap - Previously captured snapshot to restore
    */
   restore(snapshotMap: Map<string, Node>): void {
-    // Clear current nodes and restore from snapshot
-    this.nodes.clear();
+    // Clear current nodes and restore from snapshot. Routed through
+    // nodesClear()/nodesSet() (not a raw this.nodes.clear()/.set()) so
+    // nodeGeneration stays in sync with what's actually in `nodes` — a
+    // restored node is stamped fresh-as-of-now, same as any other write.
+    this.nodesClear();
     for (const [nodeId, node] of snapshotMap) {
-      this.nodes.set(nodeId, node);
+      this.nodesSet(nodeId, node);
     }
 
     // Notify all subscribers about the restore
