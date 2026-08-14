@@ -25,6 +25,7 @@ import { showSubtreeAccessDenied } from './subtree-access-denied.svelte';
 import { isValidDateId } from '$lib/types/date-node';
 import { createLogger } from '$lib/utils/logger';
 import { getPendingMoveOperation } from './pending-operations';
+import { onDaemonReconnect } from './daemon-status';
 import { focusManager } from './focus-manager.svelte';
 import { contentProcessor } from './content-processor';
 import { stripMarkdown } from './markdown-utils';
@@ -746,6 +747,28 @@ export class SharedNodeStore {
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
 
+  // ------------------------------------------------------------------------
+  // Reconnect staleness tracking
+  //
+  // The desktop app's WatchNodes bridge (`watcher.rs`) reconnects with backoff
+  // on any daemon disruption (crash, restart, transient h2 error) but opens a
+  // fresh live-forward stream with no catch-up replay — any node:created /
+  // node:updated / node:deleted events that would have landed during the
+  // outage are gone, not merely delayed. A node already cached before the
+  // outage is never told it might be missing an update, so it renders
+  // whatever it last held (in the worst case, a fresh AI chat conversation
+  // cached before its messages were appended) until some unrelated write
+  // happens to touch it again.
+  //
+  // `reconnectGeneration` is bumped once per `onDaemonReconnect` firing (i.e.
+  // once per observed outage window). `nodeGeneration` records, per node, the
+  // generation it was last written under. A node whose recorded generation is
+  // behind the current one may have missed updates and is treated as
+  // possibly-stale until the next write refreshes it — see `isPossiblyStale`.
+  // ------------------------------------------------------------------------
+  private reconnectGeneration = 0;
+  private nodeGeneration = new Map<string, number>();
+
   /**
    * Decide whether the persistence path should clear a CREATE's
    * `InsertPosition.After` hint as "stale" before talking to the backend.
@@ -913,14 +936,20 @@ export class SharedNodeStore {
 
   private nodesSet(nodeId: string, node: Node): void {
     this.nodes.set(nodeId, node);
+    // Any write — database broadcast, optimistic local edit, or a staleness
+    // refetch resolving — is fresh-as-of-now evidence for this node, so it no
+    // longer needs re-confirming against the current reconnect generation.
+    this.nodeGeneration.set(nodeId, this.reconnectGeneration);
   }
 
   private nodesDelete(nodeId: string): void {
     this.nodes.delete(nodeId);
+    this.nodeGeneration.delete(nodeId);
   }
 
   private nodesClear(): void {
     this.nodes.clear();
+    this.nodeGeneration.clear();
   }
 
   /**
@@ -999,6 +1028,32 @@ export class SharedNodeStore {
   }
 
   /**
+   * True if `nodeId` is cached but was last written before the most recent
+   * daemon reconnect — i.e. it may be missing a `WatchNodes` update the
+   * outage window dropped (see `markPossiblyStaleAfterReconnect`). Callers
+   * that hydrate a node for display (`ensureNode`, `pane-content.svelte`)
+   * use this to re-confirm the cache against the backend instead of trusting
+   * a cache entry that predates the gap. Returns `false` for an uncached
+   * node — "stale" only describes data we are already holding.
+   */
+  isPossiblyStale(nodeId: string): boolean {
+    if (!this.nodes.has(nodeId)) return false;
+    return (this.nodeGeneration.get(nodeId) ?? 0) < this.reconnectGeneration;
+  }
+
+  /**
+   * Called once per observed daemon reconnect (see the module-level
+   * `onDaemonReconnect` wiring below). Does not evict or touch any cached
+   * node — an already-open viewer keeps rendering its last-known content
+   * with no flicker — it only advances the generation counter so
+   * `isPossiblyStale` starts reporting `true` for every node cached before
+   * this point, until each is individually re-confirmed.
+   */
+  markPossiblyStaleAfterReconnect(): void {
+    this.reconnectGeneration++;
+  }
+
+  /**
    * Get node count
    */
   getNodeCount(): number {
@@ -1025,10 +1080,17 @@ export class SharedNodeStore {
    * many `[[id]]` references to the same uncached node issues ONE backend fetch,
    * not one per reference. The in-flight promise is tracked by id and cleared when
    * it settles (after which the node is cached, so later calls hit the cache).
+   *
+   * Cache-first, but not cache-only: a cache entry that predates the most
+   * recent daemon reconnect (`isPossiblyStale`) is re-fetched rather than
+   * trusted, since a `WatchNodes` outage can silently drop the update that
+   * would have kept it current. The stale entry stays visible/returned by
+   * `getNode` for any reader until this fetch resolves and overwrites it —
+   * no eviction, no flicker.
    */
   async ensureNode(nodeId: string): Promise<Node | undefined> {
     const cached = this.nodes.get(nodeId);
-    if (cached) return cached;
+    if (cached && !this.isPossiblyStale(nodeId)) return cached;
 
     const existing = this.inFlightEnsures.get(nodeId);
     if (existing) return existing;
@@ -4125,6 +4187,7 @@ export class SharedNodeStore {
     this.wildcardSubscriptions.clear();
     this.pendingUpdates.clear();
     this.versions.clear();
+    this.reconnectGeneration = 0;
     this.testErrors = [];
 
     // Cancel all active batches
@@ -4151,6 +4214,17 @@ export class SharedNodeStore {
  * Singleton instance for application-wide use
  */
 export const sharedNodeStore = SharedNodeStore.getInstance();
+
+// A daemon reconnect (crash/restart, or a wedged-channel recovery — see
+// daemon-status.ts) means the WatchNodes bridge opened a fresh stream with no
+// catch-up replay: any node updates that happened during the outage never
+// reached the store. Mark the whole cache possibly-stale so the next time
+// each node is hydrated (mount, or navigating back to it), it is re-confirmed
+// against the backend instead of trusting a cache entry that predates the
+// gap. Mirrors the same reload-on-reconnect idiom `schemasStore` and
+// `collectionsData` already use, but lazily per-node instead of eagerly
+// reloading everything.
+onDaemonReconnect(() => sharedNodeStore.markPossiblyStaleAfterReconnect());
 
 /**
  * Default export

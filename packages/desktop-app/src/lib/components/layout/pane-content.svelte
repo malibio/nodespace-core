@@ -70,15 +70,17 @@
     }
   }
 
-  // Ensure the node backing a tab is present in the store. This only pushes a fetch into
-  // sharedNodeStore (a non-reactive external system) — it writes no local reactive state,
-  // so there is nothing to race: hydration status is read back off the store's per-node
-  // cell via isNodeHydrated below. No staleness guard is needed. If the node genuinely
-  // doesn't exist, close the tab — but only if that tab still points at this nodeId, so a
-  // superseded navigation can't close the newly-active tab (checked against live tab state,
-  // the single source of truth, not a tracked "latest requested" variable).
+  // Ensure the node backing a tab is present in the store AND not possibly stale from a
+  // daemon reconnect (a WatchNodes outage can silently drop the update that would have kept
+  // an already-cached node current — see SharedNodeStore.isPossiblyStale). This only pushes a
+  // fetch into sharedNodeStore (a non-reactive external system) — it writes no local reactive
+  // state, so there is nothing to race: hydration status is read back off the store's
+  // per-node cell via isNodeHydrated below. If the node genuinely doesn't exist, close the
+  // tab — but only if that tab still points at this nodeId, so a superseded navigation can't
+  // close the newly-active tab (checked against live tab state, the single source of truth,
+  // not a tracked "latest requested" variable).
   async function hydrateNode(nodeId: string, tabId: string) {
-    if (sharedNodeStore.getNode(nodeId)) return;
+    if (sharedNodeStore.getNode(nodeId) && !sharedNodeStore.isPossiblyStale(nodeId)) return;
 
     let node;
     try {
@@ -146,13 +148,16 @@
   // window (fresh install: the webview renders while the sidecar is still
   // seeding its DB and binding the socket) sits on "Loading..." forever. Retry
   // the active tab's hydration whenever the daemon transitions back to healthy.
-  // hydrateNode's store-presence guard makes this a no-op once hydration has
-  // succeeded; same idiom as the sidebar stores and base-node-viewer.
+  // This also covers the case where the active tab's node WAS already hydrated
+  // before the outage: hydrateNode's own presence-AND-freshness guard decides
+  // whether a re-fetch is actually needed, so this handler can unconditionally
+  // delegate to it rather than duplicating that check; same idiom as the
+  // sidebar stores and base-node-viewer.
   onMount(() =>
     onDaemonReconnect(() => {
       const nodeId = activeTab?.content?.nodeId;
       const tabId = activeTabId;
-      if (nodeId && tabId && !sharedNodeStore.getNode(nodeId)) {
+      if (nodeId && tabId) {
         hydrateNode(nodeId, tabId);
       }
     })

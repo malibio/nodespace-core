@@ -26,6 +26,10 @@ const { PANE_ID, TAB_ID, NODE_ID, h } = vi.hoisted(() => ({
   h: {
     reconnectCallbacks: [] as Array<() => void>,
     nodes: new Map<string, { id: string }>(),
+    /** Node ids the mock store currently considers possibly-stale (see
+     *  SharedNodeStore.isPossiblyStale) — set by a test to simulate the real
+     *  store's reconnect-generation bump, independent of `nodes` presence. */
+    staleIds: new Set<string>(),
     ensureCalls: [] as string[],
     /** Queue of outcomes for successive ensureNode() calls. */
     ensureOutcomes: [] as Array<'boot-window-failure' | 'success'>,
@@ -49,6 +53,7 @@ vi.mock('$lib/services/daemon-status', () => ({
 vi.mock('$lib/services/shared-node-store.svelte', () => ({
   sharedNodeStore: {
     getNode: (id: string) => h.nodes.get(id),
+    isPossiblyStale: (id: string) => h.staleIds.has(id),
     ensureNode: async (id: string) => {
       h.ensureCalls.push(id);
       const outcome = h.ensureOutcomes.shift() ?? 'success';
@@ -59,6 +64,10 @@ vi.mock('$lib/services/shared-node-store.svelte', () => ({
       }
       const node = { id };
       h.nodes.set(id, node);
+      // A successful fetch is fresh-as-of-now — mirrors the real store's
+      // `nodesSet` stamping the current reconnect generation on every write,
+      // which is what clears `isPossiblyStale` after a re-confirm succeeds.
+      h.staleIds.delete(id);
       return node;
     }
   }
@@ -120,6 +129,7 @@ describe('pane-content daemon-reconnect hydration', () => {
   beforeEach(() => {
     h.reconnectCallbacks = [];
     h.nodes.clear();
+    h.staleIds.clear();
     h.ensureCalls.length = 0;
     h.ensureOutcomes.length = 0;
     h.closedTabs.length = 0;
@@ -161,7 +171,7 @@ describe('pane-content daemon-reconnect hydration', () => {
     expect(h.nodes.has(NODE_ID)).toBe(true);
   });
 
-  it('does not re-fetch on reconnect once the node is already hydrated', async () => {
+  it('does not re-fetch a fresh (non-stale) node on reconnect once already hydrated', async () => {
     h.ensureOutcomes.push('success');
 
     render(PaneContent, { props: { pane } });
@@ -171,11 +181,43 @@ describe('pane-content daemon-reconnect hydration', () => {
     expect(h.nodes.has(NODE_ID)).toBe(true);
 
     // A later reconnect (daemon restart mid-session) must be a no-op for a pane
-    // whose node is present, not a redundant refetch of the whole graph.
+    // whose node is present AND not flagged possibly-stale (h.staleIds is
+    // empty here) — not a redundant refetch of the whole graph.
     fireDaemonHealthy();
     await settle();
 
     expect(h.ensureCalls).toEqual([NODE_ID]);
+  });
+
+  it('re-fetches a possibly-stale node on reconnect even though it is already hydrated (#1979)', async () => {
+    h.ensureOutcomes.push('success');
+
+    render(PaneContent, { props: { pane } });
+    await settle();
+
+    expect(h.ensureCalls).toEqual([NODE_ID]);
+    expect(h.nodes.has(NODE_ID)).toBe(true);
+
+    // Simulate what a real WatchNodes outage leaves behind: the store now
+    // considers this node's cache entry possibly-stale, because live updates
+    // could have been missed for it while the connection was down — even
+    // though the node was already present before the outage. This is the
+    // #1979 repro: a chat node cached before a daemon restart rendered
+    // permanently empty/stale afterward because presence alone was trusted
+    // forever, with no re-confirmation against the backend.
+    h.staleIds.add(NODE_ID);
+    h.ensureOutcomes.push('success');
+
+    fireDaemonHealthy();
+    await settle();
+
+    expect(h.ensureCalls).toEqual([NODE_ID, NODE_ID]);
+    // The re-confirm resolved successfully, so the entry is fresh again —
+    // a further reconnect with no new outage must not refetch a third time.
+    expect(h.staleIds.has(NODE_ID)).toBe(false);
+    fireDaemonHealthy();
+    await settle();
+    expect(h.ensureCalls).toEqual([NODE_ID, NODE_ID]);
   });
 
   it('stops retrying after the pane unmounts', async () => {
