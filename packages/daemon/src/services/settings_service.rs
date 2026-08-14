@@ -266,16 +266,18 @@ pub struct SettingsServiceImpl {
     write_lock: Arc<Mutex<()>>,
 }
 
-// Test-only fault injection for `write_config`'s permissions step. When set,
-// the *next* `set_permissions` call in `write_config` on this thread fails
-// as if the OS had rejected it, then clears itself. A `thread_local` (not a
-// process-global `static`) because `#[tokio::test]` gives each test its own
-// current-thread runtime — everything a test awaits, including nested
-// `write_config` calls, runs on that one OS thread — so this stays isolated
-// per test even though `cargo test` runs many tests concurrently.
+// Test-only fault injection for `write_config`'s permissions and rename
+// steps. When set, the *next* `set_permissions` (resp. `rename`) call in
+// `write_config` on this thread fails as if the OS had rejected it, then
+// clears itself. A `thread_local` (not a process-global `static`) because
+// `#[tokio::test]` gives each test its own current-thread runtime —
+// everything a test awaits, including nested `write_config` calls, runs on
+// that one OS thread — so this stays isolated per test even though
+// `cargo test` runs many tests concurrently.
 #[cfg(all(test, unix))]
 thread_local! {
     static FAIL_NEXT_CHMOD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl SettingsServiceImpl {
@@ -339,9 +341,16 @@ impl SettingsServiceImpl {
         );
         let tmp_path = self.config_path.with_file_name(tmp_file_name);
 
-        tokio::fs::write(&tmp_path, &contents)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to write daemon config: {}", e)))?;
+        // A failure partway through this write (e.g. ENOSPC) can still leave
+        // a partial file at `tmp_path` — clean it up rather than leaving a
+        // stray, possibly secret-bearing file behind at default permissions.
+        if let Err(e) = tokio::fs::write(&tmp_path, &contents).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(Status::internal(format!(
+                "Failed to write daemon config: {}",
+                e
+            )));
+        }
 
         // Owner-only: other local accounts on a shared machine must not be
         // able to read the API keys this file can contain. Unix-only; this
@@ -369,10 +378,25 @@ impl SettingsServiceImpl {
             }
         }
 
-        if let Err(e) = tokio::fs::rename(&tmp_path, &self.config_path).await {
+        // Unlike the chmod injection above, this must skip the *real* rename
+        // syscall entirely when firing — POSIX rename is atomic, so a real
+        // failure never moves anything; overriding a real (successful)
+        // rename's `Ok` after the fact would leave the new content live
+        // under `config_path` while this function still reported failure,
+        // which is not what a genuine rename failure looks like and would
+        // defeat the point of the test using this flag.
+        #[cfg(all(test, unix))]
+        let rename_result = if FAIL_NEXT_RENAME.with(|f| f.replace(false)) {
+            Err(std::io::Error::other("injected rename failure (test)"))
+        } else {
+            tokio::fs::rename(&tmp_path, &self.config_path).await
+        };
+        #[cfg(not(all(test, unix)))]
+        let rename_result = tokio::fs::rename(&tmp_path, &self.config_path).await;
+        if let Err(e) = rename_result {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err(Status::internal(format!(
-                "Failed to write daemon config: {}",
+                "Failed to finalize daemon config write: {}",
                 e
             )));
         }
@@ -750,6 +774,99 @@ mod tests {
             .await
             .expect("read should succeed");
         assert!(found.is_some(), "a genuine save must still take effect");
+    }
+
+    /// Same guarantee as the chmod-failure regression test above, but for
+    /// the final `rename` step: a failure finalizing the write (e.g. the
+    /// destination became briefly unwritable, or a filesystem-level rename
+    /// error) must also leave the previously-saved config in place, clean up
+    /// the temp file, and report an error distinct from a plain write
+    /// failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rename_failure_after_chmod_leaves_previous_config_intact_and_reports_the_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config(
+                "original",
+                "https://original.example.com",
+                "m",
+            )],
+        }))
+        .await
+        .expect("baseline set should succeed");
+
+        FAIL_NEXT_RENAME.with(|f| f.set(true));
+
+        let failed = svc
+            .set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+                configs: vec![probe_config(
+                    "replacement",
+                    "https://replacement.example.com",
+                    "m",
+                )],
+            }))
+            .await;
+
+        assert!(
+            failed.is_err(),
+            "a rename failure finalizing the write must surface as an error"
+        );
+        let err_message = failed.unwrap_err().message().to_string();
+        assert!(
+            err_message.contains("finalize"),
+            "rename failure should be reported distinctly from a plain write failure, got: {}",
+            err_message
+        );
+        assert!(
+            !FAIL_NEXT_RENAME.with(|f| f.get()),
+            "injected failure should have been consumed by the write attempt"
+        );
+
+        let found = find_openai_compat_config(&config_path, "replacement")
+            .await
+            .expect("read should succeed");
+        assert!(
+            found.is_none(),
+            "the replacement config must not be live after a reported save failure"
+        );
+        let original = find_openai_compat_config(&config_path, "original")
+            .await
+            .expect("read should succeed");
+        assert!(
+            original.is_some(),
+            "the previously-saved config must survive a failed save"
+        );
+
+        let mut entries = tokio::fs::read_dir(tempdir.path())
+            .await
+            .expect("read_dir should succeed");
+        let mut leftover_tmp_files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".tmp-") {
+                leftover_tmp_files.push(name);
+            }
+        }
+        assert!(
+            leftover_tmp_files.is_empty(),
+            "a failed rename must not leave a temp file behind, found {:?}",
+            leftover_tmp_files
+        );
+
+        let metadata = tokio::fs::metadata(&config_path)
+            .await
+            .expect("daemon.toml should still exist");
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "surviving daemon.toml should still be owner-only, got {:o}",
+            mode
+        );
     }
 
     fn probe_config(id: &str, base_url: &str, model: &str) -> ProtoOpenAiCompatConfig {
