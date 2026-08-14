@@ -1515,15 +1515,62 @@ export class SharedNodeStore {
                   }
 
                   if (currentNode && !hydrationIsStale) {
-                    // Hydrate directly from the authoritative node returned by daemon
-                    this.nodesSet(nodeId, currentNode);
-                    this.versions.set(nodeId, currentNode.version ?? 1);
-                    this.persistedNodeIds.add(nodeId);
-                    this.pendingUpdates.delete(nodeId);
-                    this.notifySubscribers(nodeId, currentNode, {
-                      type: 'database',
-                      reason: 'occ-resync'
-                    });
+                    // This writes the conflict payload straight into the
+                    // store, same as a `database`-sourced broadcast, so it
+                    // must respect the same skip-while-editing guard
+                    // `setNode()`/`resyncNodeFromServer()` enforce
+                    // (`decideRemoteUpdate`). Without this, an OCC conflict
+                    // on a node the user is actively editing — where the
+                    // daemon's response happens to embed `current_node` —
+                    // would silently clobber the optimistic, actively-edited
+                    // content, exactly the class of bug #2066 closed for the
+                    // fallback (`resyncNodeFromServer`) path.
+                    //
+                    // `hasPending` is deliberately `false` here for the same
+                    // reason `resyncNodeFromServer`'s direct call keeps it
+                    // `false` (see that method's comment): this fires from
+                    // inside the very write's own catch handler, before its
+                    // `executingOperations` entry has cleared, so a real
+                    // `PersistenceCoordinator.hasPending()` read here would
+                    // just see that same failing write's own not-yet-cleared
+                    // bookkeeping and treat it as "an edit is pending" every
+                    // time — self-referential and racy, not a signal of a
+                    // genuinely different in-flight write.
+                    const isFocused = focusManager.isNodeEditing(nodeId);
+                    const decision = decideRemoteUpdate(
+                      currentNode,
+                      this.nodes.get(nodeId),
+                      { type: 'database', reason: 'occ-resync' },
+                      { isFocused, hasPending: false }
+                    );
+
+                    if (decision.apply) {
+                      // Hydrate directly from the authoritative node returned by daemon
+                      this.nodesSet(nodeId, currentNode);
+                      this.versions.set(nodeId, currentNode.version ?? 1);
+                      this.persistedNodeIds.add(nodeId);
+                      this.pendingUpdates.delete(nodeId);
+                      this.notifySubscribers(nodeId, currentNode, {
+                        type: 'database',
+                        reason: 'occ-resync'
+                      });
+                    } else {
+                      // Node is actively being edited — keep the local,
+                      // in-progress content and skip the clobber. The
+                      // conflict response fetch still proves the node exists
+                      // server-side, so mark it persisted the same way the
+                      // apply branch would; only the content/version
+                      // overwrite is skipped. This call site always raises
+                      // its own conflict notification unconditionally below
+                      // regardless of branch, so no separate notify here
+                      // (unlike `resyncNodeFromServer`'s skip branch, which
+                      // has no such external caller for its queued-follow-up
+                      // case).
+                      this.persistedNodeIds.add(nodeId);
+                      log.debug(
+                        `OCC direct hydration for ${nodeId} skipped — node is actively being edited (focused=${isFocused})`
+                      );
+                    }
                   } else {
                     // Fallback: fetch from server if daemon didn't embed current_node
                     this.resyncNodeFromServer(nodeId).catch((resyncError) => {
