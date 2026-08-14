@@ -266,6 +266,18 @@ pub struct SettingsServiceImpl {
     write_lock: Arc<Mutex<()>>,
 }
 
+// Test-only fault injection for `write_config`'s permissions step. When set,
+// the *next* `set_permissions` call in `write_config` on this thread fails
+// as if the OS had rejected it, then clears itself. A `thread_local` (not a
+// process-global `static`) because `#[tokio::test]` gives each test its own
+// current-thread runtime — everything a test awaits, including nested
+// `write_config` calls, runs on that one OS thread — so this stays isolated
+// per test even though `cargo test` runs many tests concurrently.
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAIL_NEXT_CHMOD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl SettingsServiceImpl {
     pub fn new(config_path: PathBuf) -> Self {
         Self {
@@ -302,22 +314,67 @@ impl SettingsServiceImpl {
         }
         let contents = toml::to_string_pretty(config)
             .map_err(|e| Status::internal(format!("Failed to serialize daemon config: {}", e)))?;
-        tokio::fs::write(&self.config_path, contents)
+
+        // Write to a temp file next to `config_path` (same directory, so the
+        // final rename is an atomic same-filesystem move), restrict its
+        // permissions, and only then rename it over the real path. This
+        // ordering — chmod the not-yet-live temp file, *then* make it live —
+        // matters because daemon.toml can hold real third-party API keys
+        // (openai_compat.configs): chmod'ing the real path only after writing
+        // to it (the old order) meant a chmod failure was reported to the
+        // caller as "save failed" while the new content was already
+        // durably live and would be read back on the next daemon restart —
+        // the caller's retry/error-toast has no way to know that. With the
+        // temp file, a failure at either the write or the chmod step aborts
+        // before the rename, so `config_path` and its permissions are left
+        // exactly as they were and the reported failure matches what's
+        // actually on disk.
+        let tmp_file_name = format!(
+            "{}.tmp-{}",
+            self.config_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("daemon.toml"),
+            std::process::id(),
+        );
+        let tmp_path = self.config_path.with_file_name(tmp_file_name);
+
+        tokio::fs::write(&tmp_path, &contents)
             .await
             .map_err(|e| Status::internal(format!("Failed to write daemon config: {}", e)))?;
 
-        // daemon.toml now holds real third-party API keys (openai_compat.configs) —
-        // restrict to owner-only so other local accounts on a shared machine can't
-        // read them off disk. Unix-only; this is a macOS/Linux desktop app.
+        // Owner-only: other local accounts on a shared machine must not be
+        // able to read the API keys this file can contain. Unix-only; this
+        // is a macOS/Linux desktop app.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            tokio::fs::set_permissions(&self.config_path, perms)
-                .await
-                .map_err(|e| {
-                    Status::internal(format!("Failed to set daemon config permissions: {}", e))
-                })?;
+            let result = tokio::fs::set_permissions(&tmp_path, perms).await;
+            #[cfg(test)]
+            let result = if FAIL_NEXT_CHMOD.with(|f| f.replace(false)) {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected chmod failure (test)",
+                ))
+            } else {
+                result
+            };
+            if let Err(e) = result {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                return Err(Status::internal(format!(
+                    "Failed to set daemon config permissions: {}",
+                    e
+                )));
+            }
+        }
+
+        if let Err(e) = tokio::fs::rename(&tmp_path, &self.config_path).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(Status::internal(format!(
+                "Failed to write daemon config: {}",
+                e
+            )));
         }
 
         Ok(())
@@ -578,6 +635,121 @@ mod tests {
             "daemon.toml should be owner-read/write only, got {:o}",
             mode
         );
+    }
+
+    /// Regression test for the bug fixed here: a `set_permissions` failure
+    /// on the write path used to happen *after* the new content was already
+    /// durably written to `config_path`, so the caller was told the save
+    /// failed while the new config was in fact already live. `write_config`
+    /// now writes and chmods a temp file first and only renames it over
+    /// `config_path` once both succeed, so a chmod failure must leave the
+    /// previously-saved config in place — not the new one — matching the
+    /// error the caller was given.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn chmod_failure_after_write_leaves_previous_config_intact_and_reports_the_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (svc, tempdir) = test_impl();
+        let config_path = tempdir.path().join("daemon.toml");
+
+        // Establish a known-good baseline config on disk.
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config(
+                "original",
+                "https://original.example.com",
+                "m",
+            )],
+        }))
+        .await
+        .expect("baseline set should succeed");
+
+        // Inject a chmod failure for the *next* write only.
+        FAIL_NEXT_CHMOD.with(|f| f.set(true));
+
+        let failed = svc
+            .set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+                configs: vec![probe_config(
+                    "replacement",
+                    "https://replacement.example.com",
+                    "m",
+                )],
+            }))
+            .await;
+
+        // The caller must be told the save failed...
+        assert!(
+            failed.is_err(),
+            "a chmod failure on the write path must surface as an error"
+        );
+        // ...and the flag must have been consumed (proves the injected
+        // failure is what actually fired, not some other error).
+        assert!(
+            !FAIL_NEXT_CHMOD.with(|f| f.get()),
+            "injected failure should have been consumed by the write attempt"
+        );
+
+        // ...and, unlike the pre-fix behavior, the config on disk must still
+        // be the ORIGINAL one — the replacement must never have gone live.
+        let found = find_openai_compat_config(&config_path, "replacement")
+            .await
+            .expect("read should succeed");
+        assert!(
+            found.is_none(),
+            "the replacement config must not be live after a reported save failure"
+        );
+        let original = find_openai_compat_config(&config_path, "original")
+            .await
+            .expect("read should succeed");
+        assert!(
+            original.is_some(),
+            "the previously-saved config must survive a failed save"
+        );
+
+        // No temp file left behind.
+        let mut entries = tokio::fs::read_dir(tempdir.path())
+            .await
+            .expect("read_dir should succeed");
+        let mut leftover_tmp_files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".tmp-") {
+                leftover_tmp_files.push(name);
+            }
+        }
+        assert!(
+            leftover_tmp_files.is_empty(),
+            "a failed write must not leave a temp file behind, found {:?}",
+            leftover_tmp_files
+        );
+
+        // Permissions on the surviving file are untouched by the failed
+        // attempt.
+        let metadata = tokio::fs::metadata(&config_path)
+            .await
+            .expect("daemon.toml should still exist");
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "surviving daemon.toml should still be owner-only, got {:o}",
+            mode
+        );
+
+        // A subsequent save with no injected failure succeeds normally,
+        // proving the temp-file machinery itself still works.
+        svc.set_open_ai_compat_configs(Request::new(SetOpenAiCompatConfigsRequest {
+            configs: vec![probe_config(
+                "replacement",
+                "https://replacement.example.com",
+                "m",
+            )],
+        }))
+        .await
+        .expect("save without injected failure should succeed");
+        let found = find_openai_compat_config(&config_path, "replacement")
+            .await
+            .expect("read should succeed");
+        assert!(found.is_some(), "a genuine save must still take effect");
     }
 
     fn probe_config(id: &str, base_url: &str, model: &str) -> ProtoOpenAiCompatConfig {
