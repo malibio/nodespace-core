@@ -30,6 +30,18 @@
  * to guard against duplicating. The second describe block below locks in
  * that setNode()'s OCC failures correctly surface exactly one (generic)
  * notification — confirmed here rather than just asserted in a comment.
+ *
+ * `updateTaskNode()`'s closure DOES have the OCC-specific branch (it
+ * unconditionally raises its own `version-mismatch` notification whenever
+ * `occError` is truthy) — but until fixed, its OUTER catch had no
+ * `write-failure` fallback for the non-OCC case AT ALL, unlike the other
+ * three methods above. That gap meant a genuine non-OCC failure (network
+ * error, daemon offline, validation error) surfaced ZERO user-visible
+ * notification — worse than a duplicate, a silent failure. Fixed by adding
+ * the same captured-boolean-gated fallback the other three methods already
+ * have. The third describe block below covers both: exactly one
+ * notification on an OCC conflict (not a duplicate, matching updateNode()'s
+ * shape), and exactly one (the fallback) on a non-OCC failure (not zero).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -65,6 +77,19 @@ describe('SharedNodeStore — OCC notification dedup (#2080)', () => {
     properties: {},
     mentions: []
   });
+
+  const makeTaskNode = (id: string, status: string, version = 1): Node =>
+    ({
+      id,
+      nodeType: 'task',
+      content: '- [ ] seed task',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      modifiedAt: '2024-01-01T00:00:00.000Z',
+      version,
+      properties: {},
+      mentions: [],
+      status
+    }) as unknown as Node;
 
   // Real daemon error shape (plain object, NOT instanceof Error) — same
   // convention every other OCC test in this suite uses (e.g.
@@ -176,6 +201,50 @@ describe('SharedNodeStore — OCC notification dedup (#2080)', () => {
       const notifications = conflictNotifications.notifications.filter(
         (n) => n.nodeId === 's-occ-2'
       );
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].conflictType).toBe('write-failure');
+    });
+  });
+
+  describe('updateTaskNode()', () => {
+    it('raises exactly one notification (version-mismatch) on an OCC conflict, not a duplicate write-failure', async () => {
+      store.setNode(makeTaskNode('t-occ-1', 'open', 1), databaseSource);
+
+      // Fallback path (no current_node embedded) — exercises
+      // resyncNodeFromServer, not the direct-hydration branch, but the
+      // notification-dedup bug is in the shared outer catch, not either
+      // hydration branch.
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        makeVersionConflictError(null)
+      );
+      vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeTaskNode('t-occ-1', 'open', 2));
+
+      store.updateTaskNode('t-occ-1', { status: 'in_progress' }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const notifications = conflictNotifications.notifications.filter(
+        (n) => n.nodeId === 't-occ-1'
+      );
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].conflictType).toBe('version-mismatch');
+    });
+
+    it('raises the generic write-failure notification for a genuine non-OCC failure (was previously silently swallowed — the bug this fix closes)', async () => {
+      store.setNode(makeTaskNode('t-occ-2', 'open', 1), databaseSource);
+
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockRejectedValueOnce(
+        new Error('network error: connection refused')
+      );
+
+      store.updateTaskNode('t-occ-2', { status: 'in_progress' }, viewerSource);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const notifications = conflictNotifications.notifications.filter(
+        (n) => n.nodeId === 't-occ-2'
+      );
+      // Before the fix: this was 0 — updateTaskNode()'s outer catch had no
+      // fallback for a non-OCC failure at all, so a genuine write failure
+      // surfaced with zero user-visible signal.
       expect(notifications).toHaveLength(1);
       expect(notifications[0].conflictType).toBe('write-failure');
     });

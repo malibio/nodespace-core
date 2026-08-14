@@ -139,10 +139,11 @@ describe('updateTaskNode failure-path rollback — queued-write regression', () 
 
       store.updateTaskNode(nodeId, { status: 'in_progress' }, viewerSource);
 
-      // Confirms the failure was actually caught and handled (not that a
-      // user-visible notification fired — updateTaskNode()'s outer catch has
-      // no such fallback for a non-OCC failure at all; that gap is tracked
-      // separately, not asserted here).
+      // Confirms the failure was actually caught and handled. (The
+      // user-visible write-failure notification for this same scenario is
+      // covered by occ-notification-dedup.test.ts's updateTaskNode()
+      // describe block, not asserted here — this test's focus is the
+      // rollback-clobber behavior.)
       await vi.waitFor(() => {
         expect(store.getTestErrors().length).toBeGreaterThan(0);
       });
