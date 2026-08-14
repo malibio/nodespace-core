@@ -2301,6 +2301,19 @@ export class SharedNodeStore {
           PersistenceCoordinator.getInstance().isPending(depId)
         );
 
+        // Set from inside the closure below when a subtree-access-denied
+        // refusal has already raised its own specific notification, so the
+        // outer handle.promise.catch() can skip piling a second, generic
+        // one on top. Can't just re-check `isSubtreeAccessDenied` on the
+        // outer catch's error: the closure re-throws `error` (`dbError
+        // instanceof Error ? dbError : new Error(String(dbError))`), which
+        // for a plain-object CommandError (the real shape errors cross the
+        // Tauri/gRPC boundary in — see `isSubtreeAccessDenied`'s own doc
+        // comment) is NOT `instanceof Error`, so it gets wrapped in a fresh
+        // generic `Error` that has lost the `.code`/`.conflictData` shape
+        // entirely by the time it reaches the outer catch.
+        let subtreeAccessDeniedAlreadyNotified = false;
+
         // Capture handle to catch cancellation errors
         const handle = PersistenceCoordinator.getInstance().persist(
           nodeId,
@@ -2341,6 +2354,7 @@ export class SharedNodeStore {
                 onRefused?.();
 
                 showSubtreeAccessDenied(dbError.conflictData.inaccessibleCount);
+                subtreeAccessDeniedAlreadyNotified = true;
               }
 
               throw error; // Re-throw to mark operation as failed in coordinator
@@ -2358,6 +2372,17 @@ export class SharedNodeStore {
             // Operation was cancelled by a newer operation - this is expected
             return;
           }
+          // A subtree-access-denied refusal already restored the node and
+          // surfaced its own specific notification (showSubtreeAccessDenied)
+          // inside the persist closure's own catch above, before re-throwing
+          // to mark the coordinator operation failed. Same intent as the
+          // isVersionConflict check at the other call sites — don't pile a
+          // second, generic notification on top of the one already raised
+          // for the exact same event — but implemented via the captured
+          // flag rather than re-deriving it from `err` (see
+          // `subtreeAccessDeniedAlreadyNotified`'s declaration for why
+          // re-checking `isSubtreeAccessDenied(err)` here doesn't work).
+          if (subtreeAccessDeniedAlreadyNotified) return;
           // Surface genuine deletion failures visibly, INCLUDING a
           // DependencyFailedError — a dependency this deletion was waiting
           // on (a node that had to finish persisting first, to avoid a
