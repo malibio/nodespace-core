@@ -179,6 +179,15 @@ impl Registry {
     fn find(&self, id: &DatabaseId) -> Option<&DatabaseEntry> {
         self.databases.iter().find(|e| &e.id == id)
     }
+
+    /// [`Self::find`], or the standard "not registered" error. Every mutator
+    /// and lookup in this file needs exactly this "find or fail" shape;
+    /// centralizing it here means the error text is written once instead of
+    /// independently at every call site.
+    fn find_or_err(&self, id: &DatabaseId) -> Result<&DatabaseEntry> {
+        self.find(id)
+            .ok_or_else(|| anyhow!("no database registered with id {id}"))
+    }
 }
 
 /// Owns the database registry and the set of currently-open databases.
@@ -503,9 +512,7 @@ impl DatabaseManager {
     /// uniqueness.
     pub async fn remove(&self, id: &DatabaseId) -> Result<()> {
         let registry = self.registry.write().await;
-        if registry.find(id).is_none() {
-            return Err(anyhow!("no database registered with id {id}"));
-        }
+        registry.find_or_err(id)?;
         self.mutate_and_save(registry, |registry| {
             let mut next = registry.clone();
             if let Some(index) = next.databases.iter().position(|e| &e.id == id) {
@@ -536,9 +543,7 @@ impl DatabaseManager {
     /// in place.
     pub async fn set_default(&self, id: &DatabaseId) -> Result<()> {
         let registry = self.registry.write().await;
-        if registry.find(id).is_none() {
-            return Err(anyhow!("no database registered with id {id}"));
-        }
+        registry.find_or_err(id)?;
         self.mutate_and_save(registry, |registry| {
             let mut next = registry.clone();
             next.default_database = Some(id.clone());
@@ -553,9 +558,7 @@ impl DatabaseManager {
     /// so a failed (or cancelled) save leaves the previous name in place.
     pub async fn rename(&self, id: &DatabaseId, name: String) -> Result<()> {
         let registry = self.registry.write().await;
-        if registry.find(id).is_none() {
-            return Err(anyhow!("no database registered with id {id}"));
-        }
+        registry.find_or_err(id)?;
         self.mutate_and_save(registry, |registry| {
             let mut next = registry.clone();
             if let Some(entry) = next.databases.iter_mut().find(|e| &e.id == id) {
@@ -580,9 +583,7 @@ impl DatabaseManager {
         collection: Option<String>,
     ) -> Result<()> {
         let registry = self.registry.write().await;
-        if registry.find(id).is_none() {
-            return Err(anyhow!("no database registered with id {id}"));
-        }
+        registry.find_or_err(id)?;
         self.mutate_and_save(registry, |registry| {
             let mut next = registry.clone();
             if let Some(entry) = next.databases.iter_mut().find(|e| &e.id == id) {
@@ -751,11 +752,8 @@ impl DatabaseManager {
         match header {
             Some(raw) => {
                 let id = DatabaseId::from(raw.to_string());
-                if registry.find(&id).is_some() {
-                    Ok(id)
-                } else {
-                    Err(anyhow!("no database registered with id {id}"))
-                }
+                registry.find_or_err(&id)?;
+                Ok(id)
             }
             None => registry
                 .default_database
@@ -784,10 +782,7 @@ impl DatabaseManager {
         // Resolve the registry entry's on-disk path before the (slow) build.
         let path = {
             let registry = self.registry.read().await;
-            registry
-                .find(id)
-                .map(|entry| entry.path.clone())
-                .ok_or_else(|| anyhow!("no database registered with id {id}"))?
+            registry.find_or_err(id)?.path.clone()
         };
 
         // Assemble the service set (opens SQLite, seeds schema) without holding
@@ -1050,18 +1045,28 @@ mod tests {
         }
     }
 
-    async fn temp_manager() -> (DatabaseManager, tempfile::TempDir) {
+    /// Build a `DatabaseManager` backed by a fresh temp directory, returning
+    /// the manager, the `TempDir` (keep it alive for the duration of the
+    /// test — dropping it deletes the directory), and the registry file path
+    /// within it. Every test that needs to break persistence
+    /// ([`break_registry_persistence`]) or reload from disk needs that path;
+    /// returning it here means those tests don't each independently
+    /// reconstruct `dir.path().join("databases.toml")`.
+    async fn temp_manager() -> (DatabaseManager, tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("databases.toml");
+        let registry_path = dir.path().join("databases.toml");
         (
-            DatabaseManager::load(path, test_context()).await.unwrap(),
+            DatabaseManager::load(registry_path.clone(), test_context())
+                .await
+                .unwrap(),
             dir,
+            registry_path,
         )
     }
 
     #[tokio::test]
     async fn ensure_default_registers_on_empty_and_is_idempotent() {
-        let (mgr, _dir) = temp_manager().await;
+        let (mgr, _dir, _registry_path) = temp_manager().await;
         let id = mgr
             .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
             .await
@@ -1104,7 +1109,7 @@ mod tests {
         // temp_manager's registry lives under a temp dir → isolated env, so even
         // a temp default must be left alone. This is what keeps the daemon's own
         // test suites from "repairing" (and clobbering) their own fixtures.
-        let (mgr, _dir) = temp_manager().await;
+        let (mgr, _dir, _registry_path) = temp_manager().await;
         let temp_db = std::env::temp_dir().join("iso-db").join("nodespace.db");
         mgr.ensure_default_registered("Default".into(), temp_db.clone())
             .await
@@ -1123,7 +1128,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_standard_default_replaces_the_previous_default() {
-        let (mgr, _dir) = temp_manager().await;
+        let (mgr, _dir, _registry_path) = temp_manager().await;
         let doomed = std::env::temp_dir().join("old").join("db");
         mgr.ensure_default_registered("Default".into(), doomed)
             .await
@@ -1142,11 +1147,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_standard_default_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, _dir, registry_path) = temp_manager().await;
         let doomed = std::env::temp_dir()
             .join("doomed-for-set-standard-default-rollback-test")
             .join("db");
@@ -1182,11 +1183,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_default_registered_empty_registry_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
 
         break_registry_persistence(&registry_path).await;
 
@@ -1212,11 +1209,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_default_registered_adopt_first_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
 
         // Reach "entries exist, no default" through the public API (rather
         // than only the state ensure_default_registered itself would
@@ -1258,11 +1251,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_bound_tenant_mirrors_persists_and_clears() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, _dir, path) = temp_manager().await;
         let id = mgr
             .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
             .await
@@ -1303,11 +1292,12 @@ mod tests {
     }
 
     /// Put a directory at `registry_path`, so any subsequent `Registry::save`
-    /// fails at the `tokio::fs::write` step. Mirrors the technique
-    /// `failed_create_rolls_back_and_leaves_the_daemon_serviceable` uses to
-    /// break persistence without touching in-memory state. Tolerates
-    /// `registry_path` not existing yet — a manager that has never
-    /// successfully saved has no file there to remove first.
+    /// fails at the `tokio::fs::write` step, without touching any in-memory
+    /// state. The one shared way every save-failure/cancellation test below
+    /// (and `failed_create_rolls_back_and_leaves_the_daemon_serviceable`)
+    /// breaks persistence. Tolerates `registry_path` not existing yet — a
+    /// manager that has never successfully saved has no file there to remove
+    /// first.
     async fn break_registry_persistence(registry_path: &Path) {
         match tokio::fs::remove_file(registry_path).await {
             Ok(()) => {}
@@ -1319,11 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
 
         // Two entries, so removing the first also exercises index-preserving
         // restoration rather than a trivial single-element case.
@@ -1373,11 +1359,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_of_a_non_default_entry_rolls_back_without_touching_the_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
 
         // `first` becomes the default (first entry ever registered); `second`
         // is not. This is the scenario `remove_rolls_back_when_save_fails`
@@ -1412,7 +1394,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_of_an_open_database_notifies_exactly_once() {
-        let (mgr, dir) = temp_manager().await;
+        let (mgr, dir, _registry_path) = temp_manager().await;
         let entry = mgr
             .create("Open".into(), Some(dir.path().join("open.db")))
             .await
@@ -1440,11 +1422,7 @@ mod tests {
 
     #[tokio::test]
     async fn rename_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
         let id = mgr
             .ensure_default_registered("Original".into(), dir.path().join("db"))
             .await
@@ -1467,11 +1445,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_default_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
         let first = mgr
             .ensure_default_registered("First".into(), dir.path().join("first.db"))
             .await
@@ -1502,11 +1476,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_bound_tenant_rolls_back_when_save_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
         let id = mgr
             .ensure_default_registered("Default".into(), dir.path().join("db"))
             .await
@@ -1552,7 +1522,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_database_id_routes_header_and_default() {
-        let (mgr, _dir) = temp_manager().await;
+        let (mgr, _dir, _registry_path) = temp_manager().await;
         let default = mgr
             .ensure_default_registered("Default".into(), PathBuf::from("/tmp/ns.db"))
             .await
@@ -1590,13 +1560,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_without_default_errors() {
-        let (mgr, _dir) = temp_manager().await;
+        let (mgr, _dir, _registry_path) = temp_manager().await;
         assert!(mgr.resolve_database_id(None).await.is_err());
     }
 
     #[tokio::test]
     async fn create_creates_and_opens_the_database_file_before_registering() {
-        let (mgr, dir) = temp_manager().await;
+        let (mgr, dir, _registry_path) = temp_manager().await;
         let path = dir.path().join("fresh.db");
 
         let entry = mgr
@@ -1623,7 +1593,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_an_existing_file() {
-        let (mgr, dir) = temp_manager().await;
+        let (mgr, dir, _registry_path) = temp_manager().await;
         let path = dir.path().join("existing.db");
         std::fs::write(&path, b"data").unwrap();
 
@@ -1643,11 +1613,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_create_rolls_back_and_leaves_the_daemon_serviceable() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = DatabaseManager::load(registry_path.clone(), test_context())
-            .await
-            .unwrap();
+        let (mgr, dir, registry_path) = temp_manager().await;
 
         // Register + open a healthy default first, as the daemon boot path does.
         let default_path = dir.path().join("default.db");
@@ -1702,7 +1668,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_requires_an_existing_file() {
-        let (mgr, dir) = temp_manager().await;
+        let (mgr, dir, _registry_path) = temp_manager().await;
 
         // An absent path is rejected — a registration pointing at nothing would
         // report Missing forever.
@@ -1728,7 +1694,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_or_open_builds_and_caches_the_service_set() {
-        let (mgr, dir) = temp_manager().await;
+        let (mgr, dir, _registry_path) = temp_manager().await;
         let db_path = dir.path().join("default.db");
         let id = mgr
             .ensure_default_registered("Default".into(), db_path)
@@ -1770,13 +1736,8 @@ mod tests {
     /// reading the code and asserting intent.
     #[tokio::test]
     async fn dropping_the_future_mid_persist_leaves_the_registry_untouched() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = Arc::new(
-            DatabaseManager::load(registry_path.clone(), test_context())
-                .await
-                .unwrap(),
-        );
+        let (mgr, dir, _registry_path) = temp_manager().await;
+        let mgr = Arc::new(mgr);
         let id = mgr
             .ensure_default_registered("Original".into(), dir.path().join("db"))
             .await
@@ -1835,13 +1796,8 @@ mod tests {
     /// translate cleanly to this design too.
     #[tokio::test]
     async fn dropping_the_future_mid_persist_during_insert_leaves_no_partial_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join("databases.toml");
-        let mgr = Arc::new(
-            DatabaseManager::load(registry_path.clone(), test_context())
-                .await
-                .unwrap(),
-        );
+        let (mgr, dir, _registry_path) = temp_manager().await;
+        let mgr = Arc::new(mgr);
 
         let gate = SaveGate::default();
         mgr.set_save_gate(gate.clone());
