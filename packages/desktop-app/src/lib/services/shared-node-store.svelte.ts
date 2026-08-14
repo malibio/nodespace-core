@@ -390,6 +390,23 @@ export class SimplePersistenceCoordinator {
   }
 
   /**
+   * True only when a genuinely different write is collapsed behind this
+   * node's currently-executing one (see `persist()`'s `isExecuting` branch).
+   * Unlike `isPending`/`isExecuting`/`hasPending`, this is never true purely
+   * because of an operation's OWN bookkeeping — a write is never routed
+   * through the `isExecuting` queueing branch for itself, only a second,
+   * later `persist()` call for the same node arriving while it runs. Callers
+   * that need to distinguish "something else is genuinely queued" from "I'm
+   * reading my own not-yet-cleared state" (e.g. an OCC-conflict handler
+   * deciding whether a fallback resync is safe to apply) must use this
+   * instead of `hasPending()`/`isPending()`/`isExecuting()`, and must read it
+   * BEFORE calling `clearQueued()`, which erases the evidence this checks.
+   */
+  isQueued(nodeId: string): boolean {
+    return this.queuedOperations.has(nodeId);
+  }
+
+  /**
    * Flush all pending operations immediately.
    * Used on window close to prevent data loss.
    *
@@ -1479,6 +1496,17 @@ export class SharedNodeStore {
                       `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
                   );
 
+                  // Capture BEFORE clearing: was a genuinely different write
+                  // (e.g. a second edit that arrived while this one was
+                  // executing) queued behind this one at the moment its OCC
+                  // conflict was detected? `clearQueued()` below unconditionally
+                  // cancels and removes it — necessary so it doesn't retry with
+                  // the now-stale version this failing write captured — but
+                  // that cancellation would otherwise erase the only evidence
+                  // that write ever existed by the time the fallback resync
+                  // below needs to know about it (see resyncNodeFromServer's
+                  // `directCallHadQueuedWrite` param doc).
+                  const hadQueuedWrite = PersistenceCoordinator.getInstance().isQueued(nodeId);
                   // Clear queued operations to prevent stale-version retries
                   PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
@@ -1526,13 +1554,15 @@ export class SharedNodeStore {
                     // content, exactly the class of bug #2066 closed for the
                     // fallback (`resyncNodeFromServer`) path.
                     //
-                    // `hasPending` is deliberately `false` here for the same
-                    // reason `resyncNodeFromServer`'s direct call keeps it
-                    // `false` (see that method's comment): this fires from
-                    // inside the very write's own catch handler, before its
-                    // `executingOperations` entry has cleared, so a real
-                    // `PersistenceCoordinator.hasPending()` read here would
-                    // just see that same failing write's own not-yet-cleared
+                    // `hasPending` here is `hadQueuedWrite` (captured above,
+                    // BEFORE `clearQueued()` ran) rather than a live
+                    // `PersistenceCoordinator.hasPending()` read, for the same
+                    // reason `resyncNodeFromServer`'s direct call uses it (see
+                    // that method's `directCallHadQueuedWrite` param doc):
+                    // this fires from inside the very write's own catch
+                    // handler, before its `executingOperations` entry has
+                    // cleared, so a live `hasPending()` read here would just
+                    // see that same failing write's own not-yet-cleared
                     // bookkeeping and treat it as "an edit is pending" every
                     // time — self-referential and racy, not a signal of a
                     // genuinely different in-flight write.
@@ -1541,7 +1571,7 @@ export class SharedNodeStore {
                       currentNode,
                       this.nodes.get(nodeId),
                       { type: 'database', reason: 'occ-resync' },
-                      { isFocused, hasPending: false }
+                      { isFocused, hasPending: hadQueuedWrite }
                     );
 
                     if (decision.apply) {
@@ -1573,12 +1603,14 @@ export class SharedNodeStore {
                     }
                   } else {
                     // Fallback: fetch from server if daemon didn't embed current_node
-                    this.resyncNodeFromServer(nodeId).catch((resyncError) => {
-                      log.error(
-                        `Failed to resync after OCC error for node ${nodeId}:`,
-                        resyncError
-                      );
-                    });
+                    this.resyncNodeFromServer(nodeId, false, hadQueuedWrite).catch(
+                      (resyncError) => {
+                        log.error(
+                          `Failed to resync after OCC error for node ${nodeId}:`,
+                          resyncError
+                        );
+                      }
+                    );
                   }
 
                   conflictNotifications.add({
@@ -2382,6 +2414,9 @@ export class SharedNodeStore {
               `OCC conflict for task node ${nodeId}: ` +
                 `expected v${occError.conflictData.expected}, got v${occError.conflictData.actual}`
             );
+            // See the identical capture in updateNode()'s OCC handler above
+            // for why this must be read BEFORE clearQueued() below erases it.
+            const hadQueuedWrite = PersistenceCoordinator.getInstance().isQueued(nodeId);
             PersistenceCoordinator.getInstance().clearQueued(nodeId);
 
             // Normalized for the same reason as the generic update path above:
@@ -2400,7 +2435,7 @@ export class SharedNodeStore {
                 reason: 'occ-resync'
               });
             } else {
-              this.resyncNodeFromServer(nodeId).catch((resyncError) => {
+              this.resyncNodeFromServer(nodeId, false, hadQueuedWrite).catch((resyncError) => {
                 log.error(`Failed to resync after OCC error for task node ${nodeId}:`, resyncError);
               });
             }
@@ -2889,8 +2924,23 @@ export class SharedNodeStore {
    * settles, so a second failure's correction is never silently lost.
    *
    * Future enhancement: Implement conflict merge UI
+   *
+   * @param directCallHadQueuedWrite - DIRECT-call callers only (see the
+   *   `hasPending` computation below for why this can't just be read live
+   *   inside this method): whether `PersistenceCoordinator.isQueued(nodeId)`
+   *   was true at the moment the caller detected its OCC conflict, captured
+   *   BEFORE it called `clearQueued(nodeId)` — which unconditionally cancels
+   *   and removes any queued write for this node (to stop a stale-version
+   *   retry of the FAILING write itself), and so would otherwise erase the
+   *   only evidence that a genuinely different second write was ever queued
+   *   here. Ignored for the queued-follow-up call (`_isQueuedFollowUp: true`),
+   *   which computes a live `hasPending()` read instead.
    */
-  async resyncNodeFromServer(nodeId: string, _isQueuedFollowUp = false): Promise<void> {
+  async resyncNodeFromServer(
+    nodeId: string,
+    _isQueuedFollowUp = false,
+    directCallHadQueuedWrite = false
+  ): Promise<void> {
     // Idempotency guard: prevent concurrent resync operations on same node.
     // A second caller while one is already in flight doesn't get dropped
     // outright, though — it queues exactly one follow-up (single-slot,
@@ -2953,28 +3003,39 @@ export class SharedNodeStore {
         // actively-edited content with this now-stale server snapshot —
         // exactly the clobber `setNode()` was built to prevent, just reached
         // through a different write path.
-        // `hasPending` is deliberately NOT `PersistenceCoordinator
-        // .hasPending(nodeId)` when this is the DIRECT call from inside a
-        // failing write's own catch handler (`_isQueuedFollowUp` false):
-        // `hasPending()` is OR'd across pending/executing/queued, and there
-        // is only one executing slot per node — which the write whose
-        // *failure* is what got us here still occupies for the rest of its
-        // own microtask (its `finally` hasn't cleared `executingOperations`
-        // yet when this runs). Checking it there would almost always read
-        // that failing write's own not-yet-cleared bookkeeping as "a pending
-        // edit exists" and skip the resync outright — self-referential,
+        // `hasPending` is NOT a live `PersistenceCoordinator.hasPending(nodeId)`
+        // read when this is the DIRECT call from inside a failing write's own
+        // catch handler (`_isQueuedFollowUp` false) — confirmed empirically
+        // (see the regression tests below): at this point in the DIRECT call,
+        // `executingOperations` still has an entry for this node (the failing
+        // write's own `runOperation` hasn't reached its `finally` yet), so a
+        // live `hasPending()` read here is true almost every time regardless
+        // of whether anything else is genuinely queued — self-referential and
         // racy, and it would defeat this recovery path for its single most
-        // common case. For the QUEUED follow-up, though, that self-reference
-        // doesn't apply — it fires from resyncNodeFromServer's own `finally`,
-        // strictly after the direct call's fetch (and so also after the
-        // triggering write's `executingOperations` entry) has settled, so a
-        // real `hasPending` reading here reflects a genuinely different,
-        // still-in-flight write, not this method's own residue — worth
-        // protecting for real.
+        // common case (an isolated failure with nothing else in flight).
+        // `pendingOperations` is equally self-referential here for the same
+        // reason (the failing write's own placeholder is still registered).
+        //
+        // `queuedOperations`, in contrast, is never populated by a write's own
+        // bookkeeping — only by a genuinely different write collapsed behind
+        // it while it was executing — which is exactly the signal this needs.
+        // But by the time this method's decision point runs, the caller has
+        // already called `clearQueued(nodeId)` (to stop a stale-version retry
+        // of the FAILING write itself), which erases that evidence. So the
+        // caller must capture `PersistenceCoordinator.isQueued(nodeId)` BEFORE
+        // calling `clearQueued()` and pass it in as `directCallHadQueuedWrite`
+        // — see that param's doc above.
+        //
+        // For the QUEUED follow-up, none of this applies — it fires from
+        // resyncNodeFromServer's own `finally`, strictly after the direct
+        // call's fetch (and so also after the triggering write's
+        // `executingOperations` entry) has settled, so a live `hasPending()`
+        // reading here reflects a genuinely different, still-in-flight write,
+        // not this method's own residue — worth protecting for real.
         const isFocused = focusManager.isNodeEditing(nodeId);
         const hasPending = _isQueuedFollowUp
           ? PersistenceCoordinator.getInstance().hasPending(nodeId)
-          : false;
+          : directCallHadQueuedWrite;
         const decision = decideRemoteUpdate(
           serverNode,
           nodeBeforeFetch,
