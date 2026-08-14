@@ -211,12 +211,19 @@ impl Registry {
 
         if let Err(e) = tokio::fs::write(&tmp_path, &contents).await {
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(e).with_context(|| format!("writing database registry {}", path.display()));
+            return Err(e)
+                .with_context(|| format!("writing database registry {}", tmp_path.display()));
         }
 
         if let Err(e) = tokio::fs::rename(&tmp_path, path).await {
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(e).with_context(|| format!("writing database registry {}", path.display()));
+            return Err(e).with_context(|| {
+                format!(
+                    "finalizing database registry {} (staged at {})",
+                    path.display(),
+                    tmp_path.display()
+                )
+            });
         }
 
         Ok(())
