@@ -1374,6 +1374,22 @@ export class SharedNodeStore {
           // to the rest of what this closure reads from the outer scope.
           const onPersistError = options.onPersistError;
           const onPersistSuccess = options.onPersistSuccess;
+
+          // Set from inside the closure below when an OCC (version-conflict)
+          // error has already raised its own specific `version-mismatch`
+          // notification, so the outer `handle.promise.catch()` can skip
+          // piling a second, generic `write-failure` one on top. Can't just
+          // re-check `isVersionConflict` on the outer catch's `err`: the
+          // closure re-throws `error` (`dbError instanceof Error ? dbError :
+          // new Error(String(dbError))`), which for a plain-object
+          // CommandError (the real shape errors cross the Tauri/gRPC
+          // boundary in — see `isVersionConflict`'s own doc comment) is NOT
+          // `instanceof Error`, so it gets wrapped in a fresh generic `Error`
+          // that has lost the `.code`/`.conflictData` shape entirely by the
+          // time it reaches the outer catch. Same fix `deleteNode()` already
+          // applies for its analogous `subtreeAccessDeniedAlreadyNotified`.
+          let occConflictAlreadyNotified = false;
+
           const handle = PersistenceCoordinator.getInstance().persist(
             nodeId,
             async () => {
@@ -1753,6 +1769,7 @@ export class SharedNodeStore {
                     message: CONFLICT_MESSAGE['version-mismatch'],
                     conflictType: 'version-mismatch'
                   });
+                  occConflictAlreadyNotified = true;
                 } else if (onPersistError) {
                   // Non-OCC failure (network error, validation error, daemon
                   // offline, etc.): the optimistic write above never landed
@@ -1816,8 +1833,13 @@ export class SharedNodeStore {
               // Operation was cancelled by a newer operation - this is expected
               return;
             }
-            // OCC errors are already handled inside the persistence closure (rollback + notification)
-            if (isVersionConflict(err)) return;
+            // An OCC error already raised its own specific version-mismatch
+            // notification inside the persistence closure's own catch above
+            // (see `occConflictAlreadyNotified`'s declaration for why this is
+            // a captured flag rather than re-deriving it from `err` via
+            // `isVersionConflict` — the re-thrown `err` has already lost the
+            // shape that check needs).
+            if (occConflictAlreadyNotified) return;
             // Surface non-OCC write failures visibly so users know their change didn't save
             conflictNotifications.add({
               nodeId,
@@ -2201,9 +2223,18 @@ export class SharedNodeStore {
             // Operation was cancelled by a newer operation - this is expected
             return;
           }
-          // OCC errors are already handled inside the persistence closure (rollback + notification)
-          if (isVersionConflict(err)) return;
-          // Surface non-OCC write failures visibly so users know their change didn't save
+          // Unlike updateNode()/deleteNode()/updateTaskNode(), this closure's
+          // own `catch (dbError)` above has no OCC-specific branch — it never
+          // raises a version-mismatch notification of its own for this write
+          // to duplicate, so there is nothing here to skip. (An
+          // `isVersionConflict(err)` guard mirroring those other call sites
+          // used to sit here; removed as dead code — it could never match
+          // anyway, since the closure re-throws a generic wrapped `Error`
+          // that has already lost the original error's shape, and even if it
+          // had matched, there was no earlier notification to avoid
+          // duplicating.) Every failure this write can produce, OCC
+          // conflicts included, surfaces through the generic notification
+          // below — confirmed by test, not just this comment.
           conflictNotifications.add({
             nodeId,
             message: CONFLICT_MESSAGE['write-failure'],
