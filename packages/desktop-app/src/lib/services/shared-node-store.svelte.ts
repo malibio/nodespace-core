@@ -110,6 +110,23 @@ export class SimplePersistenceCoordinator {
     return SimplePersistenceCoordinator.instance;
   }
 
+  /**
+   * Audited for the same defect class `cancelPending()` and the queued-
+   * operation overwrite had before they were fixed to settle a superseded
+   * write's promise before dropping it (see `OperationCancelledError`
+   * usage above): this drops the whole singleton — including any
+   * outstanding `pendingOperations`/`queuedOperations` entries and their
+   * live `setTimeout` timers — without settling their promises at all.
+   * Left as-is rather than applying the same fix here: every call site of
+   * `resetInstance()` (this one and `SharedNodeStore.resetInstance()`,
+   * which delegates to it) is test setup/teardown only — no production
+   * code path calls it. A caller awaiting a `persist()` handle across a
+   * `resetInstance()` call only happens today in a test that's actively
+   * tearing down its own fixture, where an unsettled promise is
+   * consequence-free (the test process/module state resets right after).
+   * If a real (non-test) call path is ever added, apply the same
+   * settle-before-drop fix used elsewhere in this class first.
+   */
   static resetInstance(): void {
     SimplePersistenceCoordinator.instance = null;
   }
@@ -213,14 +230,34 @@ export class SimplePersistenceCoordinator {
         // Wait for dependencies if any
         if (deps) {
           for (const dep of deps) {
-            if (typeof dep === 'function') {
-              await dep();
-            } else {
-              // Wait for dependent node to finish
-              const pending = this.pendingOperations.get(dep);
-              if (pending) {
-                await pending.promise;
+            try {
+              if (typeof dep === 'function') {
+                await dep();
+              } else {
+                // Wait for dependent node to finish
+                const pending = this.pendingOperations.get(dep);
+                if (pending) {
+                  await pending.promise;
+                }
               }
+            } catch (depError) {
+              // The dependency (another node's persist operation, or this
+              // lambda dependency itself) failed or was cancelled — this
+              // operation's own `op()` below never even got a chance to
+              // run. Wrap it so every `.catch` site downstream can tell
+              // that apart from being personally cancelled — see
+              // `DependencyFailedError`'s doc comment for why that
+              // distinction matters (a raw propagated
+              // `OperationCancelledError` here would otherwise be
+              // misclassified by every `.catch(err => err instanceof
+              // OperationCancelledError ...)` site as "expected, ignore
+              // it," silently eating this write with nothing left to
+              // retry it).
+              const cause = depError instanceof Error ? depError : new Error(String(depError));
+              throw new DependencyFailedError(
+                typeof dep === 'function' ? '<function dependency>' : dep,
+                cause
+              );
             }
           }
         }
@@ -582,6 +619,42 @@ export class OperationCancelledError extends Error {
   constructor(message = 'Operation cancelled') {
     super(message);
     this.name = 'OperationCancelledError';
+  }
+}
+
+/**
+ * Thrown by `runOperation`'s dependency-wait loop (see `persist()`'s
+ * `dependencies` option) when a dependency — another node's persist
+ * operation, or an arbitrary lambda dependency — fails or is cancelled
+ * before this operation's own `op()` ever runs.
+ *
+ * Deliberately NOT a subclass of `OperationCancelledError`, even though the
+ * most common cause is a dependency being cancelled (whose promise rejects
+ * with exactly that type): every `persist()` caller's `.catch(err => ...)`
+ * treats `err instanceof OperationCancelledError` as "I was personally
+ * cancelled — a newer write for the SAME node supersedes me, ignore this."
+ * That's true when `cancelPending()`/`clearQueued()`/the queue-overwrite
+ * path rejects THIS operation's own promise directly. It is NOT true here:
+ * this operation was never itself cancelled, and nothing else is going to
+ * retry its write — a DIFFERENT node it depended on didn't complete, so its
+ * own backend RPC never even had a chance to fire. Without a distinct type,
+ * a propagated dependency cancellation would be misclassified by every one
+ * of those `.catch` sites as "expected, ignore it" and silently swallowed.
+ *
+ * `cause` preserves the original error (which may itself be an
+ * `OperationCancelledError`, an OCC/version-conflict error, or any other
+ * write failure) for callers that want to inspect it; `.catch` sites that
+ * don't care can just treat any `DependencyFailedError` as a generic
+ * failure to surface, the same way they already treat any other non-
+ * cancellation error.
+ */
+export class DependencyFailedError extends Error {
+  constructor(
+    public readonly dependencyId: string,
+    public readonly cause: Error
+  ) {
+    super(`Dependency "${dependencyId}" failed or was cancelled: ${cause.message}`);
+    this.name = 'DependencyFailedError';
   }
 }
 
@@ -2285,8 +2358,22 @@ export class SharedNodeStore {
             // Operation was cancelled by a newer operation - this is expected
             return;
           }
-          // Real errors are logged by PersistenceCoordinator
-          // Re-throw would create unhandled rejection, so we silently handle
+          // Surface genuine deletion failures visibly, INCLUDING a
+          // DependencyFailedError — a dependency this deletion was waiting
+          // on (a node that had to finish persisting first, to avoid a
+          // FOREIGN KEY violation on the delete) failing or being
+          // cancelled. In that case this deletion's own backend RPC never
+          // even ran, and nothing else is going to retry it, so leaving
+          // this silent (the prior behavior — "Real errors are logged by
+          // PersistenceCoordinator" was not actually true; nothing
+          // surfaced to the user either way) would mean the node stays
+          // gone locally while the deletion never actually reaches the
+          // server.
+          conflictNotifications.add({
+            nodeId,
+            message: CONFLICT_MESSAGE['write-failure'],
+            conflictType: 'write-failure'
+          });
         });
       }
     }
