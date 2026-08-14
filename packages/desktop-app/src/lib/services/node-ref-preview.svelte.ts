@@ -143,7 +143,11 @@ class NodeRefPreviewController {
     this.#setDescribedBy(anchor);
 
     let node = sharedNodeStore.getNode(nodeId);
-    if (!node) {
+    // Re-confirm against the backend if uncached, or cached but possibly
+    // stale from a daemon reconnect (a WatchNodes outage can silently drop
+    // the update that would have kept it current — see
+    // SharedNodeStore.isPossiblyStale).
+    if (!node || sharedNodeStore.isPossiblyStale(nodeId)) {
       try {
         node = await sharedNodeStore.ensureNode(nodeId);
       } catch (error) {
