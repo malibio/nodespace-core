@@ -2581,18 +2581,56 @@ export class SharedNodeStore {
           // Update local node with backend version
           const localNode = this.nodes.get(nodeId);
           if (localNode && updatedTaskNode) {
+            // `PersistenceCoordinator` serializes real RPCs per node — only
+            // one `updateTaskNode()` write executes at a time — so the
+            // version this response carries is always the latest
+            // authoritative one and is always safe to apply.
             localNode.version = updatedTaskNode.version;
-            // Also update type-specific fields from backend response
+
+            // Only apply the type-specific (and content) fields THIS
+            // write's own request actually asked to change. `localNode` is
+            // whatever `this.nodes.get(nodeId)` returns AT THE MOMENT this
+            // write's RPC resolves — not necessarily the object this
+            // write's own optimistic update installed. If a second
+            // `updateTaskNode()` call for the same node was submitted while
+            // this one was still executing, it collapses into
+            // `PersistenceCoordinator`'s queued slot and applies its OWN
+            // optimistic update (a different object, or the same object
+            // mutated further) immediately — before this write's RPC even
+            // settles. `updatedTaskNode` reflects the server's task row as
+            // of THIS write's OWN request, which is frozen for every field
+            // this write never changed (their values just reflect
+            // whatever the server already had when this write was sent).
+            // Unconditionally `Object.assign`-ing all six type-specific
+            // fields (the previous behavior) would silently overwrite a
+            // concurrently-resolving write's optimistic or already-
+            // confirmed value for any field THIS write didn't intend to
+            // touch. Building a patch limited to the fields this write's
+            // own `update` specified avoids that: a field this write
+            // didn't ask to change is left exactly as the store currently
+            // has it, however it got there.
+            const confirmedFields: Partial<TaskNode> = {};
+            if (update.status !== undefined) {
+              confirmedFields.status = updatedTaskNode.status;
+            }
+            if (update.priority !== undefined) {
+              confirmedFields.priority = updatedTaskNode.priority;
+            }
+            if (update.dueDate !== undefined) {
+              confirmedFields.dueDate = updatedTaskNode.dueDate;
+            }
+            if (update.assignee !== undefined) {
+              confirmedFields.assignee = updatedTaskNode.assignee;
+            }
+            if (update.startedAt !== undefined) {
+              confirmedFields.startedAt = updatedTaskNode.startedAt;
+            }
+            if (update.completedAt !== undefined) {
+              confirmedFields.completedAt = updatedTaskNode.completedAt;
+            }
             // Use Object.assign to safely update fields that may not exist on Node interface
-            Object.assign(localNode, {
-              status: updatedTaskNode.status,
-              priority: updatedTaskNode.priority,
-              dueDate: updatedTaskNode.dueDate,
-              assignee: updatedTaskNode.assignee,
-              startedAt: updatedTaskNode.startedAt,
-              completedAt: updatedTaskNode.completedAt
-            });
-            if (updatedTaskNode.content !== undefined) {
+            Object.assign(localNode, confirmedFields);
+            if (update.content !== undefined && updatedTaskNode.content !== undefined) {
               localNode.content = updatedTaskNode.content;
             }
             this.nodesSet(nodeId, localNode);
