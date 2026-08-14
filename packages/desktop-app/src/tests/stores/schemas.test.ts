@@ -4,7 +4,11 @@
  * `builtInSchemas` surfaces core schemas whose id is in the private
  * SIDENAV_CORE_TYPES set. `project` is a built-in core node type (backend
  * core#134) and must appear alongside `task`, while non-core schemas and core
- * schemas outside the set stay excluded.
+ * schemas outside the set stay excluded. `person` and `agent-guidance` are
+ * genuine entity types with no other sidebar presence and are included
+ * alongside `task`/`project`/`skill` (core#1961); every other core type is a
+ * primitive/structural block type, app config, or already has a dedicated
+ * nav affordance, so it stays excluded.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -65,5 +69,38 @@ describe('schemasStore.builtInSchemas — sidenav core types', () => {
     // The custom (non-core) project schema is routed to customSchemas instead.
     expect(schemasStore.builtInSchemas.filter((s) => s.id === 'project')).toHaveLength(1);
     expect(schemasStore.customSchemas.map((s) => s.id)).toContain('project');
+  });
+
+  it('includes core person and agent-guidance schemas, excludes other core types', () => {
+    schemasStore.schemas = [
+      makeSchema('task', true),
+      makeSchema('project', true),
+      makeSchema('skill', true),
+      makeSchema('person', true),
+      makeSchema('agent-guidance', true),
+      // Everything else in the backend's isCore:true list either has its own
+      // dedicated nav affordance or is a primitive/app-config type — none of
+      // these belong in the sidenav schema-type list.
+      makeSchema('text', true),
+      makeSchema('date', true),
+      makeSchema('header', true),
+      makeSchema('code-block', true),
+      makeSchema('quote-block', true),
+      makeSchema('ordered-list', true),
+      makeSchema('horizontal-line', true),
+      makeSchema('table', true),
+      makeSchema('collection', true),
+      makeSchema('checkbox', true),
+      makeSchema('ai-chat', true),
+      makeSchema('query', true),
+      makeSchema('database-settings', true)
+    ];
+
+    const ids = schemasStore.builtInSchemas.map((s) => s.id);
+
+    expect(ids).toEqual(
+      expect.arrayContaining(['task', 'project', 'skill', 'person', 'agent-guidance'])
+    );
+    expect(ids).toHaveLength(5);
   });
 });
