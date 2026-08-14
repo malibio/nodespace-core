@@ -133,7 +133,12 @@ pub struct RegistrySnapshot {
 }
 
 /// On-disk representation of `~/.nodespace/databases.toml`.
-#[derive(Debug, Default, Serialize, Deserialize)]
+///
+/// `Clone` backs [`DatabaseManager::mutate_and_save`]'s "compute a candidate,
+/// persist it, then swap it in" shape: cloning is cheap (a `Vec<DatabaseEntry>`
+/// plus an `Option<DatabaseId>`), and every mutator computes its next value
+/// from a clone of the current one rather than mutating the live registry.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Registry {
     /// Registered databases, in registration order.
     #[serde(default)]
@@ -207,6 +212,30 @@ pub struct DatabaseManager {
     /// also means a burst of changes collapses into one refresh — `watch` keeps
     /// only the latest value.
     change_tx: watch::Sender<u64>,
+    /// Test-only hook: when set, [`Self::mutate_and_save`] parks at this gate
+    /// right before persisting, letting cancellation-safety tests suspend a
+    /// mutation mid-flight deterministically (see [`SaveGate`]). This field
+    /// does not exist at all in a non-test build.
+    #[cfg(test)]
+    save_gate: std::sync::Mutex<Option<SaveGate>>,
+}
+
+/// Test-only synchronization point injected into
+/// [`DatabaseManager::mutate_and_save`] so a test can deterministically
+/// suspend a mutation mid-persist and then drop (via `JoinHandle::abort`) the
+/// future driving it — reproducing the exact "future dropped while parked at
+/// the save await" scenario cancellation-safety must survive, without relying
+/// on real filesystem/timing races.
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct SaveGate {
+    /// Signaled once a mutation has reached (and is now parked inside) the
+    /// gate, so the test knows it is safe to abort the driving task.
+    entered: Arc<tokio::sync::Notify>,
+    /// The gate waits on this before letting the real save proceed. A test
+    /// that never signals it — and instead aborts the driving task — is how
+    /// cancellation mid-persist is reproduced.
+    release: Arc<tokio::sync::Notify>,
 }
 
 /// True if `path` lives under a system temporary directory. macOS purges
@@ -250,6 +279,8 @@ impl DatabaseManager {
             last_activity: RwLock::new(HashMap::new()),
             context,
             change_tx: watch::channel(0).0,
+            #[cfg(test)]
+            save_gate: std::sync::Mutex::new(None),
         })
     }
 
@@ -269,6 +300,20 @@ impl DatabaseManager {
     /// that woke it.
     fn notify_changed(&self) {
         self.change_tx.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Arm the test-only [`SaveGate`] so the next [`Self::mutate_and_save`]
+    /// parks right before persisting instead of proceeding straight to disk.
+    #[cfg(test)]
+    fn set_save_gate(&self, gate: SaveGate) {
+        *self.save_gate.lock().unwrap() = Some(gate);
+    }
+
+    /// Disarm the test-only [`SaveGate`], restoring normal (non-suspending)
+    /// persist behavior.
+    #[cfg(test)]
+    fn clear_save_gate(&self) {
+        *self.save_gate.lock().unwrap() = None;
     }
 
     /// Default registry path `<nodespace_dir>/databases.toml`.
@@ -388,37 +433,52 @@ impl DatabaseManager {
         self.insert_entry(id, name, path).await
     }
 
-    /// Persist the registry, notifying observers on success. If the save
-    /// fails, `restore` is invoked — with the write lock still held — to undo
-    /// the in-memory mutation the caller already applied, so `list()` never
-    /// reports a change that did not make it to disk.
+    /// Compute a candidate registry, persist it, and only then splice it into
+    /// the live `RwLock` — with no `.await` between the save resolving and
+    /// the swap, so cancellation of the calling future can only ever observe
+    /// "nothing happened" or "fully happened," never a half-applied mutation.
     ///
-    /// Every registry mutator below follows the same two-part shape (roll
-    /// back on failure, notify on success); centralizing it here means a
-    /// future mutator can't copy the rollback half and forget the notify
-    /// half, which is exactly how `set_default`/`set_bound_tenant` first
-    /// shipped.
+    /// `mutate` receives the *current* registry and returns the candidate
+    /// next value; it does not touch `registry` itself. That is what makes
+    /// this cancellation-safe where the previous `persist_or_rollback` design
+    /// was not: that version mutated the live registry in the caller *before*
+    /// entering the save `await`, so a future dropped while parked there left
+    /// the mutation applied with neither a restore nor `notify_changed` ever
+    /// having run (a client disconnect, a `tonic` timeout, a `select!`, or a
+    /// shutdown signal mid-mutation). Here, nothing observable changes until
+    /// `candidate.save(..)` has already resolved `Ok` — at which point the
+    /// remaining code (the assignment, the notify) runs synchronously to
+    /// completion with no further await point, so it cannot be interrupted:
+    /// Rust futures can only be dropped while parked at an `.await`, not
+    /// mid-poll of synchronous code. If the future is dropped while still
+    /// parked at the save, `registry` (still holding the untouched pre-call
+    /// value) is simply dropped via its own `Drop`, releasing the write lock
+    /// with the live registry exactly as it was.
     ///
-    /// Not cancellation-safe: this closes the "`save` returned `Err`" case,
-    /// not the "the calling future was dropped while `save` was still
-    /// pending" case (a client disconnect, a `select!`, a shutdown signal).
-    /// The in-memory mutation happens in the caller before this is invoked,
-    /// so a mid-`await` cancellation here leaves it applied with neither
-    /// `restore` nor `notify_changed` having run. A fully cancellation-safe
-    /// version would defer the in-memory mutation until after a successful
-    /// save (e.g. save a computed next-state value, then swap it in with no
-    /// further await) — real scope beyond what this file's mutators
-    /// currently need caught in a `save`-failure code path; tracked as a
-    /// follow-up rather than folded in here.
-    async fn persist_or_rollback(
+    /// Every registry mutator below funnels through this one helper so that
+    /// property holds everywhere, not just in whichever mutator happened to
+    /// get it right — which is exactly how `set_default`/`set_bound_tenant`
+    /// first shipped without it.
+    async fn mutate_and_save(
         &self,
         mut registry: RwLockWriteGuard<'_, Registry>,
-        restore: impl FnOnce(&mut Registry),
+        mutate: impl FnOnce(&Registry) -> Registry,
     ) -> Result<()> {
-        if let Err(e) = registry.save(&self.registry_path).await {
-            restore(&mut registry);
-            return Err(e);
+        let candidate = mutate(&registry);
+        #[cfg(test)]
+        {
+            // The `MutexGuard` must not live across the `.await` below (it
+            // would make this whole future non-`Send`), so the lock is taken
+            // and released in this separate statement, before the gate is
+            // ever awaited.
+            let gate = self.save_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
         }
+        candidate.save(&self.registry_path).await?;
+        *registry = candidate;
         drop(registry);
         self.notify_changed();
         Ok(())
@@ -426,9 +486,11 @@ impl DatabaseManager {
 
     /// Unregister a database. This only removes the registry entry — it never
     /// deletes the underlying database file. If the removed database was the
-    /// default, the default is cleared. If persisting fails, the in-memory
-    /// removal is rolled back (via [`Self::persist_or_rollback`]) so `list()`
-    /// never reports a database as gone when it is still on disk.
+    /// default, the default is cleared. Persists via
+    /// [`Self::mutate_and_save`], which computes and saves the post-removal
+    /// registry before it ever becomes the live one, so a failed (or
+    /// cancelled) save leaves `list()` reporting the database as still
+    /// present, never gone when it is still on disk.
     ///
     /// Removes at most one entry, by `id`'s first match — consistent with
     /// every other lookup in this file (`rename`, `set_default`,
@@ -440,40 +502,25 @@ impl DatabaseManager {
     /// worse than every other method here already implicitly assuming
     /// uniqueness.
     pub async fn remove(&self, id: &DatabaseId) -> Result<()> {
-        let mut registry = self.registry.write().await;
-        let index = registry
-            .databases
-            .iter()
-            .position(|e| &e.id == id)
-            .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-        // `Vec::remove` (unlike `retain`) both hands back the removed entry
-        // and preserves the index needed to restore it in place, rather than
-        // at the end, if the save below fails.
-        let removed = registry.databases.remove(index);
-        // `was_default` records whether `id` was the current default *before*
-        // this call touches it, matching `insert_entry`'s own `adopted_default`
-        // guard for the identical shape: both the clear below and the restore
-        // in the rollback closure are conditioned on it, so a failed save of a
-        // *non*-default removal leaves an untouched, unrelated default alone
-        // (an earlier version of this code restored unconditionally, which
-        // wiped such a default back to `None`).
-        let was_default = registry.default_database.as_ref() == Some(id);
-        if was_default {
-            registry.default_database = None;
+        let registry = self.registry.write().await;
+        if registry.find(id).is_none() {
+            return Err(anyhow!("no database registered with id {id}"));
         }
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so `index` still points at
-            // the pre-call slot — insert restores exactly the pre-call state.
-            registry.databases.insert(index, removed);
-            if was_default {
-                registry.default_database = Some(id.clone());
+        self.mutate_and_save(registry, |registry| {
+            let mut next = registry.clone();
+            if let Some(index) = next.databases.iter().position(|e| &e.id == id) {
+                next.databases.remove(index);
             }
+            if next.default_database.as_ref() == Some(id) {
+                next.default_database = None;
+            }
+            next
         })
         .await?;
         // Tear down the database's compute (processor + event watcher) as well as
         // its registry entry — unregistering must not leave a detached watcher
         // running (ADR-053: per-database compute scoping). Uses the no-notify
-        // variant: `persist_or_rollback` already notified observers of the
+        // variant: `mutate_and_save` already notified observers of the
         // registry change above (covering the case where the removed database
         // was never opened, so the ordinary `close` below would be a no-op),
         // and calling the public `close` here too would double-notify for a
@@ -483,38 +530,38 @@ impl DatabaseManager {
     }
 
     /// Mark a registered database as the default served for header-less
-    /// requests. If persisting fails, the previous default is restored (via
-    /// [`Self::persist_or_rollback`]).
+    /// requests. Persists via [`Self::mutate_and_save`]: the new default is
+    /// only computed as a candidate and saved before it ever becomes the live
+    /// default, so a failed (or cancelled) save leaves the previous default
+    /// in place.
     pub async fn set_default(&self, id: &DatabaseId) -> Result<()> {
-        let mut registry = self.registry.write().await;
+        let registry = self.registry.write().await;
         if registry.find(id).is_none() {
             return Err(anyhow!("no database registered with id {id}"));
         }
-        let previous_default = registry.default_database.replace(id.clone());
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so restoring the previous
-            // value here exactly undoes the mutation above.
-            registry.default_database = previous_default;
+        self.mutate_and_save(registry, |registry| {
+            let mut next = registry.clone();
+            next.default_database = Some(id.clone());
+            next
         })
         .await
     }
 
     /// Rename the human-facing label of a registered database. Does not touch
-    /// the underlying file. If persisting fails, the previous name is restored
-    /// (via [`Self::persist_or_rollback`]).
+    /// the underlying file. Persists via [`Self::mutate_and_save`]: the
+    /// renamed candidate is saved before it ever becomes the live registry,
+    /// so a failed (or cancelled) save leaves the previous name in place.
     pub async fn rename(&self, id: &DatabaseId, name: String) -> Result<()> {
-        let mut registry = self.registry.write().await;
-        let index = registry
-            .databases
-            .iter()
-            .position(|e| &e.id == id)
-            .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-        let previous_name = std::mem::replace(&mut registry.databases[index].name, name);
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so `index` still points at
-            // the same entry — restore the previous name on a failed save
-            // without re-scanning for it.
-            registry.databases[index].name = previous_name;
+        let registry = self.registry.write().await;
+        if registry.find(id).is_none() {
+            return Err(anyhow!("no database registered with id {id}"));
+        }
+        self.mutate_and_save(registry, |registry| {
+            let mut next = registry.clone();
+            if let Some(entry) = next.databases.iter_mut().find(|e| &e.id == id) {
+                entry.name = name;
+            }
+            next
         })
         .await
     }
@@ -523,30 +570,26 @@ impl DatabaseManager {
     /// per-database cloud sync) so the binding can be shown before the database
     /// is opened. Pass `None` to clear it on unbind. The authoritative record is
     /// the database's DatabaseSettingsNode; this registry field is a display
-    /// mirror kept in step with it. If persisting fails, the previous binding is
-    /// restored (via [`Self::persist_or_rollback`]).
+    /// mirror kept in step with it. Persists via [`Self::mutate_and_save`]:
+    /// the new binding is saved before it ever becomes the live registry, so
+    /// a failed (or cancelled) save leaves the previous binding in place.
     pub async fn set_bound_tenant(
         &self,
         id: &DatabaseId,
         schema: Option<String>,
         collection: Option<String>,
     ) -> Result<()> {
-        let mut registry = self.registry.write().await;
-        let index = registry
-            .databases
-            .iter()
-            .position(|e| &e.id == id)
-            .ok_or_else(|| anyhow!("no database registered with id {id}"))?;
-        let entry = &mut registry.databases[index];
-        let previous_schema = std::mem::replace(&mut entry.bound_tenant_schema, schema);
-        let previous_collection = std::mem::replace(&mut entry.bound_tenant_collection, collection);
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so `index` still points at
-            // the same entry — restore the previous binding on a failed save
-            // without re-scanning for it.
-            let entry = &mut registry.databases[index];
-            entry.bound_tenant_schema = previous_schema;
-            entry.bound_tenant_collection = previous_collection;
+        let registry = self.registry.write().await;
+        if registry.find(id).is_none() {
+            return Err(anyhow!("no database registered with id {id}"));
+        }
+        self.mutate_and_save(registry, |registry| {
+            let mut next = registry.clone();
+            if let Some(entry) = next.databases.iter_mut().find(|e| &e.id == id) {
+                entry.bound_tenant_schema = schema;
+                entry.bound_tenant_collection = collection;
+            }
+            next
         })
         .await
     }
@@ -570,37 +613,42 @@ impl DatabaseManager {
         }
         // Take the write lock and re-check — a concurrent caller may have
         // registered the default between the read above and this acquire.
-        let mut registry = self.registry.write().await;
+        let registry = self.registry.write().await;
         if let Some(id) = registry.default_database.clone() {
             return Ok(id);
         }
         // Entries exist but no default → adopt the first as default.
         if let Some(first) = registry.databases.first() {
             let id = first.id.clone();
-            registry.default_database = Some(id.clone());
-            self.persist_or_rollback(registry, |registry| {
-                registry.default_database = None;
+            self.mutate_and_save(registry, {
+                let id = id.clone();
+                move |registry| {
+                    let mut next = registry.clone();
+                    next.default_database = Some(id.clone());
+                    next
+                }
             })
             .await?;
             return Ok(id);
         }
         // Empty registry → register the default database.
         let id = DatabaseId::generate();
-        registry.databases.push(DatabaseEntry {
-            id: id.clone(),
-            name,
-            path,
-            created_at: Utc::now(),
-            last_opened_at: None,
-            bound_tenant_schema: None,
-            bound_tenant_collection: None,
-        });
-        registry.default_database = Some(id.clone());
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so the pushed entry is
-            // still last — pop restores exactly the pre-call state.
-            registry.databases.pop();
-            registry.default_database = None;
+        self.mutate_and_save(registry, {
+            let id = id.clone();
+            move |registry| {
+                let mut next = registry.clone();
+                next.databases.push(DatabaseEntry {
+                    id: id.clone(),
+                    name,
+                    path,
+                    created_at: Utc::now(),
+                    last_opened_at: None,
+                    bound_tenant_schema: None,
+                    bound_tenant_collection: None,
+                });
+                next.default_database = Some(id.clone());
+                next
+            }
         })
         .await?;
         Ok(id)
@@ -651,46 +699,41 @@ impl DatabaseManager {
     }
 
     /// Drop the current default entry (if any) and register a fresh "Default"
-    /// at `standard_path`, marking it the default. Persists the registry (via
-    /// [`Self::persist_or_rollback`], so a failed save leaves neither the
-    /// doomed entry gone nor the new one half-registered) and returns the new
-    /// id. The doomed file itself is never touched — only the registry entry
-    /// is replaced. Runs on every daemon boot via [`Self::repair_doomed_default`],
-    /// so a save failure here is not a rare edge path.
+    /// at `standard_path`, marking it the default. Persists via
+    /// [`Self::mutate_and_save`]: the candidate (doomed entry removed, fresh
+    /// one added) is saved before it ever becomes the live registry, so a
+    /// failed (or cancelled) save leaves neither the doomed entry gone nor
+    /// the new one half-registered. Returns the new id. The doomed file
+    /// itself is never touched — only the registry entry is replaced. Runs on
+    /// every daemon boot via [`Self::repair_doomed_default`], so a save
+    /// failure here is not a rare edge path.
     async fn set_standard_default(&self, standard_path: &Path) -> Result<DatabaseId> {
-        let mut registry = self.registry.write().await;
-        let previous_default = registry.default_database.take();
-        // Capture the doomed entry and its index before removing it (`id`s
-        // are unique — see `DatabaseId`'s docs — so at most one matches), so
-        // a failed save can restore it exactly where it was rather than at
-        // the end.
-        let removed = previous_default.as_ref().and_then(|prev| {
-            registry
-                .databases
-                .iter()
-                .position(|entry| &entry.id == prev)
-                .map(|index| (index, registry.databases.remove(index)))
-        });
+        let registry = self.registry.write().await;
         let id = DatabaseId::generate();
-        registry.databases.push(DatabaseEntry {
-            id: id.clone(),
-            name: "Default".to_string(),
-            path: standard_path.to_path_buf(),
-            created_at: Utc::now(),
-            last_opened_at: None,
-            bound_tenant_schema: None,
-            bound_tenant_collection: None,
-        });
-        registry.default_database = Some(id.clone());
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so the pushed entry is
-            // still last — pop restores exactly the pre-call state, then the
-            // doomed entry (if any) goes back at its original index.
-            registry.databases.pop();
-            if let Some((index, entry)) = removed {
-                registry.databases.insert(index, entry);
+        let standard_path = standard_path.to_path_buf();
+        self.mutate_and_save(registry, {
+            let id = id.clone();
+            move |registry| {
+                let mut next = registry.clone();
+                // `id`s are unique (see `DatabaseId`'s docs), so at most one
+                // entry matches the previous default.
+                if let Some(prev) = next.default_database.take() {
+                    if let Some(index) = next.databases.iter().position(|e| e.id == prev) {
+                        next.databases.remove(index);
+                    }
+                }
+                next.databases.push(DatabaseEntry {
+                    id: id.clone(),
+                    name: "Default".to_string(),
+                    path: standard_path.clone(),
+                    created_at: Utc::now(),
+                    last_opened_at: None,
+                    bound_tenant_schema: None,
+                    bound_tenant_collection: None,
+                });
+                next.default_database = Some(id.clone());
+                next
             }
-            registry.default_database = previous_default;
         })
         .await?;
         Ok(id)
@@ -798,7 +841,7 @@ impl DatabaseManager {
 
     /// Core of [`Self::close`] without the notify. `remove` uses this
     /// directly: it already notifies once (unconditionally, via
-    /// `persist_or_rollback`) for the registry change, and would otherwise
+    /// `mutate_and_save`) for the registry change, and would otherwise
     /// double-notify — once for the registry, once more here — when the
     /// removed database happened to be open.
     async fn close_without_notify(&self, id: &DatabaseId) -> bool {
@@ -900,9 +943,10 @@ impl DatabaseManager {
     }
 
     /// Push a new entry into the registry and persist it. The first registered
-    /// database becomes the default. If persisting fails, the in-memory
-    /// mutation is rolled back (via [`Self::persist_or_rollback`]) so the
-    /// registry map never drifts from the file on disk.
+    /// database becomes the default. Persists via [`Self::mutate_and_save`]:
+    /// the candidate (with the new entry appended) is saved before it ever
+    /// becomes the live registry, so a failed (or cancelled) save leaves the
+    /// registry map exactly as it was, never drifting from the file on disk.
     async fn insert_entry(
         &self,
         id: DatabaseId,
@@ -918,18 +962,16 @@ impl DatabaseManager {
             bound_tenant_schema: None,
             bound_tenant_collection: None,
         };
-        let mut registry = self.registry.write().await;
-        registry.databases.push(entry.clone());
-        let adopted_default = registry.default_database.is_none();
-        if adopted_default {
-            registry.default_database = Some(id);
-        }
-        self.persist_or_rollback(registry, |registry| {
-            // The write lock is held throughout, so the pushed entry is still
-            // last — pop restores exactly the pre-call state.
-            registry.databases.pop();
-            if adopted_default {
-                registry.default_database = None;
+        let registry = self.registry.write().await;
+        self.mutate_and_save(registry, {
+            let entry = entry.clone();
+            move |registry| {
+                let mut next = registry.clone();
+                next.databases.push(entry.clone());
+                if next.default_database.is_none() {
+                    next.default_database = Some(id.clone());
+                }
+                next
             }
         })
         .await?;
@@ -1387,7 +1429,7 @@ mod tests {
         let after = *mgr.subscribe_changes().borrow();
 
         // `remove` notifies once for the registry change (via
-        // `persist_or_rollback`); closing the open handle must not notify a
+        // `mutate_and_save`); closing the open handle must not notify a
         // second time for what is, to a subscriber, a single logical event.
         assert_eq!(
             after.wrapping_sub(before),
@@ -1709,5 +1751,134 @@ mod tests {
             .get_or_open(&DatabaseId::from("ZZZ-NOT-REGISTERED".to_string()))
             .await
             .is_err());
+    }
+
+    /// Empirically proves `mutate_and_save` is cancellation-safe: drops the
+    /// future driving a mutation while it is genuinely suspended mid-persist
+    /// (not merely "before it started") and asserts the live registry is
+    /// untouched afterward.
+    ///
+    /// The old `persist_or_rollback` design applied the mutation to the live
+    /// registry *before* entering the save `.await` — so a future dropped
+    /// there (a gRPC client disconnect, a `tonic` timeout, a `select!`
+    /// racing the call, a shutdown signal mid-mutation) left the mutation
+    /// applied in memory with neither `restore()` nor `notify_changed()`
+    /// ever having run. This test uses the test-only [`SaveGate`] to
+    /// deterministically suspend a real `rename` call at exactly that point,
+    /// then `abort()`s the task driving it — a genuine future-drop, not a
+    /// simulation — and checks the invariant empirically rather than by
+    /// reading the code and asserting intent.
+    #[tokio::test]
+    async fn dropping_the_future_mid_persist_leaves_the_registry_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = Arc::new(
+            DatabaseManager::load(registry_path.clone(), test_context())
+                .await
+                .unwrap(),
+        );
+        let id = mgr
+            .ensure_default_registered("Original".into(), dir.path().join("db"))
+            .await
+            .unwrap();
+
+        let gate = SaveGate::default();
+        mgr.set_save_gate(gate.clone());
+
+        // Drive the mutation on a separate task so it can be cancelled from
+        // the outside while parked mid-persist.
+        let driver = {
+            let mgr = mgr.clone();
+            let id = id.clone();
+            tokio::spawn(async move { mgr.rename(&id, "Renamed".into()).await })
+        };
+
+        // Wait until `rename` has computed its candidate and is genuinely
+        // parked at the gate, mid-persist — not merely "spawned."
+        gate.entered.notified().await;
+
+        // Drop the driving future while it is suspended there. `abort`
+        // cancels at the task's next (i.e. current) yield point, dropping
+        // the future in place — the write-lock guard it was holding
+        // releases via `Drop`, exactly matching a real
+        // disconnect/timeout/select!/shutdown cancellation.
+        driver.abort();
+        let outcome = driver.await;
+        assert!(
+            outcome.unwrap_err().is_cancelled(),
+            "the driving task must have been cancelled, not completed"
+        );
+
+        // The live registry must be untouched: still "Original", never
+        // half-applied to "Renamed". `mutate_and_save` only swaps the
+        // candidate in *after* save resolves, with no further await in
+        // between, so a drop mid-save can only ever observe "nothing
+        // happened."
+        mgr.clear_save_gate();
+        let snap = mgr.list().await;
+        assert_eq!(
+            snap.databases[0].entry.name, "Original",
+            "a mutation cancelled mid-persist must leave the live registry exactly as it was"
+        );
+
+        // The manager still works correctly for a real, uncancelled call
+        // afterward — the gate doesn't leave anything wedged.
+        mgr.rename(&id, "Renamed".into()).await.unwrap();
+        assert_eq!(mgr.list().await.databases[0].entry.name, "Renamed");
+    }
+
+    /// Same proof as
+    /// [`dropping_the_future_mid_persist_leaves_the_registry_untouched`], but
+    /// for the "push a new entry" shape (`insert_entry`, reached here via
+    /// `register`) rather than mutating an existing entry — the issue's scope
+    /// note specifically calls out verifying the push-based mutators
+    /// translate cleanly to this design too.
+    #[tokio::test]
+    async fn dropping_the_future_mid_persist_during_insert_leaves_no_partial_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("databases.toml");
+        let mgr = Arc::new(
+            DatabaseManager::load(registry_path.clone(), test_context())
+                .await
+                .unwrap(),
+        );
+
+        let gate = SaveGate::default();
+        mgr.set_save_gate(gate.clone());
+
+        let path = dir.path().join("fresh.db");
+        std::fs::write(&path, b"").unwrap();
+        let driver = {
+            let mgr = mgr.clone();
+            let path = path.clone();
+            tokio::spawn(async move { mgr.register(path).await })
+        };
+
+        gate.entered.notified().await;
+        driver.abort();
+        let outcome = driver.await;
+        assert!(
+            outcome.unwrap_err().is_cancelled(),
+            "the driving task must have been cancelled, not completed"
+        );
+
+        // Cancelling mid-persist during an insert must leave no partial
+        // entry — not a half-registered database, and no default silently
+        // adopted.
+        mgr.clear_save_gate();
+        let snap = mgr.list().await;
+        assert!(
+            snap.databases.is_empty(),
+            "a cancelled insert must leave no registry entry behind"
+        );
+        assert_eq!(snap.default_database, None);
+
+        // A subsequent real call still works and adopts the entry as default
+        // (first-ever registration).
+        let entry = mgr.register(path).await.unwrap();
+        let snap = mgr.list().await;
+        assert_eq!(snap.databases.len(), 1);
+        assert_eq!(snap.databases[0].entry.id, entry.id);
+        assert_eq!(snap.default_database.as_ref(), Some(&entry.id));
     }
 }
