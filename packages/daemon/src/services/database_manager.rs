@@ -164,24 +164,33 @@ impl Registry {
 
     /// Persist the registry to `path`, creating the parent directory if needed.
     ///
-    /// Known residual gap: `tokio::fs::write` below persists via
-    /// `spawn_blocking` under the hood, dispatching the actual write to a
-    /// blocking-pool thread. Tokio does not retract an already-dispatched
-    /// blocking closure when the task polling this `.await` is aborted or
-    /// dropped — so if a caller (e.g.
+    /// Writes to a temp file in the same directory as `path` and atomically
+    /// renames it into place, rather than writing `path` directly. `rename`
+    /// is atomic on POSIX filesystems, so a hard process kill (crash, OOM,
+    /// forced shutdown) at any point during the save can never leave a
+    /// truncated or otherwise partially-written `databases.toml` on disk —
+    /// the visible file is always either the fully-old or the fully-new
+    /// content. The temp file lives next to `path` (same directory) so the
+    /// rename stays on the same filesystem, which POSIX atomicity requires;
+    /// the pid suffix keeps two daemon instances that raced to save the same
+    /// registry from colliding on the same temp path.
+    ///
+    /// Known residual gap: `tokio::fs::write` and `tokio::fs::rename` below
+    /// both persist via `spawn_blocking` under the hood, dispatching the
+    /// actual syscall to a blocking-pool thread. Tokio does not retract an
+    /// already-dispatched blocking closure when the task polling this
+    /// `.await` is aborted or dropped — so if a caller (e.g.
     /// [`DatabaseManager::mutate_and_save`]) is cancelled while parked
-    /// here, the write can still complete on disk moments later, after the
-    /// caller has already given up on it. This is deliberately left as-is
-    /// rather than made abort-aware: every caller only swaps its candidate
-    /// into live state after this call has already resolved `Ok` with no
-    /// further `.await` in between, so a stray completed write here can
-    /// never surface as a false success — it only means the in-memory view
-    /// can lag the file by one write until the next `load()` (e.g. process
-    /// restart) re-reads it. Closing that lag for real would mean making
-    /// this write atomic against cancellation at the OS/thread-pool level
-    /// (for example, a temp-file-plus-rename with the reconciliation itself
-    /// detached from the caller's lifetime) — a materially larger change
-    /// than the narrow, self-healing gap it would close.
+    /// here, the write or rename can still complete on disk moments later,
+    /// after the caller has already given up on it. Temp-file-plus-rename
+    /// does not close this window — it only shrinks it from "however long
+    /// the write takes" to "however long the rename syscall takes" — so
+    /// this is deliberately left as-is rather than made abort-aware: every
+    /// caller only swaps its candidate into live state after this call has
+    /// already resolved `Ok` with no further `.await` in between, so a
+    /// stray completed write/rename here can never surface as a false
+    /// success — it only means the in-memory view can lag the file by one
+    /// write until the next `load()` (e.g. process restart) re-reads it.
     pub async fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -190,9 +199,34 @@ impl Registry {
         }
         let contents =
             toml::to_string_pretty(self).context("serializing database registry to TOML")?;
-        tokio::fs::write(path, contents)
-            .await
-            .with_context(|| format!("writing database registry {}", path.display()))
+
+        let tmp_file_name = format!(
+            "{}.tmp-{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("databases.toml"),
+            std::process::id(),
+        );
+        let tmp_path = path.with_file_name(tmp_file_name);
+
+        if let Err(e) = tokio::fs::write(&tmp_path, &contents).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(e)
+                .with_context(|| format!("writing database registry {}", tmp_path.display()));
+        }
+
+        if let Err(e) = tokio::fs::rename(&tmp_path, path).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(e).with_context(|| {
+                format!(
+                    "finalizing database registry {} (staged at {})",
+                    path.display(),
+                    tmp_path.display()
+                )
+            });
+        }
+
+        Ok(())
     }
 
     fn find(&self, id: &DatabaseId) -> Option<&DatabaseEntry> {
@@ -1318,7 +1352,8 @@ mod tests {
     }
 
     /// Put a directory at `registry_path`, so any subsequent `Registry::save`
-    /// fails at the `tokio::fs::write` step, without touching any in-memory
+    /// fails — the temp-file write beside it still succeeds, but the final
+    /// rename onto a directory does not — without touching any in-memory
     /// state. The one shared way every save-*failure* test below (and
     /// `failed_create_rolls_back_and_leaves_the_daemon_serviceable`) breaks
     /// persistence — distinct from the cancellation tests further down,
@@ -1951,6 +1986,80 @@ mod tests {
         assert_eq!(
             after_restart.default_database, new.default_database,
             "the stray completed write must be visible to the next load()"
+        );
+    }
+
+    /// Regression test for the crash-safety gap tracked separately from the
+    /// cancellation-lag one above: `Registry::save` must not write `path`
+    /// directly, or a hard kill mid-write (crash, OOM, forced shutdown)
+    /// could leave a truncated, unparseable `databases.toml` behind. A
+    /// successful save must leave exactly the real file in the directory —
+    /// no leftover `.tmp-*` file from the temp-file-plus-rename staging step.
+    #[tokio::test]
+    async fn save_leaves_no_leftover_temp_file_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("databases.toml");
+
+        let registry = Registry {
+            databases: vec![],
+            default_database: Some(DatabaseId::from("d1".to_string())),
+        };
+        registry.save(&path).await.unwrap();
+
+        let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(
+            names,
+            vec!["databases.toml"],
+            "a successful save must leave only the real file behind, no staging temp file"
+        );
+
+        let reloaded = Registry::load(&path).await.unwrap();
+        assert_eq!(reloaded.default_database, registry.default_database);
+    }
+
+    /// A failure while writing the temp-file staging copy (before the
+    /// rename that makes it visible at `path`) must leave whatever was
+    /// previously saved at `path` completely untouched — never truncated,
+    /// never partially overwritten. This is the property that closes the
+    /// crash-safety gap: the real path is only ever touched by the atomic
+    /// rename, never by the write itself.
+    #[tokio::test]
+    async fn a_failed_staging_write_leaves_the_previously_saved_registry_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("databases.toml");
+
+        let old = Registry {
+            databases: vec![],
+            default_database: Some(DatabaseId::from("old".to_string())),
+        };
+        old.save(&path).await.unwrap();
+        let old_contents = tokio::fs::read_to_string(&path).await.unwrap();
+
+        // Force the temp-file write to fail by occupying its exact path
+        // with a directory — `tokio::fs::write` onto a directory fails
+        // immediately, without ever touching `path` itself.
+        let tmp_path = path.with_file_name(format!("databases.toml.tmp-{}", std::process::id()));
+        tokio::fs::create_dir(&tmp_path).await.unwrap();
+
+        let new = Registry {
+            databases: vec![],
+            default_database: Some(DatabaseId::from("new".to_string())),
+        };
+        new.save(&path).await.unwrap_err();
+
+        let contents_after_failure = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(
+            contents_after_failure, old_contents,
+            "a failed save must leave the previously-saved registry byte-for-byte intact"
+        );
+        let reloaded = Registry::load(&path).await.unwrap();
+        assert_eq!(
+            reloaded.default_database, old.default_database,
+            "a failed save must never surface partial or new content on reload"
         );
     }
 }
