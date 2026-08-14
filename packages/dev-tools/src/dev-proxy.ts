@@ -18,6 +18,7 @@ import {
   type InsertPosition,
 } from '../../desktop-app/src/lib/services/adapter-core.ts';
 import { createNodeSpaceClients } from './grpc-client.ts';
+import { mapGrpcError } from './grpc-error-mapping.ts';
 
 const PORT = parseInt(process.env.DEV_PROXY_PORT ?? '3001', 10);
 
@@ -146,13 +147,22 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function error(code: string, message: string, status = 500): Response {
-  return json({ code, message, details: message }, status);
+function error(code: string, message: string, status = 500, conflictData?: unknown): Response {
+  const body: Record<string, unknown> = { code, message, details: message };
+  if (conflictData !== undefined) body.conflictData = conflictData;
+  return json(body, status);
 }
 
+// Mirrors the Tauri command layer's status_to_command_error
+// (packages/desktop-app/src-tauri/src/commands/nodes.rs): inspects the same
+// gRPC trailer metadata to build SUBTREE_ACCESS_DENIED/VERSION_CONFLICT codes
+// with their conflictData payload, so a live refusal reached through
+// bun run dev:browser surfaces via isSubtreeAccessDenied/isVersionConflict
+// the same way it does through the Tauri path. See grpc-error-mapping.ts.
 function grpcError(err: grpc.ServiceError): Response {
   const status = grpcStatusToHttp(err.code);
-  return error(grpc.status[err.code] ?? 'UNKNOWN', err.details ?? err.message, status);
+  const { code, conflictData } = mapGrpcError(err);
+  return error(code, err.details ?? err.message, status, conflictData);
 }
 
 function grpcStatusToHttp(code: grpc.status): number {
@@ -171,6 +181,10 @@ function grpcStatusToHttp(code: grpc.status): number {
       return 429;
     case grpc.status.ABORTED:
       return 409;
+    // A subtree-access refusal (ADR-041) — see mapGrpcError. Distinct from
+    // the 500 default so it isn't misread as a server-side failure.
+    case grpc.status.FAILED_PRECONDITION:
+      return 412;
     default:
       return 500;
   }
