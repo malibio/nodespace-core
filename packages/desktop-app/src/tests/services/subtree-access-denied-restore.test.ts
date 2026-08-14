@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SharedNodeStore } from '../../lib/services/shared-node-store.svelte';
 import { backendAdapter } from '../../lib/services/backend-adapter';
 import { getSubtreeAccessDeniedState } from '../../lib/services/subtree-access-denied.svelte';
+import { conflictNotifications } from '../../lib/stores/conflict-notifications.svelte';
 import type { Node } from '../../lib/types';
 
 const NODE_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -59,12 +60,14 @@ describe('deleteNode subtree-access-denied restore', () => {
     SharedNodeStore.resetInstance();
     store = SharedNodeStore.getInstance();
     getSubtreeAccessDeniedState().dismiss();
+    conflictNotifications.dismissAll();
   });
 
   afterEach(() => {
     store.clearAll();
     SharedNodeStore.resetInstance();
     getSubtreeAccessDeniedState().dismiss();
+    conflictNotifications.dismissAll();
     vi.restoreAllMocks();
   });
 
@@ -87,9 +90,17 @@ describe('deleteNode subtree-access-denied restore', () => {
     const refusal = getSubtreeAccessDeniedState();
     expect(refusal.pending).not.toBeNull();
     expect(refusal.pending?.inaccessibleCount).toBe(3);
+
+    // The specific subtree-access-denied modal is the ONLY notification for
+    // this event — the outer handle.promise.catch() must not pile a second,
+    // generic write-failure toast on top of it for the same refusal.
+    const writeFailures = conflictNotifications.notifications.filter(
+      (n) => n.nodeId === NODE_ID && n.conflictType === 'write-failure'
+    );
+    expect(writeFailures).toHaveLength(0);
   }, 3000);
 
-  it('leaves the node deleted for a non-refusal backend error', async () => {
+  it('leaves the node deleted for a non-refusal backend error, and surfaces a write-failure notification', async () => {
     seedPersistedNode(store);
 
     vi.spyOn(backendAdapter, 'deleteNode').mockRejectedValueOnce(
@@ -103,6 +114,15 @@ describe('deleteNode subtree-access-denied restore', () => {
     // Non-refusal errors keep today's behavior: the optimistic removal stands.
     expect(store.getNode(NODE_ID)).toBeUndefined();
     expect(getSubtreeAccessDeniedState().pending).toBeNull();
+
+    // Unlike a subtree-access-denied refusal (which has its own specific
+    // notification), a plain deletion failure has no other signal — it must
+    // surface a generic write-failure notification, not be silently
+    // dropped (the previous behavior for this catch site).
+    const writeFailures = conflictNotifications.notifications.filter(
+      (n) => n.nodeId === NODE_ID && n.conflictType === 'write-failure'
+    );
+    expect(writeFailures).toHaveLength(1);
   }, 3000);
 
   it('invokes onRefused on a refusal so a caller can restore its own view state', async () => {
