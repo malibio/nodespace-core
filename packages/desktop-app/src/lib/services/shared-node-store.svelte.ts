@@ -2609,9 +2609,23 @@ export class SharedNodeStore {
           // Always track errors in test environment for verification
           this.trackErrorIfTesting(error);
 
-          // Rollback the optimistic update
-          this.nodesSet(nodeId, existingNode);
-          this.notifySubscribers(nodeId, existingNode, source);
+          // Rollback bookkeeping only — do NOT force-revert the store's
+          // content to `existingNode` (this call's own captured pre-edit
+          // snapshot). `updateTaskNode()` has no `NodeUpdate`/`pendingUpdates`
+          // tracking the way `updateNode()` does, so there is no
+          // `rollbackUpdate()`-equivalent history to unwind here — but
+          // unconditionally calling `nodesSet(nodeId, existingNode)` would
+          // clobber a second, genuinely queued `updateTaskNode()` write's
+          // optimistic value (or its already-confirmed server result) if
+          // that write applied its own update to this node while this one
+          // was still executing. Notify subscribers with whatever the store
+          // CURRENTLY holds instead — mirrors `updateNode()`'s sibling catch
+          // handler, which calls `rollbackUpdate()` and never calls
+          // `nodesSet()`/touches node content itself.
+          const nodeAfterFailure = this.nodes.get(nodeId);
+          if (nodeAfterFailure) {
+            this.notifySubscribers(nodeId, nodeAfterFailure, source);
+          }
 
           // If this is an OCC error, hydrate from authoritative current_node and notify
           if (occError) {

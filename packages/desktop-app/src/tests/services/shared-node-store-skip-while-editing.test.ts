@@ -705,19 +705,18 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       const after = store.getNode('t-occ-1') as unknown as TaskLikeNode | undefined;
-      // Unlike updateNode()'s catch handler (which leaves the optimistic edit
-      // in place on any failure via the no-op-on-content rollbackUpdate()),
-      // updateTaskNode()'s catch handler unconditionally reverts to the
-      // pre-edit existingNode snapshot BEFORE this guard ever runs — so the
-      // guard here is not protecting the specific optimistic edit value, it
-      // is protecting against the DAEMON's conflicting snapshot landing on
-      // top of that reverted state while the node is still being edited.
-      // What must hold either way: the daemon's conflicting version/status
-      // ("done", v2) must not apply while focused — that would silently
-      // advance the node's version out from under an in-progress edit.
+      // As of #2088, updateTaskNode()'s catch handler matches updateNode()'s:
+      // it leaves the optimistic edit in place on any failure (no unconditional
+      // revert to the pre-edit existingNode snapshot) — so the guard here is
+      // protecting the user's own in-progress optimistic edit ("in-progress")
+      // against the DAEMON's conflicting snapshot landing on top of it while
+      // the node is still being edited. What must hold: the daemon's
+      // conflicting version/status ("done", v2) must not apply while focused —
+      // that would silently advance the node's version out from under an
+      // in-progress edit.
       expect(after?.status).not.toBe('done');
       expect(after?.version).not.toBe(2);
-      expect(after?.status).toBe('todo');
+      expect(after?.status).toBe('in-progress');
       expect(after?.version).toBe(1);
     });
 
@@ -772,19 +771,60 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       expect(notifications).toHaveLength(1);
     });
 
-    // Unlike updateNode()'s OCC direct-hydration branch, this describe block
-    // does not include a "does not discard a genuinely queued second write"
-    // test mirroring #2069. updateTaskNode()'s catch handler unconditionally
-    // does `this.nodesSet(nodeId, existingNode)` BEFORE this guard runs (on
+    // #2088: updateTaskNode()'s catch handler used to do an unconditional
+    // `this.nodesSet(nodeId, existingNode)` BEFORE this guard ever ran (on
     // ANY failure, OCC or not) — unlike updateNode(), whose rollbackUpdate()
-    // never touches node content. That means a write A's failure can clobber
-    // a later write B's optimistic value regardless of this guard; it is a
-    // separate, pre-existing bug in the unconditional rollback line itself,
-    // not the direct-hydration branch this fix is scoped to. Left as an
-    // explicit todo (rather than a comment alone) so it stays visible in
-    // verbose test output until #2088 fixes the underlying rollback.
-    it.todo(
-      '#2088: does not discard a genuinely queued second write when an earlier write fails (unconditional existingNode rollback clobbers it)'
-    );
+    // never touches node content. A write A failure could clobber a later
+    // write B's still-queued optimistic value regardless of what this
+    // guard's own hasPending-aware decision would have done. Fixed by
+    // removing the unconditional revert (mirroring rollbackUpdate()'s
+    // no-op-on-content behavior); this test proves write B's value survives
+    // both A's failure-path handling and the direct-hydration guard's own
+    // skip decision.
+    it('#2088: does not discard a genuinely queued second write when an earlier write fails (unconditional existingNode rollback clobbers it)', async () => {
+      const nodeId = 't-occ-queued-1';
+      seedPersistedTask(nodeId, 'server-old', 1);
+      // Not focused: hasPending (write B still queued) is the mechanism
+      // under test here, not the isFocused guard covered above.
+
+      let updateCallCount = 0;
+      vi.spyOn(backendAdapter, 'updateTaskNode').mockImplementation(async () => {
+        updateCallCount++;
+        if (updateCallCount === 1) {
+          // Write A: delayed enough that write B is guaranteed to land and
+          // collapse into queuedOperations while A is still executing.
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          const daemonCurrentNode = makeTaskNode(nodeId, 'daemon-conflict-content', 2);
+          daemonCurrentNode.status = 'done';
+          throw makeVersionConflictError(daemonCurrentNode);
+        }
+        // `clearQueued()` (called unconditionally inside the OCC branch,
+        // before the hydration decision) cancels write B's queued retry —
+        // it must never actually re-attempt its own persist.
+        throw new Error('write B should have been cancelled via clearQueued(), not re-attempted');
+      });
+
+      // Write A: immediate mode, starts executing synchronously.
+      store.updateTaskNode(nodeId, { status: 'in-progress' }, viewerSource);
+
+      // Write B: submitted synchronously while A is still executing ->
+      // collapses into queuedOperations. B's optimistic status lands
+      // immediately.
+      store.updateTaskNode(nodeId, { status: 'done-by-b' }, viewerSource);
+      expect((store.getNode(nodeId) as unknown as TaskLikeNode).status).toBe('done-by-b');
+
+      // Let A's OCC failure settle: the (now-removed) unconditional revert,
+      // then the direct-hydration guard's hasPending-aware skip decision.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const after = store.getNode(nodeId) as unknown as TaskLikeNode;
+      // B's optimistic value must survive both A's failure-path handling and
+      // the direct-hydration guard correctly skipping the daemon's stale
+      // (pre-B) conflict snapshot.
+      expect(after.status).toBe('done-by-b');
+      expect(after.status).not.toBe('todo'); // A's stale pre-edit snapshot
+      expect(after.status).not.toBe('done'); // the daemon's conflicting snapshot
+      expect(updateCallCount).toBe(1);
+    });
   });
 });
