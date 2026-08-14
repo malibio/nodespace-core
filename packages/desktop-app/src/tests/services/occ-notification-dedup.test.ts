@@ -44,13 +44,15 @@ describe('SharedNodeStore — OCC notification dedup (#2080)', () => {
 
   const viewerSource: UpdateSource = { type: 'viewer', viewerId: 'viewer-1' };
   const databaseSource: UpdateSource = { type: 'database', reason: 'seed' };
-  // updateNode()'s persistence closure only reaches the actual write for a
-  // non-viewer source or an already-persisted node — but its OCC-conflict
-  // catch handling under test here doesn't depend on source, so viewerSource
-  // is fine for it. setNode()'s persistence closure specifically requires a
-  // non-viewer source to reach the UPDATE branch for an already-persisted
-  // node (`shouldPersist = source.type !== 'viewer' || isNewNode` —
-  // shared-node-store.svelte.ts) — see the setNode block below.
+  // updateNode()'s persist mode is 'immediate' for a structural/property/
+  // nodeType/type-specific change regardless of source, and the tests below
+  // change `content` alongside `properties: {}` to land in that bucket — so
+  // viewerSource reaches the actual write here. setNode()'s persistence
+  // closure is gated differently: `shouldPersist = source.type !== 'viewer'
+  // || isNewNode` (shared-node-store.svelte.ts) — a viewer-sourced setNode
+  // call on an already-persisted (not new) node never even attempts to
+  // persist, so its OCC tests below need a non-viewer source to reach the
+  // UPDATE branch at all.
   const mcpSource: UpdateSource = { type: 'mcp-server', serverId: 'test-mcp' };
 
   const makeNode = (id: string, content: string, version = 1): Node => ({
