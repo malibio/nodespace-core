@@ -231,17 +231,35 @@ enum WriteConfigAtomicError {
 /// third-party API keys — with an explicit `set_permissions` backstop
 /// afterward for the case where a stale temp file from an interrupted prior
 /// attempt already exists at `tmp_path`.
+///
+/// The temp filename is unique per *call*, not just per process
+/// (`std::process::id()` alone is not enough): `write_config` and
+/// `record_routing_probe_verdict` both resolve to the same
+/// `~/.nodespace/daemon.toml` and can run concurrently on the daemon's
+/// multi-threaded runtime — `record_routing_probe_verdict` is deliberately
+/// unlocked (see its doc comment). A per-process-only name would let two
+/// concurrent calls open, write, and rename the *same* temp path
+/// (`create_tmp_file_owner_only` uses `truncate(true)`, not
+/// `create_new(true)`, so a second opener silently reuses/truncates the
+/// first's in-flight file), which could surface a spurious error on an
+/// unrelated save or interleave mixed content before either side renames.
+/// The monotonic counter guarantees distinct paths across concurrent calls
+/// within one process; the pid keeps them distinct across process restarts
+/// too, matching the original intent.
 async fn write_config_atomic(
     config_path: &std::path::Path,
     contents: &str,
 ) -> Result<(), WriteConfigAtomicError> {
+    static CALL_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call_id = CALL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp_file_name = format!(
-        "{}.tmp-{}",
+        "{}.tmp-{}-{}",
         config_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("daemon.toml"),
         std::process::id(),
+        call_id,
     );
     let tmp_path = config_path.with_file_name(tmp_file_name);
 
@@ -395,14 +413,15 @@ pub struct SettingsServiceImpl {
     write_lock: Arc<Mutex<()>>,
 }
 
-// Test-only fault injection for `write_config`'s permissions and rename
-// steps. When set, the *next* `set_permissions` (resp. `rename`) call in
-// `write_config` on this thread fails as if the OS had rejected it, then
-// clears itself. A `thread_local` (not a process-global `static`) because
-// `#[tokio::test]` gives each test its own current-thread runtime —
-// everything a test awaits, including nested `write_config` calls, runs on
-// that one OS thread — so this stays isolated per test even though
-// `cargo test` runs many tests concurrently.
+// Test-only fault injection for `write_config_atomic`'s permissions and
+// rename steps, shared by both its callers (`write_config` and
+// `record_routing_probe_verdict`). When set, the *next* `set_permissions`
+// (resp. `rename`) call in `write_config_atomic` on this thread fails as if
+// the OS had rejected it, then clears itself. A `thread_local` (not a
+// process-global `static`) because `#[tokio::test]` gives each test its own
+// current-thread runtime — everything a test awaits, including nested
+// `write_config_atomic` calls, runs on that one OS thread — so this stays
+// isolated per test even though `cargo test` runs many tests concurrently.
 #[cfg(all(test, unix))]
 thread_local! {
     static FAIL_NEXT_CHMOD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1042,6 +1061,74 @@ mod tests {
             .expect("read should succeed")
             .expect("config exists");
         assert_eq!(found.routing_ok.get("mistral:7b"), Some(&false));
+    }
+
+    /// Regression test for a collision introduced (and fixed) while sharing
+    /// `write_config_atomic` between `write_config` and
+    /// `record_routing_probe_verdict`: in production both resolve to the
+    /// same `~/.nodespace/daemon.toml`, and `record_routing_probe_verdict`
+    /// is deliberately unlocked (see its doc comment), so the two can run
+    /// concurrently on the daemon's real multi-threaded runtime. Keying the
+    /// temp filename on `std::process::id()` alone would let concurrent
+    /// calls target the *same* temp path — `create_tmp_file_owner_only`
+    /// opens with `truncate(true)`, not `create_new(true)`, so a second
+    /// opener silently reuses/truncates the first's in-flight file, which
+    /// can surface a spurious error on an unrelated save. Firing many
+    /// concurrent `write_config_atomic` calls against the same path proves
+    /// every call either succeeds cleanly or fails for a real reason, never
+    /// because it collided with a sibling call's temp file, and that the
+    /// file that lands is always one complete write — never truncated or
+    /// mixed content from two writers, and no temp file is left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_write_config_atomic_calls_do_not_collide_on_tmp_path() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tempdir.path().join("daemon.toml");
+
+        let mut handles = Vec::new();
+        for i in 0..20 {
+            let path = config_path.clone();
+            let contents = format!("value = {i}\n");
+            handles.push(tokio::spawn(async move {
+                write_config_atomic(&path, &contents).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("task should not panic")
+                .map_err(|_| ())
+                .expect(
+                    "a concurrent write_config_atomic call must not fail from colliding with \
+                     a sibling call's temp file",
+                );
+        }
+
+        // The file must hold exactly one complete write, never a mix of two.
+        let final_contents = tokio::fs::read_to_string(&config_path)
+            .await
+            .expect("final file should exist");
+        assert!(
+            (0..20).any(|i| final_contents == format!("value = {i}\n")),
+            "final content must be exactly one complete write, got: {:?}",
+            final_contents
+        );
+
+        // No leftover temp files once every concurrent writer has finished.
+        let mut entries = tokio::fs::read_dir(tempdir.path())
+            .await
+            .expect("read_dir should succeed");
+        let mut leftover_tmp_files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".tmp-") {
+                leftover_tmp_files.push(name);
+            }
+        }
+        assert!(
+            leftover_tmp_files.is_empty(),
+            "no temp files should remain after concurrent writers finish, found {:?}",
+            leftover_tmp_files
+        );
     }
 
     /// Regression test for the crash-safety gap this issue fixes:
