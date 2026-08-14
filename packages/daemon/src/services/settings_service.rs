@@ -296,6 +296,37 @@ impl SettingsServiceImpl {
         Ok(Self::new(path))
     }
 
+    /// Create (or truncate) the temp file at `path`, already restricted to
+    /// owner-only permissions at the instant it's created, via
+    /// `OpenOptions::mode(0o600)` (`std::os::unix::fs::OpenOptionsExt`)
+    /// rather than creating at default permissions and chmod'ing afterward.
+    /// The mode is applied by the `open(2)` syscall itself when it creates
+    /// the file, so there is no observable window where the file exists at
+    /// default (often world/group-readable) permissions. Mode `0o600` has no
+    /// group/other bits to begin with, so a typical umask — which can only
+    /// clear bits, never add them — cannot widen it.
+    ///
+    /// The kernel only applies the mode argument when `open(2)` actually
+    /// creates the file: if a stale temp file from an interrupted prior
+    /// attempt already exists at `path`, this opens it as-is with whatever
+    /// permissions it already had. Callers that need to cover that case
+    /// still run an explicit `set_permissions` afterward as a backstop.
+    #[cfg(unix)]
+    async fn create_tmp_file_owner_only(
+        path: &std::path::Path,
+    ) -> std::io::Result<tokio::fs::File> {
+        // `tokio::fs::OpenOptions` exposes `mode()` as an inherent method
+        // mirroring `std::os::unix::fs::OpenOptionsExt` — no trait import
+        // needed here, unlike the `std::fs` equivalent.
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .await
+    }
+
     async fn read_config(&self) -> Result<DaemonConfig, Status> {
         match tokio::fs::read_to_string(&self.config_path).await {
             Ok(contents) => toml::from_str(&contents)
@@ -341,10 +372,32 @@ impl SettingsServiceImpl {
         );
         let tmp_path = self.config_path.with_file_name(tmp_file_name);
 
+        // On Unix, create the temp file already restricted to owner-only via
+        // `OpenOptions::mode(0o600)` rather than `tokio::fs::write` (which
+        // opens at default, typically world/group-readable, permissions)
+        // followed by a separate `set_permissions` call. The mode is applied
+        // atomically by the `open(2)` syscall itself at the moment the file
+        // is created, so there is no window — however brief — where the
+        // fully-written new content (which can include real third-party API
+        // keys) sits on disk at default permissions. See
+        // `create_tmp_file_owner_only` for why the explicit
+        // `set_permissions` backstop below still runs after this.
+        #[cfg(unix)]
+        let write_result: std::io::Result<()> = async {
+            use tokio::io::AsyncWriteExt;
+            let mut file = Self::create_tmp_file_owner_only(&tmp_path).await?;
+            file.write_all(contents.as_bytes()).await?;
+            file.flush().await?;
+            Ok(())
+        }
+        .await;
+        #[cfg(not(unix))]
+        let write_result = tokio::fs::write(&tmp_path, &contents).await;
+
         // A failure partway through this write (e.g. ENOSPC) can still leave
         // a partial file at `tmp_path` — clean it up rather than leaving a
-        // stray, possibly secret-bearing file behind at default permissions.
-        if let Err(e) = tokio::fs::write(&tmp_path, &contents).await {
+        // stray, possibly secret-bearing file behind.
+        if let Err(e) = write_result {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err(Status::internal(format!(
                 "Failed to write daemon config: {}",
@@ -352,9 +405,15 @@ impl SettingsServiceImpl {
             )));
         }
 
-        // Owner-only: other local accounts on a shared machine must not be
-        // able to read the API keys this file can contain. Unix-only; this
-        // is a macOS/Linux desktop app.
+        // Defensive backstop, not the primary mechanism (see above): the
+        // kernel only applies `OpenOptions::mode` when `open(2)` actually
+        // creates the file. If a stale temp file from an interrupted prior
+        // attempt already exists at `tmp_path` with different permissions,
+        // `create(true)` opens it as-is and the mode argument is silently
+        // ignored — so this explicit `set_permissions` call still runs to
+        // cover that case. Owner-only: other local accounts on a shared
+        // machine must not be able to read the API keys this file can
+        // contain. Unix-only; this is a macOS/Linux desktop app.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -657,6 +716,41 @@ mod tests {
         assert_eq!(
             mode, 0o600,
             "daemon.toml should be owner-read/write only, got {:o}",
+            mode
+        );
+    }
+
+    /// Regression test for the temp-file exposure window: the pre-fix
+    /// `write_config` created the temp file via `tokio::fs::write` (default,
+    /// typically world/group-readable permissions) and only restricted it to
+    /// `0600` in a *separate* `set_permissions` call afterward, leaving a
+    /// brief window where the fully-written new content — which can include
+    /// real third-party API keys — sat on disk at default permissions.
+    /// `create_tmp_file_owner_only` closes that window by passing the
+    /// restrictive mode to the `open(2)` syscall that creates the file, so
+    /// there is no separate step for a window to exist between: the mode is
+    /// already `0600` on the file handle `open` returns, before a single
+    /// byte of content has been written. This test proves that directly by
+    /// inspecting the freshly created (still-empty) file's permissions.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tmp_file_is_owner_only_at_the_instant_of_creation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let path = tempdir.path().join("daemon.toml.tmp-test");
+
+        let file = SettingsServiceImpl::create_tmp_file_owner_only(&path)
+            .await
+            .expect("create should succeed");
+
+        // Inspect permissions on the just-created file handle before any
+        // content is written and before any `set_permissions` backstop runs.
+        let metadata = file.metadata().await.expect("metadata should succeed");
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "temp file must be owner-only from the instant open(2) creates it, got {:o}",
             mode
         );
     }
