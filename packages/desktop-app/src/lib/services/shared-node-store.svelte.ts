@@ -2562,6 +2562,20 @@ export class SharedNodeStore {
     this.nodesSet(nodeId, updatedNode);
     this.notifySubscribers(nodeId, updatedNode, source);
 
+    // Set from inside the closure below when an OCC (version-conflict) error
+    // has already raised its own specific `version-mismatch` notification, so
+    // the outer `handle.promise.catch()` can skip piling a second, generic
+    // `write-failure` one on top. Can't just re-check `isVersionConflict` on
+    // the outer catch's `err`: the closure re-throws `error` (`dbError
+    // instanceof Error ? dbError : new Error(String(dbError))`), which for a
+    // plain-object CommandError (the real shape errors cross the Tauri/gRPC
+    // boundary in — see `isVersionConflict`'s own doc comment) is NOT
+    // `instanceof Error`, so it gets wrapped in a fresh generic `Error` that
+    // has lost the `.code`/`.conflictData` shape entirely by the time it
+    // reaches the outer catch. Same fix `updateNode()`/`deleteNode()` already
+    // apply for their analogous captured flags.
+    let occConflictAlreadyNotified = false;
+
     // Capture handle to catch cancellation errors
     const handle = PersistenceCoordinator.getInstance().persist(
       nodeId,
@@ -2744,6 +2758,7 @@ export class SharedNodeStore {
               message: CONFLICT_MESSAGE['version-mismatch'],
               conflictType: 'version-mismatch'
             });
+            occConflictAlreadyNotified = true;
           }
 
           throw error;
@@ -2757,8 +2772,27 @@ export class SharedNodeStore {
     // Handle cancellation errors (expected when operations are superseded)
     handle.promise.catch((err) => {
       if (err instanceof OperationCancelledError) {
-        return; // Expected - operation was cancelled by a newer operation
+        // Operation was cancelled by a newer operation - this is expected
+        return;
       }
+      // An OCC error already raised its own specific version-mismatch
+      // notification inside the persistence closure's own catch above (see
+      // `occConflictAlreadyNotified`'s declaration for why this is a
+      // captured flag rather than re-deriving it from `err` via
+      // `isVersionConflict` — the re-thrown `err` has already lost the shape
+      // that check needs).
+      if (occConflictAlreadyNotified) return;
+      // Surface non-OCC write failures visibly so users know their change
+      // didn't save — matches updateNode()'s/deleteNode()'s/setNode()'s
+      // outer catch, which all have this same fallback. Without it, a task
+      // status/priority/due-date edit that fails outside an OCC conflict
+      // reverted (or, post-#2088, stayed as the optimistic value) with zero
+      // user-visible signal.
+      conflictNotifications.add({
+        nodeId,
+        message: CONFLICT_MESSAGE['write-failure'],
+        conflictType: 'write-failure'
+      });
     });
   }
 
