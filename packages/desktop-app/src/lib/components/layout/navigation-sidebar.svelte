@@ -1023,7 +1023,7 @@
 
   .schema-type-empty {
     display: block;
-    padding: 0.4rem 1rem 0.4rem 1.25rem;
+    padding: 0.4rem 1rem 0.4rem 3.5rem;
     font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
     font-style: italic;
