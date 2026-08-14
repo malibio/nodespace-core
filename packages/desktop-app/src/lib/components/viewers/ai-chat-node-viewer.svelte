@@ -431,11 +431,6 @@
   <div class="chat-viewer-header">
     <div class="chat-viewer-header-left">
       <h2 class="chat-viewer-title">{node?.content ?? 'AI Chat'}</h2>
-      <div class="chat-viewer-meta">
-        <span class="meta-badge" class:meta-archived={lifecycleStatus === 'archived'}>
-          {lifecycleStatus}
-        </span>
-      </div>
     </div>
     <div class="chat-viewer-header-right">
       {#if provider !== 'pty'}
@@ -604,26 +599,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .chat-viewer-meta {
-    display: flex;
-    gap: 0.375rem;
-    flex-wrap: wrap;
-  }
-
-  .meta-badge {
-    font-size: 0.6875rem;
-    color: hsl(var(--muted-foreground));
-    background: hsl(var(--muted));
-    padding: 0.0625rem 0.375rem;
-    border-radius: 9999px;
-    text-transform: lowercase;
-  }
-
-  .meta-archived {
-    color: hsl(var(--destructive));
-    background: hsl(var(--destructive) / 0.1);
   }
 
   .provider-prompt {
