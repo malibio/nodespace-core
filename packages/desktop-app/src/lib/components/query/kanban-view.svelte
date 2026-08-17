@@ -175,7 +175,6 @@
     updateRevealed(columnValue, (revealed) => growRevealed(revealed, ids, CARDS_PER_BATCH));
   }
 
-
   function titleOf(node: Node): string {
     return node.title || node.content || 'Untitled';
   }

@@ -332,6 +332,16 @@ impl NodeService {
     }
 
     /// Rename a field across all node instances and update the schema definition.
+    ///
+    /// Only `name` is rewritten — `friendly_name` is left exactly as stored,
+    /// even when it was originally auto-derived from the old `name` and is
+    /// now stale (e.g. renaming `priority` to `urgency_level` leaves a
+    /// `friendly_name` of "Priority" pointing at the new key). This is
+    /// deliberate: a stored `friendly_name` may equally have been an
+    /// explicit caller choice, and silently re-deriving it on every rename
+    /// risks clobbering that choice with no way to tell the two cases apart
+    /// after the fact. A rename that wants an updated label passes one via
+    /// `update_schema`'s field-update path instead.
     pub async fn rename_schema_field(
         &self,
         type_id: &str,

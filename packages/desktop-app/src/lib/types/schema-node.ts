@@ -117,6 +117,21 @@ export interface SchemaField {
   itemFields?: SchemaField[];
 
   /**
+   * Uniqueness hint: values are expected to be unique among active nodes of
+   * the same type. Suggest-don't-block — never enforced as a write-time
+   * constraint, surfaced via a read-only lookup (e.g. to flag a likely
+   * duplicate before commit).
+   */
+  unique?: boolean;
+
+  /**
+   * Paired with `unique`, compares values case-insensitively (e.g. an email
+   * is a claim, not an identity key, and casing should not distinguish two
+   * otherwise-identical claims).
+   */
+  uniqueCaseInsensitive?: boolean;
+
+  /**
    * Machine-bound: persisted and read locally like any other property, but never
    * included in a sync push and ignored if it arrives in a pull. Use when a value
    * denotes state on a particular machine (a resume handle, an absolute path, a

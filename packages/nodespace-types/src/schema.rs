@@ -11,38 +11,52 @@ fn default_schema_version() -> u32 {
 /// Derive a display label for a field whose `friendlyName` was omitted at
 /// `create_schema`/`update_schema` time, e.g. `due_date` -> `Due date`,
 /// `custom:capacity` -> `Capacity`, `restrictedToMembers` -> `Restricted to
-/// members`.
+/// members`, `employeeIDNumber` -> `Employee id number`.
 ///
 /// Namespace prefixes (`custom:`, `org:`, `plugin:`, ...) are stripped before
-/// humanizing. Per ADR-063, a prefix is only ever present on a field added to
-/// a CORE type, and unprefixed names on a core type are reserved for core
-/// properties (rejected by `update_schema` otherwise) — so the storage key of
-/// a prefixed field and a bare core field can never collide within the same
-/// schema, and stripping the prefix here is a display-only convenience with
-/// no effect on the stored name. The only residual risk is cosmetic: a future
-/// core field could theoretically be added whose base name matches an
-/// existing prefixed field's, producing two rows with the same displayed
-/// label (but never the same storage key or data) — an accepted trade-off of
-/// the same shape ADR-063 already made at the key level.
+/// humanizing — a display-only operation with no effect on the stored name.
+/// This is reachable *today*, not just as a future hazard: adding
+/// `custom:status` next to an existing core `status` field derives "Status"
+/// for both, since the two have different storage keys but the same
+/// stripped/humanized text. This function does not resolve that on its own —
+/// callers (`apply_friendly_name_defaults` in `packages/core/src/schema/mod.rs`)
+/// are responsible for disambiguating a derived value that collides with
+/// another field already in the schema.
 pub fn derive_friendly_name(name: &str) -> String {
     let base = name.rsplit(':').next().unwrap_or(name);
+    let chars: Vec<char> = base.chars().collect();
 
     let mut words: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut prev_lower = false;
-    for ch in base.chars() {
+    for (i, &ch) in chars.iter().enumerate() {
         if ch == '_' || ch == '-' {
             if !current.is_empty() {
                 words.push(std::mem::take(&mut current));
             }
-            prev_lower = false;
             continue;
         }
-        // camelCase boundary: lowercase (or digit) followed by uppercase starts a new word.
-        if ch.is_uppercase() && prev_lower && !current.is_empty() {
+
+        // A word boundary precedes `ch` when either:
+        // - the previous char is lowercase/digit and this one is uppercase
+        //   (`dueX` -> `due|X`), or
+        // - this is the last uppercase letter of an acronym run immediately
+        //   followed by a lowercase letter (`IDNumber` -> `ID|Number`, not
+        //   `IDN|umber`) — without this second rule, an acronym directly
+        //   adjacent to the next word (`employeeIDNumber`) merges into one
+        //   unsplit blob instead of three words.
+        let boundary = match chars.get(i.wrapping_sub(1)) {
+            Some(&prev) if i > 0 => {
+                let prev_lower = prev.is_lowercase() || prev.is_ascii_digit();
+                let cur_upper = ch.is_uppercase();
+                let next_lower = chars.get(i + 1).is_some_and(|c| c.is_lowercase());
+                (prev_lower && cur_upper) || (prev.is_uppercase() && cur_upper && next_lower)
+            }
+            _ => false,
+        };
+
+        if boundary && !current.is_empty() {
             words.push(std::mem::take(&mut current));
         }
-        prev_lower = ch.is_lowercase() || ch.is_ascii_digit();
         current.push(ch);
     }
     if !current.is_empty() {
@@ -426,6 +440,33 @@ mod tests {
     fn test_derive_friendly_name_empty_falls_back_to_raw_name() {
         assert_eq!(derive_friendly_name(""), "");
         assert_eq!(derive_friendly_name(":"), ":");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_prefix_with_empty_base_falls_back_to_raw_name() {
+        // Unreachable in practice (the field-name validator rejects an empty
+        // bare segment before this ever runs), but pinned explicitly so the
+        // fallback behavior is documented rather than incidental.
+        assert_eq!(derive_friendly_name("custom:"), "custom:");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_splits_acronym_adjacent_to_next_word() {
+        // The classic "XMLHttpRequest" splitting case: an acronym run
+        // (`ID`) directly followed by another capitalized word (`Number`)
+        // must not merge into one unsplit blob ("Idnumber").
+        assert_eq!(
+            derive_friendly_name("employeeIDNumber"),
+            "Employee id number"
+        );
+        assert_eq!(derive_friendly_name("userIDStatus"), "User id status");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_all_uppercase_is_treated_as_one_word() {
+        // No lowercase run anywhere to anchor a boundary against, so this is
+        // one word, sentence-cased like every other single-word input.
+        assert_eq!(derive_friendly_name("URL"), "Url");
     }
 
     #[test]
