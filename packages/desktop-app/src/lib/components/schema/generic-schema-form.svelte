@@ -2,15 +2,17 @@
   GenericSchemaForm - Schema-driven property form for custom node types
 
   Renders fields from a SchemaNode definition as appropriate inputs.
-  Used by BaseNodeViewer when a node's nodeType is a UUID (custom schema type)
-  that has no registered plugin schema form.
+  Used by BaseNodeViewer for any node type with no registered plugin schema form —
+  user-defined schema types and core types without a hardcoded form (e.g. project).
 
   Field type → control:
   - leaf fields (string/text, number, boolean, enum, date) → SchemaFieldLeaf
   - object/array → summary trigger opening the shared NestedPropertyModal
 
-  Values are stored/read from node.properties[field.name] (flat, not namespaced),
-  nested values included.
+  Values are read from node.properties[nodeType][field.name] when the type namespaces its
+  properties (core types with backend behavior), falling back to flat
+  node.properties[field.name] (user-defined schema types). Writes use the same precedence —
+  see schema-field-resolution.ts, where both shapes are resolved and unit-tested.
 
   Props:
   - nodeId: ID of the node to display properties for
@@ -20,6 +22,7 @@
 <script lang="ts">
   import { Collapsible } from 'bits-ui';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { resolveFieldValue, buildFieldWrite } from '$lib/components/schema/schema-field-resolution';
   import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { createLogger } from '$lib/utils/logger';
@@ -100,14 +103,16 @@
 
   function getFieldValue(fieldName: string): unknown {
     if (!node) return undefined;
-    return node.properties?.[fieldName] ?? null;
+    return resolveFieldValue(node, fieldName);
   }
 
   function updateField(fieldName: string, value: unknown) {
     if (!node) return;
+    // Write in whichever shape the node already stores, matching getFieldValue's precedence
+    // — a flat write into a namespaced node is silently discarded by the backend.
     sharedNodeStore.updateNode(
       nodeId,
-      { properties: { ...node.properties, [fieldName]: value } },
+      { properties: buildFieldWrite(node, fieldName, value) },
       { type: 'viewer', viewerId: 'generic-schema-form' }
     );
   }

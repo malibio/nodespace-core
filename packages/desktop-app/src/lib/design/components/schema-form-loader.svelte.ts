@@ -1,9 +1,9 @@
 /**
  * SchemaFormLoader — lazy-loads type-specific and generic schema forms for the viewed node.
  *
- * Type-specific forms (e.g. TaskSchemaForm) come from the plugin registry. Custom schema
- * node types (UUID nodeType) with no registered form fall back to a generic schema form
- * driven by the node's SchemaNode definition, fetched from the backend.
+ * Type-specific forms (e.g. TaskSchemaForm) come from the plugin registry. Any node type
+ * with no registered form — user-defined schema types and core types alike — falls back to
+ * a generic schema form driven by the node's SchemaNode definition, fetched from the backend.
  *
  * State lives here as `$state` so the viewer re-renders when a form or schema resolves.
  * One instance per viewer component; loading is event-driven (the viewer calls the load
@@ -13,7 +13,7 @@
 import { backendAdapter } from '$lib/services/backend-adapter';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
 import { isSchemaNode, type SchemaNode } from '$lib/types/schema-node';
-import { isCustomSchemaType } from './node-type-predicates';
+import { needsGenericSchemaForm } from './node-type-predicates';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('SchemaFormLoader');
@@ -21,23 +21,47 @@ const log = createLogger('SchemaFormLoader');
 export class SchemaFormLoader {
   /**
    * Cache of loaded schema-form components keyed by node type.
-   * `null` = checked, no type-specific form registered (core types); a component = typed form.
+   * `null` = checked, no type-specific form registered; a component = typed form.
    */
   loadedForms = $state<Record<string, unknown>>({});
 
-  /** Generic schema definition for a custom schema node type (UUID nodeType). */
+  /** Generic schema definition for a node type with no hardcoded schema form. */
   genericSchema = $state<SchemaNode | null>(null);
+
+  /**
+   * Schemas already fetched from the backend, keyed by node type.
+   * `null` = fetched, this type has no schema (structural types like text/header).
+   *
+   * `genericSchema` is cleared on every navigation, but a schema definition does not change
+   * underneath an open viewer, so revisiting a type reuses this instead of re-fetching.
+   * Negative entries matter most: without them, every navigation to a schema-less type
+   * would issue a backend round trip that is expected to fail.
+   *
+   * Scoped per `SchemaFormLoader` instance — one per viewer — which is what makes negative
+   * caching safe. A type defined mid-session is opened in a viewer with a fresh loader, so
+   * it is never served a stale "no schema" answer. Hoisting this to a module-level singleton
+   * would be a real behavior change, not just an optimization.
+   */
+  private schemaCache = new Map<string, SchemaNode | null>();
+
+  /**
+   * The type the viewer is currently on, as far as generic-schema loading is concerned.
+   * Set when a fetch starts and cleared at the navigation boundary; a fetch that resolves
+   * after either event must not publish its result. See `loadGenericSchema`.
+   */
+  private pendingType: string | null = null;
 
   /**
    * True when the current generic schema has a title_template — header should be read-only,
    * and its displayed value comes from the node's computed `title` rather than its content.
    *
-   * Scoped to custom schema types by construction: `genericSchema` is only ever loaded for
-   * `isCustomSchemaType(nodeType)`, so this is always false for core types. The backend's
-   * `compute_title()` is broader — it uses a title_template for any type whose schema has
-   * one, core or not. The two agree only because no core type ships a title_template today.
-   * Adding one, or loading `genericSchema` for core types, would need both sides updated
-   * together, or the header will display content where a computed title is expected.
+   * `genericSchema` now loads for any type with no hardcoded form — core types included —
+   * so this is no longer scoped to custom schema types. It stays false for core types only
+   * because none of them ships a title_template today. The backend's `compute_title()` uses
+   * a title_template for any type whose schema has one, core or not; the two agree solely on
+   * that "no core template exists yet" assumption. Shipping a title_template on a core type
+   * would need both sides updated together, or the header will display content where a
+   * computed title is expected.
    */
   get hasTitleTemplate(): boolean {
     return this.genericSchema?.titleTemplate != null;
@@ -51,6 +75,12 @@ export class SchemaFormLoader {
   /** Reset the generic schema (call when navigating to a different node). */
   resetGenericSchema(): void {
     this.genericSchema = null;
+    // The viewer calls this at the navigation boundary, so any fetch still in flight for
+    // the previous node is superseded here — not only when the new node happens to trigger
+    // a fetch of its own. Types with a hardcoded form (task, person) never reach
+    // `loadGenericSchema`, so without this the token would still name the previous type and
+    // a late response would pass the recency check.
+    this.pendingType = null;
   }
 
   /**
@@ -59,19 +89,29 @@ export class SchemaFormLoader {
    * Cached in `loadedForms` for subsequent renders.
    */
   async loadForm(nodeType: string): Promise<boolean> {
-    // Skip if already loaded (check for both component and explicit null)
+    // Skip if already loaded (check for both component and explicit null).
+    // `null` means "checked, no type-specific form" — the component lookup is cached, but
+    // the generic schema is not: `resetGenericSchema()` clears it on every navigation, so
+    // it must be re-fetched here or revisiting a type would render no properties form.
     if (nodeType in this.loadedForms) {
-      return this.loadedForms[nodeType] !== null;
+      const cached = this.loadedForms[nodeType];
+      if (cached === null) {
+        this.loadGenericSchema(nodeType);
+        return false;
+      }
+      return true;
     }
 
     // Check if plugin has a schema form registered
-    if (!pluginRegistry.hasSchemaForm(nodeType)) {
+    if (needsGenericSchemaForm(nodeType)) {
       // Mark as null to indicate we checked and there's no type-specific form
       this.loadedForms = { ...this.loadedForms, [nodeType]: null };
-      // For custom schema types (UUID nodeType), load generic schema
-      if (isCustomSchemaType(nodeType)) {
-        this.loadGenericSchema(nodeType);
-      }
+      // No hardcoded form for this type — fall back to the generic schema-driven form.
+      // Unconditional by design: reaching this branch already means "no type-specific
+      // form", which is the only thing the generic fallback depends on. Core types with
+      // no registered form (e.g. project) need it exactly as much as user-defined ones.
+      // Types with no schema at all simply resolve to no schema and render nothing.
+      this.loadGenericSchema(nodeType);
       return false;
     }
 
@@ -91,15 +131,42 @@ export class SchemaFormLoader {
     }
   }
 
-  /** Load the generic schema definition for a custom schema node type from the backend. */
+  /**
+   * Load the generic schema definition for a node type, fetching it at most once per type.
+   *
+   * Schema definitions are immutable for the session, so a cache hit — including a negative
+   * one — is served without touching the backend.
+   *
+   * Callers invoke this without awaiting, and the viewer calls `resetGenericSchema()` +
+   * `loadForm()` on every navigation, so an in-flight fetch for the previous node can
+   * resolve after the switch. `pendingType` is checked before publishing to `genericSchema`
+   * so a superseded response is dropped: a stale schema would not just show the wrong
+   * properties, it feeds `hasTitleTemplate`, which makes the header read-only.
+   *
+   * The cache write is deliberately outside that guard — a fetched schema is valid for its
+   * own type regardless of where the user navigated in the meantime.
+   */
   async loadGenericSchema(nodeType: string): Promise<void> {
+    this.pendingType = nodeType;
+
+    if (this.schemaCache.has(nodeType)) {
+      this.genericSchema = this.schemaCache.get(nodeType) ?? null;
+      return;
+    }
+
     try {
       const schemaNode = await backendAdapter.getSchema(nodeType);
       if (isSchemaNode(schemaNode)) {
-        this.genericSchema = schemaNode;
+        this.schemaCache.set(nodeType, schemaNode);
+        if (this.pendingType === nodeType) this.genericSchema = schemaNode;
+        return;
       }
+      this.schemaCache.set(nodeType, null);
     } catch (error) {
-      log.warn(`Failed to load generic schema for ${nodeType}:`, error);
+      // Expected for structural types (text, header, code-block, …) that have no schema —
+      // debug, not warn, so ordinary outlining doesn't emit a stream of warnings.
+      this.schemaCache.set(nodeType, null);
+      log.debug(`No generic schema for ${nodeType}:`, error);
     }
   }
 }

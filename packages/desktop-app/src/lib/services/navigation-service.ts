@@ -29,7 +29,7 @@ import type { Node } from '$lib/types';
 import { formatDateTitle } from '$lib/utils/date-formatting';
 import { formatTabTitle } from '$lib/utils/text-formatting';
 import { createLogger } from '$lib/utils/logger';
-import { isCustomSchemaType } from '$lib/design/components/node-type-predicates';
+import { rendersAsEntityRow } from '$lib/design/components/node-type-predicates';
 
 const log = createLogger('NavigationService');
 
@@ -136,8 +136,12 @@ export class NavigationService {
       return formatTabTitle(node.content, `${node.nodeType} Node`);
     }
 
-    // For custom schema types, use the plugin display name (e.g. "Customer")
-    if (isCustomSchemaType(node.nodeType)) {
+    // Untitled node: fall back to the plugin's display name (e.g. "Customer").
+    // Gated to entity rows, where plugin names are entity nouns worth showing as a
+    // title. Inline-editable types name their plugins for the registry, not the user
+    // ("Text Node", "Header Node"), so using those here would render "Text Node" for
+    // an untitled text node instead of the `<type> Node` fallback below.
+    if (rendersAsEntityRow(node.nodeType)) {
       const plugin = pluginRegistry.getPlugin(node.nodeType);
       if (plugin?.name) return plugin.name;
     }
@@ -167,9 +171,11 @@ export class NavigationService {
       return nodeId;
     }
 
-    // Custom schema entity nodes are root-level entities —
-    // always open them directly, not their parent (e.g. date node)
-    if (targetNode && isCustomSchemaType(targetNode.nodeType)) {
+    // Entity rows (no inline node component — they render read-only via the BaseNode
+    // fallback) are standalone entities: open them directly, not their parent (e.g. the
+    // date node they happen to sit under). Inline primitives (text, header, code-block)
+    // fall through and walk up to the nearest viewer-owning ancestor.
+    if (targetNode && rendersAsEntityRow(targetNode.nodeType)) {
       return nodeId;
     }
 

@@ -252,6 +252,8 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-1');
 
+    // `task` renders inline, so the plugin-name fallback does not apply — it lands on
+    // the `<type> Node` fallback rather than the registry label "Task Node".
     expect(target?.title).toBe('task Node');
   });
 
@@ -269,6 +271,8 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-2');
 
+    // `task` renders inline, so the plugin-name fallback does not apply — it lands on
+    // the `<type> Node` fallback rather than the registry label "Task Node".
     expect(target?.title).toBe('task Node');
   });
 });
@@ -731,6 +735,26 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
     expect(tabsInNewPane.length).toBe(1);
     expect(tabsInNewPane[0]?.content?.nodeId).toBe('task-other-pane');
     expect(tabsInNewPane[0]?.content?.nodeType).toBe('task');
+  });
+
+  it('project node under date opens as project (not parent date)', async () => {
+    // `project` is a core type with no registered viewer or node component — it renders as
+    // a read-only entity row, so it must open directly rather than resolving to its parent.
+    const dateNode = makeNode('2025-06-15', 'date', '2025-06-15');
+    const projectNode = makeNode('project-under-date', 'project', 'Website redesign');
+
+    sharedNodeStore.setNode(dateNode, { type: 'database', reason: 'test' }, true);
+    sharedNodeStore.setNode(projectNode, { type: 'database', reason: 'test' }, true);
+
+    structureTree.addChild({ parentId: '2025-06-15', childId: 'project-under-date', order: 1 });
+
+    await navService.navigateToNode('project-under-date', true);
+
+    const state = navigationStore.state;
+    const newTab = state.tabs.find((t) => t.content?.nodeId === 'project-under-date');
+
+    expect(newTab).toBeDefined();
+    expect(newTab?.content?.nodeType).toBe('project');
   });
 
   it('primitive text node under date still resolves to date ancestor', async () => {
