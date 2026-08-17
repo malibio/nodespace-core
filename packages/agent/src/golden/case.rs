@@ -65,6 +65,12 @@ pub struct GoldenCase {
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     /// The turns, in order. A single-turn case has exactly one.
+    ///
+    /// Turns always chain: each one sees the real user/assistant/tool exchange
+    /// of every turn before it. That is right for a conversation, and wrong
+    /// for a file holding several independent probes — those would each read
+    /// the previous probe's exchange. Put independent probes in separate
+    /// files.
     #[serde(rename = "turn")]
     pub turns: Vec<Turn>,
 }
@@ -123,6 +129,11 @@ pub struct Turn {
     /// the next turn as an assistant tool-call turn paired with its result, so
     /// the following turn sees a well-formed exchange rather than an orphan
     /// tool result. A tool with no entry here gets [`DEFAULT_TOOL_RESULT`].
+    ///
+    /// Keyed by tool name, so a turn calling the same tool twice replays the
+    /// same result for both. Each call still gets its own paired message —
+    /// only the content is shared. Distinct per-call results would need a
+    /// different key, which no case has wanted.
     #[serde(default)]
     pub tool_results: BTreeMap<String, String>,
 }
@@ -234,34 +245,46 @@ impl CaseTool {
 /// numbered list, a nested clause) survive — narrative shape is sometimes the
 /// very thing a case is comparing.
 pub fn normalize_case_text(raw: &str) -> String {
-    let without_leading_newline = raw.strip_prefix('\n').unwrap_or(raw);
+    // `\r\n` as well as `\n`: a case file authored on Windows, or pasted from
+    // somewhere that uses CRLF, opens with a carriage return that `strip_prefix`
+    // would otherwise leave sitting at the head of the prompt.
+    let body = raw
+        .strip_prefix('\n')
+        .or_else(|| raw.strip_prefix("\r\n"))
+        .unwrap_or(raw);
 
-    // Computed over non-blank lines only: a blank line carries no indentation
-    // evidence, and counting it as zero would defeat dedenting for every block
-    // containing a paragraph break.
-    let indent = without_leading_newline
+    // Indentation is counted in CHARACTERS, never bytes. `char::is_whitespace`
+    // accepts multibyte spaces — U+00A0, U+2003, U+3000 — which arrive by
+    // pasting prompt text out of a chat window, and a byte offset taken from
+    // one of them lands mid-character. Slicing there panics, and the panic
+    // would name no case file, so the author's next move would be to suspect
+    // their prompt edit rather than this function.
+    let leading_ws_chars = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+
+    // Over non-blank lines only: a blank line carries no indentation evidence,
+    // and counting it as zero would defeat dedenting for every block that
+    // contains a paragraph break.
+    let indent = body
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
+        .map(leading_ws_chars)
         .min()
         .unwrap_or(0);
 
-    without_leading_newline
-        .lines()
+    body.lines()
         .map(|line| {
-            let dedented = if line.len() >= indent {
-                &line[indent..]
-            } else {
-                line
-            };
-            // A line's own leading whitespace is deliberate relative structure
-            // the dedent just preserved, so only interior runs collapse.
-            let indent_len = dedented.len() - dedented.trim_start().len();
-            let (lead, body) = dedented.split_at(indent_len);
+            // Skipping N chars is boundary-safe by construction where slicing
+            // N bytes is not. A blank line shorter than the common indent just
+            // yields nothing, which is what it should.
+            let dedented: String = line.chars().skip(indent).collect();
+            // A line's own remaining leading whitespace is deliberate relative
+            // structure the dedent just preserved, so only interior runs
+            // collapse.
+            let lead: String = dedented.chars().take_while(|c| c.is_whitespace()).collect();
             let mut out = String::with_capacity(dedented.len());
-            out.push_str(lead);
+            out.push_str(&lead);
             let mut pending_space = false;
-            for ch in body.chars() {
+            for ch in dedented.chars().skip(lead.chars().count()) {
                 if ch == ' ' {
                     pending_space = true;
                     continue;
@@ -336,12 +359,15 @@ impl GoldenCase {
         Self::from_toml(&text, &default_name)
     }
 
-    /// Apply [`normalize_case_text`] to every string the model will see.
+    /// Apply [`normalize_case_text`] to every string the model will see, plus
+    /// `expect` — which it will not, but which is printed beside the result
+    /// and so wants the same indentation stripped.
     ///
-    /// `notes` is excluded — it never reaches the model. Tool *names* are
-    /// excluded too: they are identifiers compared exactly against what the
-    /// model emits, and whitespace-collapsing an identifier would hide a typo
-    /// rather than fix one.
+    /// `notes` is excluded: it is read as a block of prose in the file itself,
+    /// where its own paragraph layout is the point. Tool *names* are excluded
+    /// too — they are identifiers compared exactly against what the model
+    /// emits, and whitespace-collapsing an identifier would hide a typo rather
+    /// than fix one.
     fn normalize(&mut self) {
         for turn in &mut self.turns {
             turn.system = normalize_case_text(&turn.system);
@@ -498,6 +524,53 @@ user = "u"
             "Intro paragraph.\n\nThen a list:\n  1. First item.\n  2. Second item.",
             "only the COMMON indent is stripped — relative indentation and blank lines \
              are content"
+        );
+    }
+
+    #[test]
+    fn normalization_survives_multibyte_leading_whitespace() {
+        // `char::is_whitespace` accepts U+3000 (3 bytes), U+2003, and U+00A0.
+        // Counting the indent in bytes and then slicing lands mid-character
+        // and panics. These arrive by pasting prompt text out of a chat
+        // window, and the likeliest carrier is an invisible one: a "blank"
+        // line made of ideographic spaces between normally-indented lines.
+        // One U+3000 vs two spaces: the common indent is 1 CHARACTER, so
+        // `beta` keeps one space of relative indentation. That is the correct
+        // answer for genuinely mixed indentation — the point here is that it
+        // produces an answer at all rather than panicking mid-character.
+        assert_eq!(
+            normalize_case_text("\n\u{3000}alpha\n  beta\n"),
+            "alpha\n beta",
+            "a multibyte-indented line must normalize, not panic"
+        );
+        assert_eq!(
+            normalize_case_text("  alpha\n\u{3000}\u{3000}\n  beta"),
+            "alpha\n\nbeta",
+            "a blank line of ideographic spaces is filtered from the indent \
+             computation but still gets sliced — that is the reachable panic"
+        );
+        assert_eq!(normalize_case_text("\u{00a0}x"), "x", "NBSP indent");
+        assert_eq!(normalize_case_text("\u{2003}x"), "x", "em-space indent");
+    }
+
+    #[test]
+    fn normalization_handles_crlf_tabs_and_degenerate_input() {
+        assert_eq!(normalize_case_text("\r\n  a\r\n  b"), "a\nb");
+        assert_eq!(normalize_case_text("\t\ta\n\t\tb"), "a\nb");
+        assert_eq!(normalize_case_text(""), "");
+        assert_eq!(normalize_case_text("\n"), "");
+        assert_eq!(normalize_case_text("   "), "");
+    }
+
+    #[test]
+    fn normalization_preserves_multibyte_content_mid_line() {
+        // The committed cases carry an em-dash in the user message. Content
+        // characters must survive untouched — only leading whitespace is the
+        // normalizer's business.
+        let raw = "\n  The 2400 one came back — set it to returned\n  ";
+        assert_eq!(
+            normalize_case_text(raw),
+            "The 2400 one came back — set it to returned"
         );
     }
 
