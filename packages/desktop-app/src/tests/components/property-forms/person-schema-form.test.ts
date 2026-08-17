@@ -143,8 +143,23 @@ describe('PersonSchemaForm — adopt-existing suggestion', () => {
     expect(screen.queryByText(/already exists/i)).toBeNull();
   });
 
-  it('never suggests the node adopt itself', async () => {
-    // A pathological/self-referential lookup result must never render.
+  it('passes its own nodeId as excludeId, so the lookup cannot match itself', async () => {
+    // The primary self-exclusion mechanism is server-side (excludeId threads
+    // through to a SQL exclusion), proven at the backend layer; this asserts
+    // the frontend actually participates by sending its own id.
+    findDuplicateForSpy.mockResolvedValue(existingMatch());
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await blurEmail('bob@example.com');
+    await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
+
+    expect(findDuplicateForSpy).toHaveBeenCalledWith('person', 'email', 'bob@example.com', 'person-1');
+  });
+
+  it('never suggests the node adopt itself, even if the backend misbehaves', async () => {
+    // A defensive backstop, not the primary exclusion mechanism (that's
+    // excludeId, above): a pathological/self-referential lookup result must
+    // still never render, even if a hypothetical backend bug returned it.
     findDuplicateForSpy.mockResolvedValue(personNode({ id: 'person-1' }));
     render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
 
@@ -152,6 +167,82 @@ describe('PersonSchemaForm — adopt-existing suggestion', () => {
     await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
 
     expect(screen.queryByText(/already exists/i)).toBeNull();
+  });
+
+  it('check and save fire concurrently — the check does not wait for the save', async () => {
+    // Regression guard: an earlier version awaited the save before starting
+    // the duplicate check, so by the time the check ran, this node's own
+    // freshly-saved row already held the value too — a real false-negative
+    // risk given the lookup has no ORDER BY. Assert the check is issued
+    // before the save's promise has settled, not after.
+    let resolveSave!: () => void;
+    updateNodeSpy.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = () => resolve(personNode());
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(null);
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    const input = screen.getByLabelText('Email');
+    const blurPromise = fireEvent.blur(input, { target: { value: 'bob@example.com' } });
+
+    // The duplicate check must already have been issued while the save is
+    // still in flight, not queued behind it.
+    await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
+    expect(updateNodeSpy).toHaveBeenCalledTimes(1);
+
+    resolveSave();
+    await blurPromise;
+  });
+
+  it('resets a stale suggestion when nodeId changes to a different person', async () => {
+    // The component instance can be reused across different person nodes (no
+    // {#key nodeId} at any call site). A suggestion computed for the FIRST
+    // person must not linger — and must not let "Use existing" navigate using
+    // a match id that no longer has anything to do with the person now shown.
+    findDuplicateForSpy.mockResolvedValue(existingMatch());
+    const { rerender } = render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await blurEmail('bob@example.com');
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({ id: 'person-2', content: 'Carol' })
+    );
+    await rerender({ nodeId: 'person-2' });
+
+    expect(screen.queryByText(/already exists/i)).toBeNull();
+  });
+
+  it('a stale rejected lookup does not clobber a newer, still-valid suggestion', async () => {
+    // Sequence: blur an email whose lookup will eventually REJECT, then blur a
+    // different email whose lookup resolves first with a real match. The
+    // earlier (now-superseded) rejection must not wipe the valid suggestion
+    // the later blur produced — the staleness guard must cover the catch
+    // branch, not just the success branch.
+    let rejectFirst!: (err: Error) => void;
+    findDuplicateForSpy
+      .mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        })
+      )
+      .mockResolvedValueOnce(existingMatch());
+
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+    const input = screen.getByLabelText('Email');
+
+    await fireEvent.blur(input, { target: { value: 'first@example.com' } });
+    await fireEvent.blur(input, { target: { value: 'second@example.com' } });
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+
+    // The stale first lookup finally rejects AFTER the valid suggestion is
+    // already showing — it must not clear it.
+    rejectFirst(new Error('stale lookup failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText(/already exists/i)).toBeTruthy();
   });
 
   it('does not look up a duplicate for an empty email', async () => {

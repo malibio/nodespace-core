@@ -118,8 +118,18 @@ export interface BackendAdapter {
    * whose `field` matches `value` for `node_type`, or `null` when the field
    * isn't flagged `unique`, `value` is empty, or there is no conflict. Never
    * rejects — callers use a hit to offer an adopt-existing suggestion.
+   *
+   * Pass `excludeId` (the caller's own node id) whenever that node's own
+   * value could already equal `value` — otherwise a node whose own save has
+   * already landed the same value can match itself and hide a real,
+   * different duplicate.
    */
-  findDuplicateFor(nodeType: string, field: string, value: string): Promise<Node | null>;
+  findDuplicateFor(
+    nodeType: string,
+    field: string,
+    value: string,
+    excludeId?: string
+  ): Promise<Node | null>;
 
   // Typed relationships (distinct from mentions)
   getNodeRelationships(nodeId: string): Promise<RawNodeRelationships>;

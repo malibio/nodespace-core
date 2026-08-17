@@ -50,6 +50,13 @@ impl NodeService {
     /// are never rejected on a collision. Uniqueness is scoped per-database
     /// (ADR-053); email in particular is a claim, not an identity key.
     ///
+    /// `exclude_id` excludes a node from matching itself — pass the id of the
+    /// node currently being edited/created so an in-progress write that has
+    /// already landed its own copy of `value` (e.g. a UI that checks after
+    /// saving, or a re-check on an unchanged value) can't spuriously surface
+    /// itself as "the" existing duplicate, silently hiding a real one. Without
+    /// it, `None` behaves exactly as before this parameter was added.
+    ///
     /// Returns `Ok(None)` when the field is not flagged unique, when `value` is
     /// empty/whitespace, or when no conflicting node exists.
     pub async fn find_duplicate_for(
@@ -57,6 +64,7 @@ impl NodeService {
         node_type: &str,
         field: &str,
         value: &str,
+        exclude_id: Option<&str>,
     ) -> Result<Option<Node>, NodeServiceError> {
         // Empty/whitespace values are never treated as a duplicate.
         if value.trim().is_empty() {
@@ -91,7 +99,7 @@ impl NodeService {
 
         let conflicting_id = self
             .store
-            .find_conflicting_unique(node_type, field, value, None, case_insensitive)
+            .find_conflicting_unique(node_type, field, value, exclude_id, case_insensitive)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
@@ -105,22 +113,35 @@ impl NodeService {
         }
     }
 
-    /// Reserved, system-managed property key that carries the convergence
-    /// "possible duplicate" indicator (ADR-065 §4). Stored namespaced by type,
-    /// like every other property: `properties.<node_type>._possible_duplicate`.
-    pub const POSSIBLE_DUPLICATE_FIELD: &'static str = "_possible_duplicate";
-
-    /// Scan `node_id`'s unique-flagged schema fields for a conflicting active
-    /// node of the same type and, if one is found, stamp a non-blocking
-    /// "possible duplicate" marker on *both* nodes.
+    /// Scan `node_id`'s unique-flagged, string-valued schema fields for a
+    /// conflicting active node of the same type and, if one is found, stamp a
+    /// non-blocking "possible duplicate" marker on *both* nodes.
     ///
-    /// This is the convergence half of the `unique` rule (ADR-065 §4, delivery
-    /// slice S3): a duplicate that slips past creation-time suggestion — an
-    /// offline write, an explicit create-anyway, two devices that each validly
-    /// created "the same" person — becomes visible once both copies land in one
-    /// database (typically via sync pulling the peer's node in). It reuses the
-    /// exact same predicate (`find_conflicting_unique`, via `find_duplicate_for`)
-    /// that backs the creation-time suggestion, so the two can never drift.
+    /// This is a generic, reusable implementation of the convergence half of
+    /// the `unique` rule (ADR-065 §4, delivery slice S3): a duplicate that
+    /// slips past creation-time suggestion — an offline write, an explicit
+    /// create-anyway, two devices that each validly created "the same" person —
+    /// becomes visible once both copies land in one database (typically via
+    /// sync pulling the peer's node in). It calls `SqliteStore::find_conflicting_unique`
+    /// directly — the exact same predicate `find_duplicate_for` wraps for the
+    /// creation-time suggestion (a different caller of the same function, not a
+    /// call *through* `find_duplicate_for`) — so the two can never disagree on
+    /// what counts as a duplicate.
+    ///
+    /// **Not currently called from anywhere in this crate.** `nodespace-sync`'s
+    /// pulled-write handler (`nodespaced-pro/src/cloud_sync/apply.rs`,
+    /// `mark_possible_duplicate`) already implements equivalent behavior in
+    /// production, built directly against `find_conflicting_unique` before this
+    /// method existed. The two policies currently **differ** and have not been
+    /// reconciled: `nodespace-sync`'s version marks only the *incoming* node,
+    /// stops at the first colliding field, and swallows lookup errors
+    /// (appropriate for a best-effort background sync hook, where a scan
+    /// failure must never surface as a sync problem); this method marks *both*
+    /// colliding nodes, checks every unique field, and propagates errors to the
+    /// caller (appropriate for a general-purpose primitive whose caller decides
+    /// fire-and-forget vs. checked). This method is offered as a tested,
+    /// documented consolidation candidate for a future refactor — not a drop-in
+    /// replacement without that reconciliation.
     ///
     /// Deliberately **not** called from `create_node`/`update_node`: those paths
     /// must stay unconditional (ADR-065 — sync apply must never be at risk of a
@@ -143,16 +164,33 @@ impl NodeService {
     /// by construction — the marker is meant to stay wherever it was set.
     ///
     /// Generic across node types by construction: it walks whatever fields the
-    /// type's schema flags `unique`, not a hardcoded `person`/`email` pair, so an
-    /// extension type that declares its own `unique` field gets convergence
-    /// detection for free. Returns `Ok(true)` if a conflict was found and marked,
-    /// `Ok(false)` if the node has no unique-flagged fields, no schema, or no
-    /// conflicting values (nothing to mark — not an error).
+    /// type's schema flags `unique` (or `unique_case_insensitive`, which implies
+    /// uniqueness intent even if `unique` itself was left unset), not a
+    /// hardcoded `person`/`email` pair, so an extension type that declares its
+    /// own `unique` field gets convergence detection for free — as long as the
+    /// field's value is a JSON string; a non-string unique field is silently
+    /// skipped (matching the value-shape every current unique field, `email`,
+    /// actually has). Returns `Ok(true)` if a conflict was found and marked,
+    /// `Ok(false)` if `node_id` no longer exists (e.g. a concurrent delete —
+    /// nothing to mark, not a failure to propagate to a sync-apply caller that
+    /// can legitimately race this), if the node has no unique-flagged fields,
+    /// no schema, or no conflicting values.
+    ///
+    /// This method proves the `unique`/`local_only`-marker *mechanism* is sound
+    /// under a real convergence sequence (see the adversarial test in
+    /// `tests/person_duplicate_convergence_test.rs`), scoped specifically to the
+    /// schema-declared `unique` rule. It says nothing about other, unrelated
+    /// hard-uniqueness checks elsewhere in the store (e.g. collection-name
+    /// uniqueness in `SqliteStore::create_node`, which predates ADR-065 and is
+    /// a separate, harder constraint outside this method's scope).
     pub async fn mark_possible_duplicates(&self, node_id: &str) -> Result<bool, NodeServiceError> {
-        let node = self
-            .get_node(node_id)
-            .await?
-            .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+        // A node that has vanished between its write and this scan (e.g. a
+        // concurrent delete — delete-wins per ADR-042) is "nothing to mark", not
+        // a failure: a sync-apply caller can legitimately race this, and this
+        // method must never turn that benign race into a propagated error.
+        let Some(node) = self.get_node(node_id).await? else {
+            return Ok(false);
+        };
 
         let schema = self
             .store
@@ -163,10 +201,21 @@ impl NodeService {
             return Ok(false);
         };
 
-        let marker_path = format!("$.{}.{}", node.node_type, Self::POSSIBLE_DUPLICATE_FIELD);
-        let mut marked_any = false;
+        let marker_path = format!(
+            "$.{}.{}",
+            node.node_type,
+            crate::models::core_schemas::POSSIBLE_DUPLICATE_FIELD
+        );
 
-        for field in schema.fields.iter().filter(|f| f.unique.unwrap_or(false)) {
+        // Collect every conflicting id across all unique-flagged fields before
+        // writing anything, so a node with more than one unique field that each
+        // collide doesn't get its own marker written once per field.
+        let mut conflicting_ids: Vec<String> = Vec::new();
+        let unique_fields = schema
+            .fields
+            .iter()
+            .filter(|f| f.unique.unwrap_or(false) || f.unique_case_insensitive.unwrap_or(false));
+        for field in unique_fields {
             let Some(value) = node
                 .properties
                 .get(&node.node_type)
@@ -192,22 +241,29 @@ impl NodeService {
                 .await
                 .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-            let Some(conflicting_id) = conflicting_id else {
-                continue;
-            };
+            if let Some(conflicting_id) = conflicting_id {
+                if !conflicting_ids.contains(&conflicting_id) {
+                    conflicting_ids.push(conflicting_id);
+                }
+            }
+        }
 
-            marked_any = true;
+        if conflicting_ids.is_empty() {
+            return Ok(false);
+        }
+
+        self.store
+            .set_property_bool(&node.id, &marker_path, true)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        for conflicting_id in &conflicting_ids {
             self.store
-                .set_property_bool(&node.id, &marker_path, true)
-                .await
-                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-            self.store
-                .set_property_bool(&conflicting_id, &marker_path, true)
+                .set_property_bool(conflicting_id, &marker_path, true)
                 .await
                 .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
         }
 
-        Ok(marked_any)
+        Ok(true)
     }
 
     /// Get schema definition for a given node type

@@ -406,12 +406,21 @@ pub async fn get_node(
 /// unlike `get_node`, a miss is not a `NotFound` gRPC status but an ordinary
 /// empty `NodeResponse` (empty `node_id`, no `node_data`), so callers use the
 /// result to offer an adopt-existing suggestion, never to reject a write.
+///
+/// `exclude_id` should be the id of the node the caller is creating/editing —
+/// pass it whenever that node's own value could already be `value` (e.g. a
+/// check that runs concurrently with, or after, that node's own save), or the
+/// lookup can spuriously match the node against itself and hide a real,
+/// different duplicate (the query has no `ORDER BY`, so with two matching
+/// rows — the node itself and the real duplicate — which one comes back is
+/// unspecified).
 #[tauri::command]
 pub async fn find_duplicate(
     client: State<'_, GrpcClient>,
     node_type: String,
     field: String,
     value: String,
+    exclude_id: Option<String>,
 ) -> Result<Option<Value>, CommandError> {
     let mut c = client.client().await;
     let resp = c
@@ -419,6 +428,7 @@ pub async fn find_duplicate(
             node_type,
             field,
             value,
+            exclude_id,
         }))
         .await
         .map_err(status_to_command_error)?

@@ -44,10 +44,23 @@
 
   // Adopt-existing suggestion state (core#1734 / ADR-065). `duplicateMatch` is
   // the existing person the current email collides with, or null when there is
-  // none / the suggestion was dismissed. Keyed off the email value it was
-  // computed for, so a further edit doesn't keep showing a stale suggestion.
+  // none / the suggestion was dismissed. `checkedForEmail` tracks which value
+  // the in-flight (or most recent) lookup was for, so a stale response for a
+  // value the user has since changed away from — in EITHER the success or the
+  // error path — never clobbers a newer, still-valid result.
   let duplicateMatch = $state<Node | null>(null);
-  let checkedForEmail = $state<string | null>(null);
+  let checkedForEmail: string | null = null;
+
+  // A component instance can be reused across different person nodes (no
+  // `{#key nodeId}` at the call site) — reset the suggestion when the node
+  // being edited changes, or a suggestion computed for the PREVIOUS person
+  // (a different existing-node id, a different email) would linger on screen
+  // and "Use existing" would navigate using a match that no longer applies.
+  $effect(() => {
+    void nodeId;
+    duplicateMatch = null;
+    checkedForEmail = null;
+  });
 
   async function updateField(field: 'name' | 'email', value: string) {
     if (!node) return;
@@ -74,32 +87,50 @@
 
   async function handleEmailBlur(e: FocusEvent) {
     const value = (e.currentTarget as HTMLInputElement).value;
-    if (value !== email) {
-      await updateField('email', value);
-    }
-    await checkForDuplicate(value);
+    // Fired concurrently, not sequentially: the duplicate check must not wait
+    // for the save to land first, or — since both write and read this node's
+    // own email — a check that runs AFTER the save sees two rows holding
+    // `value` (this node's own freshly-saved copy, plus any real duplicate),
+    // and with no ORDER BY on the lookup, could match itself and hide the
+    // real duplicate entirely. `excludeId` below closes this structurally
+    // regardless of ordering, but firing both together also means the
+    // suggestion isn't held back by an in-flight save.
+    const tasks: Promise<unknown>[] = [checkForDuplicate(value)];
+    if (value !== email) tasks.push(updateField('email', value));
+    await Promise.all(tasks);
   }
 
   /**
    * Suggest-don't-block uniqueness check (ADR-065): looks up an existing
    * active person with the same (case-insensitive) email, excluding this
-   * node itself. Runs on blur (commit), never on every keystroke — a single
-   * indexed lookup, not a per-character scan. Never blocks or reverts the
-   * save above; a lookup failure is logged and simply surfaces no suggestion.
+   * node itself via `excludeId`. Runs on blur (commit), never on every
+   * keystroke — a single indexed lookup, not a per-character scan. Skips the
+   * round-trip entirely when re-blurring a value already checked, so tabbing
+   * through an unchanged field doesn't re-issue it. Never blocks or reverts
+   * the save; a lookup failure is logged and simply surfaces no suggestion.
    */
   async function checkForDuplicate(value: string) {
+    if (checkedForEmail === value) return;
     checkedForEmail = value;
     if (!value.trim()) {
       duplicateMatch = null;
       return;
     }
     try {
-      const match = await backendAdapter.findDuplicateFor('person', 'email', value);
-      // Ignore a stale response for an email the user has since changed, and
-      // never suggest the node adopt itself.
+      const match = await backendAdapter.findDuplicateFor('person', 'email', value, nodeId);
+      // Ignore a stale response for an email the user has since changed. The
+      // backend already excludes this node via excludeId above — the
+      // `match.id !== nodeId` check is a defensive backstop, not the primary
+      // exclusion mechanism (an earlier version relied on it alone, which
+      // could hide a REAL different duplicate whenever this node's own
+      // not-yet-excluded row satisfied the query first).
       if (checkedForEmail !== value) return;
       duplicateMatch = match && match.id !== nodeId ? match : null;
     } catch (err) {
+      // Same staleness guard as the success path — a slow, now-superseded
+      // request that fails after a newer one has already resolved must not
+      // clobber that newer (possibly valid) result.
+      if (checkedForEmail !== value) return;
       log.error('Duplicate lookup failed (non-blocking)', { err });
       duplicateMatch = null;
     }
@@ -116,7 +147,11 @@
     // "Use existing" — open the existing person instead. Deliberately
     // non-destructive: this does not delete or merge the current node (full
     // merge machinery is out of scope for this rule), it just gets the user to
-    // the record they meant to use.
+    // the record they meant to use. No sourcePaneId is available from this
+    // form's props, so with two panes open this resolves against the current
+    // active pane rather than necessarily the pane hosting this form — the
+    // same fallback other unparented call sites of this navigation helper
+    // already accept.
     getNavigationService().navigateToNodeInOtherPane(duplicateMatch.id);
     duplicateMatch = null;
   }
@@ -151,23 +186,24 @@
   </div>
 
   {#if duplicateMatch}
-    <Alert variant="warning" class="duplicate-suggestion">
+    <Alert variant="warning">
       <UserRoundSearchIcon class="h-4 w-4" />
-      <AlertDescription>
-        <p class="duplicate-message">
-          A person with this email already exists{duplicateDisplayName
-            ? `: ${duplicateDisplayName}`
-            : ''} — use them instead?
-        </p>
-        <div class="duplicate-actions">
-          <Button type="button" size="sm" variant="outline" onclick={adoptExisting}>
-            Use existing
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onclick={dismissDuplicateSuggestion}>
-            Keep as new
-          </Button>
-        </div>
+      <AlertDescription class="duplicate-message">
+        A person with this email already exists{duplicateDisplayName
+          ? `: ${duplicateDisplayName}`
+          : ''} — use them instead?
       </AlertDescription>
+      <!-- AlertDescription renders a <p>, which cannot contain block content
+           (another <p>, a <div>) without the browser silently restructuring
+           the DOM — so the action buttons are a sibling, not a child. -->
+      <div class="duplicate-actions">
+        <Button type="button" size="sm" variant="outline" onclick={adoptExisting}>
+          Use existing
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onclick={dismissDuplicateSuggestion}>
+          Keep as new
+        </Button>
+      </div>
     </Alert>
   {/if}
 
@@ -204,7 +240,11 @@
     font-weight: 500;
   }
 
-  .duplicate-message {
+  /* `class` on <AlertDescription> is forwarded to that component's own
+     internal element rather than applied to one in THIS template, so the
+     Svelte compiler can't see the usage and would otherwise warn this
+     selector unused. */
+  :global(.duplicate-message) {
     margin: 0 0 0.5rem 0;
   }
 

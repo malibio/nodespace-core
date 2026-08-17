@@ -628,16 +628,18 @@ async function handleRequest(req: Request): Promise<Response> {
   if (method === 'POST' && pathname === '/api/nodes/find-duplicate') {
     try {
       const body = await req.json() as Record<string, unknown>;
-      const res = await call<
-        { nodeType: string; field: string; value: string },
-        { nodeData?: ProtoNodeData }
-      >(
+      // exclude_id is an `optional string` proto field — omit the key entirely
+      // for "no exclusion" rather than sending null/'', matching the optional
+      // proto-field convention used above (see PATCH /api/nodes/:id).
+      const request: Record<string, unknown> = {
+        nodeType: String(body.nodeType ?? ''),
+        field: String(body.field ?? ''),
+        value: String(body.value ?? '')
+      };
+      if (body.excludeId && body.excludeId !== '') request.excludeId = body.excludeId;
+      const res = await call<typeof request, { nodeData?: ProtoNodeData }>(
         (nodeClient as unknown as Record<string, Function>).findDuplicate,
-        {
-          nodeType: String(body.nodeType ?? ''),
-          field: String(body.field ?? ''),
-          value: String(body.value ?? '')
-        }
+        request
       );
       if (!res.nodeData) return json(null);
       return json(nodeDataToApiNode(res.nodeData));

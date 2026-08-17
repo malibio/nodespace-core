@@ -2336,21 +2336,48 @@ impl SqliteStore {
         case_insensitive: bool,
     ) -> Result<Option<String>> {
         // `node_type`/`field` are interpolated into the SQL text below (SQLite has
-        // no bind-parameter form for identifiers/JSON-path segments), so they must
-        // be restricted to a safe identifier charset before being used, not merely
-        // trusted because production callers happen to pre-validate against a
-        // schema. `find_duplicate_for` only reaches this call after confirming
-        // `field` names a real schema field — but a schema field name is itself
-        // user-suppliable (extension-type `create_schema`/`update_schema` accepts
-        // arbitrary strings, with no identifier-charset restriction), so a
-        // malicious field name is a realistic path here, not merely theoretical.
-        // Reject anything outside `[A-Za-z0-9_-]` rather than build unsafe SQL.
-        fn is_safe_identifier(s: &str) -> bool {
+        // no bind-parameter form for identifiers/JSON-path segments). Every
+        // current call path reaches here only after `validate_schema_field_name`
+        // (behaviors/mod.rs) has already constrained a persisted field name to
+        // this exact grammar, and `SqliteStore::validate_node_type` allow-lists
+        // `node_type` outright — so this is defense-in-depth, not the only line
+        // of defense. It is still real defense: this method is `pub` and could
+        // gain a less-guarded caller later, so it re-validates rather than trust
+        // an upstream check it cannot see from here.
+        //
+        // The grammar must be a SUPERSET of what `validate_schema_field_name`
+        // permits, or a legitimately-declared field is silently invisible to its
+        // own `unique` rule. That function allows a bare name OR a
+        // `<namespace>:<bare>` pair (ADR-063 requires the namespaced form for any
+        // field added to a CORE type, e.g. `custom:employeeId`), each segment
+        // being Unicode-alphanumeric or `_` — so this check mirrors exactly that,
+        // not a stricter ASCII-only, colon-less approximation of it.
+        fn is_safe_segment(s: &str) -> bool {
+            !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+        }
+        // `node_type` is never namespaced (it's a schema id, e.g. `person`, or a
+        // UUID-shaped extension-schema id — hence `-` is allowed here only).
+        fn is_safe_node_type(s: &str) -> bool {
             !s.is_empty()
                 && s.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         }
-        if !is_safe_identifier(node_type) || !is_safe_identifier(field) {
+        // `field` may be bare or `<namespace>:<bare>` — at most one `:`.
+        fn is_safe_field(s: &str) -> bool {
+            let mut parts = s.split(':');
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(bare), None, _) => is_safe_segment(bare),
+                (Some(ns), Some(bare), None) => is_safe_segment(ns) && is_safe_segment(bare),
+                _ => false,
+            }
+        }
+        if !is_safe_node_type(node_type) || !is_safe_field(field) {
+            tracing::warn!(
+                node_type,
+                field,
+                "find_conflicting_unique: rejected a non-identifier node_type/field \
+                 rather than build unsafe SQL from it; treating as no-conflict"
+            );
             return Ok(None);
         }
 
@@ -2549,6 +2576,34 @@ mod find_conflicting_unique_tests {
         assert!(
             sane.is_some(),
             "store must be unharmed by the rejected attempts"
+        );
+        Ok(())
+    }
+
+    /// A namespaced field name (`<namespace>:<bare>`) is exactly what ADR-063
+    /// REQUIRES for any field added to a core type, and is what `unique` must
+    /// support for the "declarable on schema-driven types" acceptance criterion
+    /// to mean anything on a core type extension. The identifier guard must
+    /// accept this shape, not just a bare name, or a legitimately-declared
+    /// unique field is silently invisible to its own rule.
+    #[tokio::test]
+    async fn namespaced_field_name_is_accepted_and_matched() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let mut node = Node::new(
+            "task".to_string(),
+            "Employee record".to_string(),
+            json!({ "task": { "custom:employee_id": "E-42" } }),
+        );
+        node.lifecycle_status = "active".to_string();
+        store.create_node(node, None, None).await?;
+
+        let hit = store
+            .find_conflicting_unique("task", "custom:employee_id", "E-42", None, false)
+            .await?;
+        assert!(
+            hit.is_some(),
+            "a namespaced field name must be usable, not silently rejected \
+             as if it were a malicious identifier"
         );
         Ok(())
     }
