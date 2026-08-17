@@ -1,0 +1,170 @@
+name = "dev-instance-creation"
+reps = 3
+
+notes = """
+PRODUCTION-SHAPED. Dev-workflow domain.
+
+Scenario: instance creation against a type that already exists. The user
+describes ONE ticket with several particulars, and every particular has to
+survive into the record.
+
+The failure this case exists to catch is the one the matrix scored as a pass
+for years: a create/update call that carries the right tool name and an empty
+or partial value map. A ticket created with a title and nothing else reports
+success, and the assignee and sprint the user supplied are gone silently.
+
+Note `blocked_by` is NOT a field on the type. The user mentions being blocked
+on another ticket, and there is nowhere listed to put it — so the case also
+measures whether a value with no matching field is preserved under a key of
+the model's own making, or dropped because the schema had no slot for it.
+Dropping it is the worse outcome: the user was told the record was saved.
+
+STANDING FAILURE, TUNED AT AND NOT CLOSED
+
+The listed fields are carried perfectly — node_type, assignee, sprint, and
+`status` as the exact enum member, 3/3. The unlisted value is dropped, 3/3,
+across every arm tried:
+
+  1. prose in the candidate instructions ("A VALUE WITH NO MATCHING FIELD:
+     still record it ... never drop a value because the type has no field for
+     it")                                                        no effect
+  2. prose in the field_values schema description ("For a value no listed
+     field covers, add your own key ... a value omitted here is lost")
+                                                                 no effect
+  3. a worked example carrying an unlisted key, `reported_by`, with a sentence
+     naming why it is there                                      no effect
+
+Worth recording precisely because arm 3 is the lever that DID work in
+dev-schema-creation, where adding a pointer-shaped field to the example
+produced the missing field immediately. The same edit, in the same channel, on
+the same model, moves one case and not this one. So "put it in the example" is
+not a general rule — it is a lever that works when the example is the model's
+template for a LIST IT IS ALREADY BUILDING (the fields array), and does not
+work when the missing value would have to be recognised as unlisted first.
+
+The recognition step is the hard part, and none of the three channels reached
+it. This is left as a standing failure rather than tuned around: it is real,
+reproducible in seconds, and pretending otherwise would put a case in the
+corpus whose recorded result is better than what production can expect. It is
+also a candidate for #2120 to inherit as an open question rather than a solved
+one.
+
+CONTAMINATION GUARD (#1932)
+
+Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the
+minimal controls in this directory.
+
+MEASURED — per-case results recorded on #2122.
+"""
+
+[[turn]]
+label = "create-ticket-with-particulars"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Creation
+Purpose: Add one new record of a type the workspace already tracks, when the \
+user supplies the particulars of a single item rather than describing a new \
+kind of thing.
+
+CALL create_node NOW: your next action is the tool call, not planning text.
+
+THE TYPE: set node_type to the id shown in RELEVANT ENTITY TYPES, copied \
+exactly.
+
+THE VALUES: put every particular the user supplied into field_values. Work \
+through their message value by value and check each against the type's field \
+list before calling. field_values is the ONLY way any value is stored — a \
+value left out is lost silently while the record still reports as saved.
+
+A VALUE WITH NO MATCHING FIELD: still record it in field_values, under a key \
+named after the user's own noun for it, lowercase snake_case. Extra keys are \
+stored as given. Never drop a value because the type has no field for it, and \
+never reply that the type does not support it.
+"""
+user = """
+File a ticket for dana to fix the flaky retry test in sprint S-25 — it's \
+ready for dev, and it's blocked by the token refresh work
+"""
+expect = """
+create_node(node_type="ticket") carrying assignee=dana, sprint=S-25, and \
+status="ready_for_dev" as the exact enum member — all measured 3/3. The \
+blocked-by detail has no listed field, so the right outcome is a key of the \
+model's own making (blocked_by or similar); it is measured DROPPED 3/3 and is \
+a standing failure, not a solved case — see the notes for the three channels \
+tuned at without moving it. The failure this case would still catch is a call \
+with a title and little else: it reports success and loses everything the \
+user said.
+"""
+
+  [turn.tool_results]
+  create_node = '{"ok": true, "id": "9a2f4c81-7d35-4e60-b184-6c93f2a5e07b"}'
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create one new record of a type that already exists. Use for a single \
+  instance, never to define a new kind of record. In the example, `reported_by` \
+  is not one of the type's listed fields — the user mentioned it, so it is \
+  carried under a key named after their own wording rather than dropped. \
+  Example call: {"node_type": "ticket", "content": "Rotate signing keys on \
+  deploy", "field_values": {"status": "in_dev", "assignee": "dana", "sprint": \
+  "S-24", "reported_by": "priya"}}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "content"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "The record's title — the best human-readable name for it from the user's message."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "Every value the user supplied, as field keys to values, e.g. {\"status\": \"in_dev\", \"assignee\": \"dana\"}. Use the type's field names exactly as listed. When a field lists allowed values, use one of those values exactly. For a value no listed field covers, add your own key named after the user's noun for it — extra keys are stored as given, and a value omitted here is lost."
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a NEW entity type. Use only when the workspace does not already track \
+  the kind of record described — never for a single instance of a type that \
+  already exists.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]
