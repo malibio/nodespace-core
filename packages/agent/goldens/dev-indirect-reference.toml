@@ -32,6 +32,23 @@ shaped to give that gap somewhere to show: the user's request is a state
 change, so resolving alone leaves the work unfinished. Whether the model
 continues to the write is the measurement, and both outcomes are informative.
 
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
+
+Uses `field_values`, not `properties`, because a parameter named `properties`
+is silently deleted by the Gemma-4 template. See dev-status-change-enum.toml's
+notes for the measurement.
+
+Production says `properties`; this case says `field_values`. So it does not
+reproduce production's tool surface and must not be read as validated
+production shape. Provisional on #2123 being fixed BY RENAMING, in which case
+it becomes correct as written. Fixed any other way, it needs rewriting and
+re-measuring rather than re-annotating.
+
+This bears on the continuation finding above: the write completing here was
+measured against a parameter the model can see. Under production's current
+name the write half of that continuation carries nothing, so "no continuation
+gap" is a claim about THIS surface, not about production's.
+
 CONTAMINATION GUARD (#1932)
 
 Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the

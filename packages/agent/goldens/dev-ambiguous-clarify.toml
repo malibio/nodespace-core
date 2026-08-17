@@ -37,6 +37,23 @@ An ambiguity the conversation CAN resolve is not this case. The two tickets
 differ only in identity here — same status, same sprint — so nothing short of
 asking can pick one.
 
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
+
+The update_node on this case's tool surface uses `field_values`, not
+`properties`, because a parameter named `properties` is silently deleted by
+the Gemma-4 template. See dev-status-change-enum.toml's notes for the
+measurement.
+
+Production says `properties`; this case says `field_values`. So it does not
+reproduce production's tool surface and must not be read as validated
+production shape. Provisional on #2123 being fixed BY RENAMING, in which case
+it becomes correct as written. Fixed any other way, it needs rewriting and
+re-measuring rather than re-annotating.
+
+The dependency matters here even though the expected answer is route_clarify,
+not a write: update_node is on the surface precisely to make the wrong answer
+available, so its shape is part of what the case measures.
+
 CONTAMINATION GUARD (#1932)
 
 Dev-workflow vocabulary. Deliberately distinct from the dropped

@@ -20,6 +20,24 @@ available on the tool surface. That makes the case a genuine choice between
 two tools rather than a single obvious one — which is the point, since ADR-064
 rule 2 puts tool selection in the tool description channel.
 
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
+
+The update_node on this case's tool surface uses `field_values`, not
+`properties`, because a parameter named `properties` is silently deleted by
+the Gemma-4 template. See dev-status-change-enum.toml's notes for the
+measurement.
+
+Production says `properties`; this case says `field_values`. So it does not
+reproduce production's tool surface and must not be read as validated
+production shape. Provisional on #2123 being fixed BY RENAMING, in which case
+it becomes correct as written. Fixed any other way, it needs rewriting and
+re-measuring rather than re-annotating.
+
+Load-bearing here rather than incidental: this case measures a CHOICE between
+create_relationship and writing the `supersedes` field via update_node. Under
+production's current name update_node has no visible way to carry that field
+at all, which would make the choice a different one than the case measures.
+
 CONTAMINATION GUARD (#1932)
 
 Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the

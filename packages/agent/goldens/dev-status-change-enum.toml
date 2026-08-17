@@ -58,7 +58,7 @@ The runner's chaining emits the real `<|tool_call>` / `<|tool_response>` pair
 that production emits. So a prior tool call is expressed as a chained TURN.
 `history` remains right for plain conversational context.
 
-DEPENDS ON #2123
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
 
 The write parameter is named `field_values`, NOT `properties`. A tool
 parameter named `properties` is silently deleted by the Gemma-4 template — the
@@ -66,8 +66,17 @@ key collides with JSON Schema's own `properties` keyword — taking its entire
 description with it. Measured: identical case, one word changed, 420 chars
 rendered vs 694, with the allowed-values rule reaching the model only in the
 second. Authoring against `properties` would be tuning text the model provably
-never receives. If #2123 renames the production parameter to something other
-than `field_values`, this file changes with it.
+never receives.
+
+State the consequence plainly rather than leaving it as an annotation:
+production says `properties`, this case says `field_values`, so **this case
+does not currently reproduce production's tool surface** and must not be read
+as validated production shape. It is provisional on #2123 being fixed BY
+RENAMING the parameter — in which case this case becomes correct as written.
+If #2123 is instead fixed some other way (a template patch, restructuring the
+schema so the collision cannot arise), this file needs REWRITING, not
+re-annotating, and its measured results need re-taking against whatever shape
+production then sends.
 
 CONTAMINATION GUARD (#1932)
 

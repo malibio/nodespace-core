@@ -49,6 +49,24 @@ corpus whose recorded result is better than what production can expect. It is
 also a candidate for #2120 to inherit as an open question rather than a solved
 one.
 
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
+
+Uses `field_values`, not `properties`, because a parameter named `properties`
+is silently deleted by the Gemma-4 template. See dev-status-change-enum.toml's
+notes for the measurement.
+
+Production says `properties`; this case says `field_values`. So it does not
+reproduce production's tool surface and must not be read as validated
+production shape. Provisional on #2123 being fixed BY RENAMING, in which case
+it becomes correct as written. Fixed any other way, it needs rewriting and
+re-measuring rather than re-annotating.
+
+Worth noting for this case in particular: the standing failure above — the
+unlisted value being dropped — is measured against a parameter the model can
+SEE. Under production's current `properties` name the whole parameter is
+invisible, so the same request there loses every value, not just the unlisted
+one. The two failures are separate and must not be conflated when #2123 lands.
+
 CONTAMINATION GUARD (#1932)
 
 Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the

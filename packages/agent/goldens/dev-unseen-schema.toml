@@ -38,11 +38,17 @@ CONTAMINATION GUARD (#1932)
 Deliberately distinct even from the rest of THIS corpus, which is the point of
 the case.
 
-PROVISIONAL ON #2123
+PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
 
-Uses `field_values`, not `properties`. See dev-status-change-enum.toml's notes
-for the measurement; this case inherits that dependency and is likewise not
-production-shaped until #2123 is fixed by renaming.
+Uses `field_values`, not `properties`, because a parameter named `properties`
+is silently deleted by the Gemma-4 template. See dev-status-change-enum.toml's
+notes for the measurement.
+
+Production says `properties`; this case says `field_values`. So it does not
+reproduce production's tool surface and must not be read as validated
+production shape. Provisional on #2123 being fixed BY RENAMING, in which case
+it becomes correct as written. Fixed any other way, it needs rewriting and
+re-measuring rather than re-annotating.
 
 MEASURED — per-case results recorded on #2122.
 """

@@ -51,6 +51,19 @@ and because contamination between a listed type's fields and a new type's
 fields is the measured hazard (#1846) — this case doubles as a check that the
 model does not copy ticket's fields onto ADR.
 
+PROVISIONAL ON #2123 — PARTIALLY
+
+The create_schema call this case measures does NOT take a `properties`
+parameter, so the case's own subject is unaffected by #2123. The create_node
+tool on the surface uses `field_values` rather than `properties`, as elsewhere
+in this corpus.
+
+That makes this the least affected case here: what it measures — one schema,
+an enum with allowed_values, no contamination off the listed type — would read
+the same under either name. Recorded rather than omitted so the corpus's
+dependency on #2123 is uniform to check, and so nobody has to re-derive which
+cases were exposed.
+
 CONTAMINATION GUARD (#1932)
 
 Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the
