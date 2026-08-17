@@ -62,8 +62,18 @@ export interface EnumValue {
  * Enum fields can have protected core values and user-extensible values.
  */
 export interface SchemaField {
-  /** Field name (must be unique within schema) */
+  /** Field name (must be unique within schema): storage/query key, CEL
+   *  selector, titleTemplate token. Changing it is a breaking change to
+   *  every call site that references the field. */
   name: string;
+
+  /** Display label shown in every UI surface (table/kanban headers, query
+   *  editor, property forms). Always populated in storage — read it
+   *  unconditionally via `labelForField()` (`$lib/utils/schema-field-label`),
+   *  never with a fallback to `description` or a computed-from-`name`
+   *  regex. Derived from `name` at the write boundary (create_schema/
+   *  update_schema) when the caller omits it. */
+  friendlyName: string;
 
   /** Field type (e.g., "string", "number", "boolean", "enum", "array", "object") */
   type: string;
@@ -89,7 +99,12 @@ export interface SchemaField {
   /** Default value for the field */
   default?: unknown;
 
-  /** Human-readable field description */
+  /** What the field is for: meaning, purpose, usage, an example where
+   *  helpful. LLM-facing prose consumed by the agent for schema
+   *  comprehension (schema retrieval embeds this text) — NOT rendered as a
+   *  UI label. Prefer more detail over less; there is no UI-brevity cost to
+   *  a longer description now that `friendlyName` carries the display
+   *  label. */
   description?: string;
 
   /** For array fields, the type of items in the array */
@@ -100,6 +115,21 @@ export interface SchemaField {
 
   /** Sub-fields of each object element in an array field (field.itemType === 'object') */
   itemFields?: SchemaField[];
+
+  /**
+   * Uniqueness hint: values are expected to be unique among active nodes of
+   * the same type. Suggest-don't-block — never enforced as a write-time
+   * constraint, surfaced via a read-only lookup (e.g. to flag a likely
+   * duplicate before commit).
+   */
+  unique?: boolean;
+
+  /**
+   * Paired with `unique`, compares values case-insensitively (e.g. an email
+   * is a claim, not an identity key, and casing should not distinguish two
+   * otherwise-identical claims).
+   */
+  uniqueCaseInsensitive?: boolean;
 
   /**
    * Machine-bound: persisted and read locally like any other property, but never

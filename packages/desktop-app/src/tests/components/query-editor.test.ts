@@ -22,7 +22,7 @@ import type { SchemaField } from '$lib/types/schema-node';
 import type { QueryDefinition } from '$lib/types/query';
 
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, ...partial } as SchemaField;
+  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
 }
 
 describe('operatorsForType', () => {

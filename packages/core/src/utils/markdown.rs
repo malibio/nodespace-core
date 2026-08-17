@@ -419,6 +419,7 @@ mod tests {
         use crate::models::schema::EnumValue;
         SchemaField {
             name: "status".to_string(),
+            friendly_name: "Status".to_string(),
             field_type: "enum".to_string(),
             local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,
@@ -500,6 +501,7 @@ mod tests {
         use crate::models::schema::EnumValue;
         let name_field = SchemaField {
             name: "name".to_string(),
+            friendly_name: "Name".to_string(),
             field_type: "string".to_string(),
             local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::User,
@@ -518,6 +520,7 @@ mod tests {
         };
         let status_field = SchemaField {
             name: "status".to_string(),
+            friendly_name: "Status".to_string(),
             field_type: "enum".to_string(),
             local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,
@@ -576,6 +579,7 @@ mod tests {
         // Same value in both core and user with different labels — core should win
         let field = SchemaField {
             name: "status".to_string(),
+            friendly_name: "Status".to_string(),
             field_type: "enum".to_string(),
             local_only: false,
             protection: crate::models::schema::SchemaProtectionLevel::Core,

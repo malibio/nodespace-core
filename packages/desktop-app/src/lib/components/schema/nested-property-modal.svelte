@@ -19,6 +19,7 @@
   import { Button } from '$lib/components/ui/button';
   import NestedFieldEditor from './nested-field-editor.svelte';
   import type { SchemaField } from '$lib/types/schema-node';
+  import { labelForField } from '$lib/utils/schema-field-label';
 
   interface Props {
     open: boolean;
@@ -28,20 +29,12 @@
   }
 
   let { open = $bindable(false), field, value, onPersist }: Props = $props();
-
-  function formatFieldLabel(fieldName: string): string {
-    return fieldName
-      .replace(/[_-]/g, ' ')
-      .split(' ')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
 </script>
 
 <Dialog.Root bind:open>
   <Dialog.Content class="sm:max-w-2xl">
     <Dialog.Header>
-      <Dialog.Title>{field.description || formatFieldLabel(field.name)}</Dialog.Title>
+      <Dialog.Title>{labelForField(field)}</Dialog.Title>
       <Dialog.Description>
         {field.type === 'array' ? 'Edit the items in this list.' : 'Edit the fields of this object.'}
       </Dialog.Description>

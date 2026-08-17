@@ -127,6 +127,58 @@ fn warn_reserved_property_names(fields: Vec<SchemaField>) -> (Vec<SchemaField>, 
     (fields, warnings)
 }
 
+/// Fill in `friendlyName` for any field in `new_fields` where the caller
+/// omitted it, then disambiguate a derived value that collides with a
+/// friendly_name already in use by `existing` or by an earlier field in this
+/// same batch.
+///
+/// `SchemaField::friendly_name` is non-optional in storage, but callers of
+/// `create_schema`/`update_schema` (the agent included) are not required to
+/// supply it — `#[serde(default)]` on the field accepts an absent value as an
+/// empty string, and this is the one place that empty string gets replaced
+/// with a real label, via [`derive_friendly_name`]. This is THE write
+/// boundary: every field that passes through here on its way into storage
+/// carries a populated `friendly_name`, so no reader anywhere else needs a
+/// fallback or null-check.
+///
+/// Collision disambiguation exists because stripping a namespace prefix for
+/// display (`derive_friendly_name`'s job) is a display-only operation, but it
+/// is reachable *today*, not just in some future release: adding
+/// `custom:status` next to an existing core `status` field derives "Status"
+/// for both, since `custom:` and bare `status` are different storage keys
+/// but the same stripped/humanized display text. Only a *derived* value is
+/// ever adjusted — a friendly_name the caller explicitly supplied is never
+/// rewritten out from under them, even if it collides; that ambiguity is
+/// their call, not this function's to silently correct.
+fn apply_friendly_name_defaults(existing: &[SchemaField], new_fields: &mut [SchemaField]) {
+    let mut taken: std::collections::HashSet<String> =
+        existing.iter().map(|f| f.friendly_name.clone()).collect();
+
+    for field in new_fields.iter_mut() {
+        let was_omitted = field.friendly_name.trim().is_empty();
+        if was_omitted {
+            field.friendly_name = crate::models::schema::derive_friendly_name(&field.name);
+            if taken.contains(&field.friendly_name) {
+                field.friendly_name = disambiguate_friendly_name(&field.friendly_name, &field.name);
+            }
+        }
+        taken.insert(field.friendly_name.clone());
+    }
+}
+
+/// Append a disambiguator to `label` so it no longer collides with another
+/// field's display label, using `name`'s namespace prefix when it has one
+/// (`"Status" -> "Status (custom)"`) or the full field name otherwise
+/// (`"Employee name" -> "Employee name (employeeName)"`). `name` is unique
+/// within a schema (a duplicate is rejected before this runs), so the result
+/// is guaranteed unique too.
+fn disambiguate_friendly_name(label: &str, name: &str) -> String {
+    match name.split_once(':') {
+        Some((prefix, _)) if !prefix.is_empty() => format!("{label} ({prefix})"),
+        _ => format!("{label} ({name})"),
+    }
+}
+
 /// Whether `schema_id` names a schema NodeSpace ships, rather than a
 /// user-defined one. A missing schema is reported as non-core; the update path
 /// below surfaces the not-found error with better context.
@@ -319,7 +371,10 @@ pub async fn handle_create_schema(
         ));
     };
 
-    let (stored_fields, warnings) = warn_reserved_property_names(explicit_fields);
+    let (mut stored_fields, warnings) = warn_reserved_property_names(explicit_fields);
+    // A brand-new schema has no existing fields to collide with — every
+    // field in this batch is only checked against its own siblings.
+    apply_friendly_name_defaults(&[], &mut stored_fields);
 
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
@@ -516,7 +571,7 @@ pub async fn handle_update_schema(
     // only the absent key with no position.
     describe_malformed_fields(&params, "add_fields")?;
 
-    let params: UpdateSchemaParams = serde_json::from_value(params)
+    let mut params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
 
     // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
@@ -666,9 +721,9 @@ pub async fn handle_update_schema(
         fields_removed = before - fields.len();
     }
 
-    if let Some(ref add_fields) = params.add_fields {
+    if let Some(ref mut add_fields) = params.add_fields {
         // Check for duplicates before adding
-        for field in add_fields {
+        for field in add_fields.iter() {
             if fields.iter().any(|f| f.name == field.name) {
                 return Err(MarkdownError::invalid_params(format!(
                     "Field '{}' already exists in schema '{}'",
@@ -676,6 +731,10 @@ pub async fn handle_update_schema(
                 )));
             }
         }
+        // Write-boundary friendly_name defaulting, with the current field
+        // set (existing + removals already applied) as collision context —
+        // see `apply_friendly_name_defaults`.
+        apply_friendly_name_defaults(&fields, add_fields);
         fields_added = add_fields.len();
         fields.extend(add_fields.clone());
     }
@@ -954,6 +1013,7 @@ mod tests {
     fn field(name: &str) -> SchemaField {
         SchemaField {
             name: name.to_string(),
+            friendly_name: name.to_string(),
             field_type: "string".to_string(),
             local_only: false,
             protection: SchemaProtectionLevel::User,

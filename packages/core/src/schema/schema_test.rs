@@ -1594,6 +1594,254 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
     );
 }
 
+// ============================================================================
+// friendly_name write-boundary defaulting
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_schema_derives_friendly_name_when_omitted() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    assert_eq!(
+        result["fields"][0]["friendlyName"], "Due date",
+        "friendly_name omitted on input must be derived from `name` at the write boundary: {result:?}"
+    );
+
+    // The derived value is what actually landed in storage, not just what the
+    // create_schema response echoes back.
+    let schema = svc
+        .get_schema_node("invoice")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(schema.fields[0].friendly_name, "Due date");
+}
+
+#[tokio::test]
+async fn test_create_schema_respects_explicit_friendly_name() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                {
+                    "name": "due_date",
+                    "friendlyName": "Payment due",
+                    "type": "date",
+                    "protection": "user",
+                    "indexed": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    assert_eq!(
+        result["fields"][0]["friendlyName"], "Payment due",
+        "an explicit friendlyName must not be overwritten by the derived default: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_fields_derives_friendly_name_when_omitted() {
+    let (svc, _tmp) = create_test_service().await;
+    let schema_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "update_schema add_fields should succeed: {result:?}"
+    );
+
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    let due_date = schema
+        .get_field("due_date")
+        .expect("due_date field should have been added");
+    assert_eq!(
+        due_date.friendly_name, "Due date",
+        "add_fields must derive friendly_name the same way create_schema does"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_fields_respects_explicit_friendly_name() {
+    let (svc, _tmp) = create_test_service().await;
+    let schema_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_fields": [
+                {
+                    "name": "due_date",
+                    "friendlyName": "Payment due",
+                    "type": "date",
+                    "protection": "user",
+                    "indexed": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("update_schema add_fields should succeed");
+
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(
+        schema.get_field("due_date").unwrap().friendly_name,
+        "Payment due"
+    );
+}
+
+/// `custom:status` stripped and humanized for display derives the exact same
+/// text ("Status") as the core `task` schema's existing `status` field —
+/// different storage keys, same display label, reachable today via any
+/// namespaced field whose base name happens to match an existing field on
+/// the same schema. The write boundary must disambiguate the derived value
+/// rather than let it collide.
+#[tokio::test]
+async fn test_update_schema_add_fields_disambiguates_friendly_name_colliding_with_existing_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "add_fields": [
+                { "name": "custom:status", "type": "text", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("update_schema add_fields should succeed");
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node failed")
+        .expect("task schema should exist");
+
+    let core_status = schema.get_field("status").expect("core status field");
+    let custom_status = schema
+        .get_field("custom:status")
+        .expect("custom:status field should have been added");
+
+    assert_eq!(core_status.friendly_name, "Status");
+    assert_ne!(
+        custom_status.friendly_name, core_status.friendly_name,
+        "a derived friendly_name that collides with an existing field's must be disambiguated, \
+         not silently duplicated: got {:?}",
+        custom_status.friendly_name
+    );
+    // The namespace is the disambiguator, so the collision is legible, not
+    // just different.
+    assert!(
+        custom_status.friendly_name.contains("custom"),
+        "expected the namespace to disambiguate the label, got {:?}",
+        custom_status.friendly_name
+    );
+}
+
+/// Self-collision within a single batch: two brand-new fields whose derived
+/// labels would otherwise be identical must not collide with each other,
+/// even though neither has an "existing" field to conflict with.
+#[tokio::test]
+async fn test_create_schema_disambiguates_friendly_name_colliding_within_same_batch() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Employee",
+            "fields": [
+                { "name": "employee_name", "type": "string", "protection": "user", "indexed": false },
+                { "name": "employeeName", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    let fields = result["fields"].as_array().expect("fields array");
+    let labels: Vec<&str> = fields
+        .iter()
+        .map(|f| f["friendlyName"].as_str().unwrap())
+        .collect();
+    assert_ne!(
+        labels[0], labels[1],
+        "two distinct fields deriving the same label within one batch must be disambiguated: {labels:?}"
+    );
+}
+
+/// An explicit friendly_name is the caller's deliberate choice, even if it
+/// collides with another field — collision disambiguation only ever touches
+/// a value this function itself derived.
+#[tokio::test]
+async fn test_update_schema_add_fields_does_not_rewrite_an_explicit_colliding_friendly_name() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "add_fields": [
+                {
+                    "name": "custom:status",
+                    "friendlyName": "Status",
+                    "type": "text",
+                    "protection": "user",
+                    "indexed": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("update_schema add_fields should succeed");
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node failed")
+        .expect("task schema should exist");
+    assert_eq!(
+        schema.get_field("custom:status").unwrap().friendly_name,
+        "Status",
+        "an explicitly-supplied friendly_name must never be silently rewritten"
+    );
+}
+
 #[test]
 fn field_rename_rejects_unknown_field() {
     let args = json!({ "from": "old_name", "to": "new_name", "toName": "new_name" });

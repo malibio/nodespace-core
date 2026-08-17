@@ -28,6 +28,7 @@
   import SchemaFieldLeaf from './schema-field-leaf.svelte';
   import Self from './nested-field-editor.svelte';
   import type { SchemaField } from '$lib/types/schema-node';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import {
     setObjectKey,
     deleteObjectKey,
@@ -63,14 +64,6 @@
   );
   const items = $derived(Array.isArray(value) ? (value as unknown[]) : []);
 
-  function formatFieldLabel(fieldName: string): string {
-    return fieldName
-      .replace(/[_-]/g, ' ')
-      .split(' ')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
-
   // Delete an array element, shifting the per-element open-state down so expand/
   // collapse follows the content across the delete (both openKeys and the each
   // block are index-keyed).
@@ -84,6 +77,7 @@
   function arrayObjectItemField(index: number): SchemaField {
     return {
       name: `${field.name}[${index}]`,
+      friendlyName: `${labelForField(field)} ${index + 1}`,
       type: 'object',
       protection: field.protection,
       indexed: false,
@@ -96,6 +90,7 @@
   function arrayScalarItemField(index: number): SchemaField {
     return {
       name: `${field.name}[${index}]`,
+      friendlyName: `${labelForField(field)} ${index + 1}`,
       type: field.itemType ?? 'string',
       protection: field.protection,
       indexed: false,
@@ -134,7 +129,7 @@
                     stroke-linejoin="round"
                   />
                 </svg>
-                <span>{sub.description || formatFieldLabel(sub.name)}</span>
+                <span>{labelForField(sub)}</span>
                 <span class="text-xs text-muted-foreground">
                   {sub.type === 'array'
                     ? `${Array.isArray(subValue) ? subValue.length : 0} items`
@@ -163,7 +158,7 @@
         {:else}
           <div class="flex items-start justify-between gap-2">
             <label for={subId} class="text-sm font-medium">
-              {sub.description || formatFieldLabel(sub.name)}
+              {labelForField(sub)}
             </label>
             <Button
               variant="ghost"

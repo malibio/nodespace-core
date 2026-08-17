@@ -24,7 +24,7 @@ import {
 import type { SchemaField } from '$lib/types/schema-node';
 
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, ...partial };
+  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
 }
 
 describe('setObjectKey', () => {

@@ -3,13 +3,14 @@
 
   Derives columns from schema field definitions (not by enumerating result node keys).
   Always includes 'content' (title) as the first column — rendered as a clickable link.
-  Additional columns: one per schema field definition, in schema order, using field.label.
+  Additional columns: one per schema field definition, in schema order, using field.friendlyName.
   Clicking the content/title cell calls onRowClick(node.id).
   Results are paginated at 25 rows per page.
 -->
 
 <script lang="ts">
   import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import TableRow from '$lib/components/query/table-row.svelte';
   import { Table, TableHeader, TableBody, TableHead, TableRow as UiTableRow } from '$lib/components/ui/table';
   import { Button } from '$lib/components/ui/button';
@@ -32,7 +33,7 @@
   // out-of-range page on read — no $effect syncing state to the nodeIds prop (ADR-049).
   let currentPage = $state(0);
 
-  // Derive columns from schema fields — capitalize name and replace underscores with spaces
+  // Derive columns from schema fields.
   const columns = $derived.by(() => {
     const cols: Array<{ field: string; label: string }> = [
       { field: 'content', label: '' }
@@ -40,13 +41,7 @@
 
     if (schema?.fields) {
       for (const field of schema.fields) {
-        const label = field.description
-          ? field.description
-          : field.name
-              .replace(/_/g, ' ')
-              .replace(/([a-z])([A-Z])/g, '$1 $2')
-              .replace(/^\w/, (c) => c.toUpperCase());
-        cols.push({ field: field.name, label });
+        cols.push({ field: field.name, label: labelForField(field) });
       }
     }
 

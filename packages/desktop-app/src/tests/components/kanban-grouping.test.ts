@@ -19,7 +19,7 @@ import {
 } from '$lib/components/query/kanban-grouping';
 
 function field(name: string, type: string, extra: Partial<SchemaField> = {}): SchemaField {
-  return { name, type, protection: 'user', ...extra } as SchemaField;
+  return { name, type, friendlyName: name, protection: 'user', indexed: false, ...extra };
 }
 
 function node(id: string, overrides: Partial<Node> & Record<string, unknown> = {}): Node {

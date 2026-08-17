@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 import NestedFieldEditor from '$lib/components/schema/nested-field-editor.svelte';
 
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, ...partial };
+  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
 }
 
 afterEach(() => {
@@ -27,8 +27,8 @@ describe('NestedFieldEditor — object of leaves', () => {
     name: 'address',
     type: 'object',
     fields: [
-      field({ name: 'street', type: 'string' }),
-      field({ name: 'city', type: 'string' })
+      field({ name: 'street', friendlyName: 'Street', type: 'string' }),
+      field({ name: 'city', friendlyName: 'City', type: 'string' })
     ]
   });
 

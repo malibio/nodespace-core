@@ -146,10 +146,27 @@ impl SchemaNode {
             .map(|v| v as u32)
             .unwrap_or(1);
 
+        // A parse failure here (e.g. a pre-reset database whose stored field
+        // JSON predates a required-field addition like `friendlyName`) is
+        // swallowed to an empty Vec rather than surfaced as an error, so a
+        // schema with fields silently reads back as a schema with none. Log
+        // it — otherwise the only symptom is "this schema has no fields",
+        // with no indication why.
         let fields: Vec<SchemaField> = node
             .properties
             .get("fields")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|v| match serde_json::from_value(v.clone()) {
+                Ok(fields) => Some(fields),
+                Err(e) => {
+                    tracing::warn!(
+                        schema_id = %node.id,
+                        error = %e,
+                        "Failed to parse schema fields; reading back as empty. \
+                         Likely a stale storage format — reset the database."
+                    );
+                    None
+                }
+            })
             .unwrap_or_default();
 
         let title_template = node
@@ -491,6 +508,7 @@ mod tests {
 
         let new_field = SchemaField {
             name: "priority".to_string(),
+            friendly_name: "Priority".to_string(),
             field_type: "number".to_string(),
             local_only: false,
             protection: SchemaProtectionLevel::User,

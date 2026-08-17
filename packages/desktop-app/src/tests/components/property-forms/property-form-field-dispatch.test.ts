@@ -34,7 +34,7 @@ import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { backendAdapter } from '$lib/services/backend-adapter';
 
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, ...partial };
+  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
 }
 
 // One object field with a single string sub-field: enough to make an edit and
@@ -42,7 +42,7 @@ function field(partial: Partial<SchemaField> & { name: string; type: string }): 
 const ADDRESS_FIELD = field({
   name: 'address',
   type: 'object',
-  fields: [field({ name: 'street', type: 'string' })]
+  fields: [field({ name: 'street', friendlyName: 'Street', type: 'string' })]
 });
 
 function schemaWith(fields: SchemaField[], nodeType: string): SchemaNode {
@@ -240,7 +240,7 @@ describe('SchemaPropertyForm — un-migrated flat properties', () => {
 describe('SchemaPropertyForm — boolean fields', () => {
   beforeEach(() => {
     vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(
-      schemaWith([field({ name: 'paid', type: 'boolean' })], 'invoice') as never
+      schemaWith([field({ name: 'paid', friendlyName: 'Paid', type: 'boolean' })], 'invoice') as never
     );
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       nodeWith('invoice', { invoice: { total: 10 } })

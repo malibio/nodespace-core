@@ -68,6 +68,7 @@ describe('evaluateTitleTemplate', () => {
 describe('evaluateSummaryTemplate', () => {
   const statusField: SchemaField = {
     name: 'status',
+    friendlyName: 'Status',
     type: 'enum',
     protection: 'user',
     indexed: false,
@@ -80,6 +81,7 @@ describe('evaluateSummaryTemplate', () => {
 
   const companyField: SchemaField = {
     name: 'company',
+    friendlyName: 'Company',
     type: 'text',
     protection: 'user',
     indexed: false,
@@ -87,6 +89,7 @@ describe('evaluateSummaryTemplate', () => {
 
   const dueDateField: SchemaField = {
     name: 'due_date',
+    friendlyName: 'Due date',
     type: 'date',
     protection: 'user',
     indexed: false,
@@ -151,13 +154,20 @@ describe('evaluateSummaryTemplate', () => {
   });
 
   it('leaves non-date string values on unknown fields as-is', () => {
-    const textField: SchemaField = { name: 'note', type: 'text', protection: 'user', indexed: false };
+    const textField: SchemaField = {
+      name: 'note',
+      friendlyName: 'Note',
+      type: 'text',
+      protection: 'user',
+      indexed: false
+    };
     expect(evaluateSummaryTemplate('{note}', { note: 'hello' }, [textField])).toBe('hello');
   });
 
   it('resolves namespace-prefixed token names, including enum labels', () => {
     const namespacedEnum: SchemaField = {
       name: 'custom:status',
+      friendlyName: 'Status',
       type: 'enum',
       protection: 'user',
       indexed: false,
