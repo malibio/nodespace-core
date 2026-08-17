@@ -1,0 +1,110 @@
+name = "ambiguous-reference-clarify"
+reps = 3
+
+notes = """
+Reference instance for the `clarify` and `text` expectation kinds, which the
+ported scenario-6 cases do not exercise.
+
+Turn 1 is a genuinely ambiguous request: two stored items share the referenced
+value, so no correct resolution exists and asking is the right answer. A pass
+here is route_clarify being called -- clarification is a first-class expected
+outcome, not a failure mode. ADR-038's contract is that there is at most one
+clarification per intent and that it must surface concrete candidates rather
+than a bare "what do you mean?", which is why route_clarify takes options
+rather than only a question.
+
+Turn 2 is a plain question about state already in the conversation. The
+correct answer is prose: there is nothing to look up and nothing to write, and
+a tool call would be the defect. A `text` expectation is the only kind that
+can catch a model reaching for a tool it did not need.
+
+Both arms set chain = false -- turn 2 is a separate probe, not a follow-up to
+turn 1, and letting it read a clarification exchange would change what it
+measures.
+
+Lexically distinct from the eval corpus by construction (chairs and a rehearsal
+room, not equipment and laser cutters): a golden case that shares vocabulary
+with the guidance text proves only that the model memorized its own answer key.
+"""
+
+# ---------------------------------------------------------------------------
+# Ambiguous reference — asking is correct.
+# ---------------------------------------------------------------------------
+[[turn]]
+chain = false
+label = "ambiguous-asks"
+system = """
+You are a graph-editing assistant. When a request identifies a record by a \
+value that more than one record shares, you cannot know which was meant: call \
+route_clarify with the specific candidates. Do not guess, and do not ask the \
+user for an id.
+"""
+user = "Mark the 90-minute one as cancelled"
+
+  [[turn.history]]
+  role = "system"
+  content = """
+  Fact: two rehearsal_slot records exist. One is 'Strings sectional', duration \
+  90. The other is 'Brass sectional', duration 90.
+  """
+
+  [[turn.tool]]
+  name = "route_clarify"
+  description = """
+  Ask the user which of several specific candidates they meant. Use only when \
+  the request matches more than one record and nothing in the conversation \
+  distinguishes them.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["question", "options"]
+
+      [turn.tool.parameters_schema.properties.question]
+      type = "string"
+      description = "The question to put to the user."
+
+      [turn.tool.parameters_schema.properties.options]
+      type = "array"
+      description = "The concrete candidates, named as the user would recognise them."
+      items = { type = "string" }
+
+  [[turn.tool]]
+  name = "update_node"
+  description = "Update an existing node's properties, given its id."
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+    properties = { id = { type = "string" }, properties = { type = "object" } }
+
+  [turn.expect]
+  kind = "clarify"
+
+# ---------------------------------------------------------------------------
+# A question answerable from context — prose is correct, a tool call is not.
+# ---------------------------------------------------------------------------
+[[turn]]
+chain = false
+label = "answerable-from-context"
+system = """
+You are a graph-editing assistant. Answer from the conversation when it \
+already contains the answer. Call a tool only when you need information the \
+conversation does not have, or when the user asked for a change.
+"""
+user = "How many chairs did we say the small room holds?"
+
+  [[turn.history]]
+  role = "system"
+  content = "Fact: the small rehearsal room holds 18 chairs. The large room holds 40."
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = "Search the graph for records matching a query."
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["request"]
+    properties = { request = { type = "string" } }
+
+  [turn.expect]
+  kind = "text"
+  contains = ["18"]

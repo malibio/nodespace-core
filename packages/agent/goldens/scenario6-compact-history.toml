@@ -1,0 +1,83 @@
+name = "scenario6-compact-history"
+reps = 3
+
+notes = """
+Ported from golden_scenario6_handauthored.rs (golden_compact_history_variant).
+
+The discriminating experiment: is the defect "any history at all" (a real
+capability boundary, unfixable by prompt engineering) or "history above some
+size/shape" (fixable by compacting what is carried forward)?
+
+The prior finding this is built on: the model resolves "the 2400 one" ->
+resolve_query with NO prior history, but refuses and asks for a literal node
+id the moment any prior turn is present -- measured across independent trials
+on four different prompt channels. The real scenario's history is ~8,300
+tokens of mostly-boilerplate wrapped around a 10-word request.
+
+This carries the SAME facts that history carries, as ~120 words instead.
+
+expect.kind = "observe" is deliberate and matches the original, which asserted
+nothing: the printed result IS the finding. Do not convert this to a `tool`
+expectation without a reason — an observe probe that grows an assertion stops
+being able to report a surprise.
+
+MEASURED, 3/3, byte-identical across reps on the locked native model:
+
+  resolve_query(node_type="equipment", request="The 2400 one came back — set
+    it to returned")
+
+SIZE/SHAPE, not "any history". A single compact fact carries the same
+information the full history carries and the model resolves through it every
+time -- so the boundary is not presence-of-any-history, which would have been
+a hard capability limit no prompt work could move. See
+scenario6-history-size-vs-style.toml, which narrows it further: the driver is
+narrative style rather than token count.
+"""
+
+[[turn]]
+label = "compact-history"
+system = """
+You are a graph-editing assistant. When a request refers to something \
+indirectly (a bare value, a description) rather than by name, call \
+resolve_query to find it. Never ask the user to supply a node id yourself.
+"""
+user = "The 2400 one came back — set it to returned"
+
+  [[turn.history]]
+  role = "system"
+  content = """
+  Context: the user has an 'equipment' type with a replacement_cost field. \
+  They logged one equipment item with replacement_cost 2400.
+  """
+
+  [[turn.tool]]
+  name = "resolve_query"
+  description = """
+  Resolve an indirect reference (a bare value, a relative date, a description) \
+  to the single node it refers to. Returns the node directly -- do not call \
+  search_nodes afterward.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["request", "node_type"]
+
+      [turn.tool.parameters_schema.properties.request]
+      type = "string"
+      description = "The user's request, verbatim."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "The target node type id."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = "Update an existing node's properties, given its id."
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+    properties = { id = { type = "string" }, properties = { type = "object" } }
+
+  [turn.expect]
+  kind = "observe"

@@ -8,7 +8,8 @@
 //! isolation and still failed live — so a fix on this surface is not established
 //! by unit tests alone.
 //!
-//! Unlike `golden_scenario6_*.rs`, this drives the REAL production surface:
+//! Unlike the golden cases in `packages/agent/goldens/`, this drives the REAL
+//! production surface:
 //! `all_tool_definitions()` and a real `GraphToolExecutor` over a real
 //! `SqliteStore`, not hand-authored tool schemas. The assertion is on what the
 //! STORE holds afterwards, never on what the tool returned — the entire defect
