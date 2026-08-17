@@ -16,6 +16,7 @@
 <script lang="ts">
   import type { QueryDefinition } from '$lib/types/query';
   import type { SchemaField } from '$lib/types/schema-node';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import {
     type FilterRow,
     type Operator,
@@ -23,7 +24,6 @@
     buildDefinition,
     enumOptions,
     initialValueForField,
-    labelForField,
     operatorsForType,
     partitionFilters,
   } from './query-editor-model';

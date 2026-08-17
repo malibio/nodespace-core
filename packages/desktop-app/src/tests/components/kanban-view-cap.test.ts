@@ -36,6 +36,7 @@ function schema(): SchemaNode {
     fields: [
       {
         name: 'status',
+        friendlyName: 'Status',
         type: 'enum',
         protection: 'user',
         indexed: false,
@@ -239,6 +240,7 @@ describe('KanbanView — per-column cap', () => {
       fields: [
         {
           name: 'status',
+          friendlyName: 'Status',
           type: 'enum',
           protection: 'user',
           indexed: false,

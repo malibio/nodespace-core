@@ -4,12 +4,72 @@ use serde::{Deserialize, Serialize};
 use crate::helpers::default_version;
 use crate::node::Node;
 
-fn default_protection_level() -> SchemaProtectionLevel {
-    SchemaProtectionLevel::User
-}
-
 fn default_schema_version() -> u32 {
     1
+}
+
+/// Derive a display label for a field whose `friendlyName` was omitted at
+/// `create_schema`/`update_schema` time, e.g. `due_date` -> `Due date`,
+/// `custom:capacity` -> `Capacity`, `restrictedToMembers` -> `Restricted to
+/// members`.
+///
+/// Namespace prefixes (`custom:`, `org:`, `plugin:`, ...) are stripped before
+/// humanizing. Per ADR-063, a prefix is only ever present on a field added to
+/// a CORE type, and unprefixed names on a core type are reserved for core
+/// properties (rejected by `update_schema` otherwise) — so the storage key of
+/// a prefixed field and a bare core field can never collide within the same
+/// schema, and stripping the prefix here is a display-only convenience with
+/// no effect on the stored name. The only residual risk is cosmetic: a future
+/// core field could theoretically be added whose base name matches an
+/// existing prefixed field's, producing two rows with the same displayed
+/// label (but never the same storage key or data) — an accepted trade-off of
+/// the same shape ADR-063 already made at the key level.
+pub fn derive_friendly_name(name: &str) -> String {
+    let base = name.rsplit(':').next().unwrap_or(name);
+
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+    for ch in base.chars() {
+        if ch == '_' || ch == '-' {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            prev_lower = false;
+            continue;
+        }
+        // camelCase boundary: lowercase (or digit) followed by uppercase starts a new word.
+        if ch.is_uppercase() && prev_lower && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        prev_lower = ch.is_lowercase() || ch.is_ascii_digit();
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    if words.is_empty() {
+        return name.to_string();
+    }
+
+    words
+        .into_iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let lower = w.to_lowercase();
+            if i == 0 {
+                let mut chars = lower.chars();
+                match chars.next() {
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => lower,
+                }
+            } else {
+                lower
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -18,21 +78,34 @@ pub struct EnumValue {
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SchemaProtectionLevel {
     Core,
+    #[default]
     User,
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchemaField {
+    /// Unique key within the schema: storage/query key, CEL selector,
+    /// titleTemplate token. Changing it is a breaking change to every call
+    /// site that references the field.
     pub name: String,
+    /// Display label shown in every UI surface (table/kanban headers, query
+    /// editor, property forms). Always populated in storage — every reader
+    /// uses it unconditionally, with no fallback to `description` and no
+    /// null-branching. Not required on input to `create_schema`/
+    /// `update_schema`: when omitted (empty string), the write boundary
+    /// derives it from `name` via [`derive_friendly_name`] before the field
+    /// is persisted.
+    #[serde(default)]
+    pub friendly_name: String,
     #[serde(rename = "type")]
     pub field_type: String,
-    #[serde(default = "default_protection_level")]
+    #[serde(default)]
     pub protection: SchemaProtectionLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core_values: Option<Vec<EnumValue>>,
@@ -46,6 +119,11 @@ pub struct SchemaField {
     pub extensible: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// What the field is for: meaning, purpose, usage, an example where
+    /// helpful. Consumed by the model for schema comprehension (schema
+    /// retrieval embeds this text) — NOT rendered as a UI label. Prefer more
+    /// detail over less; there is no UI-brevity cost to a longer description
+    /// now that [`SchemaField::friendly_name`] carries the display label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -238,6 +316,7 @@ mod tests {
     fn create_test_field() -> SchemaField {
         SchemaField {
             name: "status".to_string(),
+            friendly_name: "Status".to_string(),
             field_type: "enum".to_string(),
             protection: SchemaProtectionLevel::Core,
             local_only: false,
@@ -274,12 +353,79 @@ mod tests {
         let json = serde_json::to_value(&field).unwrap();
 
         assert_eq!(json["name"], "status");
+        assert_eq!(json["friendlyName"], "Status");
         assert_eq!(json["protection"], "core");
         // field_type serializes to "type" due to #[serde(rename = "type")]
         assert_eq!(json["type"], "enum");
         // core_values serializes to coreValues
         assert!(json["coreValues"].is_array());
         assert_eq!(json["indexed"], true);
+    }
+
+    #[test]
+    fn test_schema_field_friendly_name_defaults_to_empty_when_omitted() {
+        // The write boundary (create_schema/update_schema) is the only place
+        // friendly_name gets derived from `name` — the bare wire type accepts
+        // an absent friendlyName as "" so a caller (including the agent) is
+        // never forced to supply it, and never rejected for omitting it.
+        let json = json!({
+            "name": "due_date",
+            "type": "date",
+        });
+        let field: SchemaField = serde_json::from_value(json).unwrap();
+        assert_eq!(field.friendly_name, "");
+    }
+
+    #[test]
+    fn test_schema_field_friendly_name_round_trips() {
+        let json = json!({
+            "name": "due_date",
+            "friendlyName": "Due date",
+            "type": "date",
+        });
+        let field: SchemaField = serde_json::from_value(json).unwrap();
+        assert_eq!(field.friendly_name, "Due date");
+
+        let out = serde_json::to_value(&field).unwrap();
+        assert_eq!(out["friendlyName"], "Due date");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_snake_case() {
+        assert_eq!(derive_friendly_name("due_date"), "Due date");
+        assert_eq!(derive_friendly_name("started_at"), "Started at");
+        assert_eq!(derive_friendly_name("status"), "Status");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_strips_namespace_prefix() {
+        // ADR-063: a prefix only ever appears on a field added to a core
+        // type; stripping it for display cannot collide with the storage key
+        // of a bare core field (see derive_friendly_name's doc comment).
+        assert_eq!(derive_friendly_name("custom:capacity"), "Capacity");
+        assert_eq!(derive_friendly_name("org:cost_center"), "Cost center");
+    }
+
+    #[test]
+    fn test_derive_friendly_name_splits_camel_case() {
+        assert_eq!(
+            derive_friendly_name("restrictedToMembers"),
+            "Restricted to members"
+        );
+    }
+
+    #[test]
+    fn test_derive_friendly_name_hyphenated() {
+        assert_eq!(
+            derive_friendly_name("capture-session-id"),
+            "Capture session id"
+        );
+    }
+
+    #[test]
+    fn test_derive_friendly_name_empty_falls_back_to_raw_name() {
+        assert_eq!(derive_friendly_name(""), "");
+        assert_eq!(derive_friendly_name(":"), ":");
     }
 
     #[test]
@@ -349,6 +495,7 @@ mod tests {
     fn test_nested_field_serialization() {
         let address_field = SchemaField {
             name: "address".to_string(),
+            friendly_name: "Address".to_string(),
             field_type: "object".to_string(),
             protection: SchemaProtectionLevel::User,
             local_only: false,
@@ -363,6 +510,7 @@ mod tests {
             fields: Some(vec![
                 SchemaField {
                     name: "street".to_string(),
+                    friendly_name: "Street".to_string(),
                     field_type: "string".to_string(),
                     protection: SchemaProtectionLevel::User,
                     local_only: false,
@@ -381,6 +529,7 @@ mod tests {
                 },
                 SchemaField {
                     name: "city".to_string(),
+                    friendly_name: "City".to_string(),
                     field_type: "string".to_string(),
                     protection: SchemaProtectionLevel::User,
                     local_only: false,
@@ -442,6 +591,7 @@ mod tests {
     fn test_array_of_objects_serialization() {
         let contacts_field = SchemaField {
             name: "contacts".to_string(),
+            friendly_name: "Contacts".to_string(),
             field_type: "array".to_string(),
             protection: SchemaProtectionLevel::User,
             local_only: false,
@@ -456,6 +606,7 @@ mod tests {
             fields: None,
             item_fields: Some(vec![SchemaField {
                 name: "email".to_string(),
+                friendly_name: "Email".to_string(),
                 field_type: "string".to_string(),
                 protection: SchemaProtectionLevel::User,
                 local_only: false,

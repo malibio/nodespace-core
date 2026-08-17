@@ -39,15 +39,6 @@ export function operatorsForType(type: string | undefined): Operator[] {
   return ['contains', 'equals', 'in', 'exists'];
 }
 
-export function labelForField(field: SchemaField): string {
-  return field.description
-    ? field.description
-    : field.name
-        .replace(/_/g, ' ')
-        .replace(/([a-z])([A-Z])/g, '$1 $2')
-        .replace(/^\w/, (c) => c.toUpperCase());
-}
-
 /** The selectable enum options for a field (core + user-extended), or [] when
  *  the field isn't an enum. */
 export function enumOptions(field: SchemaField | undefined): EnumValue[] {

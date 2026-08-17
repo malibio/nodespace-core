@@ -23,6 +23,7 @@
   import type { SchemaField, EnumValue } from '$lib/types/schema-node';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
+  import { labelForField } from '$lib/utils/schema-field-label';
 
   const log = createLogger('SchemaFieldLeaf');
 
@@ -94,7 +95,7 @@
            value. -->
       {enumValues.find((ev) => ev.value === currentValue)?.label ||
         (currentValue ? formatFieldLabel(currentValue) : '') ||
-        `Select ${formatFieldLabel(field.name)}...`}
+        `Select ${labelForField(field)}...`}
     </Select.Trigger>
     <Select.Content>
       {#each enumValues as ev}

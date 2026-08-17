@@ -38,6 +38,7 @@
   import type { Node } from '$lib/types';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import { evaluateTitleTemplate } from '$lib/utils/title-template';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
@@ -382,7 +383,7 @@
             {@const fieldId = `property-${nodeId}-${field.name}`}
             <div class="space-y-2">
               <label for={fieldId} class="text-sm font-medium">
-                {field.description || formatEnumLabel(field.name)}
+                {labelForField(field)}
               </label>
 
               {#if isNestedField(field)}

@@ -39,6 +39,7 @@ function schema(): SchemaNode {
     fields: [
       {
         name: 'status',
+        friendlyName: 'Status',
         type: 'enum',
         protection: 'user',
         indexed: false,

@@ -41,8 +41,8 @@
 //! field is dropped at the conversion boundary.
 
 pub use nodespace_types::{
-    EdgeField, EnumValue, RelationshipCardinality, RelationshipDirection, SchemaField,
-    SchemaProtectionLevel, SchemaRelationship,
+    derive_friendly_name, EdgeField, EnumValue, RelationshipCardinality, RelationshipDirection,
+    SchemaField, SchemaProtectionLevel, SchemaRelationship,
 };
 
 /// Built-in structural relationship types. These are not schema-declared: they

@@ -1594,6 +1594,137 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
     );
 }
 
+// ============================================================================
+// friendly_name write-boundary defaulting
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_schema_derives_friendly_name_when_omitted() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    assert_eq!(
+        result["fields"][0]["friendlyName"], "Due date",
+        "friendly_name omitted on input must be derived from `name` at the write boundary: {result:?}"
+    );
+
+    // The derived value is what actually landed in storage, not just what the
+    // create_schema response echoes back.
+    let schema = svc
+        .get_schema_node("invoice")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(schema.fields[0].friendly_name, "Due date");
+}
+
+#[tokio::test]
+async fn test_create_schema_respects_explicit_friendly_name() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [
+                {
+                    "name": "due_date",
+                    "friendlyName": "Payment due",
+                    "type": "date",
+                    "protection": "user",
+                    "indexed": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    assert_eq!(
+        result["fields"][0]["friendlyName"], "Payment due",
+        "an explicit friendlyName must not be overwritten by the derived default: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_fields_derives_friendly_name_when_omitted() {
+    let (svc, _tmp) = create_test_service().await;
+    let schema_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "update_schema add_fields should succeed: {result:?}"
+    );
+
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    let due_date = schema
+        .get_field("due_date")
+        .expect("due_date field should have been added");
+    assert_eq!(
+        due_date.friendly_name, "Due date",
+        "add_fields must derive friendly_name the same way create_schema does"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_add_fields_respects_explicit_friendly_name() {
+    let (svc, _tmp) = create_test_service().await;
+    let schema_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_fields": [
+                {
+                    "name": "due_date",
+                    "friendlyName": "Payment due",
+                    "type": "date",
+                    "protection": "user",
+                    "indexed": false
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("update_schema add_fields should succeed");
+
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(
+        schema.get_field("due_date").unwrap().friendly_name,
+        "Payment due"
+    );
+}
+
 #[test]
 fn field_rename_rejects_unknown_field() {
     let args = json!({ "from": "old_name", "to": "new_name", "toName": "new_name" });

@@ -31,7 +31,8 @@
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { createLogger } from '$lib/utils/logger';
   import type { Node } from '$lib/types';
-  import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
+  import type { SchemaNode } from '$lib/types/schema-node';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import {
     UNASSIGNED,
     eligibleGroupByFields,
@@ -174,13 +175,6 @@
     updateRevealed(columnValue, (revealed) => growRevealed(revealed, ids, CARDS_PER_BATCH));
   }
 
-  function fieldLabel(f: SchemaField): string {
-    if (f.description) return f.description;
-    return f.name
-      .replace(/_/g, ' ')
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/^\w/, (c) => c.toUpperCase());
-  }
 
   function titleOf(node: Node): string {
     return node.title || node.content || 'Untitled';
@@ -351,7 +345,7 @@
           onchange={(e) => onPickGroupBy(e.currentTarget.value)}
         >
           {#each eligible as f (f.name)}
-            <option value={f.name}>{fieldLabel(f)}</option>
+            <option value={f.name}>{labelForField(f)}</option>
           {/each}
         </select>
       </label>

@@ -537,6 +537,7 @@ mod tests {
                 .iter()
                 .map(|name| SchemaField {
                     name: name.to_string(),
+                    friendly_name: name.to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: crate::models::schema::SchemaProtectionLevel::User,
@@ -615,6 +616,7 @@ mod tests {
         let mut schema = sample_schema("invoice", "Invoice", &["reference"]);
         schema.fields.push(SchemaField {
             name: "amount".to_string(),
+            friendly_name: "Amount".to_string(),
             field_type: "number".to_string(),
             protection: SchemaProtectionLevel::User,
             core_values: None,
@@ -650,6 +652,7 @@ mod tests {
         let mut schema = sample_schema("ticket", "Ticket", &[]);
         schema.fields.push(SchemaField {
             name: "status".to_string(),
+            friendly_name: "Status".to_string(),
             field_type: "enum".to_string(),
             protection: SchemaProtectionLevel::User,
             core_values: Some(vec![EnumValue {

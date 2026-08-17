@@ -381,6 +381,7 @@ mod tests {
     fn field(name: &str, ty: &str) -> SchemaField {
         SchemaField {
             name: name.to_string(),
+            friendly_name: name.to_string(),
             field_type: ty.to_string(),
             protection: SchemaProtectionLevel::User,
             core_values: None,

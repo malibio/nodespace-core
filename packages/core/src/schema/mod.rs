@@ -127,6 +127,24 @@ fn warn_reserved_property_names(fields: Vec<SchemaField>) -> (Vec<SchemaField>, 
     (fields, warnings)
 }
 
+/// Fill in `friendlyName` for any field where the caller omitted it.
+///
+/// `SchemaField::friendly_name` is non-optional in storage, but callers of
+/// `create_schema`/`update_schema` (the agent included) are not required to
+/// supply it — `#[serde(default)]` on the field accepts an absent value as an
+/// empty string, and this is the one place that empty string gets replaced
+/// with a real label, via [`derive_friendly_name`]. This is THE write
+/// boundary: every field that passes through here on its way into storage
+/// carries a populated `friendly_name`, so no reader anywhere else needs a
+/// fallback or null-check.
+fn apply_friendly_name_defaults(fields: &mut [SchemaField]) {
+    for field in fields.iter_mut() {
+        if field.friendly_name.trim().is_empty() {
+            field.friendly_name = crate::models::schema::derive_friendly_name(&field.name);
+        }
+    }
+}
+
 /// Whether `schema_id` names a schema NodeSpace ships, rather than a
 /// user-defined one. A missing schema is reported as non-core; the update path
 /// below surfaces the not-found error with better context.
@@ -319,7 +337,8 @@ pub async fn handle_create_schema(
         ));
     };
 
-    let (stored_fields, warnings) = warn_reserved_property_names(explicit_fields);
+    let (mut stored_fields, warnings) = warn_reserved_property_names(explicit_fields);
+    apply_friendly_name_defaults(&mut stored_fields);
 
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
@@ -516,8 +535,16 @@ pub async fn handle_update_schema(
     // only the absent key with no position.
     describe_malformed_fields(&params, "add_fields")?;
 
-    let params: UpdateSchemaParams = serde_json::from_value(params)
+    let mut params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
+
+    // Write-boundary friendly_name defaulting — same rule as create_schema:
+    // fill in any field the caller left blank before it touches validation or
+    // storage, so everything downstream (including the Phase 0 namespace
+    // check, which only reads `name`) sees a fully-populated field either way.
+    if let Some(ref mut add_fields) = params.add_fields {
+        apply_friendly_name_defaults(add_fields);
+    }
 
     // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
     // Schema existence is verified upfront so rename/playbook validation errors are reported
@@ -954,6 +981,7 @@ mod tests {
     fn field(name: &str) -> SchemaField {
         SchemaField {
             name: name.to_string(),
+            friendly_name: name.to_string(),
             field_type: "string".to_string(),
             local_only: false,
             protection: SchemaProtectionLevel::User,

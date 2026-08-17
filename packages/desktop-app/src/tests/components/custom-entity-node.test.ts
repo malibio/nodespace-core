@@ -289,6 +289,7 @@ describe('CustomEntityNode Logic', () => {
         fields: [
           {
             name: 'amount',
+            friendlyName: 'Amount',
             type: 'number',
             protection: 'user',
             indexed: false

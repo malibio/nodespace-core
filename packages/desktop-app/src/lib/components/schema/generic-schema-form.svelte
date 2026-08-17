@@ -23,6 +23,7 @@
   import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { createLogger } from '$lib/utils/logger';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
   import SchemaFieldLeaf from './schema-field-leaf.svelte';
   import NestedFieldTrigger from './nested-field-trigger.svelte';
@@ -111,14 +112,6 @@
     );
   }
 
-  function formatFieldLabel(fieldName: string): string {
-    return fieldName
-      .replace(/[_-]/g, ' ')
-      .split(' ')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
-
   function openNestedModal(field: SchemaField) {
     nestedModalField = field;
     nestedModalOpen = true;
@@ -160,7 +153,7 @@
             {@const fieldId = `generic-${nodeId}-${field.name}`}
             <div class="space-y-2">
               <label for={fieldId} class="text-sm font-medium">
-                {field.description || formatFieldLabel(field.name)}
+                {labelForField(field)}
               </label>
 
               {#if isNestedField(field)}

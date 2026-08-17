@@ -51,6 +51,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "status".to_string(),
+                    friendly_name: "Status".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -77,7 +78,13 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(true),
                     extensible: Some(true),
                     default: Some(serde_json::json!("open")),
-                    description: Some("Status".to_string()),
+                    description: Some(
+                        "Current workflow state of the task: open (not started), in_progress \
+                         (actively being worked), done (completed), or cancelled (abandoned, \
+                         not completed). Drives board columns and completion rollups — a task \
+                         counts toward \"done\" totals only when this equals done."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -86,6 +93,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "priority".to_string(),
+                    friendly_name: "Priority".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -108,7 +116,12 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: Some(true),
                     default: None,
-                    description: Some("Priority".to_string()),
+                    description: Some(
+                        "Relative urgency for triage and sorting (low, medium, high), \
+                         independent of status. Not a deadline — use due_date for that. \
+                         Absent means no priority has been assigned."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -117,6 +130,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "due_date".to_string(),
+                    friendly_name: "Due date".to_string(),
                     field_type: "date".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -126,7 +140,13 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Due date".to_string()),
+                    description: Some(
+                        "Date by which the task should be completed. Used for deadline \
+                         reminders and overdue detection (a task is overdue when due_date is \
+                         in the past and status is not done or cancelled). Absent means no \
+                         deadline."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -135,6 +155,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "started_at".to_string(),
+                    friendly_name: "Started at".to_string(),
                     field_type: "date".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -144,7 +165,12 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Started at".to_string()),
+                    description: Some(
+                        "Date work on the task actually began, distinct from due_date (the \
+                         deadline) and created_at (when the task record was made). Set once, \
+                         when status first moves to in_progress; not required."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -153,6 +179,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "completed_at".to_string(),
+                    friendly_name: "Completed at".to_string(),
                     field_type: "date".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -162,7 +189,13 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Completed at".to_string()),
+                    description: Some(
+                        "Date the task was finished. Set when status moves to done; used for \
+                         completion-rate and cycle-time reporting alongside started_at. Absent \
+                         while the task is open, in progress, or cancelled without a recorded \
+                         finish date."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -171,6 +204,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "assignee".to_string(),
+                    friendly_name: "Assignee".to_string(),
                     field_type: "text".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -180,7 +214,11 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Assignee".to_string()),
+                    description: Some(
+                        "Person responsible for the task, as a free-text name or identifier — \
+                         not a relationship to a person node. Absent means unassigned."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -206,6 +244,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "status".to_string(),
+                    friendly_name: "Status".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -236,7 +275,13 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(true),
                     extensible: Some(true),
                     default: Some(serde_json::json!("planning")),
-                    description: Some("Status".to_string()),
+                    description: Some(
+                        "Current lifecycle stage of the project: planning (not yet started), \
+                         active (underway), completed (finished successfully), archived (no \
+                         longer active but retained for reference), or cancelled (abandoned). \
+                         Distinct from an individual task's status."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -245,6 +290,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "priority".to_string(),
+                    friendly_name: "Priority".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -267,7 +313,11 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: Some(true),
                     default: None,
-                    description: Some("Priority".to_string()),
+                    description: Some(
+                        "Relative importance for triage across projects (low, medium, high). \
+                         Absent means no priority has been assigned."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -276,6 +326,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "start_date".to_string(),
+                    friendly_name: "Start date".to_string(),
                     field_type: "date".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -285,7 +336,11 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Start date".to_string()),
+                    description: Some(
+                        "Date work on the project is intended to begin (or began). Used with \
+                         end_date to compute the project's planned or actual timeline."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -294,6 +349,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "end_date".to_string(),
+                    friendly_name: "End date".to_string(),
                     field_type: "date".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::User,
@@ -303,7 +359,13 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("End date".to_string()),
+                    description: Some(
+                        "Date the project is intended to finish (or did finish). Paired with \
+                         start_date to compute the project's planned or actual timeline; a \
+                         project past its end_date while status is still active or planning \
+                         reads as behind schedule."
+                            .to_string(),
+                    ),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -457,6 +519,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             // RLS reads directly — no schema field needed.
             fields: vec![SchemaField {
                 name: "restrictedToMembers".to_string(),
+                friendly_name: "Restricted to members".to_string(),
                 field_type: "boolean".to_string(),
                 local_only: false,
                 protection: SchemaProtectionLevel::Core,
@@ -507,6 +570,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "provider".to_string(),
+                    friendly_name: "Provider".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -542,6 +606,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "model".to_string(),
+                    friendly_name: "Model".to_string(),
                     field_type: "text".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -560,6 +625,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "status".to_string(),
+                    friendly_name: "Conversation status".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -587,6 +653,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "last_active".to_string(),
+                    friendly_name: "Last active".to_string(),
                     field_type: "datetime".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -605,6 +672,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "context_tokens".to_string(),
+                    friendly_name: "Context tokens".to_string(),
                     field_type: "number".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -625,6 +693,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "created_nodes".to_string(),
+                    friendly_name: "Created nodes".to_string(),
                     field_type: "array".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -645,6 +714,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "messages".to_string(),
+                    friendly_name: "Messages".to_string(),
                     field_type: "array".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -660,6 +730,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     item_fields: Some(vec![
                         SchemaField {
                             name: "role".to_string(),
+                            friendly_name: "Message sender role".to_string(),
                             field_type: "enum".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -695,6 +766,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "content".to_string(),
+                            friendly_name: "Message text content".to_string(),
                             field_type: "text".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -713,6 +785,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "reasoning".to_string(),
+                            friendly_name: "Reasoning".to_string(),
                             field_type: "text".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -733,6 +806,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "timestamp".to_string(),
+                            friendly_name: "Message timestamp".to_string(),
                             field_type: "datetime".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::System,
@@ -751,6 +825,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "referenced_nodes".to_string(),
+                            friendly_name: "Referenced nodes".to_string(),
                             field_type: "array".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -769,6 +844,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "tool".to_string(),
+                            friendly_name: "Tool".to_string(),
                             field_type: "text".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -789,6 +865,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "args".to_string(),
+                            friendly_name: "Args".to_string(),
                             field_type: "object".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -809,6 +886,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "status".to_string(),
+                            friendly_name: "Status".to_string(),
                             field_type: "enum".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -838,6 +916,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "result_summary".to_string(),
+                            friendly_name: "Result summary".to_string(),
                             field_type: "text".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::Core,
@@ -859,6 +938,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                         },
                         SchemaField {
                             name: "duration_ms".to_string(),
+                            friendly_name: "Duration ms".to_string(),
                             field_type: "number".to_string(),
                             local_only: false,
                             protection: SchemaProtectionLevel::System,
@@ -887,6 +967,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 // is the intended cross-device artifact and syncs like any field.
                 SchemaField {
                     name: "capture:session_id".to_string(),
+                    friendly_name: "Session id".to_string(),
                     field_type: "text".to_string(),
                     local_only: true,
                     protection: SchemaProtectionLevel::System,
@@ -909,6 +990,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "capture:transcript".to_string(),
+                    friendly_name: "Transcript".to_string(),
                     field_type: "text".to_string(),
                     local_only: true,
                     protection: SchemaProtectionLevel::System,
@@ -933,6 +1015,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "capture:summary".to_string(),
+                    friendly_name: "Summary".to_string(),
                     field_type: "text".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -970,6 +1053,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "target_type".to_string(),
+                    friendly_name: "Target type".to_string(),
                     field_type: "text".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -988,6 +1072,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "filters".to_string(),
+                    friendly_name: "Filters".to_string(),
                     field_type: "array".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1006,6 +1091,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "sorting".to_string(),
+                    friendly_name: "Sorting".to_string(),
                     field_type: "array".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1024,6 +1110,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "limit".to_string(),
+                    friendly_name: "Result limit".to_string(),
                     field_type: "number".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1042,6 +1129,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "generated_by".to_string(),
+                    friendly_name: "Generated by".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1069,6 +1157,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "generator_context".to_string(),
+                    friendly_name: "Generator context".to_string(),
                     field_type: "text".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1087,6 +1176,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "execution_count".to_string(),
+                    friendly_name: "Execution count".to_string(),
                     field_type: "number".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -1105,6 +1195,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "last_executed".to_string(),
+                    friendly_name: "Last executed".to_string(),
                     field_type: "datetime".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::System,
@@ -1138,6 +1229,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "name".to_string(),
+                    friendly_name: "Name".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1156,6 +1248,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "email".to_string(),
+                    friendly_name: "Email".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1214,6 +1307,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "description".to_string(),
+                    friendly_name: "Description".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1234,6 +1328,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "tool_whitelist".to_string(),
+                    friendly_name: "Tool whitelist".to_string(),
                     field_type: "array".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1252,6 +1347,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "max_iterations".to_string(),
+                    friendly_name: "Max iterations".to_string(),
                     field_type: "number".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1289,6 +1385,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             fields: vec![
                 SchemaField {
                     name: "sync_enabled".to_string(),
+                    friendly_name: "Sync enabled".to_string(),
                     field_type: "boolean".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1311,6 +1408,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "auth_status".to_string(),
+                    friendly_name: "Auth status".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1342,6 +1440,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "bound_tenant_schema".to_string(),
+                    friendly_name: "Bound tenant schema".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1365,6 +1464,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 },
                 SchemaField {
                     name: "bound_tenant_collection".to_string(),
+                    friendly_name: "Bound tenant collection".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,

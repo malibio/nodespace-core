@@ -27,6 +27,7 @@
   import { nodeToTaskNode } from '$lib/types/task-node';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
+  import { labelForField } from '$lib/utils/schema-field-label';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
@@ -240,14 +241,6 @@
   function openNestedModal(field: SchemaField) {
     nestedModalField = field;
     nestedModalOpen = true;
-  }
-
-  // Format enum label
-  function formatEnumLabel(value: string): string {
-    return value
-      .split('_')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
   }
 
   // Parse date from backend (handles both YYYY-MM-DD and ISO8601 formats)
@@ -643,7 +636,7 @@
             {@const fieldId = `task-user-${field.name}`}
             <div class="space-y-2">
               <label for={fieldId} class="text-sm font-medium">
-                {field.description || formatEnumLabel(field.name)}
+                {labelForField(field)}
               </label>
 
               {#if isNestedField(field)}

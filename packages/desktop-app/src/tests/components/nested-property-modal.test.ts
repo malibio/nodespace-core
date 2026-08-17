@@ -15,13 +15,16 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 import NestedPropertyModal from '$lib/components/schema/nested-property-modal.svelte';
 
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, ...partial };
+  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
 }
 
 const addressField = field({
   name: 'address',
   type: 'object',
-  fields: [field({ name: 'street', type: 'string' }), field({ name: 'city', type: 'string' })]
+  fields: [
+    field({ name: 'street', friendlyName: 'Street', type: 'string' }),
+    field({ name: 'city', friendlyName: 'City', type: 'string' })
+  ]
 });
 
 afterEach(() => {
