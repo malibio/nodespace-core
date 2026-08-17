@@ -39,13 +39,30 @@ export function operatorsForType(type: string | undefined): Operator[] {
   return ['contains', 'equals', 'in', 'exists'];
 }
 
+/**
+ * Derive a short, human-readable label from a field's `name` — the single
+ * label helper shared by every query surface: table headers (table-view),
+ * the group-by picker (kanban-view), and this module's own filter-builder
+ * property list (query-editor).
+ *
+ * Deliberately ignores `description`: that's help text ("Human-readable
+ * field description" per the schema doc comment), and schemas are free to
+ * put arbitrarily long prose there (e.g. the person schema's `name`/`email`
+ * fields) — prose that reads fine as a tooltip is unusable as a table header
+ * or option label. `name` is the only field guaranteed to be short.
+ *
+ * A namespaced name (`custom:capacity`) is stripped to its local segment
+ * before formatting — the namespace prefix disambiguates storage, not
+ * display, so `custom:capacity` renders as `Capacity`, not `Custom:capacity`.
+ */
 export function labelForField(field: SchemaField): string {
-  return field.description
-    ? field.description
-    : field.name
-        .replace(/_/g, ' ')
-        .replace(/([a-z])([A-Z])/g, '$1 $2')
-        .replace(/^\w/, (c) => c.toUpperCase());
+  const localName = field.name.includes(':')
+    ? field.name.slice(field.name.lastIndexOf(':') + 1)
+    : field.name;
+  return localName
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^\w/, (c) => c.toUpperCase());
 }
 
 /** The selectable enum options for a field (core + user-extended), or [] when

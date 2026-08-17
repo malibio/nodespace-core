@@ -16,6 +16,7 @@ import {
   initialValueForField,
   partitionFilters,
   buildDefinition,
+  labelForField,
   type FilterRow,
 } from '$lib/components/query/query-editor-model';
 import type { SchemaField } from '$lib/types/schema-node';
@@ -24,6 +25,69 @@ import type { QueryDefinition } from '$lib/types/query';
 function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
   return { protection: 'user', indexed: false, ...partial } as SchemaField;
 }
+
+describe('labelForField', () => {
+  // Regression coverage for issue #2100: the column/option label must come
+  // from `name`, never from `description` — `description` is help text and
+  // schemas are free to put arbitrarily long prose there.
+
+  it('derives person-schema headers from name, ignoring long description prose', () => {
+    const nameField = field({
+      name: 'name',
+      type: 'string',
+      description: 'Display name; optional — a person may exist before a name is set',
+    });
+    const emailField = field({
+      name: 'email',
+      type: 'string',
+      description: 'Email address; optional at schema level, required in practice for invited teammates',
+    });
+
+    expect(labelForField(nameField)).toBe('Name');
+    expect(labelForField(emailField)).toBe('Email');
+  });
+
+  it('leaves task-like schemas unaffected — label-like descriptions still resolve the same way', () => {
+    expect(labelForField(field({ name: 'status', type: 'enum', description: 'Status' }))).toBe('Status');
+    expect(labelForField(field({ name: 'priority', type: 'enum', description: 'Priority' }))).toBe(
+      'Priority',
+    );
+    expect(labelForField(field({ name: 'due_date', type: 'date', description: 'Due date' }))).toBe(
+      'Due date',
+    );
+  });
+
+  it('renders a short header for a field whose description is long prose', () => {
+    const notes = field({
+      name: 'notes',
+      type: 'string',
+      description:
+        'Free-form notes about this record, entered by any team member at any point in its lifecycle, with no length limit',
+    });
+    expect(labelForField(notes)).toBe('Notes');
+  });
+
+  it('formats snake_case names with a space per word, capitalized', () => {
+    expect(labelForField(field({ name: 'due_date', type: 'date' }))).toBe('Due date');
+    expect(labelForField(field({ name: 'created_at', type: 'date' }))).toBe('Created at');
+  });
+
+  it('formats camelCase names by splitting at the case boundary', () => {
+    // The existing regex only inserts a space at the boundary — it doesn't
+    // lowercase what follows, so the original capital survives per word.
+    expect(labelForField(field({ name: 'firstName', type: 'string' }))).toBe('First Name');
+    expect(labelForField(field({ name: 'dueDate', type: 'date' }))).toBe('Due Date');
+  });
+
+  it('renders a namespaced name sensibly, dropping the namespace prefix', () => {
+    expect(labelForField(field({ name: 'custom:capacity', type: 'number' }))).toBe('Capacity');
+    expect(labelForField(field({ name: 'org:teamId', type: 'string' }))).toBe('Team Id');
+  });
+
+  it('produces a label even when description is absent', () => {
+    expect(labelForField(field({ name: 'content', type: 'string' }))).toBe('Content');
+  });
+});
 
 describe('operatorsForType', () => {
   it('offers comparison operators for number and date', () => {
