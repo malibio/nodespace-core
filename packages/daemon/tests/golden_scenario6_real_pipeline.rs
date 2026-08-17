@@ -3,11 +3,11 @@
 //! node_history_from_messages}`) against the confirmed golden sequence for
 //! agent-matrix scenario 6, per issue #1925.
 //!
-//! `packages/agent/goldens/scenario6-full-sequence.toml` established, with
+//! `packages/agent/tests/golden_scenario6_sequence.rs` established, with
 //! hand-authored terse "Fact: ..." history strings, that turn 3 of the
 //! sequence reliably calls `resolve_query` when given turn 1's and turn 2's
 //! actual outputs summarized as terse facts (CONFIRMED 3/3 in both the
-//! isolated and chained forms). That case deliberately reuses no production
+//! isolated and chained forms). That file deliberately reuses no production
 //! assembly code — every string there is hand-authored, so it validates the
 //! *shape* history needs to have, not that the real pipeline produces it.
 //!
@@ -18,7 +18,7 @@
 //! `create_node` at `replacementCost: 2400`), runs them through the REAL
 //! `completed_writes_from` + `node_history_from_messages`, and feeds the
 //! resulting `ChatMessage` history into turn 3 against bare llama.cpp — same
-//! harness pattern as the golden runner drives, no daemon involved.
+//! harness pattern as `golden_scenario6_sequence.rs`, no daemon involved.
 //!
 //! Ignored by default — loads the 5GB locked native GGUF. Run explicitly:
 //! ```text
@@ -99,7 +99,7 @@ fn exec(name: &str, args: serde_json::Value, result: serde_json::Value) -> ToolE
 
 /// Build the real, persisted-shape history for turns 1 and 2 of the golden
 /// sequence, using their ACTUAL confirmed outputs (recorded in
-/// `packages/agent/goldens/scenario6-full-sequence.toml`'s notes):
+/// `golden_scenario6_sequence.rs`'s doc comments):
 ///   turn 1: create_schema(name="Equipment Checkout Record",
 ///     fields=[isReturned: boolean, replacementCost: number])
 ///     -> schema_id "equipment_checkout_record"

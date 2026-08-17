@@ -1,55 +1,61 @@
-//! Runs golden prompt cases against the locked native model.
+//! Runs a golden prompt case against the locked native model and prints what
+//! came back.
 //!
-//! The tuning loop this exists for: open a case file, shorten the system
-//! prompt or reword a tool description, re-run, see whether the model still
-//! does the right thing. No recompile — the prompt is data. No daemon,
-//! database, gRPC, agent loop, `PromptAssembler`, or routing — none of them
-//! change what the model sees, and all of them cost minutes.
+//! The loop this exists for: open a case file, shorten the system prompt or
+//! reword a tool description, re-run, read the output, decide. No recompile —
+//! the prompt is data. No daemon, database, gRPC, agent loop,
+//! `PromptAssembler`, or routing — none of them change what the model sees,
+//! and all of them cost minutes.
+//!
+//! It deliberately does not assert or score. The human judges the output.
+//!
+//! Note which half is the deliverable: the **case files** are the artifact —
+//! a set of prompt strings that reliably get the right tool call, which the
+//! real assembly pipeline is then engineered to reproduce. This bin is the
+//! scaffolding that produces them.
 //!
 //! A bin rather than a test, so it sits outside `cargo test` entirely and
 //! cannot be pulled into the default run: it loads a ~5GB GGUF.
 //!
 //! Usage:
 //! ```text
-//! cargo run -p nodespace-agent --bin golden_runner -- packages/agent/goldens/scenario6-turn3-zero-history.toml
-//! cargo run -p nodespace-agent --bin golden_runner -- packages/agent/goldens          # every case in a directory
-//! cargo run -p nodespace-agent --bin golden_runner -- --reps 5 <case.toml>            # override the case's reps
-//! cargo run -p nodespace-agent --bin golden_runner -- --check <case.toml>             # parse only, no model load
-//! cargo run -p nodespace-agent --bin golden_runner -- --model /path/to.gguf <case>
+//! cargo run --release -p nodespace-agent --bin golden_runner -- packages/agent/goldens/indirect-reference-resolves.toml
+//! cargo run --release -p nodespace-agent --bin golden_runner -- --reps 5 <case.toml>
+//! cargo run --release -p nodespace-agent --bin golden_runner -- --check <case.toml>
+//! cargo run --release -p nodespace-agent --bin golden_runner -- --model /path/to.gguf <case.toml>
 //! ```
 //!
-//! Exit code is 1 if any case failed, so a case set can gate something later.
-//! `observe` cases never contribute a failure.
+//! `--check` parses the case and prints every string the model would see,
+//! escaped, without loading the model. Escaped because the mistakes worth
+//! catching are invisible otherwise — a stray leading newline, an indent TOML
+//! added, a doubled space at a line continuation.
 //!
-//! `NODESPACE_PROMPT_DUMP` still applies: set it to dump the exact final
-//! templated string for each turn, which is the way to seed a new case file
-//! from a real session's assembled prompt.
+//! To capture the **post-template** string (what llama.cpp actually receives,
+//! after the chat template is applied), set `NODESPACE_PROMPT_DUMP` when
+//! running this bin. It hooks the single native-path chokepoint in
+//! `nlp-engine`'s `chat/mod.rs`, so it needs nothing from this utility.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nodespace_agent::golden::case::GoldenCase;
-use nodespace_agent::golden::runner::{
-    default_model_path, load_engine, render_report, run_case, CaseRun,
-};
+use nodespace_agent::golden::runner::{default_model_path, load_engine, run_case};
+
+const USAGE: &str = "usage: golden_runner [--model <path.gguf>] [--reps <n>] [--check] <case.toml>
+
+  --model   GGUF to load (default: $HOME/.nodespace/models/gemma-4-E4B-it-Q4_K_M.gguf)
+  --reps    override the case's declared rep count
+  --check   parse the case and print what the model would see, without loading it";
 
 struct Args {
-    paths: Vec<PathBuf>,
+    case: PathBuf,
     model: PathBuf,
     reps: Option<u32>,
     check_only: bool,
 }
 
-fn usage() -> &'static str {
-    "usage: golden_runner [--model <path.gguf>] [--reps <n>] [--check] <case.toml|dir> ...
-
-  --model   GGUF to load (default: $HOME/.nodespace/models/gemma-4-E4B-it-Q4_K_M.gguf)
-  --reps    override every case's declared rep count
-  --check   parse and validate the case files without loading the model"
-}
-
 fn parse_args() -> Result<Args, String> {
-    let mut paths = Vec::new();
+    let mut case: Option<PathBuf> = None;
     let mut model = PathBuf::from(default_model_path());
     let mut reps = None;
     let mut check_only = false;
@@ -57,10 +63,7 @@ fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
-            "--model" => {
-                let v = argv.next().ok_or("--model needs a path")?;
-                model = PathBuf::from(v);
-            }
+            "--model" => model = PathBuf::from(argv.next().ok_or("--model needs a path")?),
             "--reps" => {
                 let v = argv.next().ok_or("--reps needs a number")?;
                 let n: u32 = v
@@ -72,44 +75,19 @@ fn parse_args() -> Result<Args, String> {
                 reps = Some(n);
             }
             "--check" => check_only = true,
-            "-h" | "--help" => return Err(usage().into()),
+            "-h" | "--help" => return Err(USAGE.into()),
             other if other.starts_with('-') => return Err(format!("unknown flag {other}")),
-            other => paths.push(PathBuf::from(other)),
+            other if case.is_none() => case = Some(PathBuf::from(other)),
+            other => return Err(format!("unexpected second case file {other}; pass one")),
         }
     }
 
-    if paths.is_empty() {
-        return Err(usage().into());
-    }
     Ok(Args {
-        paths,
+        case: case.ok_or(USAGE)?,
         model,
         reps,
         check_only,
     })
-}
-
-/// Expand directories into the `.toml` files directly inside them, sorted so
-/// a run's output order is stable across machines.
-fn collect_case_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            let mut found: Vec<PathBuf> = std::fs::read_dir(path)
-                .map_err(|e| format!("could not read {}: {e}", path.display()))?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-                .collect();
-            found.sort();
-            if found.is_empty() {
-                return Err(format!("{} contains no .toml case files", path.display()));
-            }
-            files.extend(found);
-        } else {
-            files.push(path.clone());
-        }
-    }
-    Ok(files)
 }
 
 fn main() -> ExitCode {
@@ -121,63 +99,19 @@ fn main() -> ExitCode {
         }
     };
 
-    let files = match collect_case_files(&args.paths) {
-        Ok(f) => f,
-        Err(msg) => {
-            eprintln!("{msg}");
+    let mut case = match GoldenCase::load(&args.case) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{}: {e}", args.case.display());
             return ExitCode::FAILURE;
         }
     };
-
-    // Every case is parsed before the model loads. A typo in the last file of
-    // a set should not surface several minutes and one 5GB load later.
-    let mut cases = Vec::with_capacity(files.len());
-    for file in &files {
-        match GoldenCase::load(file) {
-            Ok(mut case) => {
-                if let Some(n) = args.reps {
-                    case.reps = n;
-                }
-                cases.push(case);
-            }
-            Err(e) => {
-                eprintln!("{}: {e}", file.display());
-                return ExitCode::FAILURE;
-            }
-        }
+    if let Some(n) = args.reps {
+        case.reps = n;
     }
 
     if args.check_only {
-        for (case, file) in cases.iter().zip(&files) {
-            println!(
-                "ok  {} ({} turn(s), {} rep(s))  {}",
-                case.name,
-                case.turns.len(),
-                case.reps,
-                file.display()
-            );
-            // The tool surface after TOML→JSON conversion, because a schema
-            // that converted to a shape the author did not intend is
-            // invisible otherwise: the model just behaves oddly and the
-            // prompt gets blamed.
-            for (i, turn) in case.turns.iter().enumerate() {
-                for tool in &turn.tools {
-                    match tool.to_tool_definition() {
-                        Ok(def) => println!(
-                            "      {} {}: {}",
-                            case.turn_label(i),
-                            def.name,
-                            serde_json::to_string(&def.parameters_schema)
-                                .unwrap_or_else(|e| format!("<unserializable: {e}>"))
-                        ),
-                        Err(e) => {
-                            eprintln!("{}: {e}", file.display());
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-            }
-        }
+        print_case(&case);
         return ExitCode::SUCCESS;
     }
 
@@ -189,12 +123,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    run(&args.model, &cases)
-}
-
-fn run(model: &Path, cases: &[GoldenCase]) -> ExitCode {
-    println!("loading {} …", model.display());
-    let engine = match load_engine(model) {
+    println!("loading {} …", args.model.display());
+    let engine = match load_engine(&args.model) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("{e}");
@@ -209,28 +139,44 @@ fn run(model: &Path, cases: &[GoldenCase]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    runtime.block_on(run_case(&engine, &case));
 
-    let mut runs: Vec<CaseRun> = Vec::with_capacity(cases.len());
-    for case in cases {
-        runs.push(runtime.block_on(run_case(&engine, case)));
-    }
+    ExitCode::SUCCESS
+}
 
-    for run in &runs {
-        print!("{}", render_report(run));
-    }
-
-    let failed: Vec<&CaseRun> = runs.iter().filter(|r| !r.is_pass()).collect();
+/// Print exactly what the model would be sent, for `--check`.
+fn print_case(case: &GoldenCase) {
     println!(
-        "\n{} of {} case(s) passed all reps",
-        runs.len() - failed.len(),
-        runs.len()
+        "{} ({} turn(s), {} rep(s))",
+        case.name,
+        case.turns.len(),
+        case.reps
     );
-    if failed.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        for run in failed {
-            println!("  FAILED {}: {}/{}", run.name, run.passes(), run.reps.len());
+    for (i, turn) in case.turns.iter().enumerate() {
+        println!("  {}", case.turn_label(i));
+        println!("    system  = {:?}", turn.system);
+        for (h, msg) in turn.history.iter().enumerate() {
+            println!("    hist[{h}] = {:?}", msg.content);
         }
-        ExitCode::FAILURE
+        println!("    user    = {:?}", turn.user);
+        for tool in &turn.tools {
+            match tool.to_tool_definition() {
+                Ok(def) => {
+                    println!("    tool {} = {:?}", def.name, def.description);
+                    println!(
+                        "      schema = {}",
+                        serde_json::to_string(&def.parameters_schema)
+                            .unwrap_or_else(|e| format!("<unserializable: {e}>"))
+                    );
+                }
+                Err(e) => println!("    tool {} = <invalid: {e}>", tool.name),
+            }
+        }
+        for (name, result) in &turn.tool_results {
+            println!("    result[{name}] = {result:?}");
+        }
+        if !turn.expect.is_empty() {
+            println!("    expect  = {}", turn.expect);
+        }
     }
 }

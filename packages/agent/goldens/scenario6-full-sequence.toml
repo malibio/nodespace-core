@@ -2,38 +2,28 @@ name = "scenario6-full-sequence"
 reps = 3
 
 notes = """
-Ported from golden_scenario6_sequence.rs: the full three-turn chain, not three
-isolated islands.
+The multi-turn worked example: a three-turn chain where each turn sees what
+the model REALLY produced in the turns before it.
 
   turn 1  "I want to keep a record of the equipment my team checks out,
            whether it's been returned, and what each item costs to replace"
-             -> create_schema, once
   turn 2  "Log a laser cutter checked out on the 12th, replacement cost 2400"
-             -> create_node against the schema turn 1 created
   turn 3  "The 2400 one came back — set it to returned"
-             -> resolve_query, then update_node carrying the change
 
-Every turn chains (the default): turn 2 sees turn 1's ACTUAL create_schema
-call and turn 3 sees turn 2's ACTUAL create_node call, replayed as a
-well-formed assistant-turn-plus-tool-result exchange. That closes the loop the
-original file left open as a TODO -- it hand-authored terse stand-ins for the
-prior turns because it had no way to feed the real output forward.
+Ported from golden_scenario6_sequence.rs, which remains in packages/agent/
+tests/ as the Rust-side reference. The difference worth knowing: that file
+hand-authored terse "Fact: ..." stand-ins for the prior turns, because it had
+no way to feed real output forward. Here the runner carries each turn's actual
+assistant turn and tool results into the next turn's history, which is the
+thing its own TODO asked for.
 
-Why that mattered: the original's isolated turns each "passed" while silently
-disagreeing on the schema id. Turn 1 really produced "Equipment Checkout
-Record"; isolated turn 2 guessed node_type "equipment" and isolated turn 3
-guessed "equipment_item". Neither is the id turn 1 derived. Three green turns,
-a chain that could not actually run. This case cannot reproduce that failure,
-because a wrong id in turn 2 is now a wrong id against what turn 1 really
-emitted.
+Why that matters, from the ported file's own recorded observation: its
+ISOLATED turns each looked fine while silently disagreeing on the schema id.
+Turn 1 really produced "Equipment Checkout Record"; isolated turn 2 guessed
+node_type "equipment" and isolated turn 3 guessed "equipment_item". Neither is
+what turn 1 emitted — three green turns, a chain that could not actually run.
 
-Assertions are deliberately loose on names and tight on structure: which tool
-is called, and whether the write carried anything -- not which schema name the
-model picked. Pinning the display name would fail this case on a rewording
-that is not a regression, and the derived id is turn 1's business.
-
-MEASURED, 3/3 on the locked native model, reproducing the original file's
-recorded results:
+MEASURED 3/3 on the locked native model:
 
   turn 1  create_schema(name="Equipment Checkout Record",
             fields=[isReturned: boolean, replacementCost: number])
@@ -42,18 +32,13 @@ recorded results:
   turn 3  resolve_query(node_type="Equipment Checkout Record",
             request="the 2400 one")                    <- turn 2's real chain
 
-Turn 2 using turn 1's actual schema name rather than a guessed "equipment" or
-"equipment_item" is the chain doing its job: those two guesses are what the
-original's ISOLATED turns produced, and neither is what turn 1 emitted.
+Turn 2 picking up turn 1's actual schema name rather than a guess is the chain
+doing its job.
 
-Turn 3 asserts resolve_query only, matching the original. It does NOT continue
-to update_node: measured 0/3, the model resolves and stops. That is the
-single-turn-pull boundary, not a defect in this case, and it is exactly the
-kind of finding this instrument exists to make cheap to re-measure. Tightening
-turn 3 to `sequence = ["resolve_query", "update_node"]` reproduces the
-continuation failure on demand -- do that when working the continuation
-problem, and leave it as-is otherwise so the case reports what the ported
-golden reported.
+Also observed, and worth its own investigation rather than being buried here:
+turn 3 resolves and then STOPS — it does not continue to update_node. That is
+the single-turn-pull boundary, reproducible by reading this case's turn-3
+output.
 """
 
 # ---------------------------------------------------------------------------
@@ -71,6 +56,7 @@ user = """
 I want to keep a record of the equipment my team checks out, whether it's \
 been returned, and what each item costs to replace
 """
+expect = "create_schema, exactly once, with a replacement-cost field and a returned/status field"
 
   [turn.tool_results]
   create_schema = """
@@ -117,10 +103,6 @@ lowercased, spaces to underscores."}
             type = "object"
             properties = { value = { type = "string" }, label = { type = "string" } }
 
-  [turn.expect]
-  kind = "tool"
-  tool = "create_schema"
-
 # ---------------------------------------------------------------------------
 # Turn 2 — instance creation, given turn 1's real schema.
 # ---------------------------------------------------------------------------
@@ -132,6 +114,10 @@ ONE record of an existing type, call create_node with those particulars as \
 properties.
 """
 user = "Log a laser cutter checked out on the 12th, replacement cost 2400"
+expect = """
+create_node against turn 1's ACTUAL type id, carrying the 2400 — a guessed id \
+like 'equipment', or an empty properties blob, is the failure worth catching
+"""
 
   [turn.tool_results]
   create_node = '{"ok": true, "note": "Node created."}'
@@ -155,20 +141,8 @@ user = "Log a laser cutter checked out on the 12th, replacement cost 2400"
       type = "object"
       description = "Field values supplied by the user."
 
-  # A `sequence` of one, rather than `tool`, purely to reach
-  # min_properties_on: the 2400 must survive into the write, because turn 3's
-  # whole request is an indirect reference to it, and a create_node that
-  # dropped the cost would leave turn 3 resolving against a value that was
-  # never stored. The field NAME is turn 1's to choose (it derives from
-  # whatever schema it authored), so the assertion is on the count, not on a
-  # name this case would be guessing at.
-  [turn.expect]
-  kind = "sequence"
-  tools = ["create_node"]
-  min_properties_on = { create_node = 1 }
-
 # ---------------------------------------------------------------------------
-# Turn 3 — resolution and update, given the real turn1 -> turn2 chain.
+# Turn 3 — resolution, given the real turn1 -> turn2 chain.
 # ---------------------------------------------------------------------------
 [[turn]]
 label = "turn3-resolve-and-update"
@@ -178,6 +152,10 @@ indirectly (a bare value, a description) rather than by name, call \
 resolve_query to find it. Never ask the user to supply a node id yourself.
 """
 user = "The 2400 one came back — set it to returned"
+expect = """
+resolve_query naming turn 1's real type id. Continuing on to update_node would \
+be better still, but is measured NOT to happen — see the notes
+"""
 
   [turn.tool_results]
   resolve_query = """
@@ -212,7 +190,3 @@ user = "The 2400 one came back — set it to returned"
     type = "object"
     required = ["id"]
     properties = { id = { type = "string" }, properties = { type = "object" } }
-
-  [turn.expect]
-  kind = "tool"
-  tool = "resolve_query"
