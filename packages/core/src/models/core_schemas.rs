@@ -1269,6 +1269,29 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     unique: Some(true),
                     unique_case_insensitive: Some(true),
                 },
+                SchemaField {
+                    name: "_possible_duplicate".to_string(),
+                    friendly_name: "Possible duplicate".to_string(),
+                    field_type: "boolean".to_string(),
+                    // Never re-broadcast: the sync engine excludes local_only
+                    // properties from a push and ignores them on a pull, so this
+                    // marker stays wherever NodeService::mark_possible_duplicates
+                    // set it and never fights convergence or gets echoed back.
+                    local_only: true,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: Some(serde_json::Value::Bool(false)),
+                    description: Some("System-managed convergence indicator (ADR-065): set when this person's email collides with another active person after both land in the same database. Never written directly; see NodeService::mark_possible_duplicates.".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
             ],
             relationships: vec![],
             title_template: None,

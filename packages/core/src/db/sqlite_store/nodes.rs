@@ -2335,6 +2335,25 @@ impl SqliteStore {
         exclude_id: Option<&str>,
         case_insensitive: bool,
     ) -> Result<Option<String>> {
+        // `node_type`/`field` are interpolated into the SQL text below (SQLite has
+        // no bind-parameter form for identifiers/JSON-path segments), so they must
+        // be restricted to a safe identifier charset before being used, not merely
+        // trusted because production callers happen to pre-validate against a
+        // schema. `find_duplicate_for` only reaches this call after confirming
+        // `field` names a real schema field — but a schema field name is itself
+        // user-suppliable (extension-type `create_schema`/`update_schema` accepts
+        // arbitrary strings, with no identifier-charset restriction), so a
+        // malicious field name is a realistic path here, not merely theoretical.
+        // Reject anything outside `[A-Za-z0-9_-]` rather than build unsafe SQL.
+        fn is_safe_identifier(s: &str) -> bool {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        }
+        if !is_safe_identifier(node_type) || !is_safe_identifier(field) {
+            return Ok(None);
+        }
+
         let extract = format!("json_extract(properties, '$.{}.{}')", node_type, field);
         let (lhs, needle) = if case_insensitive {
             // SQLite LOWER() folds ASCII only, so a value differing solely in the
@@ -2485,6 +2504,52 @@ mod find_conflicting_unique_tests {
             .find_conflicting_unique("organization", "email", "a@x.com", None, false)
             .await?;
         assert_eq!(miss, None);
+        Ok(())
+    }
+
+    /// `node_type`/`field` are spliced into the SQL text (no bind-parameter form
+    /// exists for a JSON-path segment), so a malicious identifier must be
+    /// rejected rather than executed. This does not error — it degrades to "no
+    /// conflict found", consistent with the suggest-don't-block contract (a
+    /// malformed lookup should never surface as a hard failure to the caller).
+    #[tokio::test]
+    async fn malicious_field_identifier_is_rejected_not_executed() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        make_person(&store, "a@x.com", "active").await?;
+
+        let attempt = store
+            .find_conflicting_unique(
+                "person",
+                "email') OR '1'='1", // would match everything if spliced unguarded
+                "a@x.com",
+                None,
+                false,
+            )
+            .await?;
+        assert_eq!(attempt, None, "a non-identifier field must never match");
+
+        let attempt2 = store
+            .find_conflicting_unique(
+                "person'; DROP TABLE node; --",
+                "email",
+                "a@x.com",
+                None,
+                false,
+            )
+            .await?;
+        assert_eq!(
+            attempt2, None,
+            "a non-identifier node_type must never match"
+        );
+
+        // And the table must still be intact and queryable afterward.
+        let sane = store
+            .find_conflicting_unique("person", "email", "a@x.com", None, false)
+            .await?;
+        assert!(
+            sane.is_some(),
+            "store must be unharmed by the rejected attempts"
+        );
         Ok(())
     }
 }

@@ -105,6 +105,111 @@ impl NodeService {
         }
     }
 
+    /// Reserved, system-managed property key that carries the convergence
+    /// "possible duplicate" indicator (ADR-065 §4). Stored namespaced by type,
+    /// like every other property: `properties.<node_type>._possible_duplicate`.
+    pub const POSSIBLE_DUPLICATE_FIELD: &'static str = "_possible_duplicate";
+
+    /// Scan `node_id`'s unique-flagged schema fields for a conflicting active
+    /// node of the same type and, if one is found, stamp a non-blocking
+    /// "possible duplicate" marker on *both* nodes.
+    ///
+    /// This is the convergence half of the `unique` rule (ADR-065 §4, delivery
+    /// slice S3): a duplicate that slips past creation-time suggestion — an
+    /// offline write, an explicit create-anyway, two devices that each validly
+    /// created "the same" person — becomes visible once both copies land in one
+    /// database (typically via sync pulling the peer's node in). It reuses the
+    /// exact same predicate (`find_conflicting_unique`, via `find_duplicate_for`)
+    /// that backs the creation-time suggestion, so the two can never drift.
+    ///
+    /// Deliberately **not** called from `create_node`/`update_node`: those paths
+    /// must stay unconditional (ADR-065 — sync apply must never be at risk of a
+    /// uniqueness collision blocking or erroring a write). This method is an
+    /// out-of-band, best-effort side channel a caller invokes *after* a write has
+    /// already succeeded — the interactive create/update flow, or a sync-apply
+    /// hook that persists an incoming node. It never rejects, never errors on a
+    /// collision (a collision is its normal, expected finding), and never fails
+    /// the write it follows.
+    ///
+    /// The marker is written with `SqliteStore::set_property_bool` — OCC-bypassing
+    /// (no version check, no version bump) and event-free (no domain event is
+    /// emitted). That is intentional, not an oversight: bumping version or firing
+    /// an event here would make the marker itself look like a user edit to a
+    /// concurrent writer or to the sync engine's dirty-tracking, which could
+    /// perturb an unrelated in-flight update or get the marker re-broadcast as if
+    /// it were content. A schema field for the marker (see `person` in
+    /// `core_schemas.rs`) is additionally declared `local_only`, so where a
+    /// schema does declare it, the sync engine's push-payload builder excludes it
+    /// by construction — the marker is meant to stay wherever it was set.
+    ///
+    /// Generic across node types by construction: it walks whatever fields the
+    /// type's schema flags `unique`, not a hardcoded `person`/`email` pair, so an
+    /// extension type that declares its own `unique` field gets convergence
+    /// detection for free. Returns `Ok(true)` if a conflict was found and marked,
+    /// `Ok(false)` if the node has no unique-flagged fields, no schema, or no
+    /// conflicting values (nothing to mark — not an error).
+    pub async fn mark_possible_duplicates(&self, node_id: &str) -> Result<bool, NodeServiceError> {
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(node_id))?;
+
+        let schema = self
+            .store
+            .get_schema_node(&node.node_type)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        let Some(schema) = schema else {
+            return Ok(false);
+        };
+
+        let marker_path = format!("$.{}.{}", node.node_type, Self::POSSIBLE_DUPLICATE_FIELD);
+        let mut marked_any = false;
+
+        for field in schema.fields.iter().filter(|f| f.unique.unwrap_or(false)) {
+            let Some(value) = node
+                .properties
+                .get(&node.node_type)
+                .and_then(|p| p.get(&field.name))
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            if value.trim().is_empty() {
+                continue;
+            }
+
+            let case_insensitive = field.unique_case_insensitive.unwrap_or(false);
+            let conflicting_id = self
+                .store
+                .find_conflicting_unique(
+                    &node.node_type,
+                    &field.name,
+                    value,
+                    Some(&node.id),
+                    case_insensitive,
+                )
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+            let Some(conflicting_id) = conflicting_id else {
+                continue;
+            };
+
+            marked_any = true;
+            self.store
+                .set_property_bool(&node.id, &marker_path, true)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            self.store
+                .set_property_bool(&conflicting_id, &marker_path, true)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        }
+
+        Ok(marked_any)
+    }
+
     /// Get schema definition for a given node type
     pub async fn get_schema_for_type(
         &self,

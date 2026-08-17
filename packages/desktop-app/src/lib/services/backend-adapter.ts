@@ -227,6 +227,14 @@ class TauriAdapter implements BackendAdapter {
     );
   }
 
+  async findDuplicateFor(nodeType: string, field: string, value: string): Promise<Node | null> {
+    return withDiagnosticLogging(
+      'findDuplicateFor',
+      () => invoke<Node | null>('find_duplicate', { nodeType, field, value }),
+      [nodeType, field, value]
+    );
+  }
+
   async createContainerNode(input: CreateContainerInput): Promise<string> {
     // Keep snake_case for struct fields to match Rust serde expectations
     const rustInput = {
@@ -552,6 +560,15 @@ export class HttpAdapter implements BackendAdapter {
     return await this.handleResponse<Node[]>(response);
   }
 
+  async findDuplicateFor(nodeType: string, field: string, value: string): Promise<Node | null> {
+    const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.findDuplicate()}`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ nodeType, field, value })
+    });
+    return await this.handleResponse<Node | null>(response);
+  }
+
   async createContainerNode(input: CreateContainerInput): Promise<string> {
     // Use createNode with no parent for root node creation
     return this.createNode({
@@ -711,6 +728,9 @@ class MockAdapter implements BackendAdapter {
   }
   async mentionAutocomplete(_query: string, _limit?: number): Promise<Node[]> {
     return [];
+  }
+  async findDuplicateFor(_nodeType: string, _field: string, _value: string): Promise<Node | null> {
+    return null;
   }
   async createContainerNode(_input: CreateContainerInput): Promise<string> {
     return 'mock-container-id';

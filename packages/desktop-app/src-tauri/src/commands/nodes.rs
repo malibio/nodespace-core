@@ -11,8 +11,8 @@ use crate::types::{
 use chrono::{DateTime, Utc};
 use nodespace_proto::nodespace::{
     ChildMove, CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest,
-    DeleteMentionRequest, DeleteNodeRequest, DeleteRelationshipRequest, GetChildrenRequest,
-    GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
+    DeleteMentionRequest, DeleteNodeRequest, DeleteRelationshipRequest, FindDuplicateRequest,
+    GetChildrenRequest, GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
     GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionTargetRequest,
     MoveChildrenToParentRequest, MoveNodeRequest, NodeData, NodeResponse, OptionalStringClear,
     OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest, UpdateNodeRequest,
@@ -125,16 +125,16 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
     // FailedPrecondition WITH that metadata is an access refusal — the daemon
     // returns FailedPrecondition from unrelated paths too (node-create/schema
     // failures), which must not be branded as a security refusal.
-    let subtree_inaccessible_count: Option<u64> = if status.code() == tonic::Code::FailedPrecondition
-    {
-        status
-            .metadata()
-            .get("x-subtree-inaccessible-count")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-    } else {
-        None
-    };
+    let subtree_inaccessible_count: Option<u64> =
+        if status.code() == tonic::Code::FailedPrecondition {
+            status
+                .metadata()
+                .get("x-subtree-inaccessible-count")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+        } else {
+            None
+        };
 
     let code = match status.code() {
         tonic::Code::NotFound => "NODE_NOT_FOUND",
@@ -158,8 +158,9 @@ fn status_to_command_error(status: tonic::Status) -> CommandError {
             .and_then(|s| serde_json::from_str(s).ok())
     } else {
         // Present only for a genuine subtree refusal (count metadata parsed above).
-        subtree_inaccessible_count
-            .map(|inaccessible_count| serde_json::json!({ "inaccessibleCount": inaccessible_count }))
+        subtree_inaccessible_count.map(
+            |inaccessible_count| serde_json::json!({ "inaccessibleCount": inaccessible_count }),
+        )
     };
 
     CommandError {
@@ -395,6 +396,40 @@ pub async fn get_node(
         }
         Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
         Err(s) => Err(status_to_command_error(s)),
+    }
+}
+
+/// Suggest-don't-block uniqueness lookup (ADR-065, core#1734): returns the
+/// existing active node whose `field` matches `value` for `node_type`, or
+/// `None` when the field isn't flagged `unique` on the schema, `value` is
+/// empty, or there is simply no conflict. This never errors on "no match" —
+/// unlike `get_node`, a miss is not a `NotFound` gRPC status but an ordinary
+/// empty `NodeResponse` (empty `node_id`, no `node_data`), so callers use the
+/// result to offer an adopt-existing suggestion, never to reject a write.
+#[tauri::command]
+pub async fn find_duplicate(
+    client: State<'_, GrpcClient>,
+    node_type: String,
+    field: String,
+    value: String,
+) -> Result<Option<Value>, CommandError> {
+    let mut c = client.client().await;
+    let resp = c
+        .find_duplicate(Request::new(FindDuplicateRequest {
+            node_type,
+            field,
+            value,
+        }))
+        .await
+        .map_err(status_to_command_error)?
+        .into_inner();
+
+    match resp.node_data {
+        Some(nd) => {
+            let node = proto_node_data_to_node(nd)?;
+            Ok(Some(node_to_typed_value(node)?))
+        }
+        None => Ok(None),
     }
 }
 

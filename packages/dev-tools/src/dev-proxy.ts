@@ -621,6 +621,31 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
+  // POST /api/nodes/find-duplicate
+  // Suggest-don't-block uniqueness lookup (ADR-065): "no conflict" is an
+  // ordinary empty NodeResponse from the daemon, never a NotFound status, so
+  // this always resolves 200 with either a node or `null` — never an error.
+  if (method === 'POST' && pathname === '/api/nodes/find-duplicate') {
+    try {
+      const body = await req.json() as Record<string, unknown>;
+      const res = await call<
+        { nodeType: string; field: string; value: string },
+        { nodeData?: ProtoNodeData }
+      >(
+        (nodeClient as unknown as Record<string, Function>).findDuplicate,
+        {
+          nodeType: String(body.nodeType ?? ''),
+          field: String(body.field ?? ''),
+          value: String(body.value ?? '')
+        }
+      );
+      if (!res.nodeData) return json(null);
+      return json(nodeDataToApiNode(res.nodeData));
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
   // GET /api/nodes/:id/mentions/outgoing
   const outgoingMatch = pathname.match(HTTP_ROUTE_PATTERNS.getOutgoingMentions);
   if (method === 'GET' && outgoingMatch) {
