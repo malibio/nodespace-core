@@ -89,7 +89,7 @@ field value.
 CALL search_nodes NOW: your next action is the tool call, not planning text.
 
 FILTERING BY FIELD: to narrow by a stored value, pass filters. Copy the type \
-id and the field name exactly as they appear below.
+id and the field name exactly as they appear in RELEVANT ENTITY TYPES.
 """
 user = "What's sitting in review?"
 expect = """

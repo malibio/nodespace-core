@@ -21,19 +21,32 @@ produced only two. `supersedes` was dropped 3/3 while the enum was handled
 perfectly — the detail with no counterpart in the worked example was the one
 that vanished.
 
-Two edits, in order, both 3/3:
+Three arms, in order, each 3/3:
 
-  1. PROSE, in the `fields` description: "work through the user's message
-     detail by detail ... a detail with no field is silently lost."
+  1. PROSE ALONE, in the `fields` description: "work through the user's
+     message detail by detail ... a detail with no field is silently lost."
      NO EFFECT. Still 3/3 without `supersedes`.
-  2. THE WORKED EXAMPLE: added a third field, `blocks`, a plain field that
-     points at another ticket. `supersedes` appeared immediately, 3/3.
+  2. PROSE + EXAMPLE: added a third field, `blocks`, a plain field pointing at
+     another ticket, to the worked example. `supersedes` appeared, 3/3.
+  3. EXAMPLE ALONE: reverted the arm-1 prose, kept the example.
+     STILL 3/3 WITH `supersedes`.
+
+Arm 3 exists because arm 2 was confounded — it changed the example while the
+arm-1 prose was still in place, so it could not distinguish "the example did
+it" from "both together did it". Flagged in review, and the honest fix was to
+run the missing arm rather than soften the claim. Running it isolated the
+cause and left the case leaner: the committed file carries the example and NOT
+the prose.
 
 The example carried a two-field shape and got a two-field answer back; adding
 a pointer-shaped field to the example produced a pointer-shaped field in the
-output. Prose asserting the same obligation did not move it at all. When a
-case here needs an argument SHAPE changed, change the example — the prose slot
-is measurably not the lever.
+output, with no prose asserting the obligation at all. When a case here needs
+an argument SHAPE changed, change the example — the prose slot is measurably
+not the lever.
+
+Scoped to this case. dev-instance-creation.toml records the same edit, in the
+same channel, on the same model, moving nothing — so this is not a general
+rule about examples.
 
 WHAT THIS CASE IS TUNED AGAINST
 
@@ -140,13 +153,13 @@ field copied off `ticket` (assignee, sprint) that this request never mentioned.
       type = "string"
       description = "Display name for the type, singular (e.g. \"Ticket\", \"ADR\")."
 
-      # "Every field the request implies" was not enough on its own: the
-      # `supersedes` detail was dropped 3/3 while the enum was handled
-      # perfectly. Naming the scan — one field per detail the user mentioned —
-      # is what makes the obligation actionable.
+      # Deliberately plain. An earlier version spelled out the obligation here
+      # ("work through the user's message detail by detail ... a detail with no
+      # field is silently lost") and measured NO effect, 3/3. The worked
+      # example in the tool description is what moved it — see the notes.
       [turn.tool.parameters_schema.properties.fields]
       type = "array"
-      description = "Every field this type needs, listed explicitly. Work through the user's message detail by detail: each one they mention a record should hold needs a field here, including a detail that points at another record. A detail with no field is silently lost. Do not include a title or name field — every record already has a title."
+      description = "Every field this type needs, listed explicitly. Do not include a title or name field — every record already has a title."
 
         [turn.tool.parameters_schema.properties.fields.items]
         type = "object"

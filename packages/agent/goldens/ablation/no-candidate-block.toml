@@ -44,9 +44,17 @@ framing, Purpose line, and instruction subtree — changed nothing. Same tool,
 same exact enum member, same real uuid carried from turn 1, byte-identical
 across all three reps.
 
-The system prompt fell from 1507 to 575 characters on turn 1, a 62% cut, at no
-measured cost on this case. What remains is COLLECTIONS, RELEVANT ENTITY
-TYPES, and the tool surface.
+Size, measured on the POST-TEMPLATE prompt — the whole string llama.cpp
+receives, captured with NODESPACE_PROMPT_DUMP. That is the only figure with an
+unambiguous referent: the `system` field alone, the escaped `--check`
+rendering, and the full prompt are three different numbers, and quoting the
+wrong one is how a size claim stops reproducing.
+
+  turn 1   2708 -> 1788   (-34%)
+  turn 2   4091 -> 2790   (-32%)
+
+A third of the prompt, at no measured cost on this case. What remains is
+COLLECTIONS, RELEVANT ENTITY TYPES, and the tool surface.
 
 Read against ADR-064 rule 2: tool selection belongs to the tool description
 channel, and here the tool descriptions alone were sufficient to select the

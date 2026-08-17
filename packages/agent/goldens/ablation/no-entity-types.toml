@@ -43,6 +43,12 @@ it is fixed another way, this file needs rewriting rather than annotating.
 
 MEASURED: 3/3 WRONG. THE ONLY BLOCK THAT PAID.
 
+Size, measured on the POST-TEMPLATE prompt via NODESPACE_PROMPT_DUMP (see
+no-candidate-block.toml for why that is the figure quoted):
+
+  turn 1   2708 -> 2036
+  turn 2   4091 -> 3416
+
 Both enum values collapsed to prose, in both turns, in all three reps:
 
   turn 1   status filter "dev"            (not "in_dev")
@@ -63,6 +69,19 @@ itself as "equipment" in one session and "Product" in another).
 This is the arm that justifies the block's context cost, and it does so
 narrowly: what earned its place is the `{a,b,c}` allowed-values rendering, not
 the prose framing around it.
+
+A DANGLING POINTER IS PART OF WHAT THIS ARM MEASURES
+
+The inherited instruction "copy the type id and the field name exactly as they
+appear below" now points at nothing, because this arm deleted what was below
+it. That is deliberate and is NOT corrected here: it is exactly the state
+production reaches when guidance survives a block that did not, and it is a
+plausible contributor to the failure rather than a flaw in the arm.
+
+So the arm measures "the block is gone AND the prose still refers to it",
+which is the realistic condition. An arm that also tidied the pointer would be
+a two-variable arm and would answer a question production never asks. Noted
+rather than silently inherited, since it bears on how the result is read.
 
 Per-arm results also recorded on #2122.
 """
