@@ -252,8 +252,9 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-1');
 
-    // Untitled node falls back to the plugin's registered display name.
-    expect(target?.title).toBe('Task Node');
+    // `task` renders inline, so the plugin-name fallback does not apply — it lands on
+    // the `<type> Node` fallback rather than the registry label "Task Node".
+    expect(target?.title).toBe('task Node');
   });
 
   it('generates fallback title for node with non-string content', async () => {
@@ -270,8 +271,9 @@ describe('NavigationService - generateTabTitle (via resolveNodeTarget)', () => {
 
     const target = await navService.resolveNodeTarget('task-2');
 
-    // Untitled node falls back to the plugin's registered display name.
-    expect(target?.title).toBe('Task Node');
+    // `task` renders inline, so the plugin-name fallback does not apply — it lands on
+    // the `<type> Node` fallback rather than the registry label "Task Node".
+    expect(target?.title).toBe('task Node');
   });
 });
 

@@ -3,14 +3,16 @@
  *
  * Two property storage shapes are in play across node types:
  *
- * - **Namespaced** — core types with hardcoded backend behavior keep schema-defined fields
- *   under `properties[nodeType]` (e.g. `properties.project.status`). NodeService hoists
- *   them there on write.
- * - **Flat** — user-defined schema types store fields directly as `properties[fieldName]`.
+ * - **Namespaced** — schema-defined fields live under `properties[nodeType]` (e.g.
+ *   `properties.project.status`). NodeService namespaces on create for every type except
+ *   `schema`, so this is the normal shape for user-defined types as well as core ones.
+ * - **Flat** — fields stored directly as `properties[fieldName]`. Reached by nodes written
+ *   outside the create path, and by older rows predating namespacing.
  *
- * The backend reads nested-first with a flat fallback; reads here mirror that order so one
- * generic form renders both shapes correctly. Writes must match the shape the node already
- * uses — a flat write into a namespaced node is silently dropped (see `buildFieldWrite`).
+ * Core behaviors read nested-first with a flat fallback (`project`, `task`), though not
+ * universally — `person` reads nested-only. Reads here mirror the nested-first order so one
+ * generic form renders both shapes correctly, and writes preserve whichever shape the node
+ * already uses (see `buildFieldWrite`).
  *
  * Extracted from generic-schema-form.svelte so both are unit-testable without rendering
  * the component.
@@ -38,11 +40,16 @@ export function resolveFieldValue(node: FieldValueSource, fieldName: string): un
  * Build the `properties` payload that writes `fieldName = value` in the shape the node
  * already stores — mirroring `resolveFieldValue`'s precedence so a field round-trips.
  *
- * Writing flat into a node that already has a namespace does NOT work: the backend's
- * hoisting step returns early when `properties[nodeType]` is already an object, so the
- * flat key is stored as a top-level sibling, and the read path then returns only the
- * namespace contents — silently discarding the edit. This mirrors `task-schema-form`,
- * which re-nests for the same reason.
+ * The namespaced branch is load-bearing **because this payload spreads the node's existing
+ * properties**. The backend's normalize step returns the payload untouched when it already
+ * carries a `properties[nodeType]` key, so a spread payload plus a flat `fieldName` merges
+ * as two siblings — the namespaced copy wins on read and the edit is silently discarded.
+ * (A payload carrying *only* the bare field would be namespaced and merged correctly; it is
+ * the spread that reintroduces the key and defeats that.) Re-nesting here keeps the edit in
+ * the branch the read path actually consults. `task-schema-form` re-nests likewise.
+ *
+ * Anyone tempted to drop the spread should note it is what makes both branches necessary —
+ * sending only the changed field would let a single flat write serve both shapes.
  */
 export function buildFieldWrite(
   node: FieldValueSource,

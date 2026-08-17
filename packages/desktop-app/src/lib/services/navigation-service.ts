@@ -137,11 +137,14 @@ export class NavigationService {
     }
 
     // Untitled node: fall back to the plugin's display name (e.g. "Customer").
-    // Not gated on core/custom classification — getPlugin is already self-limiting
-    // (null for unregistered types), and a registered core type's display name is as
-    // good a title here as a user-defined one's.
-    const plugin = pluginRegistry.getPlugin(node.nodeType);
-    if (plugin?.name) return plugin.name;
+    // Gated to entity rows, where plugin names are entity nouns worth showing as a
+    // title. Inline-editable types name their plugins for the registry, not the user
+    // ("Text Node", "Header Node"), so using those here would render "Text Node" for
+    // an untitled text node instead of the `<type> Node` fallback below.
+    if (rendersAsEntityRow(node.nodeType)) {
+      const plugin = pluginRegistry.getPlugin(node.nodeType);
+      if (plugin?.name) return plugin.name;
+    }
 
     // Fallback to node type
     return `${node.nodeType} Node`;

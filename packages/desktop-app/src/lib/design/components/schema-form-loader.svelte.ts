@@ -32,10 +32,15 @@ export class SchemaFormLoader {
    * Schemas already fetched from the backend, keyed by node type.
    * `null` = fetched, this type has no schema (structural types like text/header).
    *
-   * `genericSchema` is cleared on every navigation, but the underlying schema definition is
-   * immutable for the session, so revisiting a type reuses this instead of re-fetching.
+   * `genericSchema` is cleared on every navigation, but a schema definition does not change
+   * underneath an open viewer, so revisiting a type reuses this instead of re-fetching.
    * Negative entries matter most: without them, every navigation to a schema-less type
    * would issue a backend round trip that is expected to fail.
+   *
+   * Scoped per `SchemaFormLoader` instance — one per viewer — which is what makes negative
+   * caching safe. A type defined mid-session is opened in a viewer with a fresh loader, so
+   * it is never served a stale "no schema" answer. Hoisting this to a module-level singleton
+   * would be a real behavior change, not just an optimization.
    */
   private schemaCache = new Map<string, SchemaNode | null>();
 
@@ -114,12 +119,29 @@ export class SchemaFormLoader {
   }
 
   /**
+   * The type of the most recent `loadGenericSchema` request. A fetch that resolves after
+   * the viewer has navigated elsewhere must not publish its result — see below.
+   */
+  private pendingType: string | null = null;
+
+  /**
    * Load the generic schema definition for a node type, fetching it at most once per type.
    *
    * Schema definitions are immutable for the session, so a cache hit — including a negative
    * one — is served without touching the backend.
+   *
+   * Callers invoke this without awaiting, and the viewer calls `resetGenericSchema()` +
+   * `loadForm()` on every navigation, so an in-flight fetch for the previous node can
+   * resolve after the switch. `pendingType` is checked before publishing to `genericSchema`
+   * so a superseded response is dropped: a stale schema would not just show the wrong
+   * properties, it feeds `hasTitleTemplate`, which makes the header read-only.
+   *
+   * The cache write is deliberately outside that guard — a fetched schema is valid for its
+   * own type regardless of where the user navigated in the meantime.
    */
   async loadGenericSchema(nodeType: string): Promise<void> {
+    this.pendingType = nodeType;
+
     if (this.schemaCache.has(nodeType)) {
       this.genericSchema = this.schemaCache.get(nodeType) ?? null;
       return;
@@ -129,7 +151,7 @@ export class SchemaFormLoader {
       const schemaNode = await backendAdapter.getSchema(nodeType);
       if (isSchemaNode(schemaNode)) {
         this.schemaCache.set(nodeType, schemaNode);
-        this.genericSchema = schemaNode;
+        if (this.pendingType === nodeType) this.genericSchema = schemaNode;
         return;
       }
       this.schemaCache.set(nodeType, null);
