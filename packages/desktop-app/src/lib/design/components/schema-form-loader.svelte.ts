@@ -45,6 +45,13 @@ export class SchemaFormLoader {
   private schemaCache = new Map<string, SchemaNode | null>();
 
   /**
+   * The type the viewer is currently on, as far as generic-schema loading is concerned.
+   * Set when a fetch starts and cleared at the navigation boundary; a fetch that resolves
+   * after either event must not publish its result. See `loadGenericSchema`.
+   */
+  private pendingType: string | null = null;
+
+  /**
    * True when the current generic schema has a title_template — header should be read-only,
    * and its displayed value comes from the node's computed `title` rather than its content.
    *
@@ -68,6 +75,12 @@ export class SchemaFormLoader {
   /** Reset the generic schema (call when navigating to a different node). */
   resetGenericSchema(): void {
     this.genericSchema = null;
+    // The viewer calls this at the navigation boundary, so any fetch still in flight for
+    // the previous node is superseded here — not only when the new node happens to trigger
+    // a fetch of its own. Types with a hardcoded form (task, person) never reach
+    // `loadGenericSchema`, so without this the token would still name the previous type and
+    // a late response would pass the recency check.
+    this.pendingType = null;
   }
 
   /**
@@ -117,12 +130,6 @@ export class SchemaFormLoader {
       return false;
     }
   }
-
-  /**
-   * The type of the most recent `loadGenericSchema` request. A fetch that resolves after
-   * the viewer has navigated elsewhere must not publish its result — see below.
-   */
-  private pendingType: string | null = null;
 
   /**
    * Load the generic schema definition for a node type, fetching it at most once per type.

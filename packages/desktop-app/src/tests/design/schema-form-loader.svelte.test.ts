@@ -113,4 +113,60 @@ describe('SchemaFormLoader', () => {
     await vi.waitFor(() => expect(getSchema).toHaveBeenCalledWith('text'));
     expect(loader.genericSchema).toBeNull();
   });
+
+  describe('stale-response guard', () => {
+    /**
+     * Fetches resolve after the viewer may have navigated away, and `genericSchema` feeds
+     * `hasTitleTemplate`, which drives the header's readonly state. A superseded response
+     * must never be published — these pin the ordering that guarantees it.
+     */
+
+    /** A getSchema mock whose per-type promises resolve only when told to. */
+    function deferredSchemas() {
+      const resolvers = new Map<string, (schema: SchemaNode) => void>();
+      getSchema.mockImplementation(
+        (nodeType: string) =>
+          new Promise((resolve) => {
+            resolvers.set(nodeType, resolve as (schema: SchemaNode) => void);
+          })
+      );
+      return (nodeType: string) => resolvers.get(nodeType)?.(schemaFor(nodeType));
+    }
+
+    it('drops a response for a type the viewer has navigated away from', async () => {
+      const resolve = deferredSchemas();
+      const loader = new SchemaFormLoader();
+
+      loader.loadForm('project');
+      await vi.waitFor(() => expect(getSchema).toHaveBeenCalledWith('project'));
+
+      // Navigate to a second generic type before the first fetch settles.
+      loader.resetGenericSchema();
+      loader.loadForm('invoice');
+      await vi.waitFor(() => expect(getSchema).toHaveBeenCalledWith('invoice'));
+
+      resolve('project');
+      await vi.waitFor(() => expect(getSchema).toHaveBeenCalledTimes(2));
+      expect(loader.genericSchema).toBeNull();
+
+      resolve('invoice');
+      await vi.waitFor(() => expect(loader.genericSchema?.id).toBe('invoice'));
+    });
+
+    it('drops a response after navigating to a type that has a hardcoded form', async () => {
+      const resolve = deferredSchemas();
+      const loader = new SchemaFormLoader();
+
+      loader.loadForm('project');
+      await vi.waitFor(() => expect(getSchema).toHaveBeenCalledWith('project'));
+
+      // `task` ships a hardcoded form, so this navigation never fetches a generic schema.
+      // The reset is the only thing marking the in-flight `project` fetch as superseded.
+      loader.resetGenericSchema();
+
+      resolve('project');
+      await vi.waitFor(() => expect(getSchema).toHaveBeenCalledTimes(1));
+      expect(loader.genericSchema).toBeNull();
+    });
+  });
 });
