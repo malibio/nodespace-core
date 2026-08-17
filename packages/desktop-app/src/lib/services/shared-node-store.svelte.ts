@@ -2435,6 +2435,13 @@ export class SharedNodeStore {
       // (subtree-access-denied) can restore the node exactly as it was.
       const removedVersion = this.versions.get(nodeId);
       const wasPersisted = this.persistedNodeIds.has(nodeId);
+      // Captured (not cloned) — safe to hand the same Map back on restore.
+      // `updateTaskNode()` is the only caller of `bumpTaskFieldSeq()`/
+      // `getTaskFieldSeq()`, and it no-ops whenever `this.nodes.get(nodeId)`
+      // is missing (see its own `existingNode` guard) — so nothing can touch
+      // this node's field-sequence map while it's optimistically deleted and
+      // not yet restored.
+      const removedTaskFieldSeq = this.taskFieldWriteSeq.get(nodeId);
 
       this.nodesDelete(nodeId);
       this.versions.delete(nodeId);
@@ -2498,6 +2505,16 @@ export class SharedNodeStore {
                 }
                 if (wasPersisted) {
                   this.persistedNodeIds.add(nodeId);
+                }
+                // Restore the field-sequence map alongside `versions`/
+                // `persistedNodeIds` above — otherwise a refused delete would
+                // leave a resurrected node's per-field write-sequence
+                // counters silently reset to zero, which a future change
+                // elsewhere in `updateTaskNode()` could turn into a real
+                // same-field clobber (the exact class this file's
+                // `bumpTaskFieldSeq()`/`getTaskFieldSeq()` exist to prevent).
+                if (removedTaskFieldSeq !== undefined) {
+                  this.taskFieldWriteSeq.set(nodeId, removedTaskFieldSeq);
                 }
                 this.notifySubscribers(nodeId, node, source);
 
