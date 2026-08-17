@@ -1,0 +1,180 @@
+name = "dev-relationship-creation"
+reps = 3
+
+notes = """
+PRODUCTION-SHAPED. Dev-workflow domain.
+
+Scenario: relationship creation — an ADR superseding an older ADR. Two
+existing records, and the user asks for a link between them.
+
+The direction is the whole case. "ADR-12 replaces the old caching one" means
+from = ADR-12 (the new one), to = ADR-04 (the old one), and a reversed call is
+a plausible-looking write that records the opposite fact. Both ids are present
+in turn 1's real tool result, so nothing about the direction is guessable from
+which id the model happens to have — it has both.
+
+The second failure this case exists to catch: expressing the link by WRITING A
+FIELD instead of creating a relationship. `adr` has a `supersedes: text` field,
+so update_node(field_values={"supersedes": ...}) looks reasonable and is
+available on the tool surface. That makes the case a genuine choice between
+two tools rather than a single obvious one — which is the point, since ADR-064
+rule 2 puts tool selection in the tool description channel.
+
+CONTAMINATION GUARD (#1932)
+
+Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the
+minimal controls in this directory.
+
+MEASURED — per-case results recorded on #2122.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — surface both ADRs, so both ids are real.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-list-adrs"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+CALL search_nodes NOW: your next action is the tool call, not planning text.
+
+LISTING BY TYPE: to list every record of a type, use an empty query with \
+node_type set.
+"""
+user = "Show me our ADRs"
+expect = """
+search_nodes(node_type="adr", query="") — an empty query listing the type, \
+not a free-text search for the word "ADRs".
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "1d7e4b03-8f26-4c91-a35d-9e2b7f4a6c18", "title": "ADR-04: Cache invalidation by TTL", "node_type": "adr", "properties": {"status": "accepted"}}, {"id": "6b09c5d2-3a14-4f78-9e26-8d51a3c7b904", "title": "ADR-12: Cache invalidation by event", "node_type": "adr", "properties": {"status": "accepted"}}], "count": 2}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `adr`), never the quoted display name that follows it (e.g. \"ADR\")."
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the link. Direction is the measurement.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-supersedes-link"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Relationships
+Purpose: Record that one existing record stands in a named relation to \
+another — supersedes, blocks, belongs to.
+
+CALL create_relationship NOW: your next action is the tool call, not planning \
+text.
+
+BOTH IDS COME FROM THE TOOL RESULT ABOVE: copy each exactly. Do not ask the \
+user for either.
+
+DIRECTION: from_id is the record that ACTS, to_id is the record acted upon. \
+"A supersedes B" is from_id=A, to_id=B. Reversing them records the opposite \
+fact and still reports success.
+"""
+user = "ADR-12 replaces the old caching one"
+expect = """
+create_relationship(from_id=<ADR-12: 6b09c5d2-...>, to_id=<ADR-04: \
+1d7e4b03-...>, relationship_type="supersedes"). Two failures worth telling \
+apart: reversed ids record the opposite fact while reporting success, and \
+update_node writing the `supersedes` text field instead expresses the link in \
+the wrong channel — that tool is on the surface precisely so the choice is \
+real.
+"""
+
+  [turn.tool_results]
+  create_relationship = '{"ok": true}'
+
+  [[turn.tool]]
+  name = "create_relationship"
+  description = """
+  Record a named relationship between two existing records, given both ids. \
+  Use this whenever the user describes one record standing in a relation to \
+  another — superseding, blocking, belonging to — rather than writing that \
+  relation into a text field.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["from_id", "to_id", "relationship_type"]
+
+      [turn.tool.parameters_schema.properties.from_id]
+      type = "string"
+      description = "Id of the record that acts — the one doing the superseding, blocking, or belonging. Copied exactly from a tool result."
+
+      [turn.tool.parameters_schema.properties.to_id]
+      type = "string"
+      description = "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
+
+      [turn.tool.parameters_schema.properties.relationship_type]
+      type = "string"
+      description = "The relation's name, lowercase snake_case (e.g. supersedes, blocks, belongs_to)."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's own fields. Use for a value the record holds about \
+  itself, not for a relation between two records — a link between two \
+  existing records is create_relationship.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values. When a field lists allowed values, use one of those values exactly."
