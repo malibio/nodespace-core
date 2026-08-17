@@ -1,0 +1,247 @@
+name = "no-entity-types"
+reps = 3
+
+notes = """
+ABLATION ARM. Built by subtraction from dev-status-change-enum.toml.
+
+Every RELEVANT ENTITY TYPES block removed — both the resident one and the
+per-candidate one, since production renders the heading at two independent
+sites and removing only one would measure neither.
+
+This is the arm most likely to FAIL rather than tie, and that is why it is
+worth running: the block is where `status`'s allowed values are stated, and
+the full arm's headline result is the model choosing the exact enum member
+`ready_for_review`. With the values gone the model has nothing to copy from,
+and #2118 measured node_type inventing itself ("equipment" vs "Product") in
+exactly that condition.
+
+A tie here would be the surprising result. A failure quantifies what the block
+buys.
+
+HOW TO READ IT
+
+Compare against the full arm's measured result: 3/3 on both turns, turn 1
+sending node_type "ticket" (the id, not the display name) with a status filter
+of the exact enum member "in_dev", and turn 2 sending update_node with the
+real uuid from turn 1's tool result plus field_values={"status":
+"ready_for_review"}.
+
+A tie means this block is not paying for the context it consumes ON THIS CASE.
+It does not license deleting the block: one case is not the workload, and a
+block can be inert here and load-bearing on a case this corpus does not hold.
+
+A difference inside one rep of the full arm is noise. Identical code has
+scored 6/7/7 on the agent matrix; single runs are not decision-grade.
+
+PROVISIONAL ON #2123
+
+Inherits the full arm's dependency: the write parameter is `field_values`, not
+`properties`, because a parameter named `properties` is silently deleted by
+the Gemma-4 template. That makes this arm — like its parent — NOT
+production-shaped today, and provisional on #2123 being fixed by renaming. If
+it is fixed another way, this file needs rewriting rather than annotating.
+
+MEASURED: 3/3 WRONG. THE ONLY BLOCK THAT PAID.
+
+Both enum values collapsed to prose, in both turns, in all three reps:
+
+  turn 1   status filter "dev"            (not "in_dev")
+  turn 2   status "ready for review"      (not "ready_for_review")
+
+Both writes would be rejected by a schema that validates its enum, and the
+turn-1 filter would silently match nothing — indistinguishable from a
+genuinely empty result, which is the failure this corpus already has a case
+for.
+
+Everything else survived: the model still chose the right tools, still carried
+the real uuid from turn 1's tool result, still populated field_values. What it
+lost was the one thing only this block supplies — the legal values. It fell
+back to prettifying the user's own wording, which is exactly what #2118
+observed when nothing in the prompt says what exists (node_type inventing
+itself as "equipment" in one session and "Product" in another).
+
+This is the arm that justifies the block's context cost, and it does so
+narrowly: what earned its place is the `{a,b,c}` allowed-values rendering, not
+the prose framing around it.
+
+Per-arm results also recorded on #2122.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — find the ticket. Exists so turn 2's id is a real tool result.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-find-ticket"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+CALL search_nodes NOW: your next action is the tool call, not planning text.
+
+LISTING BY TYPE: to list every node of a type, use an empty query with \
+node_type set.
+
+FILTERING BY FIELD: to narrow by a stored value, pass filters. Copy the type \
+id and the field name exactly as they appear below.
+"""
+user = "Which tickets are still in dev?"
+expect = """
+search_nodes(node_type="ticket", ...) filtering status to the exact enum \
+member "in_dev" — not "in dev", not "In Dev". A title-text query instead of a \
+status filter is the miss worth noting.
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", "title": "Token refresh returns 401 after idle", "node_type": "ticket", "properties": {"status": "in_dev", "assignee": "dana", "sprint": "S-24"}}], "count": 1}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      # The type id is the unquoted token, not the quoted display name beside
+      # it. Naming both halves of the line is what makes the distinction
+      # actionable — "copied exactly" alone left the model sending "Ticket".
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      [turn.tool.parameters_schema.properties.filters]
+      type = "array"
+      description = "Field filters. Use the field name and value exactly as listed for the type."
+
+        [turn.tool.parameters_schema.properties.filters.items]
+        type = "object"
+        required = ["type", "operator", "property", "value"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.type]
+          type = "string"
+          enum = ["property"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.operator]
+          type = "string"
+          enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.property]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.value]
+          type = "string"
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the write. The case's real subject.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-status-to-ready-for-review"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Update
+Purpose: Change a field on an existing record — status, assignee, dates, or \
+any stored value — when the user describes a new state for something that \
+already exists.
+
+CALL update_node NOW: your next action is the tool call, not planning text.
+
+THE ID: use the id from the tool result above, copied exactly. It is already \
+in this conversation — do not ask the user for it.
+
+THE CHANGE: express the new state in `field_values`. Use a field the type \
+defines, copied character for character. When a field lists allowed values, \
+use one of those values exactly — never a paraphrase of the user's wording, \
+never a capitalised or spaced form of the value.
+
+AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that \
+reports success.
+"""
+user = "I've pushed the branch for that one — it's ready for review now"
+expect = """
+update_node carrying BOTH the id from turn 1's real tool result \
+("7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", not the ticket's title) AND \
+field_values={"status": "ready_for_review"} — the exact enum member, not \
+"review" / "In Review" / "ready for review". Two distinct failures worth \
+telling apart: a title in `id` means the id never reached the model, and an \
+absent or empty `field_values` means the write silently changes nothing.
+"""
+
+  [turn.tool_results]
+  update_node = '{"ok": true, "updated": ["status"]}'
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's fields immediately — call this directly with the \
+  node id you already have from a previous tool result. Do not ask the user \
+  to confirm or supply the id. An id on its own changes nothing: every call \
+  must also carry the change itself in field_values.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "New title text. Only when the user is renaming the node."
+
+      # Single-line, deliberately: `normalize_case_text` applies to the case's
+      # own prompt fields, not to strings nested inside a tool's JSON Schema —
+      # a `"""` block here reaches the model with its TOML indent and a
+      # trailing newline embedded in the description. Verified with --check.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Required whenever the request changes the node's state rather than its title. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly. Send only the keys that change."
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id, copied exactly from RELEVANT ENTITY TYPES."
