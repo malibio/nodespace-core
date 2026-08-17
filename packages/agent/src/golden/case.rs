@@ -245,12 +245,14 @@ impl CaseTool {
 /// numbered list, a nested clause) survive — narrative shape is sometimes the
 /// very thing a case is comparing.
 pub fn normalize_case_text(raw: &str) -> String {
-    // `\r\n` as well as `\n`: a case file authored on Windows, or pasted from
-    // somewhere that uses CRLF, opens with a carriage return that `strip_prefix`
-    // would otherwise leave sitting at the head of the prompt.
+    // Drop the blank first line that `"""` leaves when it opens on its own
+    // line. `"\r\n"` is tried first because it is the longer prefix — the
+    // conventional order, though here the two are equivalent, since `.lines()`
+    // below strips a trailing `\r` from every line anyway and the only job
+    // left for this strip is removing the empty leading line itself.
     let body = raw
-        .strip_prefix('\n')
-        .or_else(|| raw.strip_prefix("\r\n"))
+        .strip_prefix("\r\n")
+        .or_else(|| raw.strip_prefix('\n'))
         .unwrap_or(raw);
 
     // Indentation is counted in CHARACTERS, never bytes. `char::is_whitespace`
@@ -560,6 +562,29 @@ user = "u"
         assert_eq!(normalize_case_text(""), "");
         assert_eq!(normalize_case_text("\n"), "");
         assert_eq!(normalize_case_text("   "), "");
+    }
+
+    #[test]
+    fn normalization_never_leaves_a_carriage_return_in_the_prompt() {
+        // A CRLF-authored case file must not smuggle a carriage return into
+        // the prompt, where it would be invisible in every editor and diff.
+        // The guarantee comes from `.lines()`, which strips a trailing `\r`
+        // per line — not from the opening `strip_prefix`, whose only job is
+        // removing the blank first line. Asserted over inputs that put a CRLF
+        // at the head, in the middle, and at the tail.
+        for raw in [
+            "\r\n  a\r\n  b",
+            "\r\nsolo",
+            "\r\n\r\n  a",
+            "  a\r\n  b\r\n",
+        ] {
+            let out = normalize_case_text(raw);
+            assert!(
+                !out.contains('\r'),
+                "carriage return survived normalization of {raw:?} -> {out:?}"
+            );
+        }
+        assert_eq!(normalize_case_text("\r\n  a\r\n  b"), "a\nb");
     }
 
     #[test]
