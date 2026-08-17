@@ -23,7 +23,7 @@
   import { Collapsible } from 'bits-ui';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { resolveFieldValue, buildFieldWrite } from '$lib/components/schema/schema-field-resolution';
-  import type { SchemaNode, SchemaField, EnumValue } from '$lib/types/schema-node';
+  import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { createLogger } from '$lib/utils/logger';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
