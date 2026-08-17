@@ -104,7 +104,7 @@ mod person_email_uniqueness_tests {
         // person.email is flagged unique + case-insensitive, so a differently-cased
         // claim resolves to the existing person.
         let dup = service
-            .find_duplicate_for("person", "email", "alice@example.com")
+            .find_duplicate_for("person", "email", "alice@example.com", None)
             .await?;
         assert_eq!(
             dup.map(|n| n.id),
@@ -120,7 +120,7 @@ mod person_email_uniqueness_tests {
         create_person(&service, "Alice", "alice@example.com").await?;
 
         let dup = service
-            .find_duplicate_for("person", "email", "nobody@example.com")
+            .find_duplicate_for("person", "email", "nobody@example.com", None)
             .await?;
         assert!(dup.is_none(), "a never-seen email has no duplicate");
         Ok(())
@@ -132,11 +132,11 @@ mod person_email_uniqueness_tests {
         create_person(&service, "Alice", "alice@example.com").await?;
 
         assert!(service
-            .find_duplicate_for("person", "email", "")
+            .find_duplicate_for("person", "email", "", None)
             .await?
             .is_none());
         assert!(service
-            .find_duplicate_for("person", "email", "   ")
+            .find_duplicate_for("person", "email", "   ", None)
             .await?
             .is_none());
         Ok(())
@@ -149,7 +149,7 @@ mod person_email_uniqueness_tests {
 
         // `name` is not flagged unique, so a matching name is never a duplicate.
         let dup = service
-            .find_duplicate_for("person", "name", "Alice")
+            .find_duplicate_for("person", "name", "Alice", None)
             .await?;
         assert!(
             dup.is_none(),
@@ -175,7 +175,7 @@ mod person_email_uniqueness_tests {
 
         // And the read-only lookup can still see one of them as a suggested duplicate.
         let dup = service
-            .find_duplicate_for("person", "email", "a@x.com")
+            .find_duplicate_for("person", "email", "a@x.com", None)
             .await?;
         assert!(
             dup.is_some(),

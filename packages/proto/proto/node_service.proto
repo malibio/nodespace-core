@@ -178,6 +178,10 @@ message FindDuplicateRequest {
   string node_type = 1;
   string field = 2;
   string value = 3;
+  // The caller's own node id, excluded from the match so a node whose
+  // in-progress edit hasn't landed yet as the ONLY holder of `value` doesn't
+  // spuriously match itself once it has. Unset = no exclusion.
+  optional string exclude_id = 4;
 }
 
 // GetNode returns NodeResponse (node_id + node_data populated).

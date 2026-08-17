@@ -113,6 +113,23 @@ export interface BackendAdapter {
   mentionAutocomplete(query: string, limit?: number): Promise<Node[]>;
   /** Title-prefix search over nodes of an optional type, for the target picker. */
   searchNodesByTitle(nodeType: string | null, titleContains: string, limit?: number): Promise<Node[]>;
+  /**
+   * Suggest-don't-block uniqueness lookup (ADR-065): the existing active node
+   * whose `field` matches `value` for `node_type`, or `null` when the field
+   * isn't flagged `unique`, `value` is empty, or there is no conflict. Never
+   * rejects — callers use a hit to offer an adopt-existing suggestion.
+   *
+   * Pass `excludeId` (the caller's own node id) whenever that node's own
+   * value could already equal `value` — otherwise a node whose own save has
+   * already landed the same value can match itself and hide a real,
+   * different duplicate.
+   */
+  findDuplicateFor(
+    nodeType: string,
+    field: string,
+    value: string,
+    excludeId?: string
+  ): Promise<Node | null>;
 
   // Typed relationships (distinct from mentions)
   getNodeRelationships(nodeId: string): Promise<RawNodeRelationships>;
@@ -284,6 +301,7 @@ export const HTTP_ROUTES = {
   getMentioningContainers: (nodeId: string) => `/api/nodes/${encodeURIComponent(nodeId)}/mentions/roots`,
   queryNodes: () => '/api/query',
   mentionAutocomplete: () => '/api/mentions/autocomplete',
+  findDuplicate: () => '/api/nodes/find-duplicate',
   getAllSchemas: () => '/api/schemas',
   getSchema: (schemaId: string) => `/api/schemas/${encodeURIComponent(schemaId)}`,
   getDaemonVersion: () => '/api/daemon/version',

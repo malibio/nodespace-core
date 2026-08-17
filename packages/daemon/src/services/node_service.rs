@@ -246,7 +246,12 @@ impl GrpcNodeService for NodeServiceImpl {
         // suggestion, so "no duplicate" is an ordinary answer.
         match this
             .node_service
-            .find_duplicate_for(&req.node_type, &req.field, &req.value)
+            .find_duplicate_for(
+                &req.node_type,
+                &req.field,
+                &req.value,
+                req.exclude_id.as_deref(),
+            )
             .await
             .map_err(service_error_to_status)?
         {
@@ -2029,6 +2034,7 @@ mod tests {
                 node_type: "person".to_string(),
                 field: "email".to_string(),
                 value: "ALICE@example.com".to_string(),
+                exclude_id: None,
             }))
             .await
             .unwrap()
@@ -2045,12 +2051,65 @@ mod tests {
                 node_type: "person".to_string(),
                 field: "email".to_string(),
                 value: "nobody@example.com".to_string(),
+                exclude_id: None,
             }))
             .await
             .unwrap()
             .into_inner();
         assert!(miss.node_id.is_empty(), "no duplicate → empty node_id");
         assert!(miss.node_data.is_none(), "no duplicate → no node_data");
+
+        // exclude_id excludes the caller's own node from matching itself — the
+        // fix for a real false-negative: a caller that checks AFTER its own
+        // write has already landed the same value would otherwise match itself
+        // and never see the real, other, existing duplicate.
+        let self_excluded = svc
+            .find_duplicate(Request::new(crate::nodespace::FindDuplicateRequest {
+                node_type: "person".to_string(),
+                field: "email".to_string(),
+                value: "alice@example.com".to_string(),
+                exclude_id: Some(alice_id.clone()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            self_excluded.node_id.is_empty(),
+            "excluding the only holder of a value must report no duplicate, \
+             not the excluded node itself"
+        );
+
+        // With a second, genuinely different person holding the same value,
+        // excluding the first must still surface the second.
+        let bob_id = svc
+            .create_node(Request::new(crate::nodespace::CreateNodeRequest {
+                id: None,
+                node_type: "person".to_string(),
+                content: "Bob".to_string(),
+                parent_id: None,
+                collection: None,
+                lifecycle_status: None,
+                properties: r#"{"person":{"name":"Bob","email":"alice@example.com"}}"#.to_string(),
+                position: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .node_id;
+        let other_found = svc
+            .find_duplicate(Request::new(crate::nodespace::FindDuplicateRequest {
+                node_type: "person".to_string(),
+                field: "email".to_string(),
+                value: "alice@example.com".to_string(),
+                exclude_id: Some(alice_id.clone()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            other_found.node_id, bob_id,
+            "excluding Alice must still surface Bob as the real duplicate"
+        );
     }
 
     /// A model-less shared build context for constructing a `DatabaseManager`

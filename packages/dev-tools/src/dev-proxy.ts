@@ -621,6 +621,33 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
+  // POST /api/nodes/find-duplicate
+  // Suggest-don't-block uniqueness lookup (ADR-065): "no conflict" is an
+  // ordinary empty NodeResponse from the daemon, never a NotFound status, so
+  // this always resolves 200 with either a node or `null` — never an error.
+  if (method === 'POST' && pathname === '/api/nodes/find-duplicate') {
+    try {
+      const body = await req.json() as Record<string, unknown>;
+      // exclude_id is an `optional string` proto field — omit the key entirely
+      // for "no exclusion" rather than sending null/'', matching the optional
+      // proto-field convention used above (see PATCH /api/nodes/:id).
+      const request: Record<string, unknown> = {
+        nodeType: String(body.nodeType ?? ''),
+        field: String(body.field ?? ''),
+        value: String(body.value ?? '')
+      };
+      if (body.excludeId && body.excludeId !== '') request.excludeId = body.excludeId;
+      const res = await call<typeof request, { nodeData?: ProtoNodeData }>(
+        (nodeClient as unknown as Record<string, Function>).findDuplicate,
+        request
+      );
+      if (!res.nodeData) return json(null);
+      return json(nodeDataToApiNode(res.nodeData));
+    } catch (err) {
+      return grpcError(err as grpc.ServiceError);
+    }
+  }
+
   // GET /api/nodes/:id/mentions/outgoing
   const outgoingMatch = pathname.match(HTTP_ROUTE_PATTERNS.getOutgoingMentions);
   if (method === 'GET' && outgoingMatch) {

@@ -31,6 +31,14 @@ use crate::models::schema::{
 use crate::models::SchemaNode;
 use chrono::Utc;
 
+/// Reserved, system-managed property key that carries the convergence
+/// "possible duplicate" indicator (ADR-065 §4). Stored namespaced by type,
+/// like every other property: `properties.<node_type>._possible_duplicate`.
+/// Single source of truth: both the schema field declaration below and
+/// `NodeService::mark_possible_duplicates` (`services/node_service/schema.rs`)
+/// reference this constant rather than each hardcoding the string.
+pub const POSSIBLE_DUPLICATE_FIELD: &str = "_possible_duplicate";
+
 /// Get all core schema definitions as SchemaNode instances
 ///
 /// Returns all core schemas ready to be converted to Node via `schema.into_node()`
@@ -1217,7 +1225,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
-        // Person schema — pure identity primitive (name, email)
+        // Person schema — identity primitive (name, email), plus the
+        // system-managed convergence marker (_possible_duplicate)
         SchemaNode {
             id: "person".to_string(),
             content: "Person".to_string(),
@@ -1268,6 +1277,29 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     // two otherwise-identical claims.
                     unique: Some(true),
                     unique_case_insensitive: Some(true),
+                },
+                SchemaField {
+                    name: POSSIBLE_DUPLICATE_FIELD.to_string(),
+                    friendly_name: "Possible duplicate".to_string(),
+                    field_type: "boolean".to_string(),
+                    // Never re-broadcast: the sync engine excludes local_only
+                    // properties from a push and ignores them on a pull, so this
+                    // marker stays wherever NodeService::mark_possible_duplicates
+                    // set it and never fights convergence or gets echoed back.
+                    local_only: true,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: Some(serde_json::Value::Bool(false)),
+                    description: Some("System-managed convergence indicator (ADR-065): set when this person's email collides with another active person after both land in the same database. Never written directly; see NodeService::mark_possible_duplicates.".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
                 },
             ],
             relationships: vec![],
