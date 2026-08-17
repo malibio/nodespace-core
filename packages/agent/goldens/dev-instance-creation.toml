@@ -19,35 +19,74 @@ measures whether a value with no matching field is preserved under a key of
 the model's own making, or dropped because the schema had no slot for it.
 Dropping it is the worse outcome: the user was told the record was saved.
 
-STANDING FAILURE, TUNED AT AND NOT CLOSED
+STANDING FAILURE — DIAGNOSED TO A CAPABILITY BOUNDARY, NOT AN UNFOUND WORDING
 
 The listed fields are carried perfectly — node_type, assignee, sprint, and
-`status` as the exact enum member, 3/3. The unlisted value is dropped, 3/3,
-across every arm tried:
+`status` as the exact enum member, 3/3. The unlisted value is dropped, 3/3.
+
+Six arms were run against it. The first three were restatements of the
+obligation and all measured inert:
 
   1. prose in the candidate instructions ("A VALUE WITH NO MATCHING FIELD:
-     still record it ... never drop a value because the type has no field for
-     it")                                                        no effect
-  2. prose in the field_values schema description ("For a value no listed
-     field covers, add your own key ... a value omitted here is lost")
-                                                                 no effect
-  3. a worked example carrying an unlisted key, `reported_by`, with a sentence
-     naming why it is there                                      no effect
+     still record it ... never drop a value")                    no effect
+  2. prose in the field_values schema description                no effect
+  3. a worked example carrying an unlisted key `reported_by`     no effect
+  4. a worked example rewritten so the extra key is a POINTER to another
+     ticket (`depends_on`), structurally parallel to this request, with the
+     example's own user sentence shown                           no effect
+  5. bounding `content` ("the title and nothing else; facts ABOUT it are
+     field_values entries, never appended to the title")         no effect
+  6. schema channel: a declared `blocked_by` sub-property on field_values
+     whose description names the literal trigger phrase "blocked by or
+     depends on"                                                 no effect
 
-Worth recording precisely because arm 3 is the lever that DID work in
-dev-schema-creation, where adding a pointer-shaped field to the example
-produced the missing field immediately. The same edit, in the same channel, on
-the same model, moves one case and not this one. So "put it in the example" is
-not a general rule — it is a lever that works when the example is the model's
-template for a LIST IT IS ALREADY BUILDING (the fields array), and does not
-work when the missing value would have to be recognised as unlisted first.
+Arm 6 was verified present in the post-template prompt before being called a
+negative — the lesson from #2123 and the dropped tool-role history is that an
+inert-looking channel is often an absent one. It rendered cleanly. (Its
+`additionalProperties: true` did NOT survive the template, which is a third
+instance of that same silent-drop family and worth knowing independently.)
 
-The recognition step is the hard part, and none of the three channels reached
-it. This is left as a standing failure rather than tuned around: it is real,
-reproducible in seconds, and pretending otherwise would put a case in the
-corpus whose recorded result is better than what production can expect. It is
-also a candidate for #2120 to inherit as an open question rather than a solved
-one.
+WHAT THE DIAGNOSTIC PROBES ESTABLISHED
+
+Two probes, each the same request with fewer competing values:
+
+  only the unlisted detail          value PRESERVED, folded into `content`
+  one listed field + the unlisted   value PRESERVED, folded into `content`
+  three listed fields + unlisted    value GONE
+
+That looked like competition scaling with field count. It is not. The
+decisive arm settles it — with the user phrasing changed to name the key
+outright, "set blocked_by to the token refresh work":
+
+  ALL FOUR VALUES LAND, 3/3, alongside all three listed fields.
+
+So the model is fully capable of the write, at this field count, with this
+tool surface. What it will not do is infer the KEY NAME from natural phrasing:
+"it's blocked by X" -> `blocked_by`. Told the key, it complies perfectly; left
+to derive it, it drops the value rather than invent a name.
+
+That is the actual boundary, and it is a different claim than "the prompt is
+not tuned yet". Every channel ADR-064 defines has now been tried, including
+the two that worked elsewhere in this corpus. The remaining lever is not
+wording.
+
+WHY THIS CASE STAYS IN THE CORPUS, STILL FAILING
+
+It is the corpus's honest ceiling marker. A corpus of only passing cases would
+imply the assembly line has nothing left to be engineered toward, and this is
+precisely the request shape where it does. Note the boundary is narrow and
+sits between two things this corpus proves the model CAN do: it selects unseen
+enum members by matching a description (dev-unseen-schema, 3/3), and it fills
+a named key faultlessly. Only the naming step fails.
+
+Directly relevant to the open question about generated per-schema typed tools:
+a tool whose schema declares the field means the model is never asked to
+invent the key, which is the one thing measured to fail here. This case is
+evidence for that direction rather than merely a defect report.
+
+Not to be conflated with #2123: that defect makes the whole parameter
+invisible, so production loses EVERY value on this request, not just the
+unlisted one. Two separate failures with two separate fixes.
 
 PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
 
@@ -120,11 +159,12 @@ expect = """
 create_node(node_type="ticket") carrying assignee=dana, sprint=S-25, and \
 status="ready_for_dev" as the exact enum member — all measured 3/3. The \
 blocked-by detail has no listed field, so the right outcome is a key of the \
-model's own making (blocked_by or similar); it is measured DROPPED 3/3 and is \
-a standing failure, not a solved case — see the notes for the three channels \
-tuned at without moving it. The failure this case would still catch is a call \
-with a title and little else: it reports success and loses everything the \
-user said.
+model's own making (blocked_by or similar); it is measured DROPPED 3/3 across \
+six channels and is a standing failure, not a solved case. Diagnosed: the \
+model fills `blocked_by` perfectly when the user NAMES the key, so the \
+boundary is inferring a key name from natural phrasing, not the write itself \
+— see the notes. The failure this case would still catch is a call with a \
+title and little else: it reports success and loses everything the user said.
 """
 
   [turn.tool_results]
@@ -134,12 +174,14 @@ user said.
   name = "create_node"
   description = """
   Create one new record of a type that already exists. Use for a single \
-  instance, never to define a new kind of record. In the example, `reported_by` \
-  is not one of the type's listed fields — the user mentioned it, so it is \
-  carried under a key named after their own wording rather than dropped. \
-  Example call: {"node_type": "ticket", "content": "Rotate signing keys on \
-  deploy", "field_values": {"status": "in_dev", "assignee": "dana", "sprint": \
-  "S-24", "reported_by": "priya"}}
+  instance, never to define a new kind of record. The example's user said: \
+  "open a ticket for dana to rotate the signing keys on deploy in S-24, it's \
+  in dev, and it depends on the vault migration". Note `depends_on`: the type \
+  lists no field for it, so it is carried under a key named after the user's \
+  own wording rather than dropped. Example call: {"node_type": "ticket", \
+  "content": "Rotate signing keys on deploy", "field_values": {"status": \
+  "in_dev", "assignee": "dana", "sprint": "S-24", "depends_on": "the vault \
+  migration"}}
   """
 
     [turn.tool.parameters_schema]
@@ -150,13 +192,26 @@ user said.
       type = "string"
       description = "Type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
 
+      # The diagnostic probe showed the model does not DROP an unlisted detail
+      # — it folds it into `content` as extra title text. So the fix belongs
+      # here, bounding what content is, rather than in another restatement of
+      # "record the value".
       [turn.tool.parameters_schema.properties.content]
       type = "string"
-      description = "The record's title — the best human-readable name for it from the user's message."
+      description = "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title."
 
+      # `additionalProperties` is the schema-channel way to say "keys beyond
+      # the listed ones are legal here". Prose asserting the same thing was
+      # measured inert across four arms; this states it as structure, which is
+      # the channel ADR-064 rule 1 gives argument shape to.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
-      description = "Every value the user supplied, as field keys to values, e.g. {\"status\": \"in_dev\", \"assignee\": \"dana\"}. Use the type's field names exactly as listed. When a field lists allowed values, use one of those values exactly. For a value no listed field covers, add your own key named after the user's noun for it — extra keys are stored as given, and a value omitted here is lost."
+      description = "Every value the user supplied, as field keys to values, e.g. {\"status\": \"in_dev\", \"assignee\": \"dana\"}. Use the type's field names exactly as listed. When a field lists allowed values, use one of those values exactly. Keys beyond the type's listed fields are legal and stored as given: name such a key after the user's own noun for the detail (lowercase snake_case). A value omitted here is lost."
+      additionalProperties = true
+
+        [turn.tool.parameters_schema.properties.field_values.properties.blocked_by]
+        type = "string"
+        description = "What this record is waiting on, when the user says one thing is blocked by or depends on another. An example of a key beyond the type's listed fields."
 
   [[turn.tool]]
   name = "create_schema"
