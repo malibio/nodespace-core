@@ -1,0 +1,69 @@
+name = "indirect-reference-resolves"
+reps = 3
+
+notes = """
+The worked reference instance of the case-file format.
+
+Ported from golden_scenario6_handauthored.rs::golden_zero_history_control,
+which remains in packages/agent/tests/ as the Rust-side validated reference.
+This file reproduces its prompt byte for byte, so a divergence between the two
+means the runner is not faithful to what that test measured.
+
+What is being tuned here is the `system` field: it is the WHOLE resident
+prompt for this case, hand-authored, reusing no production assembly source (no
+STAGE1_SYSTEM_PROMPT, no skill_pipeline.rs, no agent_guidance.rs, no
+def_resolve_query()). A golden cannot be the target production is engineered
+toward if it is assembled from production's own current text. Shortening a
+rule, rewording it, or deleting it is a text edit in this file — no recompile.
+
+MEASURED 3/3 on the locked native model: the model calls resolve_query rather
+than asking for a literal node id, which is what the ported test asserted.
+
+The `node_type` argument is NOT stable across runs — observed as "equipment"
+in one session and "Product" in another, both 3/3 byte-identical within their
+own session. That is expected and not a defect: nothing in this case tells the
+model what types exist, so it invents a plausible one. Read the tool NAME as
+the signal here. A case that wants to pin node_type has to put the available
+types in the prompt, which is a different case than this one.
+
+To see the post-template string llama.cpp actually receives, run with
+NODESPACE_PROMPT_DUMP set.
+"""
+
+[[turn]]
+system = """
+You are a graph-editing assistant. When a request refers to something \
+indirectly (a bare value, a description) rather than by name, call \
+resolve_query to find it. Never ask the user to supply a node id yourself.
+"""
+user = "The 2400 one came back — set it to returned"
+expect = "resolve_query — not a request for a literal node id, and not update_node directly"
+
+  [[turn.tool]]
+  name = "resolve_query"
+  description = """
+  Resolve an indirect reference (a bare value, a relative date, a description) \
+  to the single node it refers to. Returns the node directly -- do not call \
+  search_nodes afterward.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["request", "node_type"]
+
+      [turn.tool.parameters_schema.properties.request]
+      type = "string"
+      description = "The user's request, verbatim."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "The target node type id."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = "Update an existing node's properties, given its id."
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+    properties = { id = { type = "string" }, properties = { type = "object" } }

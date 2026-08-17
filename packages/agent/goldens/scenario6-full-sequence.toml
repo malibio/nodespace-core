@@ -1,0 +1,192 @@
+name = "scenario6-full-sequence"
+reps = 3
+
+notes = """
+The multi-turn worked example: a three-turn chain where each turn sees what
+the model REALLY produced in the turns before it.
+
+  turn 1  "I want to keep a record of the equipment my team checks out,
+           whether it's been returned, and what each item costs to replace"
+  turn 2  "Log a laser cutter checked out on the 12th, replacement cost 2400"
+  turn 3  "The 2400 one came back — set it to returned"
+
+Ported from golden_scenario6_sequence.rs, which remains in packages/agent/
+tests/ as the Rust-side reference. The difference worth knowing: that file
+hand-authored terse "Fact: ..." stand-ins for the prior turns, because it had
+no way to feed real output forward. Here the runner carries each turn's actual
+assistant turn and tool results into the next turn's history, which is the
+thing its own TODO asked for.
+
+Why that matters, from the ported file's own recorded observation: its
+ISOLATED turns each looked fine while silently disagreeing on the schema id.
+Turn 1 really produced "Equipment Checkout Record"; isolated turn 2 guessed
+node_type "equipment" and isolated turn 3 guessed "equipment_item". Neither is
+what turn 1 emitted — three green turns, a chain that could not actually run.
+
+MEASURED 3/3 on the locked native model:
+
+  turn 1  create_schema(name="Equipment Checkout Record",
+            fields=[isReturned: boolean, replacementCost: number])
+  turn 2  create_node(node_type="Equipment Checkout Record",
+            properties={replacementCost: 2400, ...})   <- turn 1's real name
+  turn 3  resolve_query(node_type="Equipment Checkout Record",
+            request="the 2400 one")                    <- turn 2's real chain
+
+Turn 2 picking up turn 1's actual schema name rather than a guess is the chain
+doing its job.
+
+Also observed, and worth its own investigation rather than being buried here:
+turn 3 resolves and then STOPS — it does not continue to update_node. That is
+the single-turn-pull boundary, reproducible by reading this case's turn-3
+output.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — schema creation.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-create-schema"
+system = """
+You are a schema-design assistant. When the user describes a NEW KIND of \
+thing they want to track (not a single record), call create_schema once with \
+the fields their request implies. Do not create more than one schema per \
+request.
+"""
+user = """
+I want to keep a record of the equipment my team checks out, whether it's \
+been returned, and what each item costs to replace
+"""
+expect = "create_schema, exactly once, with a replacement-cost field and a returned/status field"
+
+  [turn.tool_results]
+  create_schema = """
+  {"ok": true, "note": "Schema created. Its type id is derived from the display name: \
+lowercased, spaces to underscores."}
+  """
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Create a new entity type with custom fields. Only define type-specific \
+  fields — every node already has a built-in title, do not add a 'name' or \
+  'title' field unless it is referenced by title_template.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+      description = "Display name for the entity type."
+
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+      description = "Every scalar field on this type, listed explicitly."
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.coreValues]
+          type = "array"
+          description = "Required and non-empty when type=enum."
+
+            [turn.tool.parameters_schema.properties.fields.items.properties.coreValues.items]
+            type = "object"
+            properties = { value = { type = "string" }, label = { type = "string" } }
+
+# ---------------------------------------------------------------------------
+# Turn 2 — instance creation, given turn 1's real schema.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-create-node"
+system = """
+You are a graph-editing assistant. When the user supplies the particulars of \
+ONE record of an existing type, call create_node with those particulars as \
+properties.
+"""
+user = "Log a laser cutter checked out on the 12th, replacement cost 2400"
+expect = """
+create_node against turn 1's ACTUAL type id, carrying the 2400 — a guessed id \
+like 'equipment', or an empty properties blob, is the failure worth catching
+"""
+
+  [turn.tool_results]
+  create_node = '{"ok": true, "note": "Node created."}'
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create a new instance of an existing entity type, given its type id and \
+  field values.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "properties"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "The existing type id to create an instance of."
+
+      [turn.tool.parameters_schema.properties.properties]
+      type = "object"
+      description = "Field values supplied by the user."
+
+# ---------------------------------------------------------------------------
+# Turn 3 — resolution, given the real turn1 -> turn2 chain.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn3-resolve-and-update"
+system = """
+You are a graph-editing assistant. When a request refers to something \
+indirectly (a bare value, a description) rather than by name, call \
+resolve_query to find it. Never ask the user to supply a node id yourself.
+"""
+user = "The 2400 one came back — set it to returned"
+expect = """
+resolve_query naming turn 1's real type id. Continuing on to update_node would \
+be better still, but is measured NOT to happen — see the notes
+"""
+
+  [turn.tool_results]
+  resolve_query = """
+  {"id": "nodespace://b2c3d4e5-2222-3333-4444-555566667777", "title": "Laser Cutter"}
+  """
+
+  [[turn.tool]]
+  name = "resolve_query"
+  description = """
+  Resolve an indirect reference (a bare value, a relative date, a description) \
+  to the single node it refers to. Returns the node directly -- do not call \
+  search_nodes afterward.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["request", "node_type"]
+
+      [turn.tool.parameters_schema.properties.request]
+      type = "string"
+      description = "The user's request, verbatim."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "The target node type id."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = "Update an existing node's properties, given its id."
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+    properties = { id = { type = "string" }, properties = { type = "object" } }
