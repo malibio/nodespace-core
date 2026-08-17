@@ -688,6 +688,21 @@ interface Subscription {
 }
 
 /**
+ * The type-specific (plus content) fields `updateTaskNode()` can write.
+ * Used to key the per-field write-sequence tracking that guards against
+ * same-field concurrent writes transiently clobbering each other — see
+ * `bumpTaskFieldSeq()`'s doc comment.
+ */
+type TaskFieldName =
+  | 'status'
+  | 'priority'
+  | 'dueDate'
+  | 'assignee'
+  | 'startedAt'
+  | 'completedAt'
+  | 'content';
+
+/**
  * Batch structure for atomic multi-property updates
  * Used for pattern conversions where content + nodeType must persist together
  */
@@ -746,6 +761,49 @@ export class SharedNodeStore {
 
   // Version tracking for optimistic concurrency
   private versions = new Map<string, number>();
+
+  // Per-node, per-field write sequence counters for `updateTaskNode()`. See
+  // `bumpTaskFieldSeq()`'s doc comment for what this closes.
+  private taskFieldWriteSeq = new Map<string, Map<TaskFieldName, number>>();
+
+  /**
+   * Bump and return the write-sequence number for a single task field on a
+   * node. `updateTaskNode()` calls this once per field its own `update`
+   * touches, at optimistic-apply time (synchronously, before the RPC is
+   * even queued) and captures the returned number.
+   *
+   * When that write's RPC later resolves, it re-reads the CURRENT sequence
+   * for the same field via `getTaskFieldSeq()` before applying the response's
+   * confirmed value for that field. If a second `updateTaskNode()` call for
+   * the SAME field raced in while the first write's RPC was still in
+   * flight, it bumped the sequence again — so the first write's captured
+   * number is now stale, and it must skip applying its (now-outdated)
+   * confirmed value for that one field rather than clobber the newer
+   * write's optimistic value. The newer write's own RPC (queued behind the
+   * first — `PersistenceCoordinator` serializes real RPCs per node) applies
+   * its own confirmed value when it resolves, so the store still converges;
+   * this only closes the transient window where the wrong value would
+   * otherwise be visible in between.
+   *
+   * Field-scoped (not node-scoped) so a same-field race on `status` doesn't
+   * suppress an unrelated, non-racing field like `priority` from applying
+   * its own confirmed value.
+   */
+  private bumpTaskFieldSeq(nodeId: string, field: TaskFieldName): number {
+    let fields = this.taskFieldWriteSeq.get(nodeId);
+    if (!fields) {
+      fields = new Map();
+      this.taskFieldWriteSeq.set(nodeId, fields);
+    }
+    const next = (fields.get(field) ?? 0) + 1;
+    fields.set(field, next);
+    return next;
+  }
+
+  /** Current write-sequence number for a task field. See `bumpTaskFieldSeq()`. */
+  private getTaskFieldSeq(nodeId: string, field: TaskFieldName): number {
+    return this.taskFieldWriteSeq.get(nodeId)?.get(field) ?? 0;
+  }
 
   // ------------------------------------------------------------------------
   // Reconnect staleness tracking
@@ -2382,6 +2440,7 @@ export class SharedNodeStore {
       this.versions.delete(nodeId);
       this.pendingUpdates.delete(nodeId);
       this.persistedNodeIds.delete(nodeId); // Remove from tracking set
+      this.taskFieldWriteSeq.delete(nodeId);
       this.notifySubscribers(nodeId, node, source);
 
       log.debug(`Node deleted: ${nodeId}`);
@@ -2533,27 +2592,41 @@ export class SharedNodeStore {
     // Apply update optimistically to local state
     // Map TaskNodeUpdate fields to TaskNode properties for local state
     const localChanges: Partial<TaskNode> = {};
+    // Per-field write-sequence numbers captured at THIS write's own
+    // optimistic-apply moment — see `bumpTaskFieldSeq()`'s doc comment. Used
+    // below (inside the persistence closure) to detect whether a second,
+    // same-field `updateTaskNode()` write raced in before this write's RPC
+    // resolved, so this write's confirmed value for that field can be
+    // skipped instead of transiently clobbering the newer one.
+    const myFieldSeq: Partial<Record<TaskFieldName, number>> = {};
     if (update.status !== undefined) {
       localChanges.status = update.status;
+      myFieldSeq.status = this.bumpTaskFieldSeq(nodeId, 'status');
     }
     if (update.priority !== undefined) {
       // TaskNodeUpdate allows null to clear priority; TaskNode uses undefined
       localChanges.priority = update.priority ?? undefined;
+      myFieldSeq.priority = this.bumpTaskFieldSeq(nodeId, 'priority');
     }
     if (update.dueDate !== undefined) {
       localChanges.dueDate = update.dueDate;
+      myFieldSeq.dueDate = this.bumpTaskFieldSeq(nodeId, 'dueDate');
     }
     if (update.assignee !== undefined) {
       localChanges.assignee = update.assignee;
+      myFieldSeq.assignee = this.bumpTaskFieldSeq(nodeId, 'assignee');
     }
     if (update.startedAt !== undefined) {
       localChanges.startedAt = update.startedAt;
+      myFieldSeq.startedAt = this.bumpTaskFieldSeq(nodeId, 'startedAt');
     }
     if (update.completedAt !== undefined) {
       localChanges.completedAt = update.completedAt;
+      myFieldSeq.completedAt = this.bumpTaskFieldSeq(nodeId, 'completedAt');
     }
     if (update.content !== undefined) {
       localChanges.content = update.content;
+      myFieldSeq.content = this.bumpTaskFieldSeq(nodeId, 'content');
     }
 
     // Update local node optimistically
@@ -2623,28 +2696,65 @@ export class SharedNodeStore {
             // own `update` specified avoids that: a field this write
             // didn't ask to change is left exactly as the store currently
             // has it, however it got there.
+            //
+            // Field scoping alone doesn't close the SAME-field case: if a
+            // second write also changes (say) `status` while this write's
+            // RPC is still in flight, this write's own confirmed `status`
+            // is stale by the time it lands — it reflects the server's
+            // state as of THIS write's request, not the newer optimistic
+            // value the second write already applied. Each field's guard
+            // below (`this.getTaskFieldSeq(...) === myFieldSeq.field`)
+            // detects that: if the field's write-sequence has moved past
+            // the number this write captured at its own optimistic-apply
+            // time, a newer same-field write raced in, and this write skips
+            // applying its now-stale value for that one field rather than
+            // clobbering the newer one. The newer write's own RPC (queued
+            // behind this one) applies its own confirmed value when it
+            // resolves, so the store still converges correctly.
             const confirmedFields: Partial<TaskNode> = {};
-            if (update.status !== undefined) {
+            if (
+              update.status !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'status') === myFieldSeq.status
+            ) {
               confirmedFields.status = updatedTaskNode.status;
             }
-            if (update.priority !== undefined) {
+            if (
+              update.priority !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'priority') === myFieldSeq.priority
+            ) {
               confirmedFields.priority = updatedTaskNode.priority;
             }
-            if (update.dueDate !== undefined) {
+            if (
+              update.dueDate !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'dueDate') === myFieldSeq.dueDate
+            ) {
               confirmedFields.dueDate = updatedTaskNode.dueDate;
             }
-            if (update.assignee !== undefined) {
+            if (
+              update.assignee !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'assignee') === myFieldSeq.assignee
+            ) {
               confirmedFields.assignee = updatedTaskNode.assignee;
             }
-            if (update.startedAt !== undefined) {
+            if (
+              update.startedAt !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'startedAt') === myFieldSeq.startedAt
+            ) {
               confirmedFields.startedAt = updatedTaskNode.startedAt;
             }
-            if (update.completedAt !== undefined) {
+            if (
+              update.completedAt !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'completedAt') === myFieldSeq.completedAt
+            ) {
               confirmedFields.completedAt = updatedTaskNode.completedAt;
             }
             // Use Object.assign to safely update fields that may not exist on Node interface
             Object.assign(localNode, confirmedFields);
-            if (update.content !== undefined && updatedTaskNode.content !== undefined) {
+            if (
+              update.content !== undefined &&
+              updatedTaskNode.content !== undefined &&
+              this.getTaskFieldSeq(nodeId, 'content') === myFieldSeq.content
+            ) {
               localNode.content = updatedTaskNode.content;
             }
             this.nodesSet(nodeId, localNode);
@@ -2829,6 +2939,7 @@ export class SharedNodeStore {
     this.nodesClear();
     this.versions.clear();
     this.pendingUpdates.clear();
+    this.taskFieldWriteSeq.clear();
     this.persistedNodeIds.clear();
     this.batchedNotifications.clear();
     this.activeBatches.clear();
