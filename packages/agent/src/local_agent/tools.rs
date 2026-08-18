@@ -765,52 +765,69 @@ fn json_schema_type_for_field(field_type: &str) -> &'static str {
 /// case measured directly in the corpus — the corpus's own cases each
 /// operate on a single type; recorded here rather than left implicit, so a
 /// future measurement can confirm or replace it.
+///
+/// Every occurrence of a field name is collected before any type/enum
+/// decision is made for it — not folded left-to-right as descriptors are
+/// visited. A single fold got this wrong (caught in review): whether a
+/// final `enum` restriction is safe depends on ALL occurrences of that name
+/// at once (one non-enum occurrence anywhere means no fixed list is safe
+/// for any of them), which is a property of the whole group, not
+/// decidable by looking at only the occurrences seen so far in one
+/// processing order.
 fn declared_field_values_properties(
     descriptors: &[nodespace_core::ops::entity_types_block::EntityTypeDescriptor],
 ) -> serde_json::Map<String, Value> {
-    let mut properties = serde_json::Map::new();
+    let mut occurrences: std::collections::HashMap<
+        &str,
+        Vec<&nodespace_core::ops::entity_types_block::EntityFieldDescriptor>,
+    > = std::collections::HashMap::new();
     for descriptor in descriptors {
         for field in &descriptor.fields {
-            let declared_type = json_schema_type_for_field(&field.field_type);
-            match properties.get_mut(field.name.as_str()) {
-                None => {
-                    properties.insert(field.name.clone(), json!({ "type": declared_type }));
-                }
-                Some(entry) => {
-                    // A field name repeating across retrieved types with a
-                    // DIFFERENT declared type (e.g. `assignee: text` on one
-                    // type, `assignee: number` on another) cannot be
-                    // reconciled into a single correct JSON Schema type
-                    // without risking rejecting a legal value for whichever
-                    // type `node_type` actually resolves to. Falling back to
-                    // `string` — the most permissive scalar JSON Schema type
-                    // — widens what the grammar accepts rather than
-                    // narrowing it to one type's shape at the other's
-                    // expense.
-                    if entry.get("type") != Some(&json!(declared_type)) {
-                        entry["type"] = json!("string");
-                    }
-                }
-            }
-            if !field.enum_values.is_empty() {
-                let entry = properties
-                    .get_mut(field.name.as_str())
-                    .expect("just inserted or matched above");
-                let mut merged: Vec<Value> = entry
-                    .get("enum")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
+            occurrences.entry(field.name.as_str()).or_default().push(field);
+        }
+    }
+
+    let mut properties = serde_json::Map::new();
+    for (name, fields) in occurrences {
+        // An `enum` restriction is only safe when EVERY occurrence of this
+        // field name is itself an enum: a single plain-scalar occurrence
+        // proves the field can legally hold a value outside any fixed list,
+        // so imposing one — from an enum occurrence elsewhere, in either
+        // processing order — would silently reject a value that occurrence
+        // permits. This is the fix for the bug caught in review: an earlier
+        // version widened `type` to `string` on a type conflict but left a
+        // stale `enum` array behind, which is MORE restrictive than the
+        // untyped fallback it was supposed to replace.
+        let every_occurrence_is_enum = fields.iter().all(|f| !f.enum_values.is_empty());
+
+        let declared_types: std::collections::BTreeSet<&str> = fields
+            .iter()
+            .map(|f| json_schema_type_for_field(&f.field_type))
+            .collect();
+        // A single agreed JSON Schema type is used as-is; disagreement
+        // widens to `string` — the most permissive scalar — rather than
+        // arbitrarily keeping whichever occurrence was visited first.
+        let json_type = if declared_types.len() == 1 {
+            declared_types.into_iter().next().expect("len == 1")
+        } else {
+            "string"
+        };
+
+        let mut entry = serde_json::Map::new();
+        entry.insert("type".to_string(), json!(json_type));
+        if every_occurrence_is_enum {
+            let mut merged: Vec<Value> = Vec::new();
+            for field in &fields {
                 for value in &field.enum_values {
                     let v = json!(value);
                     if !merged.contains(&v) {
                         merged.push(v);
                     }
                 }
-                entry["type"] = json!("string");
-                entry["enum"] = json!(merged);
             }
+            entry.insert("enum".to_string(), json!(merged));
         }
+        properties.insert(name.to_string(), Value::Object(entry));
     }
     properties
 }
@@ -5585,5 +5602,54 @@ mod tests {
             properties["amount"]["type"], "string",
             "a field name with conflicting types across candidate schemas must widen to string, not silently pick one"
         );
+    }
+
+    /// Regression pin for a real bug caught in review: an enum-typed
+    /// occurrence of a field name followed by a non-enum, type-conflicting
+    /// occurrence of the SAME name widened `type` to `string` but left the
+    /// first occurrence's `enum` array behind — over-constraining the field
+    /// to the enum's members even though `type` now claims to accept any
+    /// string. A legal value for the non-enum occurrence's own type (e.g.
+    /// any free-text string) would then be silently rejected by the
+    /// grammar, the exact class of defect `PATTERN.toml` measures this
+    /// whole mechanism against. Checked in both field orders, since the
+    /// union must not depend on which descriptor is processed first.
+    #[test]
+    fn declared_field_values_properties_clears_stale_enum_on_type_conflict() {
+        let enum_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: type_id.to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "priority".to_string(),
+                field_type: "enum".to_string(),
+                enum_values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                required: false,
+            }],
+            title_template: None,
+        };
+        let text_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: type_id.to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "priority".to_string(),
+                field_type: "text".to_string(),
+                enum_values: vec![],
+                required: false,
+            }],
+            title_template: None,
+        };
+
+        for descriptors in [
+            vec![enum_priority("a"), text_priority("b")],
+            vec![text_priority("b"), enum_priority("a")],
+        ] {
+            let properties = declared_field_values_properties(&descriptors);
+            assert_eq!(properties["priority"]["type"], "string");
+            assert!(
+                properties["priority"].get("enum").is_none(),
+                "a stale enum array must not survive a type-widening conflict — got: {:?}",
+                properties["priority"]
+            );
+        }
     }
 }

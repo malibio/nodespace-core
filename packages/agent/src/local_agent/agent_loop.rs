@@ -8061,8 +8061,8 @@ mod tests {
         // A candidate whose whitelist includes resolve_query clears the score
         // gate on its own terms, so stage2_tools's fail-open exclusion never
         // fires — resolve_query is legitimately in `permitted`. But this
-        // session's routing is disabled, so `candidate_block` (the RELEVANT
-        // ENTITY TYPES block resolve_query's required node_type parameter
+        // session's routing is disabled, so `candidate_block` (the EXISTING
+        // SCHEMAS block resolve_query's required node_type parameter
         // depends on) is forced to `None` regardless. Offering resolve_query
         // here reproduces #1840's defect through a second door.
         let engine = RecordingEngine::new(routed_engine(

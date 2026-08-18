@@ -518,30 +518,51 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
 /// Declares `field_values` sub-properties (see
 /// [`super::tools::with_declared_field_values`]) on any tool in `tools`
 /// shaped for it, sourced from the retrieved-schema data of whichever
-/// cleared candidate(s) whitelisting that specific tool scored highest on
-/// this turn.
+/// candidate(s) attain the TURN'S GLOBAL top score among those that cleared
+/// the gate — not the top score among only the candidates whitelisting that
+/// specific tool. Precise about this because the two read very differently:
+/// a tool whitelisted ONLY by a candidate that is not (one of) the turn's
+/// overall highest scorer(s) is declared from **no** descriptors and stays
+/// on the bare-object fallback, even if that candidate is the sole one
+/// offering the tool at all.
 ///
-/// "The top-scoring candidate that whitelists this tool", not "every cleared
-/// candidate's schema_metadata unioned": `dev-schema-creation.toml`
-/// (`packages/agent/goldens/`) offers `create_node` on the same turn as
-/// `create_schema` specifically so the model can choose wrongly, and
-/// measures it never called. Declaring `create_node`'s fields there — it is
-/// whitelisted only by the lower-scoring Node Creation candidate, not by the
-/// turn's actual top match — would make the wrong tool easier to use on
-/// exactly the turn that must not reward it, so it stays on the bare-object
-/// fallback `def_create_node` declares statically.
+/// `dev-schema-creation.toml` (`packages/agent/goldens/`) is why this is the
+/// global max rather than a per-tool one: it offers `create_node` on the
+/// same turn as `create_schema` specifically so the model can choose
+/// wrongly, and measures it never called. `create_node` there is
+/// whitelisted only by the lower-scoring Node Creation candidate — a
+/// per-tool max would find Node Creation as "the top scorer among
+/// create_node's own whitelisters" (trivially, being the only one) and
+/// declare its fields anyway, making the wrong tool easier to use on
+/// exactly the turn that must not reward it. The global-max rule is what
+/// actually excludes it: `create_node` only gets declared fields when a
+/// candidate whitelisting it ALSO happens to be the turn's overall best
+/// match, not merely the best match among candidates that want that
+/// specific tool.
+///
+/// **The known cost of that choice**, caught in review: on a genuinely
+/// compound turn — two independently-relevant skills clear the gate for two
+/// DIFFERENT, non-competing tools, e.g. a request that both creates a
+/// ticket and links it to a sprint — `stage2_tools` legitimately offers
+/// both tools (it unions every cleared candidate's whitelist, uncapped by
+/// score), but this function will decline to declare fields for whichever
+/// tool's candidate is not the turn's single highest scorer, even though
+/// that candidate is in no sense a distractor. That turn's lower-priority
+/// tool falls back to the pre-existing bare-object-plus-prose shape — not a
+/// regression relative to today's production (every write tool is on that
+/// shape today), just a missed improvement for that turn. Nothing in the
+/// corpus exercises a genuine two-different-tools compound turn, so there is
+/// no measured guidance on how to tell it apart mechanically from the
+/// distractor case using only candidate score and tool whitelist — doing so
+/// well likely needs the same per-skill retrieval scoping core#2148 tracks.
+/// Pinned by `declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool`
+/// below so this is a documented, deliberate trade-off rather than a latent
+/// surprise.
 ///
 /// Ties at the top score are unioned rather than one arbitrarily shadowing
 /// the other (see `tools::declared_field_values_properties`) — the fixture
 /// this snapshot gate exercises scores its two candidates identically on
 /// purpose, and both legitimately whitelist `create_node`.
-///
-/// This rule is inferred from which of the corpus's own cases declare a
-/// write tool's fields and which deliberately do not — the corpus itself
-/// states the outcome per case, not the selection mechanism, so this is
-/// the plumbing side filling in a mechanism the golden corpus didn't need
-/// to specify. Worth confirming against a live measurement if a future case
-/// exercises a tie or a three-or-more-candidate turn.
 ///
 /// Deliberately a separate step from [`stage2_tools`], not folded into it —
 /// this injects retrieved-schema CONTENT into the tool surface, the same
@@ -927,6 +948,41 @@ mod tests {
         assert!(
             field_values_property_names(create_node).is_empty(),
             "the distractor's tool must not receive field declarations"
+        );
+    }
+
+    /// The documented trade-off from `declare_write_tool_fields`'s doc
+    /// comment, pinned rather than left as an untested claim: two
+    /// candidates that whitelist two DIFFERENT tools (not competing for the
+    /// same tool, unlike the distractor case above) still leave the
+    /// lower-scored candidate's tool undeclared, because the selection is
+    /// the turn's GLOBAL top score, not a per-tool one. This is deliberate
+    /// (see the doc comment for why the distractor case requires it), but
+    /// it means a genuinely compound turn — both tools legitimately wanted
+    /// — only gets one of them declared. Falls back to the bare-object
+    /// shape for the other, not a regression relative to pre-#2120
+    /// production, just an unrealized improvement flagged for core#2148.
+    #[test]
+    fn declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool() {
+        let mut top = candidate("Relationship Management", 0.9, &["create_relationship"]);
+        top.schema_metadata = schema_metadata_for("adr", &[("supersedes", "text")]);
+        let mut other = candidate("Graph Editing", 0.6, &["update_node"]);
+        other.schema_metadata = schema_metadata_for("ticket", &[("status", "text")]);
+
+        let declared = declare_write_tool_fields(
+            &[top, other],
+            vec![write_tool("create_relationship"), write_tool("update_node")],
+        );
+        let update_node = declared
+            .iter()
+            .find(|t| t.name == "update_node")
+            .expect("update_node must still be present in the input list");
+        assert!(
+            field_values_property_names(update_node).is_empty(),
+            "documented trade-off: a lower-scored candidate's own, uncontested tool still \
+             stays undeclared under the global-max rule — if this now fails because the rule \
+             changed to a per-tool max, re-verify declare_write_tool_fields_leaves_a_lower_scored_candidates_tool_bare \
+             (the distractor case) still passes, since the two tests pull the rule in opposite directions"
         );
     }
 

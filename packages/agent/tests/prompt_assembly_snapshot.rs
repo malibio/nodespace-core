@@ -45,7 +45,7 @@
 //!    descriptions, and full parameter schemas, scoped to the fixture
 //!    candidates' whitelists.
 //! 4. **Stage-1 request** — `STAGE1_SYSTEM_PROMPT` + `stage1_tool_definitions()`.
-//! 5. **`RELEVANT ENTITY TYPES`**, which reaches the prompt from two
+//! 5. **`EXISTING SCHEMAS`**, which reaches the prompt from two
 //!    independent sites and both are covered separately:
 //!    - the Stage-2 candidate block (site 2, inside this file's
 //!      `stage2_candidate_block_matches_golden`)
@@ -436,7 +436,7 @@ fn skill_description(tmpl: &NodeTemplate) -> String {
 /// `EntityTypeDescriptor` JSON encoding.
 ///
 /// "Node Creation" and "Schema Creation" are chosen deliberately: both are
-/// mutating skills whose own instructions reference `RELEVANT ENTITY TYPES`
+/// mutating skills whose own instructions reference `EXISTING SCHEMAS`
 /// directly, and both whitelist real registered tools
 /// (`create_node`/`create_schema`/…), so `stage2_tools` exercises its scoped
 /// (non-fail-open) branch rather than falling back to the full surface.
@@ -615,7 +615,7 @@ fn resident_system_prompt_matches_golden() {
     golden::assert_matches("resident_system_prompt", &system_prompt);
 }
 
-/// `RELEVANT ENTITY TYPES` site 2 on its own: the raw
+/// `EXISTING SCHEMAS` site 2 on its own: the raw
 /// `WorkspaceContext::format_for_prompt` output, independent of its later
 /// substitution into the resident prompt above.
 #[test]
@@ -625,7 +625,7 @@ fn resident_workspace_context_matches_golden() {
 }
 
 /// Site 2: the Stage-2 candidate block, including each candidate's rendered
-/// instruction subtree. Also covers `RELEVANT ENTITY TYPES` site 1
+/// instruction subtree. Also covers `EXISTING SCHEMAS` site 1
 /// (per-candidate `schema_metadata`).
 #[test]
 fn stage2_candidate_block_matches_golden() {

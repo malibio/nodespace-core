@@ -34,6 +34,8 @@ BLAST-RADIUS GATE: deletion is irreversible — only call delete_node or delete_
 
 RESPONSE RULES:
 
+Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.
+
 After tool results: respond in natural language. Never paste raw JSON.
 
 Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)

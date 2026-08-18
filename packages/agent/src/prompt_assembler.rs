@@ -296,6 +296,19 @@ impl PromptAssembler {
                 markdown_content: format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES),
             },
             NodeTemplate {
+                // "Call tools immediately..." below reads as similar to
+                // Core Identity's "Call exactly one tool. Do not answer the
+                // user in prose when a tool applies." above, but the two
+                // state different invariants and both are kept, deliberately
+                // — caught in review after an earlier version deleted this
+                // bullet as redundant. Core Identity's line is about
+                // OUTCOME: don't answer in prose INSTEAD of calling a tool.
+                // This one is about TOKEN ORDER: don't emit narration BEFORE
+                // the tool call either, even alongside one. A model that
+                // reasons in prose then calls the right tool anyway satisfies
+                // the first and violates the second, and templates expecting
+                // the tool call as the first token care about exactly that
+                // distinction.
                 title: "Response Formatting Rules".to_string(),
                 content: None,
                 root_node_type: "agent-guidance".to_string(),
@@ -305,6 +318,7 @@ impl PromptAssembler {
                 tier: SeedTier::System,
                 markdown_content: format!(
                     "RESPONSE RULES:\n\
+                    - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
                     - After tool results: respond in natural language. Never paste raw JSON.\n\
                     - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
@@ -369,6 +383,7 @@ mod tests {
             format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES);
 
         let expected_response_rules = "RESPONSE RULES:\n\
+            - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
             - After tool results: respond in natural language. Never paste raw JSON.\n\
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
