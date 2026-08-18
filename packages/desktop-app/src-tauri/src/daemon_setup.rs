@@ -922,6 +922,29 @@ fn open_daemon_log(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
+/// Open a daemon log file for the spawned child's stdio, falling back to
+/// `Stdio::null()` (the pre-existing behavior this PR replaces) with a
+/// warning if the file can't be opened — e.g. a locked-by-AV or permissions
+/// edge case. A log-file-open failure must not block daemon startup itself:
+/// on macOS/Linux, a failed `launchd`/`systemd` log write never prevents the
+/// service from running (the app only ever writes the plist/unit text; the
+/// service manager owns opening the log), so treating it as fatal here would
+/// be a Windows-only regression relative to that behavior.
+#[cfg(windows)]
+fn daemon_log_stdio(path: &Path) -> std::process::Stdio {
+    match open_daemon_log(path) {
+        Ok(f) => std::process::Stdio::from(f),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to open daemon log file — falling back to discarding this stream"
+            );
+            std::process::Stdio::null()
+        }
+    }
+}
+
 /// Spawn the nodespaced binary as a detached background process on Windows.
 ///
 /// Uses `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` so the child is not a
@@ -939,6 +962,10 @@ fn open_daemon_log(path: &Path) -> std::io::Result<std::fs::File> {
 /// child spawned with `Stdio::null()` has no destination at all for that
 /// output (unlike `/dev/null`, there's no dropped-but-consistent sink; the
 /// handle is simply absent).
+///
+/// A log file that fails to open (see `daemon_log_stdio`) falls back to
+/// `Stdio::null()` for that stream rather than aborting the spawn — daemon
+/// startup must not fail just because logging couldn't be set up.
 #[cfg(windows)]
 fn spawn_daemon_windows(daemon_bin: &Path, log_dir: &Path) -> Result<()> {
     use std::os::windows::process::CommandExt;
@@ -947,16 +974,12 @@ fn spawn_daemon_windows(daemon_bin: &Path, log_dir: &Path) -> Result<()> {
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
     let (stdout_path, stderr_path) = daemon_log_paths(log_dir);
-    let stdout_log = open_daemon_log(&stdout_path)
-        .with_context(|| format!("Failed to open {} for daemon stdout", stdout_path.display()))?;
-    let stderr_log = open_daemon_log(&stderr_path)
-        .with_context(|| format!("Failed to open {} for daemon stderr", stderr_path.display()))?;
 
     Command::new(daemon_bin)
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(stderr_log))
+        .stdout(daemon_log_stdio(&stdout_path))
+        .stderr(daemon_log_stdio(&stderr_path))
         .spawn()
         .with_context(|| format!("Failed to spawn {}", daemon_bin.display()))?;
     tracing::info!(
