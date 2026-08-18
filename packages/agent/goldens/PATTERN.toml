@@ -126,3 +126,29 @@
 # Open and NOT run: declaring enums on a read tool's filter parameter. If that
 # works, the entity-types block may be redundant for writes AND reads, which
 # would be a materially larger context saving than this corpus has measured.
+#
+# ---------------------------------------------------------------------------
+# THE TWO-SITE ENTITY-TYPES SHAPE — UNIFORM, AND DELIBERATELY REDUNDANT
+# ---------------------------------------------------------------------------
+#
+# Every turn in every case carries the RELEVANT ENTITY TYPES block TWICE: once
+# resident (context_ops's workspace context) and once inside the candidate
+# block (routing.rs's per-candidate metadata). That is production's actual
+# shape, from two independent call sites sharing one heading constant.
+#
+# It is redundant, and that was measured rather than assumed. Removing the
+# per-candidate copy from both turns of dev-status-change-enum:
+#
+#   turn 2 (the write)   IDENTICAL — the duplicate buys nothing
+#   turn 1               correct tool and filter, but `query` emitted as the
+#                        literal characters """ instead of an empty string
+#
+# The turn-1 result is why the removal is not free. The instruction "use an
+# empty query with node_type set" outlived the block above it and the model
+# answered with a malformed argument — the same shape as no-entity-types'
+# dangling "as they appear below" pointer. Guidance that outlives the block it
+# references yields a plausible-looking wrong ARGUMENT, not a visible error.
+#
+# Kept because #2120 must reproduce production's shape and #2119 will assert on
+# it. Removing the duplication is production's decision; the corpus's job is to
+# carry the measurement of what it costs.
