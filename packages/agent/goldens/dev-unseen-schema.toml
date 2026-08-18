@@ -81,6 +81,11 @@ CALL search_nodes NOW: your next action is the tool call, not planning text.
 
 LISTING BY TYPE: to list every record of a type, use an empty query with \
 node_type set.
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
 user = "What releases do we have open?"
 expect = """
@@ -166,6 +171,11 @@ THE ID: use the id from the tool result above, copied exactly.
 THE CHANGE: express the new state in `field_values`. When a field lists \
 allowed values, pick the one the user's description means and write it \
 exactly as listed — the user will rarely say the value aloud.
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
 user = "2026.8.3 is out on staging now, baking overnight before we ship it"
 expect = """

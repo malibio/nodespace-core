@@ -116,6 +116,10 @@ a title — do not add a "title" or "name" field.
 A FIELD WITH A FIXED SET OF STATES: give it type "enum" and list every legal \
 value in allowed_values. An enum with no allowed_values can never be filled \
 legally afterwards.
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
 user = """
 We need to start tracking architecture decision records — each one has a \
