@@ -688,14 +688,20 @@ export const personNodePlugin: PluginDefinition = {
  * Which types get a slash command
  *
  * Slash commands are for **content primitives** — the building blocks you type while
- * outlining: text, headers, checkboxes, code, quotes, lists, rules, tables. `task` is the
- * one deliberate exception, because capturing a task mid-thought is core to outlining.
+ * outlining: text, headers, checkboxes, code, quotes, ordered lists, rules, tables.
+ * `task` is the one deliberate exception, because capturing a task mid-thought is core to
+ * outlining.
  *
- * Entity types are **not** slash-creatable — neither core entity types nor user-defined
- * schema types. Projects, collections, documents and users are containers and records set
- * up deliberately — by the agent, or through the schema/entity surfaces — not typed in ad
- * hoc mid-outline. They stay reachable: core entity types are listed in the sidenav as
- * user-queryable types and open to schema-driven properties forms.
+ * Entity types should **not** be slash-creatable — neither core entity types nor
+ * user-defined schema types. Projects, collections, documents and users are containers and
+ * records set up deliberately — by the agent, or through the schema/entity surfaces — not
+ * typed in ad hoc mid-outline. They stay reachable: core entity types are listed in the
+ * sidenav as user-queryable types and open to schema-driven properties forms.
+ *
+ * Two surfaces predate this rule and still contradict it: `person` and `ai-chat` carry
+ * slash commands above, and `createPluginFromSchema` generates one for every user-defined
+ * schema type. Each removes a working affordance if changed, so each needs its own
+ * decision — do not read either as precedent for adding new entity-type slash commands.
  *
  * `project` therefore has no plugin here at all. If you are here because `/project` seems
  * to be "missing", it is absent by decision, not by oversight. Note that `project` renders
