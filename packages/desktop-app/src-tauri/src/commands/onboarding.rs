@@ -209,6 +209,7 @@ pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
         cli_on_path,
         cli_warning: skill_setup::cli_warning(cli_on_path),
         error: None,
+        failure_is_new: false,
     })
 }
 

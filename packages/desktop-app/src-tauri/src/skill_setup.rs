@@ -11,18 +11,29 @@
 //!
 //! # Failure surfacing
 //!
-//! A genuine install failure is logged at `WARN` and pushed to the frontend
-//! (`skill:install-failed`) exactly once — the first time it happens.
-//! Subsequent launches keep retrying (the environment may since have been
-//! fixed — e.g. `bun` got installed), but log at `DEBUG` and skip the event
-//! so a persistent failure never becomes per-launch log/UI spam. A later
-//! success clears the persisted failure flag.
+//! A genuine install failure is logged at `WARN`; subsequent launches with
+//! the same still-unresolved failure log at `DEBUG` only (retries keep
+//! happening — the environment may since have been fixed, e.g. `bun` got
+//! installed — but the log doesn't repeat the warning every launch). A
+//! later success clears the persisted failure flag.
+//!
+//! [`SkillSetupResult::failure_is_new`] tells a caller whether *this*
+//! failure is the first one seen (vs. a repeat of an already-known one).
+//! Only the fire-and-forget startup call site (`lib.rs`) acts on it — it has
+//! no other way to reach the user, so it pushes a one-time `skill:install-failed`
+//! event to the frontend when `failure_is_new` is true. The onboarding/manual
+//! retry commands (`configure_skill`, `install_skill`) don't need this: their
+//! caller is a UI action already awaiting the command's return value, so
+//! `error` on the returned `SkillSetupResult` is all they need — emitting the
+//! event there too would show the same failure twice (once inline, once as a
+//! toast).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 const SETUP_FILE: &str = ".nodespace/setup.json";
 
@@ -47,6 +58,10 @@ pub struct SkillSetupResult {
     /// Human-readable warning shown in the UI when cli_on_path is false.
     pub cli_warning: Option<String>,
     pub error: Option<String>,
+    /// true when `error` is set AND this is the first launch to see this
+    /// particular failure (vs. a persisted repeat of an already-known one).
+    /// Always false when `success` is true. See module docs.
+    pub failure_is_new: bool,
 }
 
 fn setup_path() -> Result<PathBuf> {
@@ -98,9 +113,20 @@ pub fn check_cli_on_path() -> bool {
         .unwrap_or(false)
 }
 
+/// Serializes the whole read-state → run-installer → write-state critical
+/// section below across all three call sites (startup, the onboarding
+/// `configure_skill` command, and the manual-retry `install_skill` command).
+/// Without this, two concurrent calls (e.g. a user clicking "Reinstall" in
+/// Settings while the startup call is still running) could interleave their
+/// reads/writes of `~/.nodespace/setup.json` and silently drop one side's
+/// result (a stale `skill_install_failed`/`skill_installed` value).
+static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Run the skill installer. If `force` is false, this is a no-op when
 /// `~/.nodespace/setup.json` already marks skill_installed = true.
 pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
+    let _guard = INSTALL_LOCK.lock().await;
+
     // Check idempotency guard unless forced.
     let mut previously_failed = false;
     if !force {
@@ -113,6 +139,7 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
                     cli_on_path,
                     cli_warning: cli_warning(cli_on_path),
                     error: None,
+                    failure_is_new: false,
                 };
             }
             Ok(state) => previously_failed = state.skill_install_failed,
@@ -127,7 +154,7 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
     let installer_path = match resolve_installer_path(app) {
         Ok(path) => path,
         Err(e) => {
-            return finish_failed(app, previously_failed, cli_on_path, e).await;
+            return finish_failed(previously_failed, cli_on_path, e).await;
         }
     };
 
@@ -138,14 +165,13 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
     match result {
         Err(join_err) => {
             finish_failed(
-                app,
                 previously_failed,
                 cli_on_path,
                 format!("Installer task panicked: {join_err}"),
             )
             .await
         }
-        Ok(Err(exec_err)) => finish_failed(app, previously_failed, cli_on_path, exec_err).await,
+        Ok(Err(exec_err)) => finish_failed(previously_failed, cli_on_path, exec_err).await,
         Ok(Ok(agents)) => {
             // Persist the setup flag so we don't re-run on the next launch,
             // and clear any previously-recorded failure.
@@ -162,15 +188,17 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
                 cli_on_path,
                 cli_warning: cli_warning(cli_on_path),
                 error: None,
+                failure_is_new: false,
             }
         }
     }
 }
 
-/// Persist the failed state and produce the result, logging + emitting a
-/// frontend event only when this failure is new (see module docs).
+/// Persist the failed state and produce the result, logging at `WARN` only
+/// when this failure is new (see module docs) — `failure_is_new` on the
+/// returned result tells the caller whether to also push a one-time
+/// frontend event; only the startup call site does.
 async fn finish_failed(
-    app: &AppHandle,
     previously_failed: bool,
     cli_on_path: bool,
     error: String,
@@ -184,16 +212,10 @@ async fn finish_failed(
     }
 
     if previously_failed {
-        // Already known and already surfaced once — keep retrying quietly.
+        // Already known — keep retrying quietly, no repeat WARN/event.
         tracing::debug!("Skill install failed again: {}", error);
     } else {
         tracing::warn!("Skill install failed: {}", error);
-        if let Err(e) = app.emit(
-            "skill:install-failed",
-            serde_json::json!({ "error": error }),
-        ) {
-            tracing::warn!("Failed to emit skill:install-failed: {:#}", e);
-        }
     }
 
     SkillSetupResult {
@@ -202,6 +224,7 @@ async fn finish_failed(
         cli_on_path,
         cli_warning: cli_warning(cli_on_path),
         error: Some(error),
+        failure_is_new: !previously_failed,
     }
 }
 
@@ -236,22 +259,40 @@ fn resolve_installer_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathB
         return Ok(fallback);
     }
 
-    Err(format!(
-        "Skill installer not found (checked bundled resource and {}). \
-         Run `bun run build:skill` from the workspace root.",
+    // Keep the build-machine path out of the string that ends up in the UI
+    // (SkillSetupResult.error / the skill:install-failed toast) — it's only
+    // useful for whoever built the package, not whoever is running it.
+    tracing::debug!(
+        "Skill installer not found — checked bundled resource and {}",
         fallback.display()
-    ))
+    );
+    Err("Skill installer is missing from this build (packaging issue).".to_string())
 }
 
-/// Run the installer directly via `bun` — never `npx`/`npm` (this repo is
-/// Bun-only) — and collect installed agent names from stdout. Returns an
-/// error string on non-zero exit.
+/// Build the `bun <installer_path> install` invocation — the single place
+/// that decides how the installer is launched, so both production and tests
+/// exercise the exact same command construction. Never `npx`/`npm` — this
+/// repo is Bun-only, and `@nodespaceai/skill` isn't published anyway.
+fn installer_command(installer_path: &Path) -> Command {
+    let mut cmd = Command::new("bun");
+    cmd.arg(installer_path).arg("install");
+    cmd
+}
+
+/// Run the installer and collect installed agent names from stdout. Returns
+/// an error string on non-zero exit.
 fn run_skill_installer(installer_path: &Path) -> Result<Vec<String>, String> {
-    let output = Command::new("bun")
-        .arg(installer_path)
-        .arg("install")
-        .output()
-        .map_err(|e| format!("Failed to launch bun: {e}"))?;
+    let output = installer_command(installer_path).output().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            "The `bun` runtime was not found on $PATH. It's required to install NodeSpace's \
+                 AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode). Install it from \
+                 https://bun.sh and relaunch NodeSpace — or ignore this if you don't use one of \
+                 those agents."
+                .to_string()
+        } else {
+            format!("Failed to launch bun: {e}")
+        }
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -333,20 +374,74 @@ mod tests {
         assert!(resolved.exists());
     }
 
-    /// Guards against a future edit re-introducing `npx`/`npm` — the exact
-    /// invocation this issue fixes (exit 127, "command not found").
+    /// Inspects the actual constructed `Command`'s program (via its `Debug`
+    /// impl, which prints the literal program string Rust will `exec`) —
+    /// not the source text — so this can't be defeated by a non-literal
+    /// construction (`Command::new(&format!("np{}", "x"))` would still show
+    /// up here, unlike a source-text grep). Guards against a future edit
+    /// re-introducing `npx`/`npm` — the exact invocation this issue fixes
+    /// (exit 127, "command not found", because `@nodespaceai/skill` isn't
+    /// published).
     #[test]
-    fn run_skill_installer_never_shells_out_to_npx_or_npm() {
-        let src = include_str!("skill_setup.rs");
-        // Restricted to the invocation site itself, not this guard or the
-        // doc comments that explain the history of the bug being fixed.
-        let invocation_lines: Vec<&str> =
-            src.lines().filter(|l| l.contains("Command::new")).collect();
-        for line in invocation_lines {
-            assert!(
-                !line.contains("\"npx\"") && !line.contains("\"npm\""),
-                "found a Command::new invoking npx/npm: {line}"
-            );
-        }
+    fn installer_command_invokes_bun_directly_not_npx_or_npm() {
+        let cmd = installer_command(Path::new("/tmp/fake/install.js"));
+        let debug_repr = format!("{cmd:?}");
+
+        assert!(
+            debug_repr.starts_with("\"bun\""),
+            "expected bun as the program, got: {debug_repr}"
+        );
+        assert!(
+            !debug_repr.contains("npx") && !debug_repr.contains("npm"),
+            "found npx/npm in the constructed command: {debug_repr}"
+        );
+    }
+
+    /// End-to-end: actually runs the real built installer (via the same
+    /// `installer_command` production code uses) against an isolated,
+    /// throwaway `$HOME` — never the real one — and asserts SKILL.md and
+    /// the claude-code shim land where `packages/skill`'s agent config says
+    /// they should. Requires `bun` on $PATH (this repo is Bun-only, so the
+    /// test/pre-push environment always has it — see CLAUDE.md) and
+    /// `packages/skill` already built (`bun run build:skill`, staged by
+    /// scripts/test-gate.ts before this runs).
+    #[test]
+    fn run_skill_installer_actually_installs_into_an_isolated_home() {
+        let app = tauri::test::mock_app();
+        let installer_path = resolve_installer_path(&app.handle().clone())
+            .expect("dist/install.js must exist — run `bun run build:skill` first");
+
+        let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
+        std::fs::create_dir_all(fake_home.path().join(".claude"))
+            .expect("create fake .claude dir so the installer detects claude-code");
+
+        // .env() only affects this child process, not the test binary's own
+        // environment — safe under parallel test execution (no risk to any
+        // other test that resolves the real $HOME).
+        let output = installer_command(&installer_path)
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+
+        assert!(
+            output.status.success(),
+            "installer failed — stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let installed_skill = fake_home.path().join(".claude/skills/nodespace/SKILL.md");
+        assert!(
+            installed_skill.exists(),
+            "SKILL.md was not installed into the fake $HOME at {}",
+            installed_skill.display()
+        );
+        let installed_shim = fake_home
+            .path()
+            .join(".claude/skills/nodespace/nodespace-hook.ts");
+        assert!(
+            installed_shim.exists(),
+            "claude-code shim was not installed"
+        );
     }
 }
