@@ -178,7 +178,10 @@ async fn test_create_schema_duplicate_rejection_carries_existing_definition() {
 
     // Carries the EXISTING type's real fields...
     assert!(
-        msg.contains("title") && msg.contains("owner") && msg.contains("triage") && msg.contains("shipped"),
+        msg.contains("title")
+            && msg.contains("owner")
+            && msg.contains("triage")
+            && msg.contains("shipped"),
         "rejection must render the existing type's actual definition: {msg}"
     );
 
