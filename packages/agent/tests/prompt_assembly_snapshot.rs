@@ -45,7 +45,7 @@
 //!    descriptions, and full parameter schemas, scoped to the fixture
 //!    candidates' whitelists.
 //! 4. **Stage-1 request** — `STAGE1_SYSTEM_PROMPT` + `stage1_tool_definitions()`.
-//! 5. **`RELEVANT ENTITY TYPES`**, which reaches the prompt from two
+//! 5. **`EXISTING SCHEMAS`**, which reaches the prompt from two
 //!    independent sites and both are covered separately:
 //!    - the Stage-2 candidate block (site 2, inside this file's
 //!      `stage2_candidate_block_matches_golden`)
@@ -110,7 +110,8 @@ use std::collections::HashMap;
 use nodespace_agent::agent_types::{SkillCandidate, ToolDefinition};
 use nodespace_agent::local_agent::agent_loop::STAGE1_SYSTEM_PROMPT;
 use nodespace_agent::local_agent::routing::{
-    render_candidates_for_prompt, stage1_tool_definitions, stage2_tools,
+    declare_write_tool_fields, render_candidates_for_prompt, stage1_tool_definitions,
+    stage2_tools,
 };
 use nodespace_agent::local_agent::tools::model_facing_tool_definitions;
 use nodespace_agent::prompt_assembler::PromptAssembler;
@@ -435,7 +436,7 @@ fn skill_description(tmpl: &NodeTemplate) -> String {
 /// `EntityTypeDescriptor` JSON encoding.
 ///
 /// "Node Creation" and "Schema Creation" are chosen deliberately: both are
-/// mutating skills whose own instructions reference `RELEVANT ENTITY TYPES`
+/// mutating skills whose own instructions reference `EXISTING SCHEMAS`
 /// directly, and both whitelist real registered tools
 /// (`create_node`/`create_schema`/…), so `stage2_tools` exercises its scoped
 /// (non-fail-open) branch rather than falling back to the full surface.
@@ -614,7 +615,7 @@ fn resident_system_prompt_matches_golden() {
     golden::assert_matches("resident_system_prompt", &system_prompt);
 }
 
-/// `RELEVANT ENTITY TYPES` site 2 on its own: the raw
+/// `EXISTING SCHEMAS` site 2 on its own: the raw
 /// `WorkspaceContext::format_for_prompt` output, independent of its later
 /// substitution into the resident prompt above.
 #[test]
@@ -624,7 +625,7 @@ fn resident_workspace_context_matches_golden() {
 }
 
 /// Site 2: the Stage-2 candidate block, including each candidate's rendered
-/// instruction subtree. Also covers `RELEVANT ENTITY TYPES` site 1
+/// instruction subtree. Also covers `EXISTING SCHEMAS` site 1
 /// (per-candidate `schema_metadata`).
 #[test]
 fn stage2_candidate_block_matches_golden() {
@@ -641,6 +642,15 @@ fn stage2_tool_surface_matches_golden() {
     let candidates = fixture_candidates();
     let all_tools = model_facing_tool_definitions();
     let scoped = stage2_tools(&candidates, &all_tools);
+    // `agent_loop.rs` calls this immediately after `stage2_tools`, gated on
+    // `!session.routing_disabled` (core#2120) — the fixture models the
+    // routing-enabled path (the default, and the only one this fixture's
+    // candidates give a meaningful answer for), so it is called
+    // unconditionally here to keep this gate a faithful reproduction of what
+    // production actually sends on that path. `declare_write_tool_fields`'s
+    // own doc comment explains why this is a separate call rather than
+    // folded into `stage2_tools` itself.
+    let scoped = declare_write_tool_fields(&candidates, scoped);
     assert!(
         scoped.len() < all_tools.len(),
         "fixture candidates should scope the tool surface down from the full {} tools, not \

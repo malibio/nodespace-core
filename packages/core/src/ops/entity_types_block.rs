@@ -1,4 +1,4 @@
-//! The single renderer for the `RELEVANT ENTITY TYPES` prompt block.
+//! The single renderer for the `EXISTING SCHEMAS` prompt block.
 //!
 //! The block is emitted into the agent's system prompt from two places — the
 //! workspace-context path ([`super::context_ops`]) and the skill-routing path
@@ -37,7 +37,7 @@ pub struct EntityTypeDescriptor {
     pub name: Option<String>,
     pub fields: Vec<EntityFieldDescriptor>,
     /// Rendered because the `create_node` tool description promises the
-    /// template is "shown in ENTITY TYPES"; that promise needs a referent.
+    /// template is "shown in EXISTING SCHEMAS"; that promise needs a referent.
     pub title_template: Option<String>,
 }
 
@@ -327,7 +327,7 @@ pub fn descriptors_from_json(meta: &Value) -> Vec<EntityTypeDescriptor> {
 /// Delivered on a *tool result* rather than the routing prompt, per ADR-064
 /// rule 4 (tool results own facts). That choice is what keeps this independent
 /// of the `is_core` exclusion in [`super::context_ops`] and the routing block:
-/// `RELEVANT ENTITY TYPES` answers "which user-defined types are relevant to
+/// `EXISTING SCHEMAS` answers "which user-defined types are relevant to
 /// this message", a retrieval question over an unbounded set. Core types are
 /// the opposite — a small fixed set that needs to be *always known* when the
 /// model is looking at a node of that type, not *found*. Routing that through
@@ -337,7 +337,7 @@ pub fn descriptors_from_json(meta: &Value) -> Vec<EntityTypeDescriptor> {
 /// ADR-063 is unaffected by this channel: the list names only field names the
 /// schema *already defines*, so it opens no path to writing a new bare key
 /// onto a core type. The prefix rule lives in `create_node`'s guidance and
-/// keys off `RELEVANT ENTITY TYPES`, which this deliberately does not touch.
+/// keys off `EXISTING SCHEMAS`, which this deliberately does not touch.
 ///
 /// `set` is the load-bearing flag — without it this would merely be a longer
 /// list of names, and "defined but unset" would still be unreadable.
@@ -612,7 +612,7 @@ mod tests {
     /// re-verification for any new delivery path): this list can only ever name
     /// keys the schema already defines, so it adds no route by which a model
     /// writes a new bare property key onto a core type. The prefix rule keys off
-    /// `RELEVANT ENTITY TYPES`, which this channel does not touch.
+    /// `EXISTING SCHEMAS`, which this channel does not touch.
     #[test]
     fn available_properties_names_only_schema_defined_fields() {
         let schema = sample_schema();

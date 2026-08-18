@@ -10,7 +10,7 @@
 //! `status` was the field and `open` a legal value. Both are defined on the
 //! schema all along.
 //!
-//! Core types are the whole point here: the `RELEVANT ENTITY TYPES` block
+//! Core types are the whole point here: the `EXISTING SCHEMAS` block
 //! excludes them by construction, so for `task`/`text` there was no path —
 //! prompt block or tool call — by which the field list could reach the model.
 //! The fix delivers it on the tool result instead (ADR-064 rule 4), leaving

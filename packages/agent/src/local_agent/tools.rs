@@ -135,9 +135,9 @@ struct GetRelatedNodesParams {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResolveQueryParams {
-    /// The user's natural-language request, verbatim (e.g. "Mark the $500 invoice as paid").
+    /// The user's natural-language request, verbatim (e.g. "The auth one is ready for review now").
     pub request: String,
-    /// The target node type to resolve the request against (e.g. "invoice").
+    /// The target node type to resolve the request against (e.g. "ticket").
     pub node_type: String,
 }
 
@@ -378,14 +378,17 @@ fn strip_node_uri(id: &str) -> &str {
 fn def_search_nodes() -> ToolDefinition {
     ToolDefinition {
         name: "search_nodes".into(),
-        description: "Find, list, and filter nodes. This is the single tool for querying the graph by \
+        description: "Find, list, and filter nodes by title, type, or stored field value. Returns each \
+            node's id and fields. Use when the node you need is not already identified in this \
+            conversation — re-searching for a record already returned earlier wastes a turn. This is the \
+            single tool for querying the graph by \
             title, type, and/or typed properties — use it for all three of: \
-            (1) title/keyword lookup (query='invoice'); \
-            (2) listing every node of a type (query='' or query='*', node_type='task' — both enumerate all of that type; \
+            (1) title/keyword lookup (query='auth'); \
+            (2) listing every node of a type (query='' or query='*', node_type='ticket' — both enumerate all of that type; \
             do not expect '*' to do a wildcard substring match, it means \"no keyword filter\" just like ''); \
-            (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — \
+            (3) filtering by typed properties with operators (status='in_dev', a date field before a given date) — \
             pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). \
-            Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. \
+            A count of 0 means nothing in the workspace matches — it does not mean the query was wrong. \
             When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that \
             type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: \
             retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. \
@@ -402,7 +405,7 @@ fn def_search_nodes() -> ToolDefinition {
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types."
+                    "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types."
                 },
                 "filters": {
                     "type": "array",
@@ -490,8 +493,8 @@ fn def_search_nodes() -> ToolDefinition {
 /// `resolve_query` resolves against **user-defined (non-core) types only.**
 ///
 /// Not a limitation of the resolver — a consequence of its required
-/// `node_type` parameter, whose description sends the model to the `RELEVANT
-/// ENTITY TYPES` block. As things stand no seeded skill declares `node_types`,
+/// `node_type` parameter, whose description sends the model to the `EXISTING
+/// SCHEMAS` block. As things stand no seeded skill declares `node_types`,
 /// so every path that fills that block drops `is_core` schemas
 /// (`skill_ops`'s unscoped non-core fallback and
 /// `context_ops::parse_and_filter_non_core_schemas`): for a bare-value update
@@ -504,8 +507,8 @@ fn def_search_nodes() -> ToolDefinition {
 /// is a latent path, not the current behaviour, and it would surface the tool
 /// for core types without the rest of this reasoning being revisited.
 ///
-/// This matches the tool's own examples — an amount, an invoice, a code are
-/// all custom-type — and core types have dedicated verbs (`update_task_status`)
+/// This matches the tool's own examples — a bare value, a relative date, a
+/// paraphrased description are all custom-type — and core types have dedicated verbs (`update_task_status`)
 /// plus properties the model can name directly, so the indirect-reference case
 /// this tool exists for is far weaker there. Recorded because the boundary is
 /// otherwise implicit in two filters in a different crate, and reads as a bug
@@ -517,29 +520,27 @@ fn def_search_nodes() -> ToolDefinition {
 fn def_resolve_query() -> ToolDefinition {
     ToolDefinition {
         name: "resolve_query".into(),
-        description: "Find the single node an ambiguous natural-language request refers to, when the \
-            request bundles an implicit semantic decision you are not certain how to phrase as a search \
-            — e.g. which property a value like '$500' refers to, what a relative date like 'next Friday' \
-            or 'overdue' resolves to, or how to identify a specific node from a paraphrased description. \
-            This performs the search itself — it does NOT return query arguments for you to pass to \
-            search_nodes. On a unique match, returns 'resolved: true' with the node's id, title, and \
-            properties — act on that node directly (e.g. pass its id straight to update_node). On no \
-            match, returns 'resolved: false, reason: \"no_match\"' — tell the user nothing matched, do \
-            not retry the same request. On more than one match, returns 'resolved: false, \
-            reason: \"multiple_matches\"' with a 'candidates' list — ask the user which one they meant, \
-            do not guess. Skip this for simple, unambiguous requests (e.g. 'list all my invoices') — \
-            call search_nodes directly instead."
+        description: "Resolve an indirect reference — a bare value, a relative date, or a paraphrased \
+            description — to the single node it refers to, when you are not certain how to phrase it as \
+            a search. This performs the search itself — it does NOT return query arguments for you to \
+            pass to search_nodes; do not call search_nodes afterward. On a unique match, returns \
+            'resolved: true' with the node's id, title, and properties — act on that node directly (e.g. \
+            pass its id straight to update_node). On no match, returns 'resolved: false, \
+            reason: \"no_match\"' — tell the user nothing matched, do not retry the same request. On more \
+            than one match, returns 'resolved: false, reason: \"multiple_matches\"' with a 'candidates' \
+            list — ask the user which one they meant, do not guess. Skip this for simple, unambiguous \
+            requests (e.g. 'list all my tickets') — call search_nodes directly instead."
             .into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "request": {
                     "type": "string",
-                    "description": "The user's request, verbatim (e.g. \"Mark the $500 invoice as paid\")."
+                    "description": "The user's request, verbatim (e.g. \"The auth one is ready for review now\")."
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "The target node type to resolve against (e.g. 'invoice'). Copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording."
+                    "description": "The target node type to resolve against (e.g. 'ticket'). Copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording."
                 }
             },
             "required": ["request", "node_type"]
@@ -637,17 +638,30 @@ fn def_get_node() -> ToolDefinition {
 fn def_create_node() -> ToolDefinition {
     ToolDefinition {
         name: "create_node".into(),
-        description: "Create a new node. Always pass 'content' as the node name or text. Always pass 'field_values' with every schema field value the user supplied — it is the only way those values are stored, and a call without them creates an empty record. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'field_values' — the service composes the displayed title from them automatically.".into(),
+        description: "Create one new record of a type that already exists. Use for a single instance, \
+            never to define a new kind of record. Always pass 'content' as the record's title and \
+            nothing else — facts about it belong in 'field_values', never appended to the title. Always \
+            pass 'field_values' with every particular the user supplied, checked against the type's own \
+            field list — it is the only way those values are stored, and a call without them creates an \
+            empty record that still reports as saved. If the schema has a title_template (shown in \
+            EXISTING SCHEMAS), include those template fields in 'field_values' — the service composes \
+            the displayed title from them automatically. The example's user said: \"open a ticket for \
+            dana to rotate the signing keys on deploy in S-24, it's in dev, and it depends on the vault \
+            migration\". Note depends_on: the type lists no field for it, so it is carried under a key \
+            named after the user's own wording rather than dropped. Example call: {\"node_type\": \
+            \"ticket\", \"content\": \"Rotate signing keys on deploy\", \"field_values\": {\"status\": \
+            \"in_dev\", \"assignee\": \"dana\", \"sprint\": \"S-24\", \"depends_on\": \"the vault \
+            migration\"}}".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The node name or text content"
+                    "description": "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title."
                 },
                 "node_type": {
                     "type": "string",
-                    "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'project', 'customer'). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it."
+                    "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'ticket', 'adr'). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it."
                 },
                 // Named `field_values`, NOT `properties` — a parameter literally
                 // named `properties` collides with JSON Schema's own `properties`
@@ -659,7 +673,7 @@ fn def_create_node() -> ToolDefinition {
                 // rename this back to `properties`.
                 "field_values": {
                     "type": "object",
-                    "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from RELEVANT ENTITY TYPES (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
+                    "description": "The values the user supplied. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from EXISTING SCHEMAS (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields."
                 },
                 "parent_id": {
                     "type": "string",
@@ -674,24 +688,32 @@ fn def_create_node() -> ToolDefinition {
 fn def_update_node() -> ToolDefinition {
     ToolDefinition {
         name: "update_node".into(),
-        description: "Update an existing node's content or field values immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"field_values\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"field_values\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"field_values\": {\"isPaid\": true}}.".into(),
+        description: "Update an existing node's fields immediately — call this directly with the node id \
+            you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to \
+            confirm or supply it first. The node service recomputes the title automatically after any \
+            update. An id on its own changes nothing: every call must also carry the change itself, in \
+            \"content\", \"field_values\", or both. When the user describes a new state in words (\"it's \
+            ready for review\", \"put it on dana\", \"mark it done\"), express that state in \
+            \"field_values\" — see that parameter for which key to use. Example call: \
+            {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: \
+            {\"id\": \"a1b2c3d4-...\", \"field_values\": {\"status\": \"in_dev\"}}.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "id": {
                     "type": "string",
-                    "description": "Node ID to update, e.g. \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\""
+                    "description": "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
                 },
                 "content": {
                     "type": "string",
-                    "description": "New content/text for the node (optional), e.g. \"Buy milk and eggs\""
+                    "description": "New title text (optional). Only when the user is renaming the node."
                 },
                 // Named `field_values`, NOT `properties` — see the identical note
                 // on `def_create_node`'s parameter of the same name. Do not rename
                 // this back to `properties`.
                 "field_values": {
                     "type": "object",
-                    "description": "Field values to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use a key the node's type already defines, copied character for character — either one of the node's OWN existing property keys (from the properties returned by resolve_query, get_node, or search_nodes) or any field listed in that node's 'available_properties' from get_node. A field listed there with \"set\": false is still a legitimate target: it is defined on the type and simply has no value yet, so writing it is how it gets one. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. Pick the key the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}; \"set the due date to Friday\" against an available_properties entry {\"name\": \"due_date\", \"set\": false} means {\"due_date\": \"...\"}. When a field lists allowed_values, use one of those values exactly. Send only the keys that change, with their new values, not the unchanged ones."
+                    "description": "The change itself: field keys to new values, e.g. {\"status\": \"done\"}, required whenever the request changes the node's state rather than its title. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. When a field lists allowed values, use one of those values exactly — never a paraphrase of the user's wording, never a capitalised or spaced form of the value. Send only the keys that change, with their new values, not the unchanged ones."
                 }
             },
             "required": ["id"]
@@ -699,24 +721,188 @@ fn def_update_node() -> ToolDefinition {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Write-tool field declarations, generated per request from retrieved schemas
+// ---------------------------------------------------------------------------
+//
+// `def_create_node`/`def_update_node` above declare `field_values` as a bare
+// object: correct as a fallback when no schema was retrieved for this turn,
+// but measured NOT to work as the only declaration. `dev-instance-creation`
+// (packages/agent/goldens/) dropped a user-supplied value 3/3 across eight
+// prose-channel arms — candidate instructions, this description, three
+// worked-example shapes, a `content` boundary rule, an ordered procedure, and
+// that procedure with its enumeration forced to print. The model's own
+// printed enumeration showed the value was never in its input: prose cannot
+// fix a loss that happens upstream of it. Declaring the field as a typed
+// sub-property of `field_values` closed it 3/3 (`packages/agent/goldens/PATTERN.toml`).
+//
+// This is that declaration step, applied per Stage-2 request rather than
+// baked into the static `ToolDefinition`s above — see
+// `routing::stage2_tools`, the caller.
+
+/// Map a NodeSpace schema field type to the JSON Schema type that best
+/// constrains it. `text`, `date`, and `enum` are all represented as JSON
+/// strings on the wire (an ISO date and an enum member are both strings);
+/// everything else NodeSpace's schema system defines maps directly.
+fn json_schema_type_for_field(field_type: &str) -> &'static str {
+    match field_type {
+        "number" => "number",
+        "boolean" => "boolean",
+        "array" => "array",
+        "object" => "object",
+        _ => "string", // text, date, enum, and any future scalar default to string
+    }
+}
+
+/// Build the `field_values` sub-property declarations for one or more
+/// retrieved entity types.
+///
+/// A field name is unioned rather than overwritten when it repeats across
+/// more than one descriptor: at the point this schema is built, the model
+/// has not yet chosen `node_type`, so a value legal on any one of the
+/// candidate types must not be excluded by another candidate type's
+/// declaration for the same field name. This is a generalisation, not a
+/// case measured directly in the corpus — the corpus's own cases each
+/// operate on a single type; recorded here rather than left implicit, so a
+/// future measurement can confirm or replace it.
+///
+/// Every occurrence of a field name is collected before any type/enum
+/// decision is made for it — not folded left-to-right as descriptors are
+/// visited. A single fold got this wrong (caught in review): whether a
+/// final `enum` restriction is safe depends on ALL occurrences of that name
+/// at once (one non-enum occurrence anywhere means no fixed list is safe
+/// for any of them), which is a property of the whole group, not
+/// decidable by looking at only the occurrences seen so far in one
+/// processing order.
+fn declared_field_values_properties(
+    descriptors: &[nodespace_core::ops::entity_types_block::EntityTypeDescriptor],
+) -> serde_json::Map<String, Value> {
+    let mut occurrences: std::collections::HashMap<
+        &str,
+        Vec<&nodespace_core::ops::entity_types_block::EntityFieldDescriptor>,
+    > = std::collections::HashMap::new();
+    for descriptor in descriptors {
+        for field in &descriptor.fields {
+            occurrences.entry(field.name.as_str()).or_default().push(field);
+        }
+    }
+
+    let mut properties = serde_json::Map::new();
+    for (name, fields) in occurrences {
+        // An `enum` restriction is only safe when EVERY occurrence of this
+        // field name is itself an enum: a single plain-scalar occurrence
+        // proves the field can legally hold a value outside any fixed list,
+        // so imposing one — from an enum occurrence elsewhere, in either
+        // processing order — would silently reject a value that occurrence
+        // permits. This is the fix for the bug caught in review: an earlier
+        // version widened `type` to `string` on a type conflict but left a
+        // stale `enum` array behind, which is MORE restrictive than the
+        // untyped fallback it was supposed to replace.
+        let every_occurrence_is_enum = fields.iter().all(|f| !f.enum_values.is_empty());
+
+        let declared_types: std::collections::BTreeSet<&str> = fields
+            .iter()
+            .map(|f| json_schema_type_for_field(&f.field_type))
+            .collect();
+        // A single agreed JSON Schema type is used as-is; disagreement
+        // widens to `string` — the most permissive scalar — rather than
+        // arbitrarily keeping whichever occurrence was visited first.
+        let json_type = if declared_types.len() == 1 {
+            declared_types.into_iter().next().expect("len == 1")
+        } else {
+            "string"
+        };
+
+        let mut entry = serde_json::Map::new();
+        entry.insert("type".to_string(), json!(json_type));
+        if every_occurrence_is_enum {
+            let mut merged: Vec<Value> = Vec::new();
+            for field in &fields {
+                for value in &field.enum_values {
+                    let v = json!(value);
+                    if !merged.contains(&v) {
+                        merged.push(v);
+                    }
+                }
+            }
+            entry.insert("enum".to_string(), json!(merged));
+        }
+        properties.insert(name.to_string(), Value::Object(entry));
+    }
+    properties
+}
+
+/// Given a write tool's static [`ToolDefinition`], return a copy with
+/// `field_values`'s sub-properties declared from `descriptors`, when the
+/// tool actually has a `field_values` object parameter and `descriptors` is
+/// non-empty.
+///
+/// A tool without that parameter shape (everything except `create_node`/
+/// `update_node`) or a turn with no retrieved schema (fail-open, or no
+/// candidate whitelisting this tool scored highest — see
+/// `routing::stage2_tools`) is returned unchanged: the bare-object fallback
+/// in `def_create_node`/`def_update_node` still applies, which is the
+/// correct behaviour for `dev-schema-creation`'s distractor `create_node`
+/// (kept deliberately undeclared — see that case's notes).
+pub(crate) fn with_declared_field_values(
+    mut tool: ToolDefinition,
+    descriptors: &[nodespace_core::ops::entity_types_block::EntityTypeDescriptor],
+) -> ToolDefinition {
+    if descriptors.is_empty() {
+        return tool;
+    }
+    let properties = declared_field_values_properties(descriptors);
+    if properties.is_empty() {
+        // A retrieved type with no fields of its own (an unusual but real
+        // shape — a schema can legitimately have `fields: []`) must not
+        // turn into an explicit `field_values.properties: {}`. An empty but
+        // PRESENT `properties` map reads to some JSON Schema consumers as
+        // "no legal keys", which is MORE restrictive than the bare-object
+        // fallback this would otherwise replace — the opposite of a no-op.
+        return tool;
+    }
+    // `.get_mut(...)` chained rather than `[...]` indexing: `Value`'s
+    // `IndexMut` INSERTS a `Null` at a missing key on an object (so it can
+    // return a mutable reference to index into further), which would leave
+    // a stray `"properties": null` behind on a tool whose schema has no
+    // `properties` object at all. `get_mut` only looks up; a missing key
+    // returns `None` with no mutation, which is what "no-op on a tool this
+    // doesn't apply to" requires.
+    let Some(field_values) = tool
+        .parameters_schema
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut("field_values"))
+    else {
+        return tool;
+    };
+    if !field_values.is_object() || field_values.get("type") != Some(&json!("object")) {
+        return tool;
+    }
+    field_values["properties"] = Value::Object(properties);
+    tool
+}
+
 fn def_create_relationship() -> ToolDefinition {
     ToolDefinition {
         name: "create_relationship".into(),
-        description: "Create a relationship between two nodes".into(),
+        description: "Record a named relationship between two existing records, given both ids. Use \
+            this whenever the user describes one record standing in a relation to another — \
+            superseding, blocking, belonging to — rather than writing that relation into a text field."
+            .into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
                 "from_id": {
                     "type": "string",
-                    "description": "Source node ID"
+                    "description": "Id of the record that acts — the one doing the superseding, blocking, or belonging. Copied exactly from a tool result."
                 },
                 "to_id": {
                     "type": "string",
-                    "description": "Target node ID"
+                    "description": "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
                 },
                 "relationship_type": {
                     "type": "string",
-                    "description": "Type of relationship. Use a relationship name defined on the relevant schema(s) (e.g. 'has_task', 'billed_to') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
+                    "description": "The relation's name, lowercase snake_case. Use a name defined on the relevant schema(s) (e.g. 'supersedes', 'has_task') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
                 }
             },
             "required": ["from_id", "to_id", "relationship_type"]
@@ -777,10 +963,18 @@ fn def_search_skills() -> ToolDefinition {
 fn def_create_schema() -> ToolDefinition {
     ToolDefinition {
         name: "create_schema".into(),
-        description: "Create a new entity type (schema) with custom fields and relationships. \
-            The top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. 'Invoice', 'Project'). \
-            The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Customer Profile' → 'customer_profile'). \
-            After creation, use this ID as node_type when creating instances. \
+        description: "Define a new entity type with its fields. Use when the user describes a kind of \
+            record the workspace does not track yet, not a single instance of an existing kind. The \
+            top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. \
+            'Ticket', 'ADR'). \
+            The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Release Plan' → 'release_plan'). \
+            After creation, use this ID as node_type when creating instances. The example shows one \
+            field per detail the user mentioned, including a pointer at another record (e.g. \"blocks \
+            another ticket\") as a field rather than a second type. Example call: {\"name\": \"Ticket\", \
+            \"fields\": [{\"name\": \"status\", \"type\": \"enum\", \"required\": true, \"coreValues\": \
+            [{\"value\": \"ready_for_dev\", \"label\": \"Ready for Dev\"}, {\"value\": \"in_dev\", \
+            \"label\": \"In Dev\"}, {\"value\": \"done\", \"label\": \"Done\"}]}, {\"name\": \"assignee\", \
+            \"type\": \"text\"}, {\"name\": \"blocks\", \"type\": \"text\"}]}. \
             FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. \
             EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), \
             you MUST define 'name' as a text field so the template can reference it. \
@@ -790,7 +984,7 @@ fn def_create_schema() -> ToolDefinition {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Display name for the entity type (e.g., 'Project', 'Customer')"
+                    "description": "Display name for the entity type, singular (e.g. \"Ticket\", \"ADR\")."
                 },
                 "description": {
                     "type": "string",
@@ -798,16 +992,16 @@ fn def_create_schema() -> ToolDefinition {
                 },
                 "fields": {
                     "type": "array",
-                    "description": "REQUIRED. Array of field definitions — every field on this entity type must be listed explicitly here, even if empty ([]). Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.",
+                    "description": "REQUIRED. Every field this type needs, listed explicitly here, even if empty ([]) — do not include a title or name field, every record already has a title. A detail with no field is silently lost, so work through the user's message and check each detail against this list before calling. Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": { "type": "string", "description": "Field name (e.g., 'status', 'email')" },
+                            "name": { "type": "string", "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date')" },
                             "type": { "type": "string", "description": "Field type: text, number, date, enum, array, object, boolean" },
-                            "required": { "type": "boolean", "description": "Whether this field is required" },
+                            "required": { "type": "boolean", "description": "Whether every record of this type must carry a value" },
                             "indexed": { "type": "boolean", "description": "Whether to index for search/filter" },
                             "description": { "type": "string", "description": "Field description" },
-                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
+                            "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or a ticket key). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
                             "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
                                 "type": "array",
@@ -830,12 +1024,12 @@ fn def_create_schema() -> ToolDefinition {
                 },
                 "relationships": {
                     "type": "array",
-                    "description": "Relationships to other node types. Use instead of array fields when referencing existing types (e.g., project has_task task).",
+                    "description": "Relationships to other node types. Use instead of array fields when referencing existing types (e.g., ticket has_task task).",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": { "type": "string", "description": "Relationship name (e.g., 'has_task', 'assigned_to', 'depends_on')" },
-                            "targetType": { "type": "string", "description": "Target node type ID — MUST be an existing type from the ENTITY TYPES list (e.g., 'task', 'project', 'customer'). Do NOT invent types that don't exist yet." },
+                            "name": { "type": "string", "description": "Relationship name, lowercase snake_case (e.g. 'supersedes', 'blocks', 'assigned_to')" },
+                            "targetType": { "type": "string", "description": "Target node type ID — MUST be an existing type from the EXISTING SCHEMAS list (e.g., 'task', 'ticket', 'adr'). Do NOT invent types that don't exist yet." },
                             "direction": { "type": "string", "enum": ["out", "in"], "description": "Direction: 'out' (this→target, default) or 'in' (target→this)" },
                             "cardinality": { "type": "string", "enum": ["one", "many"], "description": "Cardinality: 'one' or 'many' (default)" },
                             "description": { "type": "string", "description": "What this relationship represents" }
@@ -858,7 +1052,7 @@ fn def_update_schema() -> ToolDefinition {
             "properties": {
                 "schema_id": {
                     "type": "string",
-                    "description": "ID of the schema to update (e.g. 'project', 'customer')"
+                    "description": "ID of the schema to update (e.g. 'ticket', 'adr')"
                 },
                 "description": {
                     "type": "string",
@@ -1261,7 +1455,7 @@ impl Tool {
     }
 
     /// Whether this tool has a required parameter whose description sends the
-    /// model to the `RELEVANT ENTITY TYPES` block that only Stage-2 routing
+    /// model to the `EXISTING SCHEMAS` block that only Stage-2 routing
     /// (`routing::render_candidates_for_prompt`) injects.
     ///
     /// An exhaustive match, not a list, so a future tool with the same
@@ -1270,7 +1464,7 @@ impl Tool {
     /// parameters stand on their own.
     ///
     /// `resolve_query`'s `node_type` is `required` and its description reads
-    /// "copy the id exactly from the RELEVANT ENTITY TYPES block" — on the
+    /// "copy the id exactly from the EXISTING SCHEMAS block" — on the
     /// fail-open path (no candidate cleared the Stage-2 score gate) that
     /// block never renders, so the model is directed to copy from context it
     /// cannot see. `search_nodes` carries the identical wording but
@@ -2952,7 +3146,7 @@ mod tests {
     #[test]
     fn only_resolve_query_requires_routed_guidance() {
         // resolve_query's node_type is a required parameter whose description
-        // depends on the RELEVANT ENTITY TYPES block Stage-2 routing injects
+        // depends on the EXISTING SCHEMAS block Stage-2 routing injects
         // (#1840). Every other registered tool's required parameters must
         // stand on their own regardless of routing outcome.
         for t in Tool::ALL {
@@ -3180,22 +3374,22 @@ mod tests {
         assert_eq!(all_tool_definitions().len(), 14);
     }
 
-    /// `node_type` argument-shape guidance (copy the id exactly from RELEVANT
-    /// ENTITY TYPES, never paraphrase/guess) moved here from resident prose per
+    /// `node_type` argument-shape guidance (copy the id exactly from EXISTING
+    /// SCHEMAS, never paraphrase/guess) moved here from resident prose per
     /// ADR-064 rule 1 (tool schemas own argument shape). `update_node` has no
     /// `node_type` parameter — it addresses by `id` — so it is intentionally
     /// excluded.
     #[test]
-    fn node_type_params_bind_to_relevant_entity_types() {
+    fn node_type_params_bind_to_existing_schemas() {
         for tool in [Tool::SearchNodes, Tool::CreateNode, Tool::ResolveQuery] {
             let def = tool.definition();
             let node_type_desc = def.parameters_schema["properties"]["node_type"]["description"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{} must have a node_type parameter", tool.name()));
             assert!(
-                node_type_desc.contains("RELEVANT ENTITY TYPES")
+                node_type_desc.contains("EXISTING SCHEMAS")
                     && node_type_desc.to_lowercase().contains("copy"),
-                "{}'s node_type description must instruct copying the id exactly from RELEVANT ENTITY TYPES, got: {node_type_desc:?}",
+                "{}'s node_type description must instruct copying the id exactly from EXISTING SCHEMAS, got: {node_type_desc:?}",
                 tool.name()
             );
         }
@@ -4733,7 +4927,7 @@ mod tests {
 
     /// The scenario-4 defect: the model calls `create_node` with an invented
     /// `node_type` (a display name, a paraphrase of a real schema id) instead
-    /// of copying the id from RELEVANT ENTITY TYPES. Before this fix the call
+    /// of copying the id from EXISTING SCHEMAS. Before this fix the call
     /// SUCCEEDED — CustomNodeBehavior accepts any type string — so the node
     /// was stored as a bare shell with every supplied property silently
     /// dropped, and the model was told the write succeeded. It must now
@@ -5204,5 +5398,258 @@ mod tests {
             graph_boost: params.graph_boost,
         };
         assert_eq!(input.scope, Some("conversations".to_string()));
+    }
+
+    // -- write-tool field-values declarations, generated from retrieved schemas --
+
+    use nodespace_core::ops::entity_types_block::{EntityFieldDescriptor, EntityTypeDescriptor};
+
+    fn ticket_descriptor() -> EntityTypeDescriptor {
+        EntityTypeDescriptor {
+            type_id: "ticket".to_string(),
+            name: Some("Ticket".to_string()),
+            fields: vec![
+                EntityFieldDescriptor {
+                    name: "status".to_string(),
+                    field_type: "enum".to_string(),
+                    enum_values: vec![
+                        "ready_for_dev".to_string(),
+                        "in_dev".to_string(),
+                        "done".to_string(),
+                    ],
+                    required: true,
+                },
+                EntityFieldDescriptor {
+                    name: "assignee".to_string(),
+                    field_type: "text".to_string(),
+                    enum_values: vec![],
+                    required: false,
+                },
+            ],
+            title_template: Some("{title}".to_string()),
+        }
+    }
+
+    fn release_descriptor() -> EntityTypeDescriptor {
+        EntityTypeDescriptor {
+            type_id: "release".to_string(),
+            name: Some("Release".to_string()),
+            fields: vec![
+                EntityFieldDescriptor {
+                    name: "status".to_string(),
+                    field_type: "enum".to_string(),
+                    enum_values: vec!["cut".to_string(), "shipped".to_string()],
+                    required: true,
+                },
+                EntityFieldDescriptor {
+                    name: "build".to_string(),
+                    field_type: "text".to_string(),
+                    enum_values: vec![],
+                    required: false,
+                },
+            ],
+            title_template: None,
+        }
+    }
+
+    /// The core measured fix: a retrieved type's fields become typed
+    /// sub-properties of `field_values`, enum values included — not a bare
+    /// object plus prose.
+    #[test]
+    fn with_declared_field_values_declares_typed_sub_properties() {
+        let tool = with_declared_field_values(Tool::CreateNode.definition(), &[ticket_descriptor()]);
+        let props = &tool.parameters_schema["properties"]["field_values"]["properties"];
+        assert_eq!(props["status"]["type"], "string");
+        assert_eq!(
+            props["status"]["enum"],
+            json!(["ready_for_dev", "in_dev", "done"])
+        );
+        assert_eq!(props["assignee"]["type"], "string");
+    }
+
+    /// `dev-unseen-schema.toml` (packages/agent/goldens/) is the case built
+    /// specifically to prove this generalises to a type absent from every
+    /// worked example — `release`'s `stage`-style enum has no counterpart
+    /// anywhere else in the prompt, so the declaration must come from the
+    /// schema data itself.
+    #[test]
+    fn with_declared_field_values_generalises_to_an_unseen_type() {
+        let tool = with_declared_field_values(Tool::UpdateNode.definition(), &[release_descriptor()]);
+        let props = &tool.parameters_schema["properties"]["field_values"]["properties"];
+        assert_eq!(props["status"]["enum"], json!(["cut", "shipped"]));
+        assert_eq!(props["build"]["type"], "string");
+    }
+
+    /// A field name that repeats across more than one retrieved type is
+    /// unioned rather than one type's declaration silently overwriting the
+    /// other's — at declaration time the model has not yet chosen
+    /// `node_type`, so a value legal on either candidate type must remain
+    /// legal on the declared field.
+    #[test]
+    fn with_declared_field_values_unions_a_field_name_shared_across_types() {
+        let tool = with_declared_field_values(
+            Tool::CreateNode.definition(),
+            &[ticket_descriptor(), release_descriptor()],
+        );
+        let status = &tool.parameters_schema["properties"]["field_values"]["properties"]["status"];
+        let values = status["enum"].as_array().unwrap();
+        for expected in ["ready_for_dev", "in_dev", "done", "cut", "shipped"] {
+            assert!(
+                values.iter().any(|v| v == expected),
+                "expected {expected:?} in unioned enum, got {values:?}"
+            );
+        }
+    }
+
+    /// No retrieved schema (fail-open, or no candidate whitelisting this
+    /// tool cleared the gate) must leave the bare-object fallback untouched
+    /// — not an empty `properties: {}`, which would make the schema MORE
+    /// restrictive (no properties declared as a JSON Schema object still
+    /// permits any key, but an explicit empty `properties` map reads as "no
+    /// legal keys" to some validators) and would silently discard the
+    /// existing undeclared-key guidance's own referent.
+    #[test]
+    fn with_declared_field_values_is_a_no_op_with_no_descriptors() {
+        let original = Tool::CreateNode.definition();
+        let unchanged = with_declared_field_values(Tool::CreateNode.definition(), &[]);
+        assert_eq!(unchanged.parameters_schema, original.parameters_schema);
+    }
+
+    /// A tool with no `field_values` object parameter (e.g. `create_schema`,
+    /// whose write shape is the unrelated `fields` array) must pass through
+    /// unchanged rather than gaining a spurious `field_values` key.
+    #[test]
+    fn with_declared_field_values_ignores_a_tool_without_the_parameter() {
+        let original = Tool::CreateSchema.definition();
+        let unchanged = with_declared_field_values(Tool::CreateSchema.definition(), &[ticket_descriptor()]);
+        assert_eq!(unchanged.parameters_schema, original.parameters_schema);
+    }
+
+    /// A tool whose `parameters_schema` has no `properties` object at all
+    /// must be returned byte-for-byte unchanged — regression pin for a real
+    /// bug caught in review: chained `[...]` indexing (`Value`'s `IndexMut`)
+    /// would silently insert a `"properties": null` key on exactly this
+    /// shape while still reporting "no field_values found", corrupting a
+    /// tool's schema it was never supposed to touch.
+    #[test]
+    fn with_declared_field_values_does_not_insert_properties_on_a_bare_schema() {
+        let bare = ToolDefinition {
+            name: "bare_tool".to_string(),
+            description: String::new(),
+            parameters_schema: json!({}),
+        };
+        let original = bare.parameters_schema.clone();
+        let unchanged = with_declared_field_values(bare, &[ticket_descriptor()]);
+        assert_eq!(
+            unchanged.parameters_schema, original,
+            "a schema with no `properties` key must not gain one"
+        );
+    }
+
+    /// A retrieved type with no fields of its own (`fields: []` — the same
+    /// shape a real, minimal schema can have) must leave the bare-object
+    /// fallback untouched, not turn into an explicit `properties: {}`. The
+    /// latter reads to some JSON Schema consumers as "no legal keys", which
+    /// is MORE restrictive than the untyped-object fallback, not a no-op.
+    #[test]
+    fn with_declared_field_values_does_not_narrow_to_empty_properties_for_a_fieldless_type() {
+        let fieldless = nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: "empty_type".to_string(),
+            name: Some("Empty Type".to_string()),
+            fields: vec![],
+            title_template: None,
+        };
+        let original = Tool::CreateNode.definition();
+        let unchanged = with_declared_field_values(Tool::CreateNode.definition(), &[fieldless]);
+        assert_eq!(
+            unchanged.parameters_schema, original.parameters_schema,
+            "a fieldless retrieved type must not narrow field_values to an empty properties map"
+        );
+    }
+
+    /// The same field name declared with two DIFFERENT non-enum types across
+    /// retrieved descriptors (a coincidental collision, not the same field on
+    /// related types) must fall back to `string` — JSON Schema's most
+    /// permissive scalar type — rather than silently keeping whichever
+    /// descriptor happened to be processed first, which could reject a
+    /// legal value for the type the model actually resolves `node_type` to.
+    #[test]
+    fn declared_field_values_properties_widens_a_conflicting_type_to_string() {
+        let numeric_amount = nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: "a".to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "amount".to_string(),
+                field_type: "number".to_string(),
+                enum_values: vec![],
+                required: false,
+            }],
+            title_template: None,
+        };
+        let text_amount = nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: "b".to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "amount".to_string(),
+                field_type: "text".to_string(),
+                enum_values: vec![],
+                required: false,
+            }],
+            title_template: None,
+        };
+        let properties = declared_field_values_properties(&[numeric_amount, text_amount]);
+        assert_eq!(
+            properties["amount"]["type"], "string",
+            "a field name with conflicting types across candidate schemas must widen to string, not silently pick one"
+        );
+    }
+
+    /// Regression pin for a real bug caught in review: an enum-typed
+    /// occurrence of a field name followed by a non-enum, type-conflicting
+    /// occurrence of the SAME name widened `type` to `string` but left the
+    /// first occurrence's `enum` array behind — over-constraining the field
+    /// to the enum's members even though `type` now claims to accept any
+    /// string. A legal value for the non-enum occurrence's own type (e.g.
+    /// any free-text string) would then be silently rejected by the
+    /// grammar, the exact class of defect `PATTERN.toml` measures this
+    /// whole mechanism against. Checked in both field orders, since the
+    /// union must not depend on which descriptor is processed first.
+    #[test]
+    fn declared_field_values_properties_clears_stale_enum_on_type_conflict() {
+        let enum_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: type_id.to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "priority".to_string(),
+                field_type: "enum".to_string(),
+                enum_values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                required: false,
+            }],
+            title_template: None,
+        };
+        let text_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+            type_id: type_id.to_string(),
+            name: None,
+            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                name: "priority".to_string(),
+                field_type: "text".to_string(),
+                enum_values: vec![],
+                required: false,
+            }],
+            title_template: None,
+        };
+
+        for descriptors in [
+            vec![enum_priority("a"), text_priority("b")],
+            vec![text_priority("b"), enum_priority("a")],
+        ] {
+            let properties = declared_field_values_properties(&descriptors);
+            assert_eq!(properties["priority"]["type"], "string");
+            assert!(
+                properties["priority"].get("enum").is_none(),
+                "a stale enum array must not survive a type-widening conflict — got: {:?}",
+                properties["priority"]
+            );
+        }
     }
 }

@@ -270,8 +270,8 @@ impl PromptAssembler {
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
                 tier: SeedTier::System,
-                markdown_content: "You are NodeSpace's built-in assistant. You help users work with their \
-                    knowledge graph — creating, finding, updating, and connecting nodes."
+                markdown_content: "You are NodeSpace's assistant, acting on a user's workspace.\n\
+                    Call exactly one tool. Do not answer the user in prose when a tool applies."
                         .to_string(),
             },
             NodeTemplate {
@@ -296,6 +296,19 @@ impl PromptAssembler {
                 markdown_content: format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES),
             },
             NodeTemplate {
+                // "Call tools immediately..." below reads as similar to
+                // Core Identity's "Call exactly one tool. Do not answer the
+                // user in prose when a tool applies." above, but the two
+                // state different invariants and both are kept, deliberately
+                // — caught in review after an earlier version deleted this
+                // bullet as redundant. Core Identity's line is about
+                // OUTCOME: don't answer in prose INSTEAD of calling a tool.
+                // This one is about TOKEN ORDER: don't emit narration BEFORE
+                // the tool call either, even alongside one. A model that
+                // reasons in prose then calls the right tool anyway satisfies
+                // the first and violates the second, and templates expecting
+                // the tool call as the first token care about exactly that
+                // distinction.
                 title: "Response Formatting Rules".to_string(),
                 content: None,
                 root_node_type: "agent-guidance".to_string(),

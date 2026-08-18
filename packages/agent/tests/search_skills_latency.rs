@@ -8,7 +8,7 @@
 //!   3. Multi-skill turn — cross-type request spanning search and creation
 //!
 //! Architecture note: entity types reach the model by two routes, and both are
-//! live. `context_ops::format_for_prompt` injects a `RELEVANT ENTITY TYPES`
+//! live. `context_ops::format_for_prompt` injects an `EXISTING SCHEMAS`
 //! block for query-matched schemas, and each routed skill candidate carries its
 //! own copy built from the `schema_metadata` (type IDs, field names, enum
 //! values) that `search_skills` returns per match. On-demand discovery via

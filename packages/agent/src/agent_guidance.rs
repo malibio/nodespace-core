@@ -32,7 +32,7 @@
 /// live in `skill_pipeline.rs`'s retrieved skill instructions; the
 /// no-confirmation-for-known-types rule is the same invariant
 /// `TOOL_STRATEGY_RULES`'s BLAST-RADIUS GATE already states once, not twice.
-pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. A request to start tracking a KIND of thing (a database, a tracker, a list) calls create_schema. A request that supplies the particulars of ONE record calls create_node against a type that already exists. Never call create_schema for a type already in RELEVANT ENTITY TYPES.";
+pub const SCHEMA_CREATION_RULES: &str = "NODE MODEL: Everything is a node. Built-in types: task, text, date. A request to start tracking a KIND of thing (a database, a tracker, a list) calls create_schema. A request that supplies the particulars of ONE record calls create_node against a type that already exists. Never call create_schema for a type already listed in EXISTING SCHEMAS.";
 
 /// Tool strategy guidance.
 ///
@@ -94,7 +94,7 @@ mod tests {
             "ALWAYS search_nodes first",
             "READ-THEN-WRITE TURN COMPLETION",
             "SKILL COMPLETION",
-            "NODE_TYPE COMES FROM RELEVANT ENTITY TYPES",
+            "NODE_TYPE COMES FROM EXISTING SCHEMAS",
             "resolve_query",
             "schema_metadata",
         ] {
@@ -393,7 +393,7 @@ mod tests {
     /// tuning prompts, which is exactly when it does the most damage.
     ///
     /// Fix a failure by rewording the GUIDANCE into a rule that teaches the
-    /// shape ("pass the id exactly as shown in RELEVANT ENTITY TYPES") rather
+    /// shape ("pass the id exactly as shown in EXISTING SCHEMAS") rather
     /// than by deleting the eval scenario.
     #[test]
     fn guidance_is_not_contaminated_by_eval_prompts() {

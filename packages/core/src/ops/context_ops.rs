@@ -5,7 +5,7 @@
 //! for injection into a small-model system prompt.
 //!
 //! When a query + embedding service are provided, schemas semantically relevant
-//! to the query are injected as a RELEVANT ENTITY TYPES block, covering implicit
+//! to the query are injected as an EXISTING SCHEMAS block, covering implicit
 //! references (e.g. "track my clients" → `customer` schema).
 //!
 //! That block is the *only* per-type field metadata the model receives on a
@@ -73,7 +73,7 @@ const SCHEMA_SIMILARITY_THRESHOLD: f32 = 0.2;
 ///
 /// Five covers the common multi-entity case (primary type + related types).
 /// The lower threshold above means more candidates pass; the cap keeps the
-/// injected ENTITY TYPES section from bloating in large workspaces.
+/// injected EXISTING SCHEMAS section from bloating in large workspaces.
 const MAX_SEMANTIC_SCHEMAS: usize = 5;
 
 /// Number of preceding messages blended into the retrieval query.
@@ -115,8 +115,8 @@ const BLENDED_HISTORY_TURNS: usize = 2;
 /// routed toward `create_schema`), which is a larger change since today's
 /// context block is assembled before ADR-038's Stage 2 routing runs — tracked
 /// as a follow-up rather than blocking this measured improvement on it.
-pub const RELEVANT_ENTITY_TYPES_HEADER: &str =
-    "RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their fields onto a new type):";
+pub const EXISTING_SCHEMAS_HEADER: &str =
+    "EXISTING SCHEMAS (do not recreate these; do not copy their fields onto a new type):";
 
 /// Character budget applied to each blended prior turn.
 ///
@@ -204,7 +204,7 @@ fn related_one_hop_schemas(
     // is_core is excluded here too: a user-defined schema can perfectly
     // ordinarily declare a relationship to a core type (task, text, date),
     // which would otherwise place that core type in `related_schemas`. It
-    // renders under the RELATED heading rather than RELEVANT ENTITY TYPES, so
+    // renders under the RELATED heading rather than EXISTING SCHEMAS, so
     // this isn't the same ADR-063 hazard `parse_and_filter_non_core_schemas`
     // guards against — but there's no reason for a core type to appear in
     // either block, so the two stay consistent.
@@ -228,7 +228,7 @@ fn related_one_hop_schemas(
 /// `local_agent_service.rs`'s recently-created-schema injection already
 /// applies before writing into this same `relevant_schemas` vector.
 ///
-/// The `create_node` guidance treats presence in RELEVANT ENTITY TYPES as
+/// The `create_node` guidance treats presence in EXISTING SCHEMAS as
 /// proof a type is user-defined (bare property keys) versus built-in
 /// (`custom:`-prefixed) — a core type reaching this block would make the
 /// model write a bare key onto a core type, the exact ADR-063 violation that
@@ -404,7 +404,7 @@ impl WorkspaceContext {
 
         // Relevant schemas section (query-matched via semantic retrieval)
         if !self.relevant_schemas.is_empty() {
-            let header = format!("\n{RELEVANT_ENTITY_TYPES_HEADER}\n");
+            let header = format!("\n{EXISTING_SCHEMAS_HEADER}\n");
             if out.len() + header.len() <= max_chars {
                 out.push_str(&header);
                 for schema in &self.relevant_schemas {
@@ -500,7 +500,7 @@ mod tests {
 
     /// A core type (`text`/`task`/`date`) is a stored schema node with
     /// embeddable content, so unfiltered retrieval would otherwise return it.
-    /// Its presence in RELEVANT ENTITY TYPES is what the `create_node`
+    /// Its presence in EXISTING SCHEMAS is what the `create_node`
     /// guidance reads as proof a type is user-defined, so an unfiltered core
     /// hit would make the model write a bare property key onto a core type —
     /// the ADR-063 violation that guidance exists to prevent.
@@ -593,7 +593,7 @@ mod tests {
         assert!(output.contains("Task completion"));
 
         // No schemas when relevant_schemas is empty
-        assert!(!output.contains("RELEVANT ENTITY TYPES"));
+        assert!(!output.contains("EXISTING SCHEMAS"));
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
         ctx.relevant_schemas = vec![sample_schema("customer", "Customer", &["name", "email"])];
         let output = ctx.format_for_prompt(4000);
 
-        assert!(output.contains(RELEVANT_ENTITY_TYPES_HEADER));
+        assert!(output.contains(EXISTING_SCHEMAS_HEADER));
         assert!(output.contains("customer \"Customer\""));
         // Each field carries its type, so the node-creation guidance's
         // instruction to read field names *and* types has a referent.
@@ -779,7 +779,7 @@ mod tests {
     /// with a `has_task` relationship to `task`) is an ordinary thing to
     /// model, so the outgoing traversal can reach a core schema in the
     /// corpus. It must not surface into `related_schemas` even though it
-    /// renders under a different heading than RELEVANT ENTITY TYPES — there's
+    /// renders under a different heading than EXISTING SCHEMAS — there's
     /// no reason for a core type to appear in either block.
     #[test]
     fn related_schemas_excludes_core_types_reached_via_outgoing_relationship() {

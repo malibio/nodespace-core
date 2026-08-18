@@ -47,8 +47,8 @@ pub struct InteractionRule {
 
 pub const ONE_SCHEMA_PER_REQUEST: SchemaRule = SchemaRule {
     id: "one-schema-per-request",
-    imperative: "ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for \"Invoice\", do not also create \"Customer\" or \"Product\"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.",
-    prose: "**One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for \"Invoice\" — don't also create \"Customer\" or \"Product\"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.",
+    imperative: "ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for \"ADR\", do not also create \"Ticket\" or \"Sprint\"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in EXISTING SCHEMAS; if it doesn't, omit the relationship rather than creating the other type.",
+    prose: "**One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for \"ADR\" — don't also create \"Ticket\" or \"Sprint\"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.",
 };
 
 pub const SCHEMA_ALREADY_EXISTS: SchemaRule = SchemaRule {
@@ -78,7 +78,7 @@ pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
 /// Measured on its own (isolated daemon, live model) to have ZERO effect on
 /// the #1846 contamination this rule targets — the rule was confirmed present
 /// in the seeded prompt, yet the model still copied an unrelated schema's
-/// fields verbatim. The actual fix is `RELEVANT_ENTITY_TYPES_HEADER`'s inline
+/// fields verbatim. The actual fix is `EXISTING_SCHEMAS_HEADER`'s inline
 /// anti-copy clause (`context_ops.rs`), which measured a real reduction (4/5
 /// clean trials vs. 0/1 for this rule alone). Kept anyway as defense-in-depth
 /// — cheap, doesn't conflict with anything, may matter for other models or
@@ -86,7 +86,7 @@ pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
 /// that measured 4/5 result, and should not be credited as one.
 pub const FIELDS_FROM_REQUEST_ONLY: SchemaRule = SchemaRule {
     id: "fields-from-request-only",
-    imperative: "FIELD SOURCE: derive every field from what the user's OWN request describes wanting to track — never from another schema shown in RELEVANT ENTITY TYPES. That block lists types that already exist so you don't recreate them; it is not a shape to copy fields from for a new, different type. A new type about albums does not inherit fields from an unrelated equipment or invoice schema just because one is listed there.",
+    imperative: "FIELD SOURCE: derive every field from what the user's OWN request describes wanting to track — never from another schema shown in EXISTING SCHEMAS. That block lists types that already exist so you don't recreate them; it is not a shape to copy fields from for a new, different type. A new type about releases does not inherit fields from an unrelated ticket or adr schema just because one is listed there.",
     prose: "**Field source:** derive every field from what the user's own request describes wanting to track — never from another schema shown in the entity-types context. That listing exists so you don't recreate a type that already exists; it is not a shape to copy fields from for a new, unrelated type.",
 };
 
@@ -110,8 +110,8 @@ pub const RELATIONSHIP_VS_FIELD: SchemaRule = SchemaRule {
 
 pub const TARGET_TYPE_MUST_EXIST: SchemaRule = SchemaRule {
     id: "target-type-must-exist",
-    imperative: "The targetType MUST be an existing schema ID from the ENTITY TYPES list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:\n- Invoice billed_to customer (one): `{\"name\": \"billed_to\", \"targetType\": \"customer\", \"direction\": \"out\", \"cardinality\": \"one\"}`\n- Project has_task task (many): `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}`",
-    prose: "`targetType` must be an existing schema ID. Examples: `{\"name\":\"billed_to\",\"targetType\":\"customer\",\"direction\":\"out\",\"cardinality\":\"one\"}`, `{\"name\":\"has_task\",\"targetType\":\"task\",\"direction\":\"out\",\"cardinality\":\"many\"}`.",
+    imperative: "The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:\n- ADR supersedes adr (one): `{\"name\": \"supersedes\", \"targetType\": \"adr\", \"direction\": \"out\", \"cardinality\": \"one\"}`\n- Ticket has_task task (many): `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}`",
+    prose: "`targetType` must be an existing schema ID. Examples: `{\"name\":\"supersedes\",\"targetType\":\"adr\",\"direction\":\"out\",\"cardinality\":\"one\"}`, `{\"name\":\"has_task\",\"targetType\":\"task\",\"direction\":\"out\",\"cardinality\":\"many\"}`.",
 };
 
 pub const TITLE_TEMPLATE_PLACEHOLDERS: SchemaRule = SchemaRule {
@@ -122,8 +122,8 @@ pub const TITLE_TEMPLATE_PLACEHOLDERS: SchemaRule = SchemaRule {
 
 pub const UNIQUE_FIELD_FLAGS: SchemaRule = SchemaRule {
     id: "unique-field-flags",
-    imperative: "UNIQUE FIELDS: Set \"unique\": true on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each customer should have a unique email\" -> flag email unique). Use \"unique_case_insensitive\": true instead of \"unique\" when case shouldn't matter (e.g. email, username). ADVISORY ONLY: this does NOT prevent duplicates from being created — it only lets the system suggest a likely existing match (e.g. surface the existing node) when a new value collides. Never tell the user a unique flag will block or reject a duplicate; describe it as a duplicate warning/suggestion, not an enforced constraint. Example: {\"name\": \"email\", \"type\": \"text\", \"unique_case_insensitive\": true}.",
-    prose: "**Unique fields:** set `\"unique\": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each customer should have a unique email\" → flag `email` unique). Use `\"unique_case_insensitive\": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{\"name\":\"email\",\"type\":\"text\",\"unique_case_insensitive\":true}`.",
+    imperative: "UNIQUE FIELDS: Set \"unique\": true on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each ticket should have a unique key\" -> flag key unique). Use \"unique_case_insensitive\": true instead of \"unique\" when case shouldn't matter (e.g. email, username). ADVISORY ONLY: this does NOT prevent duplicates from being created — it only lets the system suggest a likely existing match (e.g. surface the existing node) when a new value collides. Never tell the user a unique flag will block or reject a duplicate; describe it as a duplicate warning/suggestion, not an enforced constraint. Example: {\"name\": \"key\", \"type\": \"text\", \"unique_case_insensitive\": true}.",
+    prose: "**Unique fields:** set `\"unique\": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. \"each ticket should have a unique key\" → flag `key` unique). Use `\"unique_case_insensitive\": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{\"name\":\"key\",\"type\":\"text\",\"unique_case_insensitive\":true}`.",
 };
 
 /// All schema-authoring rules, in the order they should be rendered.

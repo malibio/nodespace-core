@@ -154,7 +154,7 @@ nodespace node update <node-id> --property status=in_progress --property priorit
 
 At least one of `--content` or `--property` is required.
 
-**Find then update:** if you don't already have the node's ID, run `nodespace search` or `nodespace node query` first to locate it, then update by ID. If the search comes back with zero matches or several equally plausible matches, ask the user one specific clarifying question rather than retrying — e.g. "I found 3 invoices — which one: #001 ($500), #002 ($750), or #003 ($500, overdue)?"
+**Find then update:** if you don't already have the node's ID, run `nodespace search` or `nodespace node query` first to locate it, then update by ID. If the search comes back with zero matches or several equally plausible matches, ask the user one specific clarifying question rather than retrying — e.g. "I found 3 tickets in review — which one did you mean: the auth one, the CI one, or the audit-log one?"
 
 **Do NOT use `node update --property status=...` for task status changes** — use `nodespace node set-status` instead (below); it validates against the allowed status values before writing.
 
@@ -193,7 +193,7 @@ nodespace node children <parent-id>
 ```bash
 nodespace node query --type task
 nodespace node query --content-contains "authentication" --limit 10
-nodespace node query --title-contains "Project" --type text
+nodespace node query --title-contains "Ticket" --type text
 nodespace node query --mentioned-by <node-id>
 ```
 
@@ -335,19 +335,19 @@ nodespace schema get task
 nodespace schema get person
 
 # Create a new schema
-nodespace schema create --params '{"name":"Invoice","description":"A billing invoice linked to a customer","title_template":"Invoice #{invoice_number}","fields":[{"name":"invoice_number","type":"text","required":true},{"name":"amount","type":"number","required":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"draft","label":"Draft"},{"value":"paid","label":"Paid"}]}],"relationships":[{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}]}'
+nodespace schema create --params '{"name":"Ticket","description":"A tracked unit of engineering work","fields":[{"name":"status","type":"enum","required":true,"coreValues":[{"value":"ready_for_dev","label":"Ready for Dev"},{"value":"in_dev","label":"In Dev"},{"value":"done","label":"Done"}]},{"name":"assignee","type":"text"}],"relationships":[{"name":"belongs_to_sprint","targetType":"sprint","direction":"out","cardinality":"one"}]}'
 
-# Create a schema with a unique field — email flagged unique_case_insensitive
-nodespace schema create --params '{"name":"Customer","description":"A customer contact","title_template":"{first_name} {last_name}","fields":[{"name":"first_name","type":"text","required":true},{"name":"last_name","type":"text","required":true},{"name":"email","type":"text","required":true,"unique_case_insensitive":true}]}'
+# Create a schema with a unique field — key flagged unique_case_insensitive
+nodespace schema create --params '{"name":"ADR","description":"An architecture decision record","fields":[{"name":"key","type":"text","required":true,"unique_case_insensitive":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"proposed","label":"Proposed"},{"value":"accepted","label":"Accepted"},{"value":"superseded","label":"Superseded"}]}]}'
 
 # Update an existing schema — add/remove/rename fields, without re-creating it
-nodespace schema update --params '{"schema_id":"invoice","add_fields":[{"name":"notes","type":"text"}]}'
+nodespace schema update --params '{"schema_id":"ticket","add_fields":[{"name":"sprint","type":"text"}]}'
 ```
 
 `create`/`update` take a single JSON `--params` blob (or `--params-file <path>` for a file) rather than per-field flags — the params shape mirrors `CreateSchemaParams`/`UpdateSchemaParams` in the daemon.
 
 <!-- BEGIN GENERATED: schema-rules (see packages/agent/src/skill_rules.rs, packages/agent/src/bin/gen_skill_md.rs) -->
-**One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for "Invoice" — don't also create "Customer" or "Product"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.
+**One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for "ADR" — don't also create "Ticket" or "Sprint"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.
 
 If `create` reports the schema already exists, stop and tell the user — they can create instances with `node create` against the existing type.
 
@@ -361,11 +361,11 @@ If `create` rejects the schema with a validation error (not "already exists") �
 
 **Enums:** lowercase values with readable labels — `{"value":"in_progress","label":"In Progress"}`.
 
-**Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Examples: `{"name":"billed_to","targetType":"customer","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`.
+**Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Examples: `{"name":"supersedes","targetType":"adr","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`.
 
 **Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.
 
-**Unique fields:** set `"unique": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. "each customer should have a unique email" → flag `email` unique). Use `"unique_case_insensitive": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{"name":"email","type":"text","unique_case_insensitive":true}`.
+**Unique fields:** set `"unique": true` on a field when the user's request implies each instance should have a distinct value for it (e.g. "each ticket should have a unique key" → flag `key` unique). Use `"unique_case_insensitive": true` instead when case shouldn't matter — email and username are the common case. This is advisory only: it does not prevent duplicates from being created, it only lets the system surface a likely existing match when a new value collides. Never describe it to the user as blocking or rejecting duplicates — it's a suggestion, not an enforced constraint. Example: `{"name":"key","type":"text","unique_case_insensitive":true}`.
 <!-- END GENERATED: schema-rules -->
 
 A `description` field is fine when it adds value beyond the title. Field names are alphanumeric-and-underscore only — the CLAUDE.md-documented `custom:` namespace prefix convention applies to natural-language schema authoring in the local agent, not to explicit `fields` arrays passed here; don't prefix field names when calling `schema create`/`update` directly.
@@ -460,18 +460,18 @@ nodespace node get "2026-05-30"
 
 ```bash
 # 1. Create the schema (one schema per request — see Schema inspection and management above)
-nodespace schema create --params '{"name":"Project","description":"A tracked project with status and timeline","title_template":"{name} ({status})","fields":[{"name":"name","type":"text","required":true},{"name":"status","type":"enum","required":true,"coreValues":[{"value":"planning","label":"Planning"},{"value":"active","label":"Active"},{"value":"on_hold","label":"On Hold"},{"value":"completed","label":"Completed"}]},{"name":"due_date","type":"date"}]}'
+nodespace schema create --params '{"name":"Ticket","description":"A tracked unit of engineering work","fields":[{"name":"status","type":"enum","required":true,"coreValues":[{"value":"ready_for_dev","label":"Ready for Dev"},{"value":"in_dev","label":"In Dev"},{"value":"done","label":"Done"}]},{"name":"assignee","type":"text"}]}'
 
 # 2. Create an instance
-nodespace node create --type project --content "API Redesign" --parent <parent-id>
-nodespace node update <the-new-id> --property name="API Redesign" --property status=active
+nodespace node create --type ticket --content "Fix flaky retry test" --parent <parent-id>
+nodespace node update <the-new-id> --property assignee=dana --property status=in_dev
 ```
 
 ### Link two nodes with a typed relationship
 
 ```bash
-# Relationship must already be defined on the source's schema (e.g. Project.has_task)
-nodespace relationship create --from <project-id> --type has_task --to <task-id>
+# Relationship must already be defined on the source's schema (e.g. Ticket.belongs_to_sprint)
+nodespace relationship create --from <ticket-id> --type belongs_to_sprint --to <sprint-id>
 ```
 
 ### Organize a node into a collection

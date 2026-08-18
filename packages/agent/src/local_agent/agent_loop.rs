@@ -1123,6 +1123,18 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // the mechanism actually implicated is turned off.
         let mut tools = routing::stage2_tools(&routed.candidates, &all_tools);
 
+        // Declares write-tool `field_values` sub-properties from the same
+        // retrieved-schema data `candidate_block` below renders into the
+        // prompt — content, not tool-list scoping, so it is gated behind the
+        // same `routing_disabled` probe rather than folded into
+        // `stage2_tools` unconditionally. See `declare_write_tool_fields`'s
+        // own doc comment for why: the routing-reliability matrix's finding
+        // was about retrieved-schema content reaching the model at all, not
+        // specifically the prompt-text channel it was measured through.
+        if !session.routing_disabled {
+            tools = routing::declare_write_tool_fields(&routed.candidates, tools);
+        }
+
         // `session.routing_disabled` is set once, by the caller, from a cached
         // routing-probe verdict for this session's model (see
         // `local_agent::routing_probe`). The matrix in
@@ -8049,8 +8061,8 @@ mod tests {
         // A candidate whose whitelist includes resolve_query clears the score
         // gate on its own terms, so stage2_tools's fail-open exclusion never
         // fires — resolve_query is legitimately in `permitted`. But this
-        // session's routing is disabled, so `candidate_block` (the RELEVANT
-        // ENTITY TYPES block resolve_query's required node_type parameter
+        // session's routing is disabled, so `candidate_block` (the EXISTING
+        // SCHEMAS block resolve_query's required node_type parameter
         // depends on) is forced to `None` regardless. Offering resolve_query
         // here reproduces #1840's defect through a second door.
         let engine = RecordingEngine::new(routed_engine(
@@ -8102,7 +8114,7 @@ mod tests {
     async fn routing_enabled_offers_resolve_query_when_its_entity_types_render() {
         // The genuine happy path: routing is enabled, a Graph Editing
         // candidate clears the gate, and its schema_metadata renders a real
-        // RELEVANT ENTITY TYPES sub-block — so resolve_query must still be
+        // EXISTING SCHEMAS sub-block — so resolve_query must still be
         // reachable. Guards against the precise per-candidate guidance check
         // (`routing::tools_with_available_guidance`) over-excluding the tool
         // once it stopped trusting `candidate_block.is_some()` as a whole.
@@ -8153,7 +8165,7 @@ mod tests {
         // The edge case the re-reviewer flagged: render_candidates_for_prompt
         // returns Some(..) from its header text alone once ANY candidate
         // clears the gate, even if that candidate's own schema_metadata is
-        // empty and so its RELEVANT ENTITY TYPES sub-block never appears.
+        // empty and so its EXISTING SCHEMAS sub-block never appears.
         // candidate_block.is_some() would have wrongly treated resolve_query
         // as having guidance here; the per-candidate check must not.
         let engine = RecordingEngine::new(routed_engine(
@@ -8172,7 +8184,7 @@ mod tests {
             json!({"resolved": false, "reason": "no_match"}),
         );
         // Empty schema_metadata (skill_candidate's default) — no typed
-        // entities, so no RELEVANT ENTITY TYPES sub-block for this candidate.
+        // entities, so no EXISTING SCHEMAS sub-block for this candidate.
         let exec = RoutingToolExecutor::new(
             inner,
             vec![skill_candidate(
@@ -8205,7 +8217,7 @@ mod tests {
             "premise of this test requires a rendered block header: {stage2_prompt}"
         );
         assert!(
-            !stage2_prompt.contains("RELEVANT ENTITY TYPES"),
+            !stage2_prompt.contains("EXISTING SCHEMAS"),
             "premise of this test requires no entity-types sub-block: {stage2_prompt}"
         );
 
