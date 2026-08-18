@@ -340,7 +340,7 @@
         }
 
         // Preload type-specific schema form for viewed node if available
-        // This triggers lazy loading of TaskSchemaForm, DateSchemaForm, etc.
+        // This triggers lazy loading of TaskSchemaForm, PersonSchemaForm, etc.
         if (node.nodeType) {
           // Reset generic schema when navigating to a different node
           schemaFormLoader.resetGenericSchema();
@@ -1362,7 +1362,7 @@
   <!-- Schema-Driven Properties Panel - fixed between header and content area -->
   <!-- Type-specific schema forms use plugin registry for smart dispatch -->
   <!-- Types with a hardcoded form (task, person) use it; everything else falls back to the
-       generic SchemaPropertyForm — including core types with no registered form (project) -->
+       generic GenericSchemaForm — including core types with no registered form (project) -->
   <!-- Only render when a schema form is known to exist: null means "checked, none registered" -->
   {#if currentViewedNode && nodeId && schemaFormLoader.getForm(currentViewedNode.nodeType)}
     {@const TypedSchemaForm = schemaFormLoader.getForm(

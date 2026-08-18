@@ -8,7 +8,9 @@
   - Type-safe updates via updateTaskNode
   - Follows *NodeViewer pattern (like DateNodeViewer)
 
-  Root Cause: Schema-driven SchemaPropertyForm incompatible with strongly-typed TaskNode
+  Root cause: the generic schema-driven form has no way to express TaskNode's strongly-typed
+  business logic (optimistic apply, immediate persist, OCC conflict handling via
+  sharedNodeStore.updateTaskNode).
   Solution: TaskSchemaForm registered in taskNodePlugin, loaded automatically by BaseNodeViewer
 -->
 
