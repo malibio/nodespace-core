@@ -1,0 +1,155 @@
+REFERENCE — procedures relevant to this request. Use whichever applies and IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Creation
+Purpose: Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.
+
+# Node Creation Guidance
+
+⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
+
+CALL create_node NOW: You received this instruction because this skill was matched to the request. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
+
+TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
+
+FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields after `->` as `name: type` — fields marked `required` MUST be included in the field_values map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `field_values` is the ONLY way any field value is stored.
+
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `field_values` under a key of your own. `field_values` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
+
+KEY FORMAT FOR A VALUE WITH NO MATCHING FIELD: Name the key after the user's own noun for it — lowercase, singular, snake_case (they said "weighs 40kg" → `weight`). Reusing their wording keeps the same fact under the same key next time instead of inventing a new one. Then prefix it based on the type:
+
+node_type is a type from RELEVANT ENTITY TYPES (one the user defined): use the bare key — `"weight": "40kg"`.
+
+node_type is a built-in type (text, task, date): prefix with `custom:` — `"custom:weight": "40kg"`. Unprefixed names are reserved for built-in fields on these types, so a bare key there can collide with a real one (status, priority, due_date).
+
+TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from the field values — set content to a brief descriptive label (e.g. the most identifying value). If there is no title_template, set content to the best human-readable name the user provided.
+
+PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
+
+EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget "Widget" -> label: string; quantity: number; received_on: date; condition: string`:
+
+```json
+{
+  "node_type": "widget",
+  "content": "Shipment 24",
+  "field_values": {
+    "label": "Shipment 24",
+    "quantity": 12,
+    "received_on": "2026-03-04",
+    "condition": "sealed"
+  }
+}
+```
+
+Never reuse "widget" or these field names — they are placeholders. Your node_type and property keys both come from the RELEVANT ENTITY TYPES block.
+
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete.
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev, in_dev, ready_for_review, in_review, done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed, accepted, superseded}, required; supersedes: text
+
+--- Candidate 2: Schema Creation
+Purpose: Set up a structured way to keep track of, log, or maintain records for a kind of thing the user hasn't stored before — equipment, bookings, subscriptions, contacts, or any recurring category of item with its own details to fill in. Also covers defining a new entity type or schema with custom fields, enums, and relationships, or modifying an existing schema. Use when the user wants a place to record or organize instances of something new, or says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice.
+
+# Schema Creation & Editing Guidance
+
+CREATING A SCHEMA — call create_schema:
+
+ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "Invoice", do not also create "Customer" or "Product"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in ENTITY TYPES; if it doesn't, omit the relationship rather than creating the other type.
+
+SUCCESS: After create_schema returns a schema object (with fields, type_id, etc.), the schema was created. Respond to the user immediately — do NOT call create_schema again. If create_schema returns an error saying the schema already exists, stop and tell the user the type already exists and they can create instances with create_node.
+
+VALIDATION ERROR: If create_schema returns an error other than "already exists" (e.g. a title_template placeholder missing from fields, an invalid field type), the error names the specific problem — fix exactly that and call create_schema again in this same turn with the corrected payload. Do NOT ask the user to clarify and do NOT give up after one rejection; a validation error is fixable from the error message alone.
+
+EDITING A SCHEMA — call update_schema:
+
+EDITING A SCHEMA — call update_schema: When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.
+
+FIELDS: Only define type-specific fields. Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field. EXCEPTION: if you use a 'name' placeholder in title_template (e.g. "{name} ({status})"), you MUST define 'name' as a text field so title generation works. A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
+
+FIELD SOURCE: derive every field from what the user's OWN request describes wanting to track — never from another schema shown in RELEVANT ENTITY TYPES. That block lists types that already exist so you don't recreate them; it is not a shape to copy fields from for a new, different type. A new type about albums does not inherit fields from an unrelated equipment or invoice schema just because one is listed there.
+
+ENUMS: Use lowercase values with readable labels, e.g. `{"value": "in_progress", "label": "In Progress"}`.
+
+RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the ENTITY TYPES list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
+
+Invoice billed_to customer (one): `{"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}`
+
+Project has_task task (many): `{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}`
+
+TITLE TEMPLATE: Set title_template when a node's identity comes from its fields rather than free-form content. Use {field_name} placeholders. CRITICAL: every placeholder in title_template MUST be defined as a field in the fields array. Omit title_template if the content/title field alone identifies the node. Examples:
+
+Customer with fields [first_name, last_name]: title_template = "{first_name} {last_name}"
+
+Invoice with fields [invoice_number, ...]: title_template = "Invoice #{invoice_number}"
+
+Project with fields [name, status, ...]: title_template = "{name} ({status})"
+
+UNIQUE FIELDS: Set "unique": true on a field when the user's request implies each instance should have a distinct value for it (e.g. "each customer should have a unique email" -> flag email unique). Use "unique_case_insensitive": true instead of "unique" when case shouldn't matter (e.g. email, username). ADVISORY ONLY: this does NOT prevent duplicates from being created — it only lets the system suggest a likely existing match (e.g. surface the existing node) when a new value collides. Never tell the user a unique flag will block or reject a duplicate; describe it as a duplicate warning/suggestion, not an enforced constraint. Example: {"name": "email", "type": "text", "unique_case_insensitive": true}.
+
+EXAMPLE — Customer schema (email flagged unique_case_insensitive):
+{
+"name": "Customer",
+"description": "A customer contact",
+"title_template": "{first_name} {last_name}",
+"fields": [
+{"name": "first_name", "type": "text", "required": true},
+{"name": "last_name", "type": "text", "required": true},
+{"name": "email", "type": "text", "required": true, "unique_case_insensitive": true}
+]
+}
+
+EXAMPLE — Invoice schema (references existing 'customer' type):
+
+```json
+{
+  "name": "Invoice",
+  "description": "A billing invoice linked to a customer",
+  "title_template": "Invoice #{invoice_number}",
+  "fields": [
+    {"name": "invoice_number", "type": "text", "required": true},
+    {"name": "issue_date", "type": "date", "required": true},
+    {"name": "due_date", "type": "date"},
+    {"name": "amount", "type": "number", "required": true},
+    {"name": "status", "type": "enum", "required": true, "coreValues": [
+      {"value": "draft", "label": "Draft"},
+      {"value": "sent", "label": "Sent"},
+      {"value": "paid", "label": "Paid"},
+      {"value": "overdue", "label": "Overdue"}
+    ]}
+  ],
+  "relationships": [
+    {"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}
+  ]
+}
+```
+
+EXAMPLE — Project schema (title_template uses {name} AND {status}, so BOTH are in fields):
+
+```json
+{
+  "name": "Project",
+  "description": "A tracked project with status and timeline",
+  "title_template": "{name} ({status})",
+  "fields": [
+    {"name": "name", "type": "text", "required": true},
+    {"name": "status", "type": "enum", "required": true, "coreValues": [
+      {"value": "planning", "label": "Planning"},
+      {"value": "active", "label": "Active"},
+      {"value": "on_hold", "label": "On Hold"},
+      {"value": "completed", "label": "Completed"}
+    ]},
+    {"name": "start_date", "type": "date"},
+    {"name": "due_date", "type": "date"},
+    {"name": "budget", "type": "number"},
+    {"name": "owner", "type": "text"}
+  ],
+  "relationships": [
+    {"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}
+  ]
+}
+```
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev, in_dev, ready_for_review, in_review, done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed, accepted, superseded}, required; supersedes: text
