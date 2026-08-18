@@ -54,18 +54,30 @@
 
   // Adopt-existing suggestion state (core#1734 / ADR-065). `duplicateMatch` is
   // the existing person the current email collides with, or null when there is
-  // none / the suggestion was dismissed. `checkedForEmail` tracks which value
-  // the in-flight (or most recent) lookup was for, so a stale response for a
-  // value the user has since changed away from — in EITHER the success or the
-  // error path — never clobbers a newer, still-valid result.
+  // none / the suggestion was dismissed. `checkedForEmail` skips re-issuing a
+  // lookup for a value already checked (e.g. tabbing through an unchanged
+  // field). Staleness itself — whether an in-flight lookup's result is still
+  // allowed to land — is decided by `checkGeneration`, NOT by comparing values:
+  // two different triggers (a blur check and a badge re-check, core#2116) can
+  // race for the SAME or DIFFERENT email, and a monotonic generation is the
+  // only thing that correctly says "only the most recently STARTED lookup may
+  // ever write `duplicateMatch`" regardless of which resolves first or what
+  // value each was for.
   let duplicateMatch = $state<Node | null>(null);
   let checkedForEmail: string | null = null;
+  let checkGeneration = 0;
 
   // Convergence duplicate indicator (ADR-065 §4, core#2116): true once
   // out-of-band detection (offline write, sync convergence) has stamped
   // `properties.person._possible_duplicate` on this node — independent of
   // (and typically set well after) the blur-triggered check above.
   const isFlaggedDuplicate = $derived(isPossibleDuplicate(node));
+
+  // Set when a badge-triggered recheck completes and finds no live collision
+  // — the marker itself is permanent (nothing clears it), so a recheck can
+  // legitimately find "nothing here anymore" and that must be visible, not a
+  // silent no-op. Cleared on any new check attempt and on nodeId change.
+  let recheckFoundNothing = $state(false);
 
   // A component instance can be reused across different person nodes (no
   // `{#key nodeId}` at the call site) — reset the suggestion when the node
@@ -76,6 +88,8 @@
     void nodeId;
     duplicateMatch = null;
     checkedForEmail = null;
+    recheckFoundNothing = false;
+    checkGeneration++;
   });
 
   async function updateField(field: 'name' | 'email', value: string) {
@@ -103,6 +117,9 @@
 
   async function handleEmailBlur(e: FocusEvent) {
     const value = (e.currentTarget as HTMLInputElement).value;
+    // A fresh edit supersedes any earlier "recheck found nothing" feedback,
+    // which was scoped to whatever email the badge was clicked for.
+    recheckFoundNothing = false;
     // Fired concurrently, not sequentially: the duplicate check must not wait
     // for the save to land first, or — since both write and read this node's
     // own email — a check that runs AFTER the save sees two rows holding
@@ -128,25 +145,32 @@
   async function checkForDuplicate(value: string) {
     if (checkedForEmail === value) return;
     checkedForEmail = value;
+    // Claim this attempt's generation BEFORE the await — any earlier
+    // in-flight call (whatever value or trigger it was for) is now
+    // unconditionally superseded and must not write `duplicateMatch` when it
+    // eventually resolves, even if it resolves AFTER this one.
+    const generation = ++checkGeneration;
     if (!value.trim()) {
       duplicateMatch = null;
       return;
     }
     try {
       const match = await backendAdapter.findDuplicateFor('person', 'email', value, nodeId);
-      // Ignore a stale response for an email the user has since changed. The
-      // backend already excludes this node via excludeId above — the
-      // `match.id !== nodeId` check is a defensive backstop, not the primary
-      // exclusion mechanism (an earlier version relied on it alone, which
-      // could hide a REAL different duplicate whenever this node's own
-      // not-yet-excluded row satisfied the query first).
-      if (checkedForEmail !== value) return;
+      // Ignore a superseded response — from either a newer blur check for a
+      // different value, or a badge-triggered recheck (core#2116) that
+      // started after this one. The backend already excludes this node via
+      // excludeId above — the `match.id !== nodeId` check is a defensive
+      // backstop, not the primary exclusion mechanism (an earlier version
+      // relied on it alone, which could hide a REAL different duplicate
+      // whenever this node's own not-yet-excluded row satisfied the query
+      // first).
+      if (generation !== checkGeneration) return;
       duplicateMatch = match && match.id !== nodeId ? match : null;
     } catch (err) {
       // Same staleness guard as the success path — a slow, now-superseded
       // request that fails after a newer one has already resolved must not
       // clobber that newer (possibly valid) result.
-      if (checkedForEmail !== value) return;
+      if (generation !== checkGeneration) return;
       log.error('Duplicate lookup failed (non-blocking)', { err });
       duplicateMatch = null;
     }
@@ -162,10 +186,20 @@
    * marker set by out-of-band detection can be stale relative to whatever
    * this form last checked (or never checked at all, if the marker was set
    * before this form ever loaded).
+   *
+   * Awaits the lookup (unlike the blur handler, which fires-and-forgets
+   * concurrently with the save) so it can tell the user when a recheck finds
+   * nothing — the marker is permanent once set, so "click to review" finding
+   * no live collision is an expected, not exceptional, outcome that must not
+   * be a silent no-op.
    */
-  function recheckPossibleDuplicate() {
+  async function recheckPossibleDuplicate() {
     checkedForEmail = null;
-    void checkForDuplicate(email);
+    recheckFoundNothing = false;
+    await checkForDuplicate(email);
+    if (!duplicateMatch) {
+      recheckFoundNothing = true;
+    }
   }
 
   function dismissDuplicateSuggestion() {
@@ -231,6 +265,12 @@
         Possible duplicate — click to review
       </Badge>
     </button>
+    {#if recheckFoundNothing}
+      <!-- The marker is permanent (nothing clears it) — a recheck finding no
+           LIVE collision right now is an expected outcome, not an error, and
+           must be visible rather than a silent no-op on click. -->
+      <p class="possible-duplicate-no-match">No conflicting person found right now.</p>
+    {/if}
   {/if}
 
   {#if duplicateMatch}
@@ -310,5 +350,11 @@
     background: none;
     border: none;
     cursor: pointer;
+  }
+
+  .possible-duplicate-no-match {
+    margin: -0.25rem 0 0;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
   }
 </style>

@@ -46,6 +46,11 @@
   let open = $state(false);
   let checking = $state(false);
   let match = $state<Node | null>(null);
+  // Rapid open→close→reopen can start a second lookup before the first
+  // resolves; a monotonic generation ensures only the MOST RECENTLY STARTED
+  // check may ever write `match`/`checking`, regardless of resolve order
+  // (mirrors the same fix applied to person-schema-form.svelte's checkForDuplicate).
+  let checkGeneration = 0;
 
   function toggle(e: MouseEvent): void {
     e.stopPropagation();
@@ -63,22 +68,29 @@
   }
 
   async function runCheck(): Promise<void> {
+    const generation = ++checkGeneration;
     const email = (node?.properties?.['person'] as Record<string, unknown> | undefined)?.[
       'email'
     ] as string | undefined;
     if (!email?.trim()) {
+      // No await happened yet — this generation is still current by
+      // construction, so no staleness check is needed here.
       match = null;
       return;
     }
     checking = true;
     try {
       const found = await backendAdapter.findDuplicateFor('person', 'email', email, nodeId);
+      if (generation !== checkGeneration) return;
       match = found && found.id !== nodeId ? found : null;
     } catch (err) {
+      if (generation !== checkGeneration) return;
       log.error('Duplicate re-check failed (non-blocking)', { err });
       match = null;
     } finally {
-      checking = false;
+      // A superseded call's own `checking = false` must not flip the flag
+      // while a NEWER check (which already set it true) is still in flight.
+      if (generation === checkGeneration) checking = false;
     }
   }
 

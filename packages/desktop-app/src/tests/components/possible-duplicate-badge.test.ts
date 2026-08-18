@@ -158,4 +158,49 @@ describe('PossibleDuplicateBadge', () => {
     await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
     expect(screen.getByText(/No conflicting person found/i)).toBeTruthy();
   });
+
+  it('never offers to adopt itself, even if the backend misbehaves', async () => {
+    // Defensive backstop, not the primary exclusion mechanism (that's
+    // excludeId, asserted above) — mirrors the equivalent test for the
+    // creation-time suggestion in person-schema-form.test.ts.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(personNode());
+    findDuplicateForSpy.mockResolvedValue(personNode({ id: 'person-1' }));
+    render(PossibleDuplicateBadge, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Possible duplicate/i }));
+    await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
+
+    expect(screen.queryByText(/already exists/i)).toBeNull();
+    expect(screen.getByText(/No conflicting person found/i)).toBeTruthy();
+  });
+
+  it('a stale response from a superseded check does not clobber a newer result', async () => {
+    // Regression guard for the staleness fix: open the popover (check #1,
+    // slow), close it, reopen it (check #2, resolves first with a real
+    // match). Check #1 finally resolving afterward must not wipe check #2's
+    // valid result or flip `checking` back on.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(personNode());
+    let resolveFirst!: (node: Node | null) => void;
+    findDuplicateForSpy
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        })
+      )
+      .mockResolvedValueOnce(existingMatch());
+
+    render(PossibleDuplicateBadge, { props: { nodeId: 'person-1' } });
+    const trigger = screen.getByRole('button', { name: /Possible duplicate/i });
+
+    await fireEvent.click(trigger); // opens, starts check #1 (slow)
+    await fireEvent.click(trigger); // closes
+    await fireEvent.click(trigger); // reopens, starts check #2
+
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+
+    resolveFirst(null); // the stale check finally resolves
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText(/already exists: Bob Existing/i)).toBeTruthy();
+  });
 });

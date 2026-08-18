@@ -350,4 +350,84 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     expect(navigateToNodeInOtherPane).toHaveBeenCalledWith('person-existing');
     expect(updateNodeSpy).not.toHaveBeenCalled();
   });
+
+  it('tells the user when a recheck finds no live collision, rather than being a silent no-op', async () => {
+    // The marker is permanent (nothing clears it), so clicking "click to
+    // review" and finding nothing is an expected outcome that must be
+    // visible — not indistinguishable from the click doing nothing at all.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(null);
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i));
+
+    await waitFor(() => expect(findDuplicateForSpy).toHaveBeenCalled());
+    expect(screen.getByText(/No conflicting person found/i)).toBeTruthy();
+    // The badge itself must still be there to try again later.
+    expect(screen.getByText(/Possible duplicate/i)).toBeTruthy();
+  });
+
+  it('a fresh edit clears stale "no match" feedback from an earlier recheck', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(null);
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i));
+    await waitFor(() => expect(screen.getByText(/No conflicting person found/i)).toBeTruthy());
+
+    await blurEmail('someone-else@example.com');
+
+    expect(screen.queryByText(/No conflicting person found/i)).toBeNull();
+  });
+
+  it('a slow, superseded badge recheck does not clobber a faster, later one\'s result', async () => {
+    // Regression guard for the generation-counter staleness fix: two badge
+    // clicks in quick succession start two overlapping lookups; the FIRST
+    // (slower) one resolving AFTER the second (faster) one must not clobber
+    // the second's already-landed result — "most recently started wins",
+    // not "whichever settles first wins". checkedForEmail alone (a plain
+    // by-value guard) cannot distinguish these two calls, since both are for
+    // the same email; only a monotonic generation counter can.
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    let resolveFirst!: (node: Node | null) => void;
+    findDuplicateForSpy
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        })
+      )
+      .mockResolvedValueOnce(existingMatch());
+
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i)); // check #1 (slow)
+    await fireEvent.click(screen.getByText(/Possible duplicate/i)); // check #2 (resolves first)
+
+    await waitFor(() => expect(screen.getByText(/already exists: Bob Existing/i)).toBeTruthy());
+
+    // The stale check #1 finally resolves — with NO match — after the valid
+    // suggestion from check #2 is already showing. It must not clear it.
+    resolveFirst(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText(/already exists: Bob Existing/i)).toBeTruthy();
+  });
 });
