@@ -1,0 +1,60 @@
+# This directory is not a case file. It is a `.toml` only so it sits beside the
+# arms it describes; the runner is never pointed at it.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE ARMS ARE FOR
+# ---------------------------------------------------------------------------
+#
+# The cases in the parent directory are all FULL arms: every context block
+# production sends is present. That answers "does this request work?" but not
+# "which of these blocks is doing the work?"
+#
+# Nothing in NodeSpace's context assembly has been measured against its own
+# absence. The Stage-2 candidate block, the rendered instruction subtrees,
+# EXISTING SCHEMAS, and related-entities were each built on a plausible
+# theory. The project's own measurements of the mechanisms that WERE tested are
+# not encouraging:
+#
+#   +types           25% -> 8%    (hurt)
+#   +relationships   null
+#   resident prose   10,493 chars at 50%, versus 445 chars at 73%
+#   continuation rule  inert at 72/72
+#
+# Three of four measured neutral-to-harmful. A block that costs context and
+# earns nothing is worse than absent, because it also displaces what would have
+# helped.
+#
+# ---------------------------------------------------------------------------
+# HOW AN ARM IS BUILT
+# ---------------------------------------------------------------------------
+#
+# Subtractively, from a full arm in the parent directory. One block removed,
+# everything else byte-identical. That isolation is the whole design: two arms
+# differing in two ways measure nothing, and a difference between arms is only
+# attributable if exactly one thing moved.
+#
+# Verify with --check before spending model time. An arm that accidentally
+# differs in whitespace or tool surface is a wasted run that looks like a
+# result.
+#
+# ---------------------------------------------------------------------------
+# READING THE RESULTS
+# ---------------------------------------------------------------------------
+#
+# A tie is a finding. If an arm with a block removed scores the same as the
+# full arm, that block is not paying for the context it consumes on this case.
+# That is the most likely outcome for several of these and it is the point of
+# running them.
+#
+# What a tie does NOT license is deleting the block: one case is not the
+# workload, and a block can be inert here and load-bearing on a case this
+# corpus does not contain. The arms bound the claim to what was measured.
+#
+# Single runs are not decision-grade. Identical code has scored 6, 7, and 7 out
+# of 12 on the agent matrix, and scenario 6 measured 3/3 versus 0/8 on carried
+# history alone. Arms are run at the same rep count as the full arm they came
+# from, and a difference inside one rep of each other is noise, not a result.
+#
+# Tool ARGUMENTS are less stable than tool NAMES across sessions — the same
+# case produced node_type "equipment" in one session and "Product" in another,
+# each 3/3 internally. Record which fields were stable, not only the tally.

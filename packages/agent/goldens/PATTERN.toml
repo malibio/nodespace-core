@@ -1,0 +1,225 @@
+# Not a case file. A `.toml` so it sits beside the cases it describes; the
+# runner is never pointed at it.
+#
+# ---------------------------------------------------------------------------
+# THE PATTERN EVERY WRITE CASE IN THIS CORPUS FOLLOWS
+# ---------------------------------------------------------------------------
+#
+# A write tool's value parameter DECLARES each of the type's fields as a typed
+# sub-property, with enums rendered as `enum = [...]`. It is not a bare
+# `type = "object"` accompanied by prose explaining what may go inside it.
+#
+#   [turn.tool.parameters_schema.properties.field_values]
+#   type = "object"
+#   description = "The values the user supplied, keyed by the type's field names."
+#
+#     [turn.tool.parameters_schema.properties.field_values.properties.status]
+#     type = "string"
+#     enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+#
+#     [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+#     type = "string"
+#     description = "Who the work is assigned to."
+#
+# ---------------------------------------------------------------------------
+# WHY — measured, not stylistic
+# ---------------------------------------------------------------------------
+#
+# dev-instance-creation.toml dropped a user-supplied value 3/3 across EIGHT
+# arms spanning every prose channel ADR-064 defines: candidate instructions, a
+# schema description, three shapes of worked example, a `content` boundary
+# rule, an ordered procedure, and that procedure with its enumeration forced
+# to be printed.
+#
+# The printed enumeration is what diagnosed it. The model listed five
+# particulars and the dropped one was not among them — it never entered the
+# list. So the value was already gone before any instruction could act on it,
+# which is why every wording-level arm was inert: they all operate downstream
+# of the loss.
+#
+# Declaring the field closed it immediately, 3/3. The model never has to infer
+# a key name, which is the single step measured to fail.
+#
+# Two further probes bound the failure:
+#   - asked DIRECTLY whether the type had a field for the value, the model
+#     answered correctly and unprompted. It is not ignorance.
+#   - offered a route_clarify tool and told to use it when a supplied value has
+#     nowhere to go, it wrote the record anyway, 3/3, silently. It does not
+#     surface the gap.
+# Knowledge available under a reasoning prompt, absent under an action prompt:
+# a selection failure, not addressable by instruction.
+#
+# ---------------------------------------------------------------------------
+# DELETE THE COMPETING PROSE, DO NOT MERELY ADD THE DECLARATION
+# ---------------------------------------------------------------------------
+#
+# Arm 6 had a declared sub-property AND prose telling the model to invent keys
+# for unlisted values, and it FAILED. The same declaration with that prose
+# removed passes. Adding structure while leaving the instruction it replaces is
+# measurably not the same edit.
+#
+# ---------------------------------------------------------------------------
+# APPLIED CORPUS-WIDE, AND EACH APPLICATION RE-MEASURED
+# ---------------------------------------------------------------------------
+#
+# The pattern is applied to every case whose write tool is actually EXERCISED,
+# not only the one that forced it — a pattern present only where it was
+# discovered is a patch. All six hold after the change:
+#
+#   dev-instance-creation      the case that forced it; now passes
+#   dev-status-change-enum     unchanged, 3/3
+#   dev-indirect-reference     unchanged, 3/3, all three turns
+#   dev-unseen-schema          unchanged, 3/3 — the hardest test, since its
+#                              `release` type appears in no example, so the
+#                              declarations must be GENERATED from the schema
+#                              rather than recognised from training
+#   dev-ambiguous-clarify      still asks rather than writing, 3/3
+#   dev-relationship-creation  still picks create_relationship over a field
+#                              write, 3/3 — and this one got HARDER: its
+#                              `supersedes` field is now explicitly declared,
+#                              so the wrong answer is more available than
+#                              before and is still not taken
+#
+# One deliberate exception, stated so the rule reads as exact rather than
+# nearly-true: dev-schema-creation's `create_node` keeps a bare `field_values`
+# object. That tool is a DISTRACTOR on that case — it exists so the model can
+# choose wrongly between defining a type and creating an instance, and it is
+# measured never called. Declaring its fields would tune a path the case does
+# not measure, and would mean declaring fields for a type (`adr`) that the case
+# is asking the model to CREATE and therefore deliberately withholds from
+# EXISTING SCHEMAS.
+#
+# So the rule for #2120 is: declare the fields of any write tool the turn can
+# legitimately call. A tool present only to be rejected does not need them.
+#
+# The last two matter most. Declaring fields makes the write tool easier to
+# use, so the risk was that it would pull the model toward writing in cases
+# where a write is the WRONG answer. Measured: it does not.
+#
+# Declare the fields of the type the case actually operates on. An early pass
+# put ticket fields (assignee, sprint, ticket statuses) on the ADR case, which
+# would have been an incoherent surface; it now declares the ADR's own.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE ASSEMBLY LINE HAS TO REPRODUCE
+# ---------------------------------------------------------------------------
+#
+# Per-field declarations on the write tool, generated per request from the
+# retrieved schemas — the same data that already renders the RELEVANT NODE
+# TYPES line, so no new source of truth is required.
+#
+# BLOCKED ON #2123. Production's value parameter is named `properties`, which
+# the Gemma-4 template deletes wholesale. Declarations inside a deleted
+# parameter reach the model no more than its description does, so the rename
+# has to land before any of this is reproducible.
+#
+# ---------------------------------------------------------------------------
+# THE PATTERN REVISED AN EARLIER ABLATION CONCLUSION
+# ---------------------------------------------------------------------------
+#
+# The arms in ablation/ were re-synced to the new base and re-measured, since
+# they must differ from it by exactly one block. no-schemas-block CHANGED:
+#
+#   turn 1  status filter "dev"        still wrong
+#   turn 2  status "ready_for_review"  NOW CORRECT (was "ready for review")
+#
+# Deleting the EXISTING SCHEMAS block no longer breaks the write, because
+# the enum now also reaches the model through update_node's own schema. Turn 1
+# still fails because search_nodes's `filters` takes a free-form
+# property/value pair and declares no enum — so nothing states the legal
+# values on a READ.
+#
+# That revises the earlier headline. "EXISTING SCHEMAS is the only block
+# that paid" was measured when the schema channel was empty. More precisely:
+# the allowed values must reach the model somehow, and either channel can
+# carry them. The block was the only carrier present, not uniquely
+# load-bearing.
+#
+# Open and NOT run: declaring enums on a read tool's filter parameter. If that
+# works, the node-types block may be redundant for writes AND reads, which
+# would be a materially larger context saving than this corpus has measured.
+#
+# ---------------------------------------------------------------------------
+# THE TWO-SITE NODE-TYPES SHAPE — UNIFORM, AND DELIBERATELY REDUNDANT
+# ---------------------------------------------------------------------------
+#
+# Every turn in every case carries the EXISTING SCHEMAS block TWICE: once
+# resident (context_ops's workspace context) and once inside the candidate
+# block (routing.rs's per-candidate metadata). That is production's actual
+# shape, from two independent call sites sharing one heading constant.
+#
+# It is redundant, and that was measured rather than assumed. Removing the
+# per-candidate copy from both turns of dev-status-change-enum:
+#
+#   turn 2 (the write)   IDENTICAL — the duplicate buys nothing
+#   turn 1               correct tool and filter, but `query` emitted as the
+#                        literal characters """ instead of an empty string
+#
+# The turn-1 result is why the removal is not free. The instruction "use an
+# empty query with node_type set" outlived the block above it and the model
+# answered with a malformed argument — the same shape as no-schemas-block'
+# dangling "as they appear below" pointer. Guidance that outlives the block it
+# references yields a plausible-looking wrong ARGUMENT, not a visible error.
+#
+# Kept because #2120 must reproduce production's shape and #2119 will assert on
+# it. Removing the duplication is production's decision; the corpus's job is to
+# carry the measurement of what it costs.
+#
+# ---------------------------------------------------------------------------
+# THE HEADING IS A CONSTRAINT, NOT A LABEL — MEASURED
+# ---------------------------------------------------------------------------
+#
+# The block is headed `EXISTING SCHEMAS (do not recreate these; do not copy
+# their fields onto a new type):`. The wording was measured, not chosen.
+#
+# The corpus originally inherited production's `RELEVANT ENTITY TYPES`. That
+# word is an outlier in the system: storage calls these nodes with
+# node_type == "schema", the tool parameter the block exists to feed is
+# `node_type` (44 uses in tools.rs), and `ENTITY` appears nowhere outside
+# prompt text. Renaming it was a consistency fix.
+#
+# Measured on dev-schema-creation, which is the case that must NOT reuse a
+# listed type, counting how often the `supersedes` field survives:
+#
+#   RELEVANT ENTITY TYPES                        5/5
+#   RELEVANT NODE TYPES                          0/5
+#   RELEVANT SCHEMAS                             0/3
+#   EXISTING SCHEMAS (do not recreate these...)  5/5
+#
+# So the noun is not what matters. `RELEVANT X` reads as a topic label;
+# `EXISTING X (do not recreate these)` reads as a constraint. On the one case
+# where the model must avoid the listed types rather than use them, only the
+# constraint framing carries it. `ENTITY` was doing that work accidentally, by
+# being a word with no other referent to pull toward.
+#
+# The chosen heading keeps the system's own vocabulary AND the case. Every
+# other case is unchanged by it, at 5 reps.
+#
+# METHOD NOTE, learned the hard way here: 3 reps was not enough. A 3/3 run
+# wrongly cleared the rename of causing this regression, and the 5-rep
+# comparison is what settled it. Rep counts in this corpus were raised to 5
+# for heading-level changes.
+#
+# CAVEAT ON THE ABOVE, raised in re-review and verified:
+#
+# Production's constant already carries the parenthetical —
+# `RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their
+# fields onto a new type):` (context_ops.rs:118). So the arms above were NOT
+# label-vs-constraint. `RELEVANT ENTITY TYPES (...)` and `EXISTING SCHEMAS (...)`
+# are both constraint-framed and both score 5/5; the two that scored 0 dropped
+# the parenthetical AND changed the noun at the same time.
+#
+# The measurement therefore supports "keeping the parenthetical matters" and
+# is CONSISTENT with the noun being irrelevant, but it does not isolate the
+# two. The arm that would isolate it — `EXISTING SCHEMAS:` bare, no
+# parenthetical — was run only on a probe during the tool-description
+# experiment (where it held 5/5 with the constraint moved into the tool
+# description), not as a clean single-variable arm here. Recorded as NOT
+# ISOLATED rather than left implying more than was measured.
+#
+# What is safe to carry into #2120: keep the parenthetical. The noun change is
+# a consistency fix with no measured cost, not a measured improvement.
+#
+# For #2120: production's constant is RELEVANT_ENTITY_TYPES_HEADER in
+# context_ops.rs, rendered at two sites. Adopting this means renaming the
+# constant and its text.

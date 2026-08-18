@@ -1,0 +1,212 @@
+name = "dev-schema-creation"
+reps = 5
+
+notes = """
+PRODUCTION-SHAPED. Dev-workflow domain.
+
+Scenario: schema creation. The user describes a NEW KIND of thing to track —
+an ADR — and the right answer is one create_schema carrying a workflow status
+enum with its allowed values.
+
+The worked example in the tool schema is itself the tuned channel, not
+decoration. ADR-038 Finding 2: the model reproduces the worked example's
+pattern, so the example IS the template. The example here is dev-shaped
+(`ticket`, `status`, `ready_for_dev`) precisely so the model is not
+pattern-matching a business entity against a dev request.
+
+MEASURED HERE, AND IT IS FINDING 2 REPRODUCING EXACTLY
+
+The user's message mentions three things a record should hold; the first draft
+produced only two. `supersedes` was dropped 3/3 while the enum was handled
+perfectly — the detail with no counterpart in the worked example was the one
+that vanished.
+
+Three arms, in order, each 3/3:
+
+  1. PROSE ALONE, in the `fields` description: "work through the user's
+     message detail by detail ... a detail with no field is silently lost."
+     NO EFFECT. Still 3/3 without `supersedes`.
+  2. PROSE + EXAMPLE: added a third field, `blocks`, a plain field pointing at
+     another ticket, to the worked example. `supersedes` appeared, 3/3.
+  3. EXAMPLE ALONE: reverted the arm-1 prose, kept the example.
+     STILL 3/3 WITH `supersedes`.
+
+Arm 3 exists because arm 2 was confounded — it changed the example while the
+arm-1 prose was still in place, so it could not distinguish "the example did
+it" from "both together did it". Flagged in review, and the honest fix was to
+run the missing arm rather than soften the claim. Running it isolated the
+cause and left the case leaner: the committed file carries the example and NOT
+the prose.
+
+The example carried a two-field shape and got a two-field answer back; adding
+a pointer-shaped field to the example produced a pointer-shaped field in the
+output, with no prose asserting the obligation at all. When a case here needs
+an argument SHAPE changed, change the example — the prose slot is measurably
+not the lever.
+
+Scoped to this case. dev-instance-creation.toml records the same edit, in the
+same channel, on the same model, moving nothing — so this is not a general
+rule about examples.
+
+WHAT THIS CASE IS TUNED AGAINST
+
+Two failures the enum field invites, both worth telling apart in the output:
+
+- an enum field declared WITHOUT its allowed values, which stores a field the
+  model can never legally fill later
+- more than one schema per request — the "supersedes" mention in the user's
+  message is a field on ADR, not a second type to create
+
+EXISTING SCHEMAS carries `ticket` but NOT `adr`: the block's contract is
+"existing types — do not recreate", so listing the type under construction
+would invert the case. `ticket` is present because a workspace is never empty
+and because contamination between a listed type's fields and a new type's
+fields is the measured hazard (#1846) — this case doubles as a check that the
+model does not copy ticket's fields onto ADR.
+
+PROVISIONAL ON #2123 — PARTIALLY
+
+The create_schema call this case measures does NOT take a `properties`
+parameter, so the case's own subject is unaffected by #2123. The create_node
+tool on the surface uses `field_values` rather than `properties`, as elsewhere
+in this corpus.
+
+That makes this the least affected case here: what it measures — one schema,
+an enum with allowed_values, no contamination off the listed type — would read
+the same under either name. Recorded rather than omitted so the corpus's
+dependency on #2123 is uniform to check, and so nobody has to re-derive which
+cases were exposed.
+
+CONTAMINATION GUARD (#1932)
+
+Dev-workflow vocabulary. Shares no entities with the eval fixtures or with the
+minimal controls in this directory.
+
+MEASURED — per-case results recorded on #2122.
+"""
+
+[[turn]]
+label = "create-adr-type"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Schema Creation
+Purpose: Define a new kind of record the workspace does not track yet, when \
+the user describes a category of thing rather than one particular instance.
+
+CALL create_schema NOW: your next action is the tool call, not planning text.
+
+ONE TYPE PER REQUEST: create exactly one. A detail that points at another \
+record is a FIELD on this type, not a second type to define.
+
+FIELDS: define only the fields the request implies. Every record already has \
+a title — do not add a "title" or "name" field.
+
+A FIELD WITH A FIXED SET OF STATES: give it type "enum" and list every legal \
+value in allowed_values. An enum with no allowed_values can never be filled \
+legally afterwards.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = """
+We need to start tracking architecture decision records — each one has a \
+status, moving from proposed to accepted, and sometimes one supersedes an \
+older one
+"""
+expect = """
+create_schema, exactly ONCE, defining a status field of type enum whose \
+allowed_values include proposed and accepted, plus a field for the supersedes \
+relationship. Failures worth telling apart: an enum declared with no \
+allowed_values, a second create_schema for the superseded record, and any \
+field copied off `ticket` (assignee, sprint) that this request never mentioned.
+"""
+
+  [turn.tool_results]
+  create_schema = '{"ok": true, "type_id": "adr", "note": "Type created. The id is derived from the name: lowercased, spaces to underscores."}'
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a new entity type with its fields. Use when the user describes a kind \
+  of record the workspace does not track yet, not a single instance of an \
+  existing kind. The example shows one field per detail the user mentioned, \
+  including "blocks another ticket" as a field rather than a second type. \
+  Example call: {"name": "Ticket", "fields": [{"name": "status", "type": \
+  "enum", "allowed_values": ["ready_for_dev", "in_dev", "done"]}, {"name": \
+  "assignee", "type": "text"}, {"name": "blocks", "type": "text"}]}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+      description = "Display name for the type, singular (e.g. \"Ticket\", \"ADR\")."
+
+      # Deliberately plain. An earlier version spelled out the obligation here
+      # ("work through the user's message detail by detail ... a detail with no
+      # field is silently lost") and measured NO effect, 3/3. The worked
+      # example in the tool description is what moved it — see the notes.
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+      description = "Every field this type needs, listed explicitly. Do not include a title or name field — every record already has a title."
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+          description = "Field name, lowercase snake_case (e.g. status, due_date)."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.required]
+          type = "boolean"
+          description = "Whether every record of this type must carry a value."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values]
+          type = "array"
+          description = "Required and non-empty when type is \"enum\": every legal value for the field, lowercase snake_case (e.g. [\"proposed\", \"accepted\"])."
+
+            [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values.items]
+            type = "string"
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create one new record of a type that already exists. Use for a single \
+  instance, never to define a new kind of record.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "content"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Type id, copied exactly from EXISTING SCHEMAS."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "The record's title."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "Field values for this record."
