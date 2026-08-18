@@ -1614,7 +1614,13 @@ impl NodeBehavior for QueryNodeBehavior {
 /// They form a DAG (Directed Acyclic Graph) structure where:
 /// - Collections can have multiple parent collections (multi-parent)
 /// - Nodes can belong to multiple collections (multi-membership)
-/// - Collection names are globally unique (case-insensitive lookup)
+/// - Collection names are best-effort unique (case-insensitive lookup): a
+///   name collision is never hard-rejected at creation (NodeSpace is
+///   local-first — two offline devices can each validly create a collection
+///   with the same name), and is instead surfaced as a non-blocking
+///   `_possible_duplicate` marker on both nodes once they land in the same
+///   database (`SqliteStore::create_node`), mirroring the suggest-don't-block
+///   posture ADR-065 established for the schema-declared `unique` rule.
 ///
 /// Collections use the `content` field for the collection name.
 ///

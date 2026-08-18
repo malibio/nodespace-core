@@ -525,29 +525,54 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             // Default/absent = false = open (organizational). member_of edge
             // `permission` (admin/modify/readOnly) is a free-form edge property the
             // RLS reads directly — no schema field needed.
-            fields: vec![SchemaField {
-                name: "restrictedToMembers".to_string(),
-                friendly_name: "Restricted to members".to_string(),
-                field_type: "boolean".to_string(),
-                local_only: false,
-                protection: SchemaProtectionLevel::Core,
-                core_values: None,
-                user_values: None,
-                indexed: false,
-                required: Some(false),
-                extensible: None,
-                default: Some(serde_json::json!(false)),
-                description: Some(
-                    "When true, only person members may access this collection's \
-                     nodes (ADR-037 opt-in restriction). Default false = open."
-                        .to_string(),
-                ),
-                item_type: None,
-                fields: None,
-                item_fields: None,
-                unique: None,
-                unique_case_insensitive: None,
-            }],
+            fields: vec![
+                SchemaField {
+                    name: "restrictedToMembers".to_string(),
+                    friendly_name: "Restricted to members".to_string(),
+                    field_type: "boolean".to_string(),
+                    local_only: false,
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: Some(serde_json::json!(false)),
+                    description: Some(
+                        "When true, only person members may access this collection's \
+                         nodes (ADR-037 opt-in restriction). Default false = open."
+                            .to_string(),
+                    ),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                SchemaField {
+                    name: POSSIBLE_DUPLICATE_FIELD.to_string(),
+                    friendly_name: "Possible duplicate".to_string(),
+                    field_type: "boolean".to_string(),
+                    // Never re-broadcast: the sync engine excludes local_only
+                    // properties from a push and ignores them on a pull, so this
+                    // marker stays wherever `SqliteStore::create_node` set it and
+                    // never fights convergence or gets echoed back.
+                    local_only: true,
+                    protection: SchemaProtectionLevel::System,
+                    core_values: None,
+                    user_values: None,
+                    indexed: false,
+                    required: Some(false),
+                    extensible: None,
+                    default: Some(serde_json::Value::Bool(false)),
+                    description: Some("System-managed convergence indicator: set when this collection's name collides with another active collection after both land in the same database (e.g. two offline devices each created a collection with the same name). Never written directly; see SqliteStore::create_node's collection-name-collision handling.".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+            ],
             relationships: vec![], // member_of is a native edge, not schema-defined
             title_template: None,
             properties_header_summary_template: None,

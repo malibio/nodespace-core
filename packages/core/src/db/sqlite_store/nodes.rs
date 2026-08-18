@@ -8,15 +8,21 @@ impl SqliteStore {
         source: Option<String>,
         playbook_context: Option<crate::db::events::PlaybookExecutionContext>,
     ) -> Result<Node> {
-        if node.node_type == "collection" {
-            if let Some(existing) = self.get_collection_by_name(&node.content).await? {
-                anyhow::bail!(
-                    "Collection with name '{}' already exists (id: {})",
-                    node.content,
-                    existing.id
-                );
-            }
-        }
+        // Collection-name collisions are suggest-don't-block (ADR-065 posture),
+        // never a hard rejection: NodeSpace is local-first, and two offline
+        // devices can each validly create a collection with the same name. A
+        // hard rejection here used to propagate straight out of the sync-apply
+        // `create_node` call (`nodespace-sync`'s `apply_node_upsert`), and per
+        // that function's own contract the cursor never advances past a failed
+        // row — a benign duplicate collection name could wedge a sync cursor
+        // permanently. Detect the collision (if any) BEFORE the insert below so
+        // it unambiguously identifies the pre-existing OTHER node, then let the
+        // write proceed unconditionally and mark both sides afterward.
+        let colliding_collection = if node.node_type == "collection" {
+            self.get_collection_by_name(&node.content).await?
+        } else {
+            None
+        };
 
         Self::validate_lifecycle_status(&node.lifecycle_status)?;
 
@@ -55,7 +61,41 @@ impl SqliteStore {
             playbook_context,
         });
 
+        if let Some(existing) = colliding_collection {
+            // Best-effort and non-blocking: the node above is already durably
+            // written. A marker-write failure must never fail node creation —
+            // mirrors the swallow-errors posture of nodespace-sync's own
+            // `mark_possible_duplicate` (ADR-065).
+            self.mark_collection_name_collision(&node.id, &existing.id)
+                .await;
+        }
+
         Ok(node)
+    }
+
+    /// Stamp the local-only `_possible_duplicate` marker (ADR-065 §4) on both
+    /// sides of a collection-name collision: `new_id` (the node that was just
+    /// created) and `existing_id` (the pre-existing collection it collides
+    /// with by name). Written via `set_property_bool` — OCC-bypassing (no
+    /// version check, no version bump) and event-free, the same low-level
+    /// primitive `NodeService::mark_possible_duplicates` uses, so the marker
+    /// can never look like a content edit or perturb LWW/echo state. Errors
+    /// are logged and swallowed: the create this follows has already
+    /// succeeded and must not be undone by a marker-write failure.
+    async fn mark_collection_name_collision(&self, new_id: &str, existing_id: &str) {
+        let path = format!(
+            "$.collection.{}",
+            crate::models::core_schemas::POSSIBLE_DUPLICATE_FIELD
+        );
+        for id in [new_id, existing_id] {
+            if let Err(e) = self.set_property_bool(id, &path, true).await {
+                tracing::warn!(
+                    node_id = %id,
+                    error = %e,
+                    "create_node: failed to set collection-name-collision possible-duplicate marker (node creation unaffected)"
+                );
+            }
+        }
     }
 
     pub async fn create_child_node_atomic(
