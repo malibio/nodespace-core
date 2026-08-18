@@ -70,6 +70,39 @@ not tuned yet". Every channel ADR-064 defines has now been tried, including
 the two that worked elsewhere in this corpus. The remaining lever is not
 wording.
 
+IT IS NOT UNAWARENESS, AND IT DOES NOT ASK
+
+Two further probes answer the question a reader will have next: does the model
+recognise the shortcoming and raise it, or proceed blind?
+
+  1. HITL AVAILABLE. Same request, plus a route_clarify tool, plus explicit
+     permission -- "if a value the user supplied has no field to go in, do not
+     silently proceed without it ... saving the record while dropping a value
+     tells the user it was stored when it was not."
+     STILL create_node, 3/3, no clarification, no mention.
+
+  2. AWARENESS, no write tool offered. Asked in prose to list every particular
+     and say whether the type has a field for it, the model answers exactly
+     right, unprompted:
+
+       "None of the existing fields -- title, status, assignee, or sprint --
+        are designed specifically to capture external dependencies like being
+        'blocked by X'."
+
+     It maps the other three correctly and puts "No" against this one in its
+     own summary table.
+
+So the model HAS the knowledge and does not act on it. The awareness is
+available under a reasoning prompt and absent under an action prompt. This is
+the worst of the three possible behaviours: not a comprehension limit, and not
+a gap it flags, but a silent drop by a model that could have flagged it.
+
+That also explains why six channels of guidance moved nothing. They all tell
+the model something it already knows. The failure is not in what it
+understands but in what surfaces while it is acting -- the same shape as this
+project's finding that identical guidance delivered as a tool result rather
+than in the prompt drops continuation and yields prose.
+
 WHY THIS CASE STAYS IN THE CORPUS, STILL FAILING
 
 It is the corpus's honest ceiling marker. A corpus of only passing cases would
