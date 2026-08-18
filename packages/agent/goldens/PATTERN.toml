@@ -100,3 +100,29 @@
 # the Gemma-4 template deletes wholesale. Declarations inside a deleted
 # parameter reach the model no more than its description does, so the rename
 # has to land before any of this is reproducible.
+#
+# ---------------------------------------------------------------------------
+# THE PATTERN REVISED AN EARLIER ABLATION CONCLUSION
+# ---------------------------------------------------------------------------
+#
+# The arms in ablation/ were re-synced to the new base and re-measured, since
+# they must differ from it by exactly one block. no-entity-types CHANGED:
+#
+#   turn 1  status filter "dev"        still wrong
+#   turn 2  status "ready_for_review"  NOW CORRECT (was "ready for review")
+#
+# Deleting the RELEVANT ENTITY TYPES block no longer breaks the write, because
+# the enum now also reaches the model through update_node's own schema. Turn 1
+# still fails because search_nodes's `filters` takes a free-form
+# property/value pair and declares no enum — so nothing states the legal
+# values on a READ.
+#
+# That revises the earlier headline. "RELEVANT ENTITY TYPES is the only block
+# that paid" was measured when the schema channel was empty. More precisely:
+# the allowed values must reach the model somehow, and either channel can
+# carry them. The block was the only carrier present, not uniquely
+# load-bearing.
+#
+# Open and NOT run: declaring enums on a read tool's filter parameter. If that
+# works, the entity-types block may be redundant for writes AND reads, which
+# would be a materially larger context saving than this corpus has measured.

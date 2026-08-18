@@ -41,7 +41,44 @@ the Gemma-4 template. That makes this arm — like its parent — NOT
 production-shaped today, and provisional on #2123 being fixed by renaming. If
 it is fixed another way, this file needs rewriting rather than annotating.
 
-MEASURED: 3/3 WRONG. THE ONLY BLOCK THAT PAID.
+RE-MEASURED AFTER THE DECLARED-FIELD PATTERN — THE RESULT CHANGED
+
+This arm was first measured against a base whose write tool had a bare
+`field_values` object. The base now declares each of the type's fields as
+typed sub-properties, with `status` carrying its enum (see ../PATTERN.toml),
+and the arm was re-synced so it still differs from the base by exactly one
+block. Re-measuring changed the finding, so the original is kept below it.
+
+  turn 1   status filter "dev"          STILL WRONG   (not "in_dev")
+  turn 2   status "ready_for_review"    NOW CORRECT   (was "ready for review")
+
+Turn 2 recovered because the enum now reaches the model through a SECOND
+channel: `update_node`'s own schema declares
+status: enum [ready_for_dev, in_dev, ready_for_review, in_review, done].
+With the entity-types block deleted, that declaration alone was sufficient.
+
+Turn 1 did not recover, and the asymmetry is the evidence rather than noise:
+`search_nodes`'s `filters` parameter takes a free-form property/value pair and
+declares no enum, so nothing tells the model the legal values on a READ. The
+same request fails on the filter and succeeds on the write, in the same arm,
+in the same run.
+
+WHAT THAT REVISES
+
+The earlier conclusion — "RELEVANT ENTITY TYPES is the only block that paid" —
+was measured when the schema channel was empty. It is more precisely: the
+allowed-values must reach the model SOMEHOW, and either channel can carry
+them. The entity-types block is not uniquely load-bearing; it was simply the
+only carrier present at the time.
+
+Practical consequence: declaring enums on the tool schema covers writes, but
+filters need the same treatment or the entity-types block has to stay for
+reads. This corpus does not yet have an arm declaring enums on a read tool —
+recorded as not-run rather than assumed.
+
+ORIGINAL MEASUREMENT, before the declared-field pattern (kept for the record):
+3/3 WRONG on BOTH turns — filter "dev" and write "ready for review", both
+would be rejected.
 
 Size, measured on the POST-TEMPLATE prompt via NODESPACE_PROMPT_DUMP (see
 no-candidate-block.toml for why that is the figure quoted):
@@ -241,9 +278,27 @@ absent or empty `field_values` means the write silently changes nothing.
       # own prompt fields, not to strings nested inside a tool's JSON Schema —
       # a `"""` block here reaches the model with its TOML indent and a
       # trailing newline embedded in the description. Verified with --check.
+      # Declared sub-properties mirroring the `ticket` type's own fields — the
+      # pattern dev-instance-creation.toml established after eight
+      # wording-level arms failed to carry a value the schema did not declare.
+      # Applied here for consistency and to check it does not regress a case
+      # that already passed.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
       description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Required whenever the request changes the node's state rather than its title. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+        description = "The ticket's workflow state."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
 
   [[turn.tool]]
   name = "search_nodes"

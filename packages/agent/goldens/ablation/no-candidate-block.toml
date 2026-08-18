@@ -193,9 +193,27 @@ absent or empty `field_values` means the write silently changes nothing.
       # own prompt fields, not to strings nested inside a tool's JSON Schema —
       # a `"""` block here reaches the model with its TOML indent and a
       # trailing newline embedded in the description. Verified with --check.
+      # Declared sub-properties mirroring the `ticket` type's own fields — the
+      # pattern dev-instance-creation.toml established after eight
+      # wording-level arms failed to carry a value the schema did not declare.
+      # Applied here for consistency and to check it does not regress a case
+      # that already passed.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
       description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Required whenever the request changes the node's state rather than its title. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+        description = "The ticket's workflow state."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
 
   [[turn.tool]]
   name = "search_nodes"
