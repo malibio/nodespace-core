@@ -201,6 +201,7 @@ export default defineConfig({
         '.svelte-kit/**', // SvelteKit generated files
         'scripts/**', // Build/dev scripts
         'eslint-rules/**', // Custom eslint rules
+        'src-tauri/**', // Rust backend + staged build resources (e.g. the bundled skill installer), not frontend source
         // Excluded from coverage targets
         'src/lib/components/ui/**', // Third-party shadcn-svelte wrappers
         'src/lib/design/**', // Svelte components - tested via browser-mode tests
