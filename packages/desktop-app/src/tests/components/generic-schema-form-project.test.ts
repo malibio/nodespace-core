@@ -75,13 +75,21 @@ const PROJECT_SCHEMA: SchemaNode = {
         { value: 'archived', label: 'Archived' },
         { value: 'cancelled', label: 'Cancelled' }
       ],
-      { required: true, default: 'planning' }
+      // protection: Core + extensible: true, matching core_schemas.rs exactly — this
+      // schema is meant to mirror the real one field-for-field, and #2132's planned
+      // protection-level filtering work needs a faithful fixture to test against.
+      { required: true, default: 'planning', protection: 'core', extensible: true }
     ),
-    enumField('priority', 'Priority', [
-      { value: 'low', label: 'Low' },
-      { value: 'medium', label: 'Medium' },
-      { value: 'high', label: 'High' }
-    ]),
+    enumField(
+      'priority',
+      'Priority',
+      [
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High' }
+      ],
+      { extensible: true }
+    ),
     dateField('start_date', 'Start date'),
     dateField('end_date', 'End date')
   ]

@@ -224,11 +224,54 @@ describe('GenericSchemaForm — un-migrated flat properties on a namespaced type
 
     // `city` was never rendered (it is not a declared sub-field) but must survive the
     // write — NestedPropertyModal rebuilds the whole object, not just the edited key.
-    // The write also lands flat (matching the node's current un-migrated shape), not
-    // namespaced — buildFieldWrite only namespaces when the namespace already exists.
+    // This asserts the PAYLOAD GenericSchemaForm sends to sharedNodeStore.updateNode —
+    // buildFieldWrite only namespaces when the `invoice` namespace already exists in
+    // `node.properties`, so from this component's perspective the write "lands flat".
+    // What the backend subsequently does with a flat payload against a node that also
+    // has other, unrelated data (normalize-to-namespace + merge, crud.rs) is a separate
+    // concern this test does not cover.
     expect(persistedProperties(updateNodeSpy)).toEqual({
       total: 10,
       address: { street: 'X', city: 'B' }
     });
+  });
+});
+
+describe('GenericSchemaForm — boolean fields', () => {
+  beforeEach(() => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      nodeWith('invoice', { invoice: { total: 10 } })
+    );
+  });
+
+  it('renders a checkbox for a boolean field', async () => {
+    render(GenericSchemaForm, {
+      props: {
+        nodeId: 'node-1',
+        schema: schemaWith([field({ name: 'paid', friendlyName: 'Paid', type: 'boolean' })], 'invoice'),
+        autoOpen: true
+      }
+    });
+
+    const checkbox = (await waitFor(() =>
+      screen.getByLabelText('Paid')
+    )) as HTMLInputElement;
+    expect(checkbox.type).toBe('checkbox');
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('persists the toggled value namespaced under properties[nodeType]', async () => {
+    render(GenericSchemaForm, {
+      props: {
+        nodeId: 'node-1',
+        schema: schemaWith([field({ name: 'paid', friendlyName: 'Paid', type: 'boolean' })], 'invoice'),
+        autoOpen: true
+      }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText('Paid')).toBeTruthy());
+    await fireEvent.click(screen.getByLabelText('Paid'));
+
+    expect(persistedProperties(updateNodeSpy)).toEqual({ invoice: { total: 10, paid: true } });
   });
 });
