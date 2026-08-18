@@ -359,6 +359,45 @@ mod wire_contract {
         assert_eq!(out[1]["fields"], serde_json::json!([]));
         assert_eq!(out[2]["status"], "done");
     }
+
+    /// Mirrors `schema_with_malformed_fields_does_not_fail_an_unrelated_batch_read`
+    /// above for the sibling `relationships` field, which has the identical
+    /// silent-swallow-shaped fix (`SchemaNode::from_node` delegates to
+    /// `parse_relationships`, analogous to `parse_fields`).
+    #[test]
+    fn schema_with_malformed_relationships_does_not_fail_an_unrelated_batch_read() {
+        let good_task = Node::new(
+            "task".to_string(),
+            "Buy milk".to_string(),
+            serde_json::json!({ "task": { "status": "open" } }),
+        );
+        let bad_schema = Node::new(
+            "schema".to_string(),
+            "Broken schema".to_string(),
+            serde_json::json!({
+                "isCore": false,
+                "schemaVersion": 1,
+                // `direction` must be "out"/"in" — this is a genuine parse
+                // failure, not merely an absent/defaulted field.
+                "relationships": [{ "name": "assigned_to", "direction": 42, "cardinality": "one" }],
+            }),
+        );
+        let other_good_task = Node::new(
+            "task".to_string(),
+            "Walk dog".to_string(),
+            serde_json::json!({ "task": { "status": "done" } }),
+        );
+
+        let out = nodes_to_typed_values(vec![good_task, bad_schema, other_good_task])
+            .expect("one malformed schema node must not fail the whole batch");
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["status"], "open");
+        // The malformed schema node still degrades to an empty `relationships`
+        // Vec (unchanged behavior) rather than dropping out of the batch.
+        assert_eq!(out[1]["relationships"], serde_json::json!([]));
+        assert_eq!(out[2]["status"], "done");
+    }
 }
 
 /// Property tests for the Node → wire-JSON promotion contract.

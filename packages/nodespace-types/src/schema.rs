@@ -303,6 +303,32 @@ fn parse_fields(
     }
 }
 
+/// Parses the `relationships` array out of a schema node's stored properties.
+///
+/// Mirrors `parse_fields` above — same silent-swallow shape, same fix, same
+/// reasoning for keeping `from_node`'s `Result` untouched (see `parse_fields`'s
+/// doc comment for the full blast-radius analysis of `nodes_to_typed_values`'s
+/// batch-collect semantics, which applies identically here).
+fn parse_relationships(
+    properties: &serde_json::Value,
+    node_id: &str,
+) -> (Vec<SchemaRelationship>, Option<String>) {
+    match properties.get("relationships") {
+        None => (Vec::new(), None),
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(relationships) => (relationships, None),
+            Err(e) => (
+                Vec::new(),
+                Some(format!(
+                    "nodespace-types: SchemaNode::from_node: failed to parse `relationships` for \
+                     schema node `{node_id}`: {e} — reading back as an empty relationship list. \
+                     Likely a stale/corrupted storage format."
+                )),
+            ),
+        },
+    }
+}
+
 impl SchemaNode {
     pub fn from_node(node: Node) -> Result<Self, String> {
         if node.node_type != "schema" {
@@ -334,11 +360,11 @@ impl SchemaNode {
             eprintln!("{msg}");
         }
 
-        let relationships: Vec<SchemaRelationship> = node
-            .properties
-            .get("relationships")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let (relationships, relationships_diagnostic) =
+            parse_relationships(&node.properties, &node.id);
+        if let Some(msg) = &relationships_diagnostic {
+            eprintln!("{msg}");
+        }
 
         let title_template = node
             .properties
@@ -1083,5 +1109,89 @@ mod tests {
 
         let schema = SchemaNode::from_node(node).expect("must not fail the whole conversion");
         assert!(schema.fields.is_empty());
+    }
+
+    // Regression coverage for the silent-swallow bug: `parse_relationships`
+    // (the helper `SchemaNode::from_node` delegates to for its
+    // `relationships` array) must surface a diagnostic on a genuine parse
+    // failure instead of defaulting to an empty `Vec` with zero signal.
+    // Mirrors the `parse_fields` coverage above — see that block's comment
+    // for the full rationale.
+
+    #[test]
+    fn test_parse_relationships_malformed_json_surfaces_diagnostic() {
+        // `direction` must be "out" or "in" (`RelationshipDirection`); a
+        // number is a genuine parse failure, not merely an absent-and-defaulted
+        // key.
+        let malformed = json!({
+            "relationships": [{ "name": "assigned_to", "direction": 42, "cardinality": "one" }]
+        });
+        let (relationships, diagnostic) = parse_relationships(&malformed, "test-schema-id");
+
+        assert!(
+            relationships.is_empty(),
+            "malformed relationships still default to empty — behavior is unchanged"
+        );
+        let msg = diagnostic.expect(
+            "a relationships parse failure must surface a diagnostic, not silently default to empty",
+        );
+        assert!(
+            msg.contains("test-schema-id"),
+            "diagnostic must name the affected schema node: {msg}"
+        );
+        assert!(
+            msg.contains("relationships"),
+            "diagnostic must name the affected property: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_relationships_valid_json_no_diagnostic() {
+        let json = json!({
+            "relationships": [{ "name": "assigned_to", "direction": "out", "cardinality": "one" }]
+        });
+        let (relationships, diagnostic) = parse_relationships(&json, "test-schema-id");
+
+        assert_eq!(relationships.len(), 1);
+        assert_eq!(relationships[0].name, "assigned_to");
+        assert!(
+            diagnostic.is_none(),
+            "a successful parse must not produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_parse_relationships_absent_key_no_diagnostic() {
+        // A schema node with no `relationships` key at all (e.g. a freshly
+        // created schema) is not a parse failure — must stay silent, same as
+        // before.
+        let json = json!({});
+        let (relationships, diagnostic) = parse_relationships(&json, "test-schema-id");
+
+        assert!(relationships.is_empty());
+        assert!(diagnostic.is_none());
+    }
+
+    #[test]
+    fn test_from_node_malformed_relationships_still_succeeds_with_empty_relationships() {
+        // End-to-end through `from_node`: a malformed `relationships` value
+        // must not fail the whole node conversion (same batch-collect
+        // reasoning as the `fields` case) — it must still resolve to `Ok`
+        // with an empty `relationships` Vec, now with a diagnostic printed to
+        // stderr along the way (see
+        // `test_parse_relationships_malformed_json_surfaces_diagnostic` for
+        // the assertable half of that diagnostic).
+        let node = Node::new(
+            "schema".to_string(),
+            "Malformed schema".to_string(),
+            json!({
+                "isCore": false,
+                "schemaVersion": 1,
+                "relationships": [{ "name": "assigned_to", "direction": 42, "cardinality": "one" }],
+            }),
+        );
+
+        let schema = SchemaNode::from_node(node).expect("must not fail the whole conversion");
+        assert!(schema.relationships.is_empty());
     }
 }
