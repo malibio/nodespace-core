@@ -294,10 +294,20 @@ pub async fn create_collection(
     node_service: &Arc<NodeService>,
     input: CreateCollectionInput,
 ) -> Result<CreateCollectionOutput, OpsError> {
-    let collection_service = CollectionService::new(node_service.store(), node_service);
-
-    if collection_service
-        .get_collection_by_name(&input.name)
+    // The id this create will use is a pure hash of the normalized name
+    // (`deterministic_collection_id`), independent of lifecycle_status — so
+    // any existing node at that id, active OR archived, already occupies the
+    // row this INSERT needs. Check by id, not by
+    // `CollectionService::get_collection_by_name` (which — correctly, for its
+    // own callers — only matches `lifecycle_status = 'active'` collections):
+    // an archived collection would pass that check, then fail the INSERT
+    // below with an opaque primary-key-constraint error, since
+    // `NodeService::create_node` has no get-or-create/upsert semantics for
+    // the `collection` node type (unlike, e.g., the `database-settings`
+    // singleton).
+    let deterministic_id = deterministic_collection_id(&input.name);
+    if node_service
+        .get_node(&deterministic_id)
         .await
         .map_err(OpsError::from)?
         .is_some()
@@ -316,11 +326,11 @@ pub async fn create_collection(
     // Deterministic id from the (globally-unique) name so a UI-created collection
     // converges with the same-named collection created on another device or by import
     // (`CollectionService::create_collection` derives the same id) instead of minting a
-    // random UUID that syncs up as a duplicate. The name-existence check above already
-    // rejects a local duplicate.
+    // random UUID that syncs up as a duplicate. The id-existence check above already
+    // rejects a local duplicate (including an archived one).
     let collection_id = node_service
         .create_node_with_parent(CreateNodeParams {
-            id: Some(deterministic_collection_id(&input.name)),
+            id: Some(deterministic_id),
             node_type: "collection".to_string(),
             content: input.name,
             parent_id: None,

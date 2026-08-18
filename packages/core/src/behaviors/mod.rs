@@ -1614,16 +1614,17 @@ impl NodeBehavior for QueryNodeBehavior {
 /// They form a DAG (Directed Acyclic Graph) structure where:
 /// - Collections can have multiple parent collections (multi-parent)
 /// - Nodes can belong to multiple collections (multi-membership)
-/// - Collection names are best-effort unique (case-insensitive lookup): a
-///   name collision is never hard-rejected at CREATE time (NodeSpace is
-///   local-first — two offline devices can each validly create a collection
-///   with the same name), and is instead surfaced as a non-blocking
-///   `_possible_duplicate` marker on both nodes once they land in the same
-///   database (`SqliteStore::create_node`), mirroring the suggest-don't-block
-///   posture ADR-065 established for the schema-declared `unique` rule. This
-///   detection is create-time only — a sync-applied rename/update that
-///   introduces a fresh name collision is not currently detected or marked
-///   (`SqliteStore::update_node` has no equivalent check).
+/// - Collection names are best-effort unique among ACTIVE collections
+///   (case-insensitive lookup, `lifecycle_status = 'active'` only — an
+///   archived collection's name is free to reuse): a name collision is never
+///   hard-rejected, whether at create time or on a rename (NodeSpace is
+///   local-first — two offline devices can each validly create or rename a
+///   collection onto the same name), and is instead surfaced as a
+///   non-blocking `_possible_duplicate` marker on both nodes once they land
+///   in the same database (`SqliteStore::create_node`, `SqliteStore::update_node`,
+///   `SqliteStore::update_node_with_version_check`), mirroring the
+///   suggest-don't-block posture ADR-065 established for the schema-declared
+///   `unique` rule.
 ///
 /// Collections use the `content` field for the collection name.
 ///

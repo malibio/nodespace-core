@@ -83,22 +83,28 @@ impl SqliteStore {
     /// are logged and swallowed: the create this follows has already
     /// succeeded and must not be undone by a marker-write failure.
     ///
-    /// Only called from `create_node`, and only for a collision detected
-    /// there — this is create-time detection only. `update_node` performs no
-    /// equivalent check, so a sync-applied rename that introduces a fresh
-    /// name collision is neither rejected nor marked (a known, documented
-    /// gap; see `update_path_introducing_a_name_collision_is_currently_unmarked`
-    /// in `tests/collection_name_convergence_test.rs`).
+    /// Called from `create_node` for a collision detected on insert, and also
+    /// from `update_node` / `update_node_with_version_check` for a collision
+    /// detected on a `content` change that leaves the node (effectively)
+    /// collection-typed — i.e. a rename. All three callers detect BEFORE
+    /// their write and mark AFTER it, and all three exclude the node's own id
+    /// from the pre-write match so a no-op or case-only rename onto itself
+    /// never self-marks.
     ///
     /// The collision detection this backs (`get_collection_by_name`, called
-    /// by the caller BEFORE the insert) has a real TOCTOU gap under genuine
-    /// concurrent creates of the same name: two concurrent `create_node`
-    /// calls can each run their pre-insert lookup before either INSERT
-    /// lands, so both see "no collision" and neither gets marked. This is
-    /// accepted as best-effort — the same non-atomicity
+    /// by each caller before its write) has a real TOCTOU gap under genuine
+    /// concurrent writes that would land on the same name: two concurrent
+    /// calls can each run their pre-write lookup before either write lands,
+    /// so both see "no collision" and neither gets marked. This is accepted
+    /// as best-effort — the same non-atomicity
     /// `NodeService::mark_possible_duplicates` and nodespace-sync's own
     /// `mark_possible_duplicate` already accept for person.email — not a bug
     /// unique to this mechanism.
+    ///
+    /// `get_collection_by_name` itself only matches `lifecycle_status =
+    /// 'active'` collections, so a collision against an archived collection
+    /// is never detected or marked by any caller — archiving a collection
+    /// frees up its name.
     async fn mark_collection_name_collision(&self, new_id: &str, existing_id: &str) {
         let path = format!(
             "$.collection.{}",
@@ -109,7 +115,7 @@ impl SqliteStore {
                 tracing::warn!(
                     node_id = %id,
                     error = %e,
-                    "create_node: failed to set collection-name-collision possible-duplicate marker (node creation unaffected)"
+                    "failed to set collection-name-collision possible-duplicate marker (triggering write unaffected)"
                 );
             }
         }
@@ -285,8 +291,38 @@ impl SqliteStore {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        let updated_content = update.content.unwrap_or(current.content);
+        let updated_content = update.content.unwrap_or_else(|| current.content.clone());
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+
+        // Rename-path collision detection, mirroring create_node's suggest-
+        // don't-block posture (see mark_collection_name_collision's doc
+        // comment): a sync-applied update that changes a collection's
+        // `content` to a name already used by a DIFFERENT local collection is
+        // detected here BEFORE the write, then both sides are marked after it
+        // succeeds. Only triggered when content is actually changing on an
+        // (effectively) collection-typed node — a no-op rename (including a
+        // case-only one, which would otherwise match itself) or a
+        // non-content update never re-checks or re-marks.
+        //
+        // Self-exclusion is a post-query `.filter`, not a SQL-level `id !=`
+        // (unlike `find_conflicting_unique`'s `exclude_id`), because
+        // `get_collection_by_name` has no exclude param — widening its
+        // signature is out of scope here (it has several other callers; see
+        // its own doc comment). This is provably safe despite the unordered
+        // `LIMIT 1`: a self-match can only occur when this row's OLD title,
+        // lowercased, already equals the NEW content — which means any THIRD
+        // row also matching the new content necessarily already matched the
+        // OLD title too, so a genuine collision was already detectable (and
+        // would already have been marked) before this rename, not newly
+        // hidden by filtering out the self-match here.
+        let colliding_collection =
+            if updated_node_type == "collection" && updated_content != current.content {
+                self.get_collection_by_name(&updated_content)
+                    .await?
+                    .filter(|existing| existing.id != id)
+            } else {
+                None
+            };
 
         let properties_update = if let Some(ref updated_props) = update.properties {
             let mut merged = current.properties.as_object().cloned().unwrap_or_default();
@@ -348,6 +384,12 @@ impl SqliteStore {
             previous_node: None,
             playbook_context: None,
         });
+
+        if let Some(existing) = colliding_collection {
+            // Best-effort and non-blocking, same posture as create_node's call
+            // site: the update above is already durably written.
+            self.mark_collection_name_collision(id, &existing.id).await;
+        }
 
         Ok(updated_node)
     }
@@ -435,6 +477,20 @@ impl SqliteStore {
 
         let updated_content = update.content.unwrap_or(current.content);
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+
+        // Rename-path collision detection — see the equivalent block in
+        // `update_node` and `mark_collection_name_collision`'s doc comment.
+        // Compares against `previous_node` (cloned above, before `current`
+        // was partially moved from) rather than `current` directly.
+        let colliding_collection =
+            if updated_node_type == "collection" && updated_content != previous_node.content {
+                self.get_collection_by_name(&updated_content)
+                    .await?
+                    .filter(|existing| existing.id != id)
+            } else {
+                None
+            };
+
         let updated_props = match update.properties {
             Some(p) => serde_json::to_string(&p).context("Failed to serialize properties")?,
             None => serde_json::to_string(&current.properties)
@@ -470,6 +526,13 @@ impl SqliteStore {
             previous_node: Some(previous_node),
             playbook_context,
         });
+
+        if let Some(existing) = colliding_collection {
+            // Best-effort and non-blocking, same posture as create_node's call
+            // site. Only reached when rows_affected != 0 above, i.e. the
+            // version check actually succeeded and the write landed.
+            self.mark_collection_name_collision(id, &existing.id).await;
+        }
 
         Ok(Some(node))
     }

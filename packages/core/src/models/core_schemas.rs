@@ -565,7 +565,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: Some(serde_json::Value::Bool(false)),
-                    description: Some("System-managed convergence indicator: set when this collection's name collides with another existing collection (regardless of lifecycle_status — get_collection_by_name does not filter by it) after both land in the same database (e.g. two offline devices each created a collection with the same name). Only set at CREATE time; a sync-applied rename that introduces a new name collision is not currently detected or marked. Never written directly; see SqliteStore::create_node's collection-name-collision handling.".to_string()),
+                    description: Some("System-managed convergence indicator: set when this collection's name collides with another ACTIVE existing collection (get_collection_by_name filters to lifecycle_status = 'active', so a collision against an archived collection is never detected or marked — archiving a collection frees up its name) after both land in the same database (e.g. two offline devices each created a collection with the same name, or one renamed a collection onto a name the other already uses). Set on both create and rename/update. Never written directly; see SqliteStore::create_node / update_node / update_node_with_version_check's collection-name-collision handling.".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,

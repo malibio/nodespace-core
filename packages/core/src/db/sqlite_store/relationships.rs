@@ -505,13 +505,21 @@ impl SqliteStore {
         Ok(nodes)
     }
 
+    /// Restricted to `lifecycle_status = 'active'`, matching the pattern
+    /// `find_conflicting_unique` established for the schema-declared `unique`
+    /// mechanism (ADR-065): an archived collection no longer holds its name,
+    /// so archiving one and creating a new collection with the same name is a
+    /// legitimate way to free up that name rather than a collision. Callers
+    /// that specifically need to look up an archived/deleted collection must
+    /// query the `node` table directly rather than use this method.
     pub async fn get_collection_by_name(&self, name: &str) -> Result<Option<Node>> {
         let normalized = name.to_lowercase();
 
         let mut rows = self
             .db
             .query(
-                "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 LIMIT 1",
+                "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 \
+                 AND lifecycle_status = 'active' LIMIT 1",
                 libsql::params![normalized],
             )
             .await
