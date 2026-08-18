@@ -695,13 +695,15 @@ export const personNodePlugin: PluginDefinition = {
  * Entity types should **not** be slash-creatable — neither core entity types nor
  * user-defined schema types. Projects, collections, documents and users are containers and
  * records set up deliberately — by the agent, or through the schema/entity surfaces — not
- * typed in ad hoc mid-outline. They stay reachable: core entity types are listed in the
- * sidenav as user-queryable types and open to schema-driven properties forms.
+ * typed in ad hoc mid-outline. They stay reachable: most core entity types are listed in
+ * the sidenav as user-queryable types and open to schema-driven properties forms
+ * (`SIDENAV_CORE_TYPES`), and the rest reach creation through a surface of their own.
  *
  * Two surfaces predate this rule and still contradict it: `person` and `ai-chat` carry
  * slash commands above, and `createPluginFromSchema` generates one for every user-defined
- * schema type. Both are slated for removal — entity types reach creation through the
- * sidenav's type view instead — so do not read either as precedent for adding new
+ * schema type. Both are slated for removal — `person` and user-defined types already
+ * reach creation through the sidenav's type view, and `ai-chat` gets a dedicated sidebar
+ * section before its command goes — so do not read either as precedent for adding new
  * entity-type slash commands.
  *
  * `project` therefore has no plugin here at all. If you are here because `/project` seems
