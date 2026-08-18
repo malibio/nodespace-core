@@ -41,6 +41,34 @@ describe('getEnumValues', () => {
     const field = enumField({ coreValues: [{ value: 'open', label: 'Open' }], userValues: [] });
     expect(getEnumValues(field)).toEqual([{ value: 'open', label: 'Open' }]);
   });
+
+  it('drops a userValue whose value collides with an existing coreValue, keeping the core label', () => {
+    // Matches the pre-#2132 TaskSchemaForm behavior (statusOptionsWithExtensions'
+    // `if (!coreValues.has(uv.value))` guard) — an extension adds choices, it
+    // doesn't shadow one that already exists.
+    const field = enumField({
+      coreValues: [{ value: 'open', label: 'Open' }],
+      userValues: [
+        { value: 'open', label: 'Open (duplicate)' },
+        { value: 'blocked', label: 'Blocked' }
+      ]
+    });
+    const values = getEnumValues(field);
+    expect(values).toEqual([
+      { value: 'open', label: 'Open' },
+      { value: 'blocked', label: 'Blocked' }
+    ]);
+  });
+
+  it('drops a later userValue that collides with an earlier one, keeping the first', () => {
+    const field = enumField({
+      userValues: [
+        { value: 'blocked', label: 'Blocked' },
+        { value: 'blocked', label: 'Blocked (dup)' }
+      ]
+    });
+    expect(getEnumValues(field)).toEqual([{ value: 'blocked', label: 'Blocked' }]);
+  });
 });
 
 describe('formatEnumFallbackLabel', () => {
@@ -77,5 +105,13 @@ describe('enumValueLabel', () => {
   it('falls back to a humanized version of the raw value when the schema no longer declares it', () => {
     const field = enumField({ coreValues: [{ value: 'open', label: 'Open' }] });
     expect(enumValueLabel(field, 'archived_legacy')).toBe('Archived Legacy');
+  });
+
+  it('falls back to a humanized label when the matching option has a blank declared label', () => {
+    // `||`, not `??`: a malformed `label: ''` is exactly as unhelpful as no match at
+    // all — must not surface a blank where SchemaFieldLeaf's own Select trigger (which
+    // now calls this same helper) would otherwise show something.
+    const field = enumField({ coreValues: [{ value: 'in_progress', label: '' }] });
+    expect(enumValueLabel(field, 'in_progress')).toBe('In Progress');
   });
 });

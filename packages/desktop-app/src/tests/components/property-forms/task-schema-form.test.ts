@@ -208,6 +208,40 @@ describe('TaskSchemaForm — core fields render from the fetched schema, not a h
   });
 });
 
+describe('TaskSchemaForm — schema-fetch failure degrades gracefully (no blank crash)', () => {
+  it('shows an "Unable to load" hint for core fields instead of silently leaving them blank forever', async () => {
+    vi.spyOn(backendAdapter, 'getSchema').mockRejectedValue(new Error('daemon offline'));
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
+
+    // 5 core fields (status, priority, due date, started at, completed at) each fall back
+    // to the unavailable hint — assignee is unaffected (its combobox has no schema dependency).
+    await waitFor(() => expect(screen.getAllByText('Unable to load')).toHaveLength(5));
+    expect(screen.getByText('Select assignee...')).toBeTruthy();
+  });
+
+  it('does not show "Unable to load" while the schema fetch is merely still in flight', async () => {
+    let resolveSchema!: (schema: unknown) => void;
+    vi.spyOn(backendAdapter, 'getSchema').mockReturnValue(
+      new Promise((resolve) => {
+        resolveSchema = resolve;
+      }) as never
+    );
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
+
+    expect(screen.queryByText('Unable to load')).toBeNull();
+
+    resolveSchema(realTaskSchema());
+    await waitFor(() => expect(screen.getAllByText('Open').length).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByText('Unable to load')).toBeNull();
+  });
+});
+
 describe('TaskSchemaForm — core-field writes still go through updateTaskNode', () => {
   it('writes a due-date edit through sharedNodeStore.updateTaskNode, never the generic properties path', async () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
@@ -261,6 +295,11 @@ describe('TaskSchemaForm — Relationships button is now gated (previously uncon
     render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
     await waitFor(() => expect(loadNodeRelationshipsView).toHaveBeenCalledWith('task-1'));
+    // `hasRelationships` already defaults to false, so a fixed number of ticks here would
+    // pass vacuously even if the gate's `.then()` callback never actually ran. Await the
+    // EXACT promise the component received (proving its `.then()` has been scheduled),
+    // then flush one more microtask for that callback's own body to execute.
+    await loadNodeRelationshipsView.mock.results[0].value;
     await Promise.resolve();
     expect(screen.queryByText('Relationships')).toBeNull();
   });

@@ -33,6 +33,7 @@
   import { isPossibleDuplicate } from '$lib/utils/possible-duplicate';
   import type { Node } from '$lib/types';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import { loadNodeRelationshipsView } from '$lib/services/relationship-viewer-service';
   import WaypointsIcon from '@lucide/svelte/icons/waypoints';
   import UserRoundSearchIcon from '@lucide/svelte/icons/user-round-search';
 
@@ -43,6 +44,32 @@
   let showRelationships = $state(false);
 
   let { nodeId }: { nodeId: string } = $props();
+
+  // Gate the Relationships trigger the same way TypedFormShell now gates it for
+  // TaskSchemaForm/GenericSchemaForm (core#2132) — shown only when this node's
+  // type actually has a typed relationship (outbound declared on its schema, or
+  // inbound declared by another schema targeting it), resolved once per nodeId.
+  // Default hidden; fail-open on a query error so a transient failure never
+  // hides a real feature. PersonSchemaForm doesn't route through TypedFormShell
+  // (it stays hardcoded, not schema-driven — see the issue's recorded decision),
+  // so this gate is duplicated here rather than shared; it's copied verbatim,
+  // not reimplemented, to keep the two in agreement.
+  let hasRelationships = $state(false);
+  let relCheckedFor = '';
+  $effect(() => {
+    const id = nodeId;
+    if (relCheckedFor === id) return;
+    relCheckedFor = id;
+    hasRelationships = false;
+    loadNodeRelationshipsView(id)
+      .then((view) => {
+        if (nodeId === id) hasRelationships = view.groups.length > 0;
+      })
+      .catch((err) => {
+        log.error('Failed to check relationships for the trigger gate', err);
+        if (nodeId === id) hasRelationships = true;
+      });
+  });
 
   const node = $derived(sharedNodeStore.getNode(nodeId));
   const personProps = $derived(
@@ -295,15 +322,18 @@
     </Alert>
   {/if}
 
-  <!-- Relationships entry point (issue #1918) -->
-  <button
-    type="button"
-    class="flex w-full items-center gap-2 py-2 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
-    onclick={() => (showRelationships = true)}
-  >
-    <WaypointsIcon class="h-4 w-4" />
-    <span>Relationships</span>
-  </button>
+  <!-- Relationships entry point (issue #1918), gated on the type actually having
+       typed relationships (outbound declared or inbound) — see hasRelationships above. -->
+  {#if hasRelationships}
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 py-2 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
+      onclick={() => (showRelationships = true)}
+    >
+      <WaypointsIcon class="h-4 w-4" />
+      <span>Relationships</span>
+    </button>
+  {/if}
 </div>
 
 <RelationshipViewerModal bind:open={showRelationships} {nodeId} />

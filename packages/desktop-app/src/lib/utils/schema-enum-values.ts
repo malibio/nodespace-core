@@ -9,11 +9,26 @@
  */
 import type { SchemaField, EnumValue } from '$lib/types/schema-node';
 
-/** Merge a field's protected core values with its user-extensible ones, in that order. */
+/**
+ * Merge a field's protected core values with its user-extensible ones, in that
+ * order. A userValue whose `value` collides with an existing coreValue is
+ * dropped (core wins, its label is kept) rather than appended as a second,
+ * duplicate option — an extension is meant to ADD choices, not shadow one
+ * that already exists.
+ */
 export function getEnumValues(field: SchemaField): EnumValue[] {
   const values: EnumValue[] = [];
-  if (field.coreValues) values.push(...field.coreValues);
-  if (field.userValues) values.push(...field.userValues);
+  const seen = new Set<string>();
+  for (const ev of field.coreValues ?? []) {
+    if (seen.has(ev.value)) continue;
+    values.push(ev);
+    seen.add(ev.value);
+  }
+  for (const ev of field.userValues ?? []) {
+    if (seen.has(ev.value)) continue;
+    values.push(ev);
+    seen.add(ev.value);
+  }
   return values;
 }
 
@@ -36,8 +51,13 @@ export function formatEnumFallbackLabel(value: string): string {
  * of the raw value — never the raw key verbatim — so every surface that
  * displays this field (the control itself, a collapsed-header summary, …)
  * agrees on how a value renders. Returns undefined for an absent value.
+ *
+ * A falsy declared label (e.g. a malformed `label: ''` on an enum option)
+ * is treated the same as "no label found" — falls through to the humanized
+ * fallback — rather than surfacing a blank. Deliberately `||`, not `??`: an
+ * empty string is exactly as unhelpful as a missing label.
  */
 export function enumValueLabel(field: SchemaField, value: string | null | undefined): string | undefined {
   if (!value) return undefined;
-  return getEnumValues(field).find((ev) => ev.value === value)?.label ?? formatEnumFallbackLabel(value);
+  return getEnumValues(field).find((ev) => ev.value === value)?.label || formatEnumFallbackLabel(value);
 }

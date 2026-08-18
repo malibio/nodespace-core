@@ -22,6 +22,15 @@ vi.mock('$lib/services/navigation-service', () => ({
   getNavigationService: () => ({ navigateToNodeInOtherPane })
 }));
 
+// PersonSchemaForm's Relationships trigger is gated on this service (core#2132,
+// matching TypedFormShell's gate for Task/GenericSchemaForm). Stub it so the gate
+// never reaches a daemon and the other 19 tests below — none of which care about
+// Relationships — don't incidentally exercise its fail-open error path.
+const loadNodeRelationshipsView = vi.fn();
+vi.mock('$lib/services/relationship-viewer-service', () => ({
+  loadNodeRelationshipsView: (...args: unknown[]) => loadNodeRelationshipsView(...args)
+}));
+
 import PersonSchemaForm from '$lib/components/property-forms/person-schema-form.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { backendAdapter } from '$lib/services/backend-adapter';
@@ -65,6 +74,11 @@ beforeEach(() => {
   vi.spyOn(backendAdapter, 'findDuplicateFor').mockImplementation(
     findDuplicateForSpy as unknown as typeof backendAdapter.findDuplicateFor
   );
+  // Re-armed every test, not just restored — `vi.restoreAllMocks()` below clears a bare
+  // `vi.fn()`'s implementation entirely, so a later test with no override would otherwise
+  // see `undefined` and throw calling `.then()` on it inside the gate's own effect.
+  loadNodeRelationshipsView.mockReset();
+  loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'person', groups: [] });
 });
 
 afterEach(() => {
@@ -429,5 +443,43 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(screen.getByText(/already exists: Bob Existing/i)).toBeTruthy();
+  });
+});
+
+/**
+ * Relationships trigger gating (core#2132). Before this PR, PersonSchemaForm
+ * showed the Relationships button unconditionally, unlike GenericSchemaForm
+ * (which already gated it) — and, once TaskSchemaForm started composing
+ * through TypedFormShell, unlike Task too. This closes that remaining
+ * inconsistency directly in PersonSchemaForm (which stays hardcoded, not
+ * TypedFormShell-composed — see the issue's recorded decision), using the
+ * exact same gate logic, copied verbatim.
+ */
+describe('PersonSchemaForm — Relationships trigger gate (core#2132)', () => {
+  it('hides the Relationships entry point when the type has no typed relationships', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'person', groups: [] });
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await waitFor(() => expect(loadNodeRelationshipsView).toHaveBeenCalledWith('person-1'));
+    await loadNodeRelationshipsView.mock.results[0].value;
+    await Promise.resolve();
+    expect(screen.queryByText('Relationships')).toBeNull();
+  });
+
+  it('shows the Relationships entry point when the type has a typed relationship', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({
+      nodeType: 'person',
+      groups: [{ key: 'assigned_to' }]
+    });
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await waitFor(() => expect(screen.getByText('Relationships')).toBeTruthy());
+  });
+
+  it('fails open (shows the trigger) when the relationship check errors', async () => {
+    loadNodeRelationshipsView.mockRejectedValue(new Error('daemon offline'));
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await waitFor(() => expect(screen.getByText('Relationships')).toBeTruthy());
   });
 });

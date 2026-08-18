@@ -32,10 +32,10 @@
   import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
   import type { TaskStatus } from '$lib/types/task-node';
   import { nodeToTaskNode } from '$lib/types/task-node';
-  import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import { labelForField } from '$lib/utils/schema-field-label';
   import { enumValueLabel } from '$lib/utils/schema-enum-values';
+  import { formatDateDisplay } from '$lib/utils/schema-date-values';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
   import TypedFormShell from '$lib/components/schema/typed-form-shell.svelte';
@@ -49,6 +49,12 @@
 
   // State
   let schema = $state<SchemaNode | null>(null);
+  // True once the schema fetch has settled without producing a usable schema
+  // (a thrown error, or a response that fails isSchemaNode) — distinct from
+  // "still loading", so a core field's control can tell the two apart instead
+  // of looking identically blank in both states. See the per-field "unavailable"
+  // fallback in the template below.
+  let schemaLoadFailed = $state(false);
 
   // Reactive node data - direct read from the store's SvelteMap, converted to TaskNode
   const node = $derived.by(() => {
@@ -65,9 +71,12 @@
         const schemaNode = await backendAdapter.getSchema('task');
         if (isSchemaNode(schemaNode)) {
           schema = schemaNode;
+        } else {
+          schemaLoadFailed = true;
         }
       } catch (error) {
         log.error('Failed to load schema:', error);
+        schemaLoadFailed = true;
       }
     }
     loadSchema();
@@ -91,17 +100,9 @@
   // Options/labels come straight from the real task schema's coreValues/userValues
   // (SchemaFieldLeaf reads them the same way) — no locally hardcoded enum lists.
 
-  const CORE_FIELD_NAMES = [
-    'status',
-    'priority',
-    'dueDate',
-    'due_date',
-    'assignee',
-    'started_at',
-    'startedAt',
-    'completed_at',
-    'completedAt'
-  ];
+  // The real task schema's own field names (core_schemas.rs) — always snake_case,
+  // matching what the backend actually returns from getSchema('task').
+  const CORE_FIELD_NAMES = ['status', 'priority', 'due_date', 'started_at', 'completed_at', 'assignee'];
 
   // A schema field by name, or undefined while `schema` hasn't loaded yet (or, in the
   // unexpected case of a schema-fetch failure — see loadSchema's catch above — never).
@@ -113,10 +114,11 @@
     return schema?.fields.find((f) => f.name === name);
   }
 
-  // Get user-defined fields (not core fields)
+  // Get user-defined fields (not core, not system-protected — a system-managed field must
+  // never render as a user-editable control, mirroring GenericSchemaForm's protection filter).
   const userDefinedFields = $derived.by(() => {
     if (!schema) return [];
-    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name));
+    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name) && f.protection !== 'system');
   });
 
   // Calculate field completion stats
@@ -202,25 +204,6 @@
     );
   }
 
-  // Parse date from backend (handles both YYYY-MM-DD and ISO8601 formats)
-  function parseDateFromBackend(value: string | null | undefined): DateValue | undefined {
-    if (!value) return undefined;
-    try {
-      // Extract just the date part (YYYY-MM-DD) if it's a full ISO8601 string
-      const dateOnly = value.includes('T') ? value.split('T')[0] : value;
-      return parseDate(dateOnly);
-    } catch {
-      return undefined;
-    }
-  }
-
-  // Format date for display
-  function formatDateDisplay(value: string | null | undefined): string {
-    if (!value) return 'Pick a date';
-    const date = parseDateFromBackend(value);
-    return date ? date.toString() : value;
-  }
-
   // ============================================================================
   // Type-Safe Core Field Update Functions
   // ============================================================================
@@ -303,6 +286,15 @@
       {@const dueDateField = getSchemaField('due_date')}
       {@const startedAtField = getSchemaField('started_at')}
       {@const completedAtField = getSchemaField('completed_at')}
+      <!-- Placeholder for a core field whose schema lookup hasn't resolved yet — matches
+           a SchemaFieldLeaf control's height so the grid doesn't jump once it appears.
+           Blank while the fetch is still in flight (typically sub-frame; not worth a
+           spinner), a visible hint once it's permanently failed (see schemaLoadFailed). -->
+      {#snippet fieldUnavailable()}
+        <div class="flex h-10 items-center text-sm text-muted-foreground">
+          {schemaLoadFailed ? 'Unable to load' : ''}
+        </div>
+      {/snippet}
       <div class="grid grid-cols-2 gap-4">
         <!-- ============================================================ -->
         <!-- CORE FIELDS -->
@@ -316,8 +308,17 @@
               field={statusField}
               fieldId="task-status"
               value={node.status}
-              onChange={(newValue) => updateStatus(newValue as TaskStatus)}
+              onChange={(newValue) => {
+                // Status is required — guard against a falsy write the way the
+                // pre-refactor inline Select.Root did (`if (newValue) ...`). Not
+                // reachable today (bits-ui's Select toggle-to-empty needs
+                // allowDeselect, which this app's Select wrapper never sets), but
+                // cheap defense-in-depth to keep on a required field.
+                if (newValue) updateStatus(newValue as TaskStatus);
+              }}
             />
+          {:else}
+            {@render fieldUnavailable()}
           {/if}
         </div>
 
@@ -331,6 +332,8 @@
               value={node.priority !== undefined && node.priority !== null ? String(node.priority) : ''}
               onChange={(newValue) => updatePriority((newValue as string) || undefined)}
             />
+          {:else}
+            {@render fieldUnavailable()}
           {/if}
         </div>
 
@@ -344,6 +347,8 @@
               value={node.dueDate}
               onChange={(newValue) => updateDueDate(newValue as string | null)}
             />
+          {:else}
+            {@render fieldUnavailable()}
           {/if}
         </div>
 
@@ -426,6 +431,8 @@
               value={node.startedAt}
               onChange={(newValue) => updateStartedAt(newValue as string | null)}
             />
+          {:else}
+            {@render fieldUnavailable()}
           {/if}
         </div>
 
@@ -439,6 +446,8 @@
               value={node.completedAt}
               onChange={(newValue) => updateCompletedAt(newValue as string | null)}
             />
+          {:else}
+            {@render fieldUnavailable()}
           {/if}
         </div>
 
