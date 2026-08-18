@@ -600,10 +600,12 @@ mod golden {
 // ---------------------------------------------------------------------------
 
 /// Site 1: the resident system prompt (`PromptAssembler::assemble()`, via
-/// its documented DB-free path). Also covers `RELEVANT ENTITY TYPES` site 2
-/// (resident workspace context) as it actually reaches the model: substituted
-/// into the "Workspace Context Template" seed via `{{ workspace_context }}`,
-/// exactly as `local_agent_service.rs::build_workspace_context_string` does.
+/// `assemble_resident_system_prompt`'s DB-free reproduction of its seed ->
+/// parse -> flatten -> render -> join composition). Also covers `RELEVANT
+/// ENTITY TYPES` site 2 (resident workspace context) as it actually reaches
+/// the model: substituted into the "Workspace Context Template" seed via
+/// `{{ workspace_context }}`, exactly as
+/// `local_agent_service.rs::build_workspace_context_string` does.
 #[test]
 fn resident_system_prompt_matches_golden() {
     let workspace_context =
