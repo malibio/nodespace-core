@@ -175,8 +175,8 @@ pub async fn configure_path() -> Result<(), String> {
 /// Install the NodeSpace skill into detected agents (delegates to skill_setup).
 /// Idempotent when called via the onboarding wizard; marks skill_configured in config.
 #[tauri::command]
-pub async fn configure_skill() -> Result<(), String> {
-    let result = skill_setup::install_skill(false).await;
+pub async fn configure_skill(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let result = skill_setup::install_skill(false, &app_handle).await;
     if result.success {
         Ok(())
     } else {
@@ -189,8 +189,11 @@ pub async fn configure_skill() -> Result<(), String> {
 /// Run the skill installer (for manual re-trigger from Settings → Integrations).
 /// `force = true` bypasses the idempotency guard in setup.json.
 #[tauri::command]
-pub async fn install_skill(force: bool) -> Result<SkillSetupResult, String> {
-    Ok(skill_setup::install_skill(force).await)
+pub async fn install_skill(
+    force: bool,
+    app_handle: tauri::AppHandle,
+) -> Result<SkillSetupResult, String> {
+    Ok(skill_setup::install_skill(force, &app_handle).await)
 }
 
 /// Return the current skill setup status without re-running the installer.

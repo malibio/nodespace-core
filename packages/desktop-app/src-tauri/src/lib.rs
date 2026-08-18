@@ -356,7 +356,10 @@ pub fn run() {
                     // Idempotent — no-op once ~/.nodespace/setup.json marks skill_installed.
                     {
                         use crate::skill_setup;
-                        let result = skill_setup::install_skill(false).await;
+                        // WARN + a `skill:install-failed` event on genuine failure are
+                        // handled inside install_skill itself (once, not per-launch) —
+                        // see its module docs.
+                        let result = skill_setup::install_skill(false, &app_handle).await;
                         if result.success {
                             if !result.agents_installed.is_empty() {
                                 tracing::info!(
@@ -373,8 +376,6 @@ pub fn run() {
                                     );
                                 }
                             }
-                        } else {
-                            tracing::warn!("Skill install failed: {:?}", result.error);
                         }
                     }
 

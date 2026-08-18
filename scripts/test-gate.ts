@@ -39,6 +39,12 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
   return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
 });
+// nodespace-app's build.rs (tauri_build::build()) hard-fails if any declared
+// `resources`/`externalBin` entry in tauri.conf.json doesn't physically exist
+// yet — same class of requirement as the sidecar binaries below, but cheap
+// enough (a tsc build + file copy) to just run unconditionally here rather
+// than rely on a prior `dev:tauri`/`tauri:build` having staged it.
+await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)", () => {
   const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
