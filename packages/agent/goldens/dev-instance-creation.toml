@@ -103,6 +103,44 @@ understands but in what surfaces while it is acting -- the same shape as this
 project's finding that identical guidance delivered as a tool result rather
 than in the prompt drops continuation and yields prose.
 
+A PROCEDURAL "DO NOT SKIP" STEP DOES NOT REACH IT EITHER
+
+Arms 1-6 all ASSERTED an obligation. Arm 7 made it an ordered procedure the
+model must walk before calling -- STEP 1 enumerate every particular and number
+them, STEP 2 name the field for each, STEP 3 count and go back if field_values
+has fewer entries than you numbered. Still 3/3 dropped.
+
+Arm 8 then forced that enumeration to be OUTPUT rather than performed
+silently, to find out WHERE in the procedure the value is lost. The answer is
+that it is lost before the procedure starts. Byte-identical across 3 reps, the
+model writes:
+
+  1. ticket: "Ticket"
+  2. dana: text (assignee)
+  3. flaky retry test: title of the issue/ticket content
+  4. sprint S-25: field for 'sprint' on Ticket, ...
+  5. ready for dev: status of the ticket
+
+Five items. "blocked by the token refresh work" is not among them -- it never
+enters the list at all, and item 1 is the TYPE rather than a particular.
+
+So the model is not skipping the step. The step runs, and the value is already
+absent from its input. An instruction to "not skip" cannot help, because it
+operates on a list the value never reached. That is why every wording-level
+arm has been inert: they all act at a stage downstream of where the loss
+occurs.
+
+Note also the cost of this arm: the verbose procedural framing made the model
+drift from the listed field name `assignee` to `assigned_to`, so the
+enumeration step actively degraded a part that works without it.
+
+Reconciles with the awareness probe rather than contradicting it: asked
+DIRECTLY whether the type has a field for the blocking information, the model
+answers correctly. Asked to enumerate particulars while preparing a write, the
+same detail is not enumerated. The information is retrievable on demand and
+absent from the action path -- which is a selection failure, not a knowledge
+one, and is not addressable by instruction.
+
 WHY THIS CASE STAYS IN THE CORPUS, STILL FAILING
 
 It is the corpus's honest ceiling marker. A corpus of only passing cases would
