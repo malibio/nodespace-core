@@ -2,10 +2,20 @@
   TaskSchemaForm - Type-Safe Task Property Form
 
   Hybrid approach:
-  - Hardcoded UI for core task properties (status, priority, dueDate, assignee)
-  - Dynamic rendering for user-defined schema extensions: leaf fields render
-    through the shared SchemaFieldLeaf, object/array fields render a summary
-    trigger that opens the shared NestedPropertyModal
+  - Core task properties (status, priority, dueDate, startedAt, completedAt) render
+    through the shared SchemaFieldLeaf, driven by the real task schema's coreValues/
+    userValues — no locally hardcoded enum options or date-picker markup. Their WRITES
+    still go through the type-safe sharedNodeStore.updateTaskNode() functions below,
+    unchanged: SchemaFieldLeaf is a controlled, presentational component (value + onChange)
+    that never touches the store itself, so swapping its markup in does not change how a
+    core field is persisted (same optimistic-write/OCC/field-sequencing path as before).
+  - Assignee keeps its own bespoke combobox markup (unrelated to the enum/date-picker
+    duplication this form was extracted to remove — SchemaFieldLeaf has no combobox case).
+  - Dynamic rendering for user-defined schema extensions: leaf fields render through the
+    shared SchemaFieldLeaf, object/array fields render a summary trigger that opens the
+    shared NestedPropertyModal.
+  - Shell chrome (Collapsible, trigger row, gated Relationships button, NestedPropertyModal)
+    is owned by TypedFormShell — this component supplies only the task-specific field grid.
 
   User-defined values (nested ones included) are stored under
   properties.task[field.name] via updateUserField.
@@ -16,10 +26,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Collapsible } from 'bits-ui';
-  import * as Select from '$lib/components/ui/select';
   import * as Popover from '$lib/components/ui/popover';
-  import { Calendar } from '$lib/components/ui/calendar';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
@@ -28,32 +35,19 @@
   import { parseDate, type DateValue } from '@internationalized/date';
   import { createLogger } from '$lib/utils/logger';
   import { labelForField } from '$lib/utils/schema-field-label';
-  import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
+  import { enumValueLabel } from '$lib/utils/schema-enum-values';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
-  import NestedPropertyModal from '$lib/components/schema/nested-property-modal.svelte';
+  import TypedFormShell from '$lib/components/schema/typed-form-shell.svelte';
   import { isNestedField } from '$lib/utils/nested-property-ops';
-  import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 
   // Logger instance for TaskSchemaForm component
   const log = createLogger('TaskSchemaForm');
-
-  // Relationships viewer entry point (issue #1918) — a task's typed
-  // relationships (e.g. assigned_to → person) surface here, as on other forms.
-  let showRelationships = $state(false);
-
-  // Nested (object/array) user-field editor. One modal instance is reused; the
-  // clicked field determines what it edits. It persists through updateUserField
-  // below, so nested values land under `properties.task.<field>` like every other
-  // user-defined field on a task.
-  let nestedModalField = $state<SchemaField | null>(null);
-  let nestedModalOpen = $state(false);
 
   // Props - only nodeId needed since we know it's a task
   let { nodeId }: { nodeId: string } = $props();
 
   // State
-  let isOpen = $state(false); // Collapsed by default
   let schema = $state<SchemaNode | null>(null);
 
   // Reactive node data - direct read from the store's SvelteMap, converted to TaskNode
@@ -79,12 +73,11 @@
     loadSchema();
   });
 
-  // Combobox state
+  // Combobox state (assignee only — the one core field with no SchemaFieldLeaf
+  // equivalent; every other core field's popover-open state now lives inside its
+  // own SchemaFieldLeaf instance).
   let assigneeOpen = $state(false);
   let assigneeSearch = $state('');
-  let dueDateOpen = $state(false);
-  let startedAtOpen = $state(false);
-  let completedAtOpen = $state(false);
 
   /**
    * Assignee options - currently empty placeholder
@@ -93,73 +86,41 @@
   const assigneeOptions: Array<{ value: string; label: string }> = [];
 
   // ============================================================================
-  // Core Fields (Hardcoded)
+  // Core Fields
   // ============================================================================
+  // Options/labels come straight from the real task schema's coreValues/userValues
+  // (SchemaFieldLeaf reads them the same way) — no locally hardcoded enum lists.
 
-  const CORE_FIELD_NAMES = ['status', 'priority', 'dueDate', 'due_date', 'assignee', 'started_at', 'startedAt', 'completed_at', 'completedAt'];
-
-  const STATUS_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
-    { value: 'open', label: 'Open' },
-    { value: 'in_progress', label: 'In Progress' },
-    { value: 'done', label: 'Done' },
-    { value: 'cancelled', label: 'Cancelled' }
+  const CORE_FIELD_NAMES = [
+    'status',
+    'priority',
+    'dueDate',
+    'due_date',
+    'assignee',
+    'started_at',
+    'startedAt',
+    'completed_at',
+    'completedAt'
   ];
 
-  const PRIORITY_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' }
-  ];
-
-  // Get user-defined status extensions from schema
-  const statusOptionsWithExtensions = $derived(() => {
-    const options = [...STATUS_OPTIONS];
-
-    if (schema) {
-      const statusField = schema.fields.find((f) => f.name === 'status');
-      if (statusField?.userValues) {
-        // Add user-defined values that aren't already in core
-        const coreValues = new Set(STATUS_OPTIONS.map((o) => o.value));
-        for (const uv of statusField.userValues) {
-          if (!coreValues.has(uv.value)) {
-            options.push({ value: uv.value as TaskStatus, label: uv.label });
-          }
-        }
-      }
-    }
-
-    return options;
-  });
-
-  // Get user-defined priority extensions from schema
-  const priorityOptionsWithExtensions = $derived(() => {
-    const options = [...PRIORITY_OPTIONS];
-
-    if (schema) {
-      const priorityField = schema.fields.find((f) => f.name === 'priority');
-      if (priorityField?.userValues) {
-        // Add user-defined values that aren't already in core
-        const coreValues = new Set(PRIORITY_OPTIONS.map((o) => o.value));
-        for (const uv of priorityField.userValues) {
-          if (!coreValues.has(uv.value)) {
-            options.push({ value: uv.value, label: uv.label });
-          }
-        }
-      }
-    }
-
-    return options;
-  });
+  // A schema field by name, or undefined while `schema` hasn't loaded yet (or, in the
+  // unexpected case of a schema-fetch failure — see loadSchema's catch above — never).
+  // Each core field's SchemaFieldLeaf is individually gated on its own lookup succeeding
+  // (see the template below) rather than gating the whole form on `schema`, so a slow or
+  // failed schema fetch degrades to "this one field's control is momentarily/permanently
+  // unavailable" rather than blanking the entire properties panel.
+  function getSchemaField(name: string): SchemaField | undefined {
+    return schema?.fields.find((f) => f.name === name);
+  }
 
   // Get user-defined fields (not core fields)
-  const userDefinedFields = $derived(() => {
+  const userDefinedFields = $derived.by(() => {
     if (!schema) return [];
-
     return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name));
   });
 
   // Calculate field completion stats
-  const fieldStats = $derived(() => {
+  const fieldStats = $derived.by(() => {
     if (!node) return { filled: 0, total: 6 };
 
     let filled = 0;
@@ -174,7 +135,7 @@
     if (node.completedAt) filled++;
 
     // User-defined fields
-    const userFields = userDefinedFields();
+    const userFields = userDefinedFields;
     total += userFields.length;
 
     for (const field of userFields) {
@@ -187,11 +148,14 @@
     return { filled, total };
   });
 
-  // Get status label for header display
-  const statusLabel = $derived(() => {
+  // Get status label for header display — same coreValues/userValues lookup
+  // SchemaFieldLeaf uses for the field control itself, so the collapsed header
+  // and the open control always agree on how a status value is humanized.
+  const statusLabel = $derived.by(() => {
     if (!node) return null;
-    const option = statusOptionsWithExtensions().find((o) => o.value === node?.status);
-    return option?.label || node.status;
+    const statusField = getSchemaField('status');
+    if (!statusField) return node.status;
+    return enumValueLabel(statusField, node.status) ?? node.status;
   });
 
   // ============================================================================
@@ -238,11 +202,6 @@
     );
   }
 
-  function openNestedModal(field: SchemaField) {
-    nestedModalField = field;
-    nestedModalOpen = true;
-  }
-
   // Parse date from backend (handles both YYYY-MM-DD and ISO8601 formats)
   function parseDateFromBackend(value: string | null | undefined): DateValue | undefined {
     if (!value) return undefined;
@@ -260,13 +219,6 @@
     if (!value) return 'Pick a date';
     const date = parseDateFromBackend(value);
     return date ? date.toString() : value;
-  }
-
-  // Format date value for storage (ISO string)
-  function formatDateForStorage(value: DateValue | undefined): string | null {
-    if (!value) return null;
-    // Simple YYYY-MM-DD format - backend handles conversion to DateTime
-    return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
   }
 
   // ============================================================================
@@ -326,370 +278,199 @@
 </script>
 
 {#if node}
-  <div class="schema-form-wrapper">
-    <Collapsible.Root bind:open={isOpen}>
-      <Collapsible.Trigger
-        class="flex w-full items-center justify-between py-3 font-medium transition-all hover:opacity-80"
-      >
-        <div class="flex items-center gap-3">
-          {#if node.status}
-            <span
-              class="inline-flex items-center rounded-md border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
-            >
-              {statusLabel()}
-            </span>
-          {/if}
-          <span class="text-sm text-muted-foreground">
-            Due: {node.dueDate ? formatDateDisplay(node.dueDate) : 'None'}
-          </span>
-        </div>
+  <TypedFormShell
+    {nodeId}
+    {fieldStats}
+    getFieldValue={getUserFieldValue}
+    onFieldChange={updateUserField}
+  >
+    {#snippet headerLeft()}
+      {#if node.status}
+        <span
+          class="inline-flex items-center rounded-md border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-foreground"
+        >
+          {statusLabel}
+        </span>
+      {/if}
+      <span class="text-sm text-muted-foreground">
+        Due: {node.dueDate ? formatDateDisplay(node.dueDate) : 'None'}
+      </span>
+    {/snippet}
 
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-muted-foreground">
-            {fieldStats().filled}/{fieldStats().total} fields
-          </span>
-          <svg
-            class="h-4 w-4 text-muted-foreground transition-transform duration-200"
-            class:rotate-180={isOpen}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <path
-              d="M4 6l4 4 4-4"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </div>
-      </Collapsible.Trigger>
+    {#snippet fields(openNestedModal: (_field: SchemaField) => void)}
+      {@const statusField = getSchemaField('status')}
+      {@const priorityField = getSchemaField('priority')}
+      {@const dueDateField = getSchemaField('due_date')}
+      {@const startedAtField = getSchemaField('started_at')}
+      {@const completedAtField = getSchemaField('completed_at')}
+      <div class="grid grid-cols-2 gap-4">
+        <!-- ============================================================ -->
+        <!-- CORE FIELDS -->
+        <!-- ============================================================ -->
 
-      <Collapsible.Content class="pb-4">
-        <div class="grid grid-cols-2 gap-4">
-          <!-- ============================================================ -->
-          <!-- CORE FIELDS (Hardcoded, Type-Safe) -->
-          <!-- ============================================================ -->
-
-          <!-- Status Field -->
-          <div class="space-y-2">
-            <label for="task-status" class="text-sm font-medium">Status</label>
-            <Select.Root
-              type="single"
+        <!-- Status Field -->
+        <div class="space-y-2">
+          <label for="task-status" class="text-sm font-medium">Status</label>
+          {#if statusField}
+            <SchemaFieldLeaf
+              field={statusField}
+              fieldId="task-status"
               value={node.status}
-              onValueChange={(newValue) => {
-                if (newValue) updateStatus(newValue as TaskStatus);
-              }}
-            >
-              <Select.Trigger class="w-full">
-                {statusOptionsWithExtensions().find((o) => o.value === node?.status)?.label ||
-                  node?.status ||
-                  'Select status...'}
-              </Select.Trigger>
-              <Select.Content>
-                {#each statusOptionsWithExtensions() as option}
-                  <Select.Item value={option.value} label={option.label} />
-                {/each}
-              </Select.Content>
-            </Select.Root>
-          </div>
-
-          <!-- Priority Field -->
-          <div class="space-y-2">
-            <label for="task-priority" class="text-sm font-medium">Priority</label>
-            <Select.Root
-              type="single"
-              value={node.priority !== undefined && node.priority !== null
-                ? String(node.priority)
-                : ''}
-              onValueChange={(newValue) => updatePriority(newValue || undefined)}
-            >
-              <Select.Trigger class="w-full">
-                {#if node.priority !== undefined && node.priority !== null}
-                  {priorityOptionsWithExtensions().find((o) => o.value === String(node?.priority))
-                    ?.label || String(node?.priority)}
-                {:else}
-                  <span class="text-muted-foreground">Select priority...</span>
-                {/if}
-              </Select.Trigger>
-              <Select.Content>
-                {#each priorityOptionsWithExtensions() as option}
-                  <Select.Item value={option.value} label={option.label} />
-                {/each}
-              </Select.Content>
-            </Select.Root>
-          </div>
-
-          <!-- Due Date Field -->
-          {#if node}
-            {@const dateValue = parseDateFromBackend(node.dueDate)}
-            <div class="space-y-2">
-              <label for="task-due-date" class="text-sm font-medium">Due Date</label>
-              <Popover.Root bind:open={dueDateOpen}>
-              <Popover.Trigger
-                id="task-due-date"
-                class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-              >
-                <span class={dateValue ? '' : 'text-muted-foreground'}>
-                  {formatDateDisplay(node.dueDate)}
-                </span>
-                <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                  <rect
-                    x="2"
-                    y="3"
-                    width="12"
-                    height="11"
-                    rx="1"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                  />
-                  <path
-                    d="M5 1v3M11 1v3M2 6h12"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </Popover.Trigger>
-              <Popover.Content class="w-auto p-0" align="start">
-                <!-- Cast to `never` works around bits-ui Calendar expecting CalendarDate but we pass
-                     DateValue from @internationalized/date. Both are compatible at runtime. -->
-                <Calendar
-                  value={dateValue as never}
-                  onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                    const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                    updateDueDate(formatDateForStorage(singleValue));
-                    dueDateOpen = false;
-                  }}
-                  type="single"
-                />
-              </Popover.Content>
-            </Popover.Root>
-            </div>
+              onChange={(newValue) => updateStatus(newValue as TaskStatus)}
+            />
           {/if}
-
-          <!-- Assignee Field -->
-          <div class="space-y-2">
-            <label for="task-assignee" class="text-sm font-medium">Assignee</label>
-            <Popover.Root bind:open={assigneeOpen}>
-              <Popover.Trigger
-                class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-              >
-                <span class={node.assignee ? '' : 'text-muted-foreground'}>
-                  {node.assignee || 'Select assignee...'}
-                </span>
-                <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M4 6l4 4 4-4"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </Popover.Trigger>
-              <Popover.Content class="w-[200px] p-0" align="start">
-                <div class="flex flex-col">
-                  <input
-                    type="text"
-                    placeholder="Search assignee..."
-                    value={assigneeSearch}
-                    oninput={(e) => (assigneeSearch = e.currentTarget.value)}
-                    class="flex h-10 w-full border-b border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                  />
-                  <div class="max-h-[200px] overflow-y-auto">
-                    {#if assigneeOptions.length === 0}
-                      <div class="px-3 py-2 text-sm text-muted-foreground">
-                        No assignees available
-                      </div>
-                    {:else}
-                      {#each assigneeOptions.filter((a) => a.label
-                          .toLowerCase()
-                          .includes(assigneeSearch.toLowerCase())) as assignee}
-                        <button
-                          type="button"
-                          class="relative flex w-full cursor-pointer select-none items-center rounded-sm px-3 py-2 text-sm outline-none hover:bg-muted"
-                          onclick={() => {
-                            updateAssignee(assignee.value);
-                            assigneeOpen = false;
-                            assigneeSearch = '';
-                          }}
-                        >
-                          {assignee.label}
-                          {#if node?.assignee === assignee.value}
-                            <svg class="ml-auto h-4 w-4" viewBox="0 0 16 16" fill="none">
-                              <path
-                                d="M3 8l4 4 6-8"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              />
-                            </svg>
-                          {/if}
-                        </button>
-                      {/each}
-                    {/if}
-                  </div>
-                </div>
-              </Popover.Content>
-            </Popover.Root>
-          </div>
-
-          <!-- Started At Field -->
-          {#if node}
-            {@const startedAtValue = parseDateFromBackend(node.startedAt)}
-            <div class="space-y-2">
-              <label for="task-started-at" class="text-sm font-medium">Started At</label>
-              <Popover.Root bind:open={startedAtOpen}>
-                <Popover.Trigger
-                  id="task-started-at"
-                  class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                >
-                  <span class={startedAtValue ? '' : 'text-muted-foreground'}>
-                    {formatDateDisplay(node.startedAt)}
-                  </span>
-                  <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                    <rect
-                      x="2"
-                      y="3"
-                      width="12"
-                      height="11"
-                      rx="1"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                    />
-                    <path
-                      d="M5 1v3M11 1v3M2 6h12"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                </Popover.Trigger>
-                <Popover.Content class="w-auto p-0" align="start">
-                  <Calendar
-                    value={startedAtValue as never}
-                    onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                      const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                      updateStartedAt(formatDateForStorage(singleValue));
-                      startedAtOpen = false;
-                    }}
-                    type="single"
-                  />
-                </Popover.Content>
-              </Popover.Root>
-            </div>
-          {/if}
-
-          <!-- Completed At Field -->
-          {#if node}
-            {@const completedAtValue = parseDateFromBackend(node.completedAt)}
-            <div class="space-y-2">
-              <label for="task-completed-at" class="text-sm font-medium">Completed At</label>
-              <Popover.Root bind:open={completedAtOpen}>
-                <Popover.Trigger
-                  id="task-completed-at"
-                  class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                >
-                  <span class={completedAtValue ? '' : 'text-muted-foreground'}>
-                    {formatDateDisplay(node.completedAt)}
-                  </span>
-                  <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                    <rect
-                      x="2"
-                      y="3"
-                      width="12"
-                      height="11"
-                      rx="1"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                    />
-                    <path
-                      d="M5 1v3M11 1v3M2 6h12"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                </Popover.Trigger>
-                <Popover.Content class="w-auto p-0" align="start">
-                  <Calendar
-                    value={completedAtValue as never}
-                    onValueChange={(newValue: DateValue | DateValue[] | undefined) => {
-                      const singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                      updateCompletedAt(formatDateForStorage(singleValue));
-                      completedAtOpen = false;
-                    }}
-                    type="single"
-                  />
-                </Popover.Content>
-              </Popover.Root>
-            </div>
-          {/if}
-
-          <!-- ============================================================ -->
-          <!-- USER-DEFINED FIELDS (Dynamic from Schema) -->
-          <!-- ============================================================ -->
-
-          {#each userDefinedFields() as field (field.name)}
-            {@const fieldId = `task-user-${field.name}`}
-            <div class="space-y-2">
-              <label for={fieldId} class="text-sm font-medium">
-                {labelForField(field)}
-              </label>
-
-              {#if isNestedField(field)}
-                <NestedFieldTrigger
-                  {field}
-                  {fieldId}
-                  value={getUserFieldValue(field.name)}
-                  onopen={() => openNestedModal(field)}
-                />
-              {:else}
-                <SchemaFieldLeaf
-                  {field}
-                  {fieldId}
-                  value={getUserFieldValue(field.name)}
-                  onChange={(newValue) => updateUserField(field.name, newValue)}
-                />
-              {/if}
-            </div>
-          {/each}
         </div>
-      </Collapsible.Content>
-    </Collapsible.Root>
 
-    <!-- Relationships entry point (issue #1918) -->
-    <button
-      type="button"
-      class="flex w-full items-center gap-2 py-3 text-sm font-medium text-muted-foreground transition-all hover:opacity-80"
-      onclick={() => (showRelationships = true)}
-    >
-      <WaypointsIcon class="h-4 w-4" />
-      <span>Relationships</span>
-    </button>
-  </div>
+        <!-- Priority Field -->
+        <div class="space-y-2">
+          <label for="task-priority" class="text-sm font-medium">Priority</label>
+          {#if priorityField}
+            <SchemaFieldLeaf
+              field={priorityField}
+              fieldId="task-priority"
+              value={node.priority !== undefined && node.priority !== null ? String(node.priority) : ''}
+              onChange={(newValue) => updatePriority((newValue as string) || undefined)}
+            />
+          {/if}
+        </div>
 
-  <RelationshipViewerModal bind:open={showRelationships} {nodeId} />
+        <!-- Due Date Field -->
+        <div class="space-y-2">
+          <label for="task-due-date" class="text-sm font-medium">Due Date</label>
+          {#if dueDateField}
+            <SchemaFieldLeaf
+              field={dueDateField}
+              fieldId="task-due-date"
+              value={node.dueDate}
+              onChange={(newValue) => updateDueDate(newValue as string | null)}
+            />
+          {/if}
+        </div>
 
-  {#if nestedModalField}
-    {@const nestedField = nestedModalField}
-    <NestedPropertyModal
-      bind:open={nestedModalOpen}
-      field={nestedField}
-      value={getUserFieldValue(nestedField.name)}
-      onPersist={(newValue) => updateUserField(nestedField.name, newValue)}
-    />
-  {/if}
+        <!-- Assignee Field (bespoke combobox — no SchemaFieldLeaf case duplicates this) -->
+        <div class="space-y-2">
+          <label for="task-assignee" class="text-sm font-medium">Assignee</label>
+          <Popover.Root bind:open={assigneeOpen}>
+            <Popover.Trigger
+              id="task-assignee"
+              class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
+            >
+              <span class={node.assignee ? '' : 'text-muted-foreground'}>
+                {node.assignee || 'Select assignee...'}
+              </span>
+              <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 6l4 4 4-4"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </Popover.Trigger>
+            <Popover.Content class="w-[200px] p-0" align="start">
+              <div class="flex flex-col">
+                <input
+                  type="text"
+                  placeholder="Search assignee..."
+                  value={assigneeSearch}
+                  oninput={(e) => (assigneeSearch = e.currentTarget.value)}
+                  class="flex h-10 w-full border-b border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
+                />
+                <div class="max-h-[200px] overflow-y-auto">
+                  {#if assigneeOptions.length === 0}
+                    <div class="px-3 py-2 text-sm text-muted-foreground">
+                      No assignees available
+                    </div>
+                  {:else}
+                    {#each assigneeOptions.filter((a) => a.label
+                        .toLowerCase()
+                        .includes(assigneeSearch.toLowerCase())) as assignee}
+                      <button
+                        type="button"
+                        class="relative flex w-full cursor-pointer select-none items-center rounded-sm px-3 py-2 text-sm outline-none hover:bg-muted"
+                        onclick={() => {
+                          updateAssignee(assignee.value);
+                          assigneeOpen = false;
+                          assigneeSearch = '';
+                        }}
+                      >
+                        {assignee.label}
+                        {#if node?.assignee === assignee.value}
+                          <svg class="ml-auto h-4 w-4" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M3 8l4 4 6-8"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                        {/if}
+                      </button>
+                    {/each}
+                  {/if}
+                </div>
+              </div>
+            </Popover.Content>
+          </Popover.Root>
+        </div>
+
+        <!-- Started At Field -->
+        <div class="space-y-2">
+          <label for="task-started-at" class="text-sm font-medium">Started At</label>
+          {#if startedAtField}
+            <SchemaFieldLeaf
+              field={startedAtField}
+              fieldId="task-started-at"
+              value={node.startedAt}
+              onChange={(newValue) => updateStartedAt(newValue as string | null)}
+            />
+          {/if}
+        </div>
+
+        <!-- Completed At Field -->
+        <div class="space-y-2">
+          <label for="task-completed-at" class="text-sm font-medium">Completed At</label>
+          {#if completedAtField}
+            <SchemaFieldLeaf
+              field={completedAtField}
+              fieldId="task-completed-at"
+              value={node.completedAt}
+              onChange={(newValue) => updateCompletedAt(newValue as string | null)}
+            />
+          {/if}
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- USER-DEFINED FIELDS (Dynamic from Schema) -->
+        <!-- ============================================================ -->
+
+        {#each userDefinedFields as field (field.name)}
+          {@const fieldId = `task-user-${field.name}`}
+          <div class="space-y-2">
+            <label for={fieldId} class="text-sm font-medium">
+              {labelForField(field)}
+            </label>
+
+            {#if isNestedField(field)}
+              <NestedFieldTrigger
+                {field}
+                {fieldId}
+                value={getUserFieldValue(field.name)}
+                onopen={() => openNestedModal(field)}
+              />
+            {:else}
+              <SchemaFieldLeaf
+                {field}
+                {fieldId}
+                value={getUserFieldValue(field.name)}
+                onChange={(newValue) => updateUserField(field.name, newValue)}
+              />
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/snippet}
+  </TypedFormShell>
 {/if}
-
-<style>
-  /* Extend border to container edges using negative margins */
-  .schema-form-wrapper {
-    width: calc(100% + (var(--viewer-padding-horizontal) * 2));
-    margin-left: calc(-1 * var(--viewer-padding-horizontal));
-    padding: 0 var(--viewer-padding-horizontal);
-    border-bottom: 1px solid hsl(var(--border));
-  }
-</style>

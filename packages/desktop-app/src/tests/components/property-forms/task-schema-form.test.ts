@@ -1,576 +1,367 @@
 /**
- * Tests for TaskSchemaForm Component Logic
+ * TaskSchemaForm — real component regression coverage (core#2132).
  *
- * Tests the utility functions, data transformations, and business logic
- * used by TaskSchemaForm. UI rendering tests would require browser context.
+ * TaskSchemaForm used to carry its own hardcoded STATUS_OPTIONS/PRIORITY_OPTIONS
+ * enum constants and bespoke date-picker markup, duplicating what the real task
+ * schema's coreValues/userValues and SchemaFieldLeaf already provide. core#2132
+ * removed that duplication: the 6 core fields now render through the shared
+ * SchemaFieldLeaf (driven by the schema TaskSchemaForm fetches from the backend),
+ * and the Collapsible shell / trigger row / gated Relationships button / nested-
+ * field modal now come from the shared TypedFormShell (also used by
+ * GenericSchemaForm) instead of a second hand-rolled copy.
+ *
+ * These tests exercise the REAL rendered component (not a shadow copy of its old
+ * internal logic — the previous version of this file re-implemented STATUS_OPTIONS/
+ * PRIORITY_OPTIONS/formatEnumLabel/etc. as free functions and tested those, never
+ * the component itself) against the actual task schema shape (mirroring
+ * core_schemas.rs), because this is "the most heavily-used property form in the
+ * app" and needs real scrutiny, not a test of a copy of old code that no longer
+ * exists:
+ *   - status/priority render options sourced from the SCHEMA the component is
+ *     given, not a hardcoded fallback list (a schema with different core values
+ *     than the shipped task schema is used specifically to prove this)
+ *   - core-field edits still go through sharedNodeStore.updateTaskNode (the
+ *     type-safe, OCC/field-sequenced write path), never the generic
+ *     sharedNodeStore.updateNode path — SchemaFieldLeaf is purely presentational,
+ *     so swapping its markup in must not change how a core field is persisted
+ *   - the date fields round-trip through the same YYYY-MM-DD storage format as
+ *     before
+ *   - the Relationships button is now gated on the node's type actually having a
+ *     typed relationship, matching GenericSchemaForm — previously it showed
+ *     unconditionally, which core#2132 called out as a real inconsistency to fix
+ *   - the assignee field's bespoke combobox (unrelated to the enum/date-picker
+ *     duplication) is untouched
+ *   - user-defined (non-core) schema fields still render dynamically
  */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
+import type { Node } from '$lib/types';
 
-import { describe, it, expect } from 'vitest';
-import type { TaskNode, TaskStatus } from '$lib/types/task-node';
-import type { EnumValue } from '$lib/types/schema-node';
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-// ============================================================================
-// Test Fixtures
-// ============================================================================
+const loadNodeRelationshipsView = vi.fn();
+vi.mock('$lib/services/relationship-viewer-service', () => ({
+  loadNodeRelationshipsView: (...args: unknown[]) => loadNodeRelationshipsView(...args)
+}));
 
-/**
- * Minimal schema field type for testing - excludes required fields that
- * aren't used by the utility functions being tested
- */
-interface TestSchemaField {
-  name: string;
-  type: string;
-  required?: boolean;
-  coreValues?: EnumValue[];
-  userValues?: EnumValue[];
-  default?: unknown;
-  description?: string;
-}
+import TaskSchemaForm from '$lib/components/property-forms/task-schema-form.svelte';
+import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+import { backendAdapter } from '$lib/services/backend-adapter';
 
-function createTestTaskNode(overrides: Partial<TaskNode> = {}): TaskNode {
+function enumField(
+  name: string,
+  friendlyName: string,
+  coreValues: Array<{ value: string; label: string }>,
+  opts: Partial<SchemaField> = {}
+): SchemaField {
   return {
-    id: 'task-test-1',
-    nodeType: 'task',
-    content: 'Test task content',
-    version: 1,
-    createdAt: '2025-01-01T00:00:00Z',
-    modifiedAt: '2025-01-01T00:00:00Z',
-    status: 'open',
-    ...overrides
+    name,
+    friendlyName,
+    type: 'enum',
+    protection: 'user',
+    indexed: true,
+    coreValues,
+    userValues: [],
+    required: false,
+    ...opts
   };
 }
 
-interface TestSchemaNode {
-  id: string;
-  nodeType: 'schema';
-  content: string;
-  version: number;
-  createdAt: string;
-  modifiedAt: string;
-  targetNodeType: string;
-  fields: TestSchemaField[];
+function dateField(name: string, friendlyName: string): SchemaField {
+  return { name, friendlyName, type: 'date', protection: 'user', indexed: false, required: false };
 }
 
-function createTestSchema(fields: TestSchemaField[] = []): TestSchemaNode {
+/** Mirrors the real `task` SchemaNode exactly as declared in core_schemas.rs. */
+function realTaskSchema(): SchemaNode {
   return {
-    id: 'schema-task',
-    nodeType: 'schema',
-    content: 'task',
+    id: 'task',
+    content: 'Task',
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    createdAt: '2025-01-01T00:00:00Z',
-    modifiedAt: '2025-01-01T00:00:00Z',
-    targetNodeType: 'task',
+    isCore: true,
+    schemaVersion: 1,
     fields: [
-      // Core task fields
-      {
-        name: 'status',
-        type: 'enum',
-        required: true,
-        coreValues: [
+      enumField(
+        'status',
+        'Status',
+        [
           { value: 'open', label: 'Open' },
           { value: 'in_progress', label: 'In Progress' },
           { value: 'done', label: 'Done' },
           { value: 'cancelled', label: 'Cancelled' }
-        ]
-      },
-      {
-        name: 'priority',
-        type: 'enum',
-        required: false,
-        coreValues: [
+        ],
+        { required: true, default: 'open', protection: 'core', extensible: true }
+      ),
+      enumField(
+        'priority',
+        'Priority',
+        [
           { value: 'low', label: 'Low' },
           { value: 'medium', label: 'Medium' },
           { value: 'high', label: 'High' }
-        ]
-      },
-      {
-        name: 'dueDate',
-        type: 'date',
-        required: false
-      },
-      {
-        name: 'assignee',
-        type: 'string',
-        required: false
-      },
-      ...fields
+        ],
+        { extensible: true }
+      ),
+      dateField('due_date', 'Due date'),
+      dateField('started_at', 'Started at'),
+      dateField('completed_at', 'Completed at'),
+      { name: 'assignee', friendlyName: 'Assignee', type: 'text', protection: 'user', indexed: true, required: false }
     ]
   };
 }
 
-// ============================================================================
-// Utility Functions (Extracted from TaskSchemaForm for testing)
-// ============================================================================
-
-const CORE_FIELD_NAMES = ['status', 'priority', 'dueDate', 'due_date', 'assignee'];
-
-const STATUS_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
-  { value: 'open', label: 'Open' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'done', label: 'Done' },
-  { value: 'cancelled', label: 'Cancelled' }
-];
-
-const PRIORITY_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' }
-];
-
-function getStatusOptionsWithExtensions(
-  schema: TestSchemaNode | null
-): Array<{ value: TaskStatus; label: string }> {
-  const options = [...STATUS_OPTIONS];
-
-  if (schema) {
-    const statusField = schema.fields.find((f) => f.name === 'status');
-    if (statusField?.userValues) {
-      const coreValues = new Set(STATUS_OPTIONS.map((o) => o.value));
-      for (const uv of statusField.userValues) {
-        if (!coreValues.has(uv.value as TaskStatus)) {
-          options.push({ value: uv.value as TaskStatus, label: uv.label });
-        }
-      }
-    }
-  }
-
-  return options;
+function taskNode(overrides: Record<string, unknown> = {}): Node {
+  return {
+    id: 'task-1',
+    nodeType: 'task',
+    content: 'Ship the thing',
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    properties: {},
+    status: 'open',
+    ...overrides
+  } as unknown as Node;
 }
 
-function getPriorityOptionsWithExtensions(
-  schema: TestSchemaNode | null
-): Array<{ value: string; label: string }> {
-  const options = [...PRIORITY_OPTIONS];
+let updateTaskNodeSpy: ReturnType<typeof vi.fn>;
+let updateNodeSpy: ReturnType<typeof vi.fn>;
 
-  if (schema) {
-    const priorityField = schema.fields.find((f) => f.name === 'priority');
-    if (priorityField?.userValues) {
-      const coreValues = new Set(PRIORITY_OPTIONS.map((o) => o.value));
-      for (const uv of priorityField.userValues) {
-        if (!coreValues.has(uv.value)) {
-          options.push({ value: uv.value, label: uv.label });
-        }
-      }
-    }
-  }
+beforeEach(() => {
+  updateTaskNodeSpy = vi.fn();
+  vi.spyOn(sharedNodeStore, 'updateTaskNode').mockImplementation(
+    updateTaskNodeSpy as unknown as typeof sharedNodeStore.updateTaskNode
+  );
+  updateNodeSpy = vi.fn();
+  vi.spyOn(sharedNodeStore, 'updateNode').mockImplementation(
+    updateNodeSpy as unknown as typeof sharedNodeStore.updateNode
+  );
+  // Re-armed every test (not just restored) — `vi.restoreAllMocks()` below clears a
+  // bare `vi.fn()`'s implementation entirely rather than restoring one, so without a
+  // default here, every test after the first to leave it unset would see `undefined`
+  // and throw calling `.then()` on it inside TypedFormShell's relationships-gate effect.
+  loadNodeRelationshipsView.mockReset();
+  loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+  vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(realTaskSchema() as never);
+});
 
-  return options;
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+/** Opens the form's Collapsible (collapsed by default) — its trigger is the first button. */
+async function openForm(container: HTMLElement): Promise<void> {
+  await waitFor(() => expect(container.querySelector('button')).toBeTruthy());
+  await fireEvent.click(container.querySelector('button')!);
 }
 
-function getUserDefinedFields(schema: TestSchemaNode | null): TestSchemaField[] {
-  if (!schema) return [];
-  return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name));
-}
+describe('TaskSchemaForm — core fields render from the fetched schema, not a hardcoded list', () => {
+  it('shows the real task schema\'s status/priority options and date field labels', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
 
-function calculateFieldStats(
-  node: TaskNode | null,
-  userFields: TestSchemaField[],
-  getUserFieldValue: (fieldName: string) => unknown
-): { filled: number; total: number } {
-  if (!node) return { filled: 0, total: 4 };
-
-  let filled = 0;
-  const total = 4 + userFields.length; // 4 core fields + user fields
-
-  // Core fields
-  if (node.status) filled++;
-  if (node.priority !== undefined && node.priority !== null) filled++;
-  if (node.dueDate) filled++;
-  if (node.assignee) filled++;
-
-  // User-defined fields
-  for (const field of userFields) {
-    const value = getUserFieldValue(field.name);
-    if (value !== null && value !== undefined && value !== '') {
-      filled++;
-    }
-  }
-
-  return { filled, total };
-}
-
-function getEnumValues(field: TestSchemaField): EnumValue[] {
-  const values: EnumValue[] = [];
-  if (field.coreValues) values.push(...field.coreValues);
-  if (field.userValues) values.push(...field.userValues);
-  return values;
-}
-
-function formatEnumLabel(value: string): string {
-  return value
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
-}
-
-function formatDateDisplay(value: string | null | undefined): string {
-  if (!value) return 'Pick a date';
-  return value; // Simplified for testing - actual component uses parseDate
-}
-
-function formatDateForStorage(
-  value: { year: number; month: number; day: number } | undefined
-): string | null {
-  if (!value) return null;
-  return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-describe('TaskSchemaForm Utility Functions', () => {
-  describe('getStatusOptionsWithExtensions', () => {
-    it('returns core status options when no schema', () => {
-      const options = getStatusOptionsWithExtensions(null);
-
-      expect(options).toHaveLength(4);
-      expect(options.map((o) => o.value)).toEqual(['open', 'in_progress', 'done', 'cancelled']);
-    });
-
-    it('returns core options when schema has no user values', () => {
-      const schema = createTestSchema();
-      const options = getStatusOptionsWithExtensions(schema);
-
-      expect(options).toHaveLength(4);
-    });
-
-    it('adds user-defined status values from schema', () => {
-      const schema = createTestSchema();
-      const statusField = schema.fields.find((f) => f.name === 'status');
-      if (statusField) {
-        statusField.userValues = [
-          { value: 'blocked', label: 'Blocked' },
-          { value: 'review', label: 'In Review' }
-        ];
-      }
-
-      const options = getStatusOptionsWithExtensions(schema);
-
-      expect(options).toHaveLength(6);
-      expect(options.map((o) => o.value)).toContain('blocked');
-      expect(options.map((o) => o.value)).toContain('review');
-    });
-
-    it('does not duplicate core values from userValues', () => {
-      const schema = createTestSchema();
-      const statusField = schema.fields.find((f) => f.name === 'status');
-      if (statusField) {
-        // Try to add 'open' again via userValues - should be ignored
-        statusField.userValues = [
-          { value: 'open', label: 'Open (duplicate)' },
-          { value: 'blocked', label: 'Blocked' }
-        ];
-      }
-
-      const options = getStatusOptionsWithExtensions(schema);
-
-      // Should only have 5 options (4 core + 1 new user value)
-      expect(options).toHaveLength(5);
-      const openOptions = options.filter((o) => o.value === 'open');
-      expect(openOptions).toHaveLength(1);
-      expect(openOptions[0].label).toBe('Open'); // Original label preserved
-    });
+    // "Open" appears twice once expanded: the collapsed-header status badge (always
+    // rendered) and the Status field's own Select trigger.
+    await waitFor(() => expect(screen.getAllByText('Open').length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText('Select Priority...')).toBeTruthy();
+    expect(screen.getAllByText('Pick a date')).toHaveLength(3); // due date, started at, completed at
+    expect(screen.getByText('Select assignee...')).toBeTruthy();
   });
 
-  describe('getPriorityOptionsWithExtensions', () => {
-    it('returns core priority options when no schema', () => {
-      const options = getPriorityOptionsWithExtensions(null);
+  it('renders whatever core status values the SCHEMA declares, not a hardcoded fallback list', async () => {
+    // A schema whose status coreValues are completely different from the shipped
+    // task schema's open/in_progress/done/cancelled. If the component still had a
+    // local hardcoded fallback, this value would either fail to resolve to a label
+    // or the control would ignore the schema entirely — this pins that it does not.
+    const customSchema = realTaskSchema();
+    const statusField = customSchema.fields.find((f) => f.name === 'status')!;
+    statusField.coreValues = [
+      { value: 'todo', label: 'To Do' },
+      { value: 'complete', label: 'Complete' }
+    ];
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(customSchema as never);
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode({ status: 'todo' }));
 
-      expect(options).toHaveLength(3);
-      expect(options.map((o) => o.value)).toEqual(['low', 'medium', 'high']);
-    });
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
 
-    it('adds user-defined priority values from schema', () => {
-      const schema = createTestSchema();
-      const priorityField = schema.fields.find((f) => f.name === 'priority');
-      if (priorityField) {
-        priorityField.userValues = [
-          { value: 'critical', label: 'Critical' },
-          { value: 'urgent', label: 'Urgent' }
-        ];
-      }
-
-      const options = getPriorityOptionsWithExtensions(schema);
-
-      expect(options).toHaveLength(5);
-      expect(options.map((o) => o.value)).toContain('critical');
-      expect(options.map((o) => o.value)).toContain('urgent');
-    });
+    await waitFor(() => expect(screen.getAllByText('To Do').length).toBeGreaterThanOrEqual(1));
   });
 
-  describe('getUserDefinedFields', () => {
-    it('returns empty array when no schema', () => {
-      const fields = getUserDefinedFields(null);
-      expect(fields).toEqual([]);
-    });
+  it('the collapsed header humanizes a user-extended status value via the same schema lookup', async () => {
+    const customSchema = realTaskSchema();
+    const statusField = customSchema.fields.find((f) => f.name === 'status')!;
+    statusField.userValues = [{ value: 'blocked', label: 'Blocked' }];
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(customSchema as never);
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode({ status: 'blocked' }));
 
-    it('filters out core fields', () => {
-      const schema = createTestSchema([
-        { name: 'custom_field', type: 'text', required: false },
-        { name: 'estimate', type: 'number', required: false }
-      ]);
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
-      const fields = getUserDefinedFields(schema);
-
-      expect(fields).toHaveLength(2);
-      expect(fields.map((f) => f.name)).toEqual(['custom_field', 'estimate']);
-    });
-
-    it('includes fields with user-defined names', () => {
-      const schema = createTestSchema([
-        { name: 'sprint', type: 'enum', required: false },
-        { name: 'story_points', type: 'number', required: false },
-        { name: 'due_date', type: 'date', required: false } // Should be filtered (core)
-      ]);
-
-      const fields = getUserDefinedFields(schema);
-
-      // due_date is a core field name, should be filtered
-      expect(fields).toHaveLength(2);
-      expect(fields.map((f) => f.name)).not.toContain('due_date');
-    });
-  });
-
-  describe('calculateFieldStats', () => {
-    it('returns zeros when node is null', () => {
-      const stats = calculateFieldStats(null, [], () => undefined);
-      expect(stats).toEqual({ filled: 0, total: 4 });
-    });
-
-    it('counts filled core fields correctly', () => {
-      const node = createTestTaskNode({
-        status: 'open',
-        priority: 'high',
-        dueDate: '2025-12-31',
-        assignee: null
-      });
-
-      const stats = calculateFieldStats(node, [], () => undefined);
-
-      expect(stats.filled).toBe(3); // status, priority, dueDate
-      expect(stats.total).toBe(4);
-    });
-
-    it('includes user-defined fields in total', () => {
-      const node = createTestTaskNode();
-      const userFields: TestSchemaField[] = [
-        { name: 'estimate', type: 'number', required: false },
-        { name: 'sprint', type: 'text', required: false }
-      ];
-
-      const stats = calculateFieldStats(node, userFields, () => undefined);
-
-      expect(stats.total).toBe(6); // 4 core + 2 user
-    });
-
-    it('counts filled user-defined fields', () => {
-      const node = createTestTaskNode({ status: 'open' });
-      const userFields: TestSchemaField[] = [
-        { name: 'estimate', type: 'number', required: false },
-        { name: 'sprint', type: 'text', required: false }
-      ];
-
-      const getUserFieldValue = (name: string) => {
-        if (name === 'estimate') return 5;
-        return undefined;
-      };
-
-      const stats = calculateFieldStats(node, userFields, getUserFieldValue);
-
-      expect(stats.filled).toBe(2); // status + estimate
-      expect(stats.total).toBe(6);
-    });
-
-    it('treats empty string as unfilled', () => {
-      const node = createTestTaskNode();
-      const userFields: TestSchemaField[] = [{ name: 'notes', type: 'text', required: false }];
-
-      const stats = calculateFieldStats(node, userFields, () => '');
-
-      // Only status counts as filled (from core fields)
-      expect(stats.filled).toBe(1);
-    });
-  });
-
-  describe('getEnumValues', () => {
-    it('returns empty array when no values', () => {
-      const field: TestSchemaField = { name: 'test', type: 'enum', required: false };
-      const values = getEnumValues(field);
-      expect(values).toEqual([]);
-    });
-
-    it('returns core values only', () => {
-      const field: TestSchemaField = {
-        name: 'status',
-        type: 'enum',
-        required: true,
-        coreValues: [
-          { value: 'open', label: 'Open' },
-          { value: 'done', label: 'Done' }
-        ]
-      };
-
-      const values = getEnumValues(field);
-
-      expect(values).toHaveLength(2);
-      expect(values.map((v) => v.value)).toEqual(['open', 'done']);
-    });
-
-    it('combines core and user values', () => {
-      const field: TestSchemaField = {
-        name: 'status',
-        type: 'enum',
-        required: true,
-        coreValues: [{ value: 'open', label: 'Open' }],
-        userValues: [{ value: 'blocked', label: 'Blocked' }]
-      };
-
-      const values = getEnumValues(field);
-
-      expect(values).toHaveLength(2);
-      expect(values.map((v) => v.value)).toEqual(['open', 'blocked']);
-    });
-  });
-
-  describe('formatEnumLabel', () => {
-    it('capitalizes single word', () => {
-      expect(formatEnumLabel('open')).toBe('Open');
-      expect(formatEnumLabel('high')).toBe('High');
-    });
-
-    it('handles snake_case', () => {
-      expect(formatEnumLabel('in_progress')).toBe('In Progress');
-      expect(formatEnumLabel('needs_review')).toBe('Needs Review');
-    });
-
-    it('handles multi-word snake_case', () => {
-      expect(formatEnumLabel('blocked_by_external')).toBe('Blocked By External');
-    });
-
-    it('handles already capitalized words', () => {
-      expect(formatEnumLabel('TODO')).toBe('Todo');
-    });
-  });
-
-  describe('formatDateDisplay', () => {
-    it('returns placeholder for null/undefined', () => {
-      expect(formatDateDisplay(null)).toBe('Pick a date');
-      expect(formatDateDisplay(undefined)).toBe('Pick a date');
-    });
-
-    it('returns date string as-is', () => {
-      expect(formatDateDisplay('2025-12-31')).toBe('2025-12-31');
-    });
-  });
-
-  describe('formatDateForStorage', () => {
-    it('returns null for undefined', () => {
-      expect(formatDateForStorage(undefined)).toBeNull();
-    });
-
-    it('formats date object to ISO string', () => {
-      const date = { year: 2025, month: 6, day: 15 };
-      expect(formatDateForStorage(date)).toBe('2025-06-15');
-    });
-
-    it('pads single digit months and days', () => {
-      const date = { year: 2025, month: 1, day: 5 };
-      expect(formatDateForStorage(date)).toBe('2025-01-05');
-    });
+    // The header badge is visible even while the Collapsible is closed (bits-ui keeps
+    // Collapsible.Content mounted-but-hidden, so the Select trigger's own copy of the
+    // same label may also be present in the DOM — assert at least one is showing).
+    await waitFor(() => expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1));
   });
 });
 
-describe('TaskSchemaForm Core Field Constants', () => {
-  it('has correct core field names', () => {
-    expect(CORE_FIELD_NAMES).toContain('status');
-    expect(CORE_FIELD_NAMES).toContain('priority');
-    expect(CORE_FIELD_NAMES).toContain('dueDate');
-    expect(CORE_FIELD_NAMES).toContain('due_date'); // Both formats for compatibility
-    expect(CORE_FIELD_NAMES).toContain('assignee');
+describe('TaskSchemaForm — core-field writes still go through updateTaskNode', () => {
+  it('writes a due-date edit through sharedNodeStore.updateTaskNode, never the generic properties path', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
+
+    await waitFor(() => expect(screen.getByLabelText('Due Date')).toBeTruthy());
+    await fireEvent.click(screen.getByLabelText('Due Date'));
+    const dayButton = await waitFor(() => {
+      const btn = document.querySelector('[data-bits-day]:not([data-outside-month])');
+      expect(btn).toBeTruthy();
+      return btn as Element;
+    });
+    await fireEvent.click(dayButton);
+
+    await waitFor(() => expect(updateTaskNodeSpy).toHaveBeenCalledTimes(1));
+    const [id, update] = updateTaskNodeSpy.mock.calls[0] as [string, { dueDate: string }];
+    expect(id).toBe('task-1');
+    // Same YYYY-MM-DD storage format as before the refactor.
+    expect(update.dueDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // SchemaFieldLeaf is presentational only — the write path is unchanged, not
+    // rerouted through the generic per-field properties write.
+    expect(updateNodeSpy).not.toHaveBeenCalled();
   });
 
-  it('has correct status options', () => {
-    expect(STATUS_OPTIONS).toHaveLength(4);
+  it('writes a started-at edit through updateTaskNode with the startedAt field name', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
 
-    const values = STATUS_OPTIONS.map((o) => o.value);
-    expect(values).toContain('open');
-    expect(values).toContain('in_progress');
-    expect(values).toContain('done');
-    expect(values).toContain('cancelled');
-  });
+    await waitFor(() => expect(screen.getByLabelText('Started At')).toBeTruthy());
+    await fireEvent.click(screen.getByLabelText('Started At'));
+    const dayButton = await waitFor(() => {
+      const btn = document.querySelector('[data-bits-day]:not([data-outside-month])');
+      expect(btn).toBeTruthy();
+      return btn as Element;
+    });
+    await fireEvent.click(dayButton);
 
-  it('has correct priority options', () => {
-    expect(PRIORITY_OPTIONS).toHaveLength(3);
-
-    const values = PRIORITY_OPTIONS.map((o) => o.value);
-    expect(values).toContain('low');
-    expect(values).toContain('medium');
-    expect(values).toContain('high');
+    await waitFor(() => expect(updateTaskNodeSpy).toHaveBeenCalledTimes(1));
+    const [, update] = updateTaskNodeSpy.mock.calls[0] as [string, { startedAt: string }];
+    expect(update.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 
-describe('TaskSchemaForm Integration Scenarios', () => {
-  it('correctly identifies all core task fields', () => {
-    const schema = createTestSchema();
-    const coreFields = schema.fields.filter((f) => CORE_FIELD_NAMES.includes(f.name));
-    const userFields = getUserDefinedFields(schema);
+describe('TaskSchemaForm — Relationships button is now gated (previously unconditional)', () => {
+  it('hides the Relationships entry point when the type has no typed relationships', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
 
-    expect(coreFields.length).toBeGreaterThan(0);
-    expect(userFields).toHaveLength(0);
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+
+    await waitFor(() => expect(loadNodeRelationshipsView).toHaveBeenCalledWith('task-1'));
+    await Promise.resolve();
+    expect(screen.queryByText('Relationships')).toBeNull();
   });
 
-  it('handles task with all fields filled', () => {
-    const node = createTestTaskNode({
-      status: 'in_progress',
-      priority: 'high',
-      dueDate: '2025-12-31',
-      assignee: 'user-123'
+  it('shows the Relationships entry point when the type has a typed relationship', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({
+      nodeType: 'task',
+      groups: [{ key: 'assigned_to' }]
     });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
 
-    const stats = calculateFieldStats(node, [], () => undefined);
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
-    expect(stats.filled).toBe(4);
-    expect(stats.total).toBe(4);
+    await waitFor(() => expect(screen.getByText('Relationships')).toBeTruthy());
   });
 
-  it('handles minimal task node', () => {
-    const node = createTestTaskNode({
-      status: 'open',
-      priority: undefined,
-      dueDate: undefined,
-      assignee: undefined
+  it('fails open (shows the trigger) when the relationship check errors', async () => {
+    loadNodeRelationshipsView.mockRejectedValue(new Error('daemon offline'));
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+
+    await waitFor(() => expect(screen.getByText('Relationships')).toBeTruthy());
+  });
+});
+
+describe('TaskSchemaForm — assignee field (unrelated bespoke combobox, unchanged)', () => {
+  it('still renders its own combobox rather than a plain SchemaFieldLeaf text input', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
+
+    await waitFor(() => expect(screen.getByLabelText('Assignee')).toBeTruthy());
+    await fireEvent.click(screen.getByLabelText('Assignee'));
+
+    // The empty-placeholder-list combobox behavior (TODO: UserService), not a text input.
+    expect(screen.getByPlaceholderText('Search assignee...')).toBeTruthy();
+    expect(screen.getByText('No assignees available')).toBeTruthy();
+  });
+});
+
+describe('TaskSchemaForm — field completion badge', () => {
+  it('counts filled core fields out of 6', async () => {
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      taskNode({ status: 'open', priority: 'high', dueDate: '2026-12-31' })
+    );
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+
+    await waitFor(() => expect(screen.getByText('3/6 fields')).toBeTruthy());
+  });
+
+  it('includes user-defined schema fields in the total', async () => {
+    const schema = realTaskSchema();
+    schema.fields.push({
+      name: 'estimate',
+      friendlyName: 'Estimate',
+      type: 'number',
+      protection: 'user',
+      indexed: false,
+      required: false
     });
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(schema as never);
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode({ status: 'open' }));
 
-    const stats = calculateFieldStats(node, [], () => undefined);
+    render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
-    expect(stats.filled).toBe(1); // Only status
-    expect(stats.total).toBe(4);
+    await waitFor(() => expect(screen.getByText('1/7 fields')).toBeTruthy());
   });
+});
 
-  it('schema with user extensions provides complete options', () => {
-    const schema = createTestSchema();
+describe('TaskSchemaForm — user-defined fields still render dynamically', () => {
+  it('renders a non-core schema field through SchemaFieldLeaf, keyed under properties.task', async () => {
+    const schema = realTaskSchema();
+    schema.fields.push({
+      name: 'sprint',
+      friendlyName: 'Sprint',
+      type: 'string',
+      protection: 'user',
+      indexed: false,
+      required: false
+    });
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(schema as never);
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      taskNode({ properties: { task: { sprint: 'Sprint 12' } } })
+    );
 
-    // Add user-defined status and priority
-    const statusField = schema.fields.find((f) => f.name === 'status');
-    const priorityField = schema.fields.find((f) => f.name === 'priority');
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
 
-    if (statusField) {
-      statusField.userValues = [{ value: 'blocked', label: 'Blocked' }];
-    }
-    if (priorityField) {
-      priorityField.userValues = [{ value: 'critical', label: 'Critical' }];
-    }
+    const input = (await waitFor(() => screen.getByLabelText('Sprint'))) as HTMLInputElement;
+    expect(input.value).toBe('Sprint 12');
 
-    const statusOptions = getStatusOptionsWithExtensions(schema);
-    const priorityOptions = getPriorityOptionsWithExtensions(schema);
+    await fireEvent.input(input, { target: { value: 'Sprint 13' } });
 
-    // Core + user values
-    expect(statusOptions).toHaveLength(5);
-    expect(priorityOptions).toHaveLength(4);
-
-    // User values are at the end
-    expect(statusOptions[statusOptions.length - 1].value).toBe('blocked');
-    expect(priorityOptions[priorityOptions.length - 1].value).toBe('critical');
+    expect(updateNodeSpy).toHaveBeenCalledTimes(1);
+    const [, changes] = updateNodeSpy.mock.calls[0] as [string, Partial<Node>];
+    const persisted = changes.properties as { task: Record<string, unknown> };
+    expect(persisted.task.sprint).toBe('Sprint 13');
   });
 });
