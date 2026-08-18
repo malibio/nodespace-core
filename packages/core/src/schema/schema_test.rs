@@ -110,6 +110,89 @@ async fn test_create_schema_without_title_template_succeeds() {
     );
 }
 
+#[tokio::test]
+async fn test_create_schema_duplicate_rejection_carries_existing_definition() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // Seed a "ticket" schema with a specific, deliberately distinctive set of
+    // fields — these are the ONLY fields the rejection is allowed to name.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Ticket",
+            "fields": [
+                { "name": "title", "type": "text", "protection": "user", "indexed": false, "required": true },
+                { "name": "owner", "type": "text", "protection": "user", "indexed": false },
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "protection": "user",
+                    "indexed": false,
+                    "required": true,
+                    "coreValues": [
+                        { "value": "triage", "label": "Triage" },
+                        { "value": "shipped", "label": "Shipped" }
+                    ]
+                }
+            ]
+        }),
+    )
+    .await
+    .expect("seed schema creation should succeed");
+
+    // A second call names the same type but with an entirely different,
+    // invented field set — the exact shape an agent sends when it never saw
+    // the real definition and is guessing from the user's request.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Ticket",
+            "fields": [
+                { "name": "assignee", "type": "text", "protection": "user", "indexed": false },
+                { "name": "sprint", "type": "text", "protection": "user", "indexed": false },
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "protection": "user",
+                    "indexed": false,
+                    "coreValues": [
+                        { "value": "ready for dev", "label": "Ready for dev" },
+                        { "value": "done", "label": "Done" }
+                    ]
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("creating a schema that already exists must be rejected")
+        .to_string();
+
+    // States the call was not applied.
+    assert!(
+        msg.contains("NOT modified") && msg.contains("NOT applied"),
+        "rejection must state the existing type was not modified and this call's \
+         fields were not applied: {msg}"
+    );
+
+    // Carries the EXISTING type's real fields...
+    assert!(
+        msg.contains("title")
+            && msg.contains("owner")
+            && msg.contains("triage")
+            && msg.contains("shipped"),
+        "rejection must render the existing type's actual definition: {msg}"
+    );
+
+    // ...and not the invented fields from the rejected call.
+    assert!(
+        !msg.contains("assignee") && !msg.contains("sprint") && !msg.contains("ready for dev"),
+        "rejection must not describe the fields from the rejected call as if they \
+         belonged to the existing type: {msg}"
+    );
+}
+
 // ============================================================================
 // update_schema + title_template
 // ============================================================================

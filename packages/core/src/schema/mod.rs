@@ -390,11 +390,20 @@ pub async fn handle_create_schema(
     let schema_id = crate::services::node_service::normalize_schema_id(&params.name);
 
     // Check if schema already exists — return a clear error so the agent knows
-    // to use create_node instead of retrying create_schema.
-    if matches!(node_service.get_schema_node(&schema_id).await, Ok(Some(_))) {
+    // to use create_node instead of retrying create_schema. The rejection
+    // carries the existing type's real, rendered definition: without it the
+    // agent has no fact to report and fills the gap by describing the fields
+    // from the (rejected) call it just made, presenting them as confirmed.
+    if let Ok(Some(existing_schema)) = node_service.get_schema_node(&schema_id).await {
+        let existing_definition =
+            crate::ops::entity_types_block::EntityTypeDescriptor::from_schema(&existing_schema)
+                .render_line();
         return Err(MarkdownError::invalid_params(format!(
-            "Schema '{}' already exists. Use create_node with node_type='{}' to create instances.",
-            params.name, schema_id
+            "Schema '{}' already exists — it was NOT modified, and the fields in this call \
+             were NOT applied. Its actual definition is: {}. Use create_node with \
+             node_type='{}' to create instances. Describe the type using only the definition \
+             above.",
+            params.name, existing_definition, schema_id
         )));
     }
 
