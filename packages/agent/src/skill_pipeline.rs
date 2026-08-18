@@ -18,8 +18,7 @@
 //! handler key, typed parameter schema, description, and `source` provenance.
 
 use crate::skill_rules::{
-    AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, EDIT_DONT_RECREATE, ENUM_FORMAT,
-    FIELDS_FROM_REQUEST_ONLY, FIND_THEN_ACT, NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD,
+    AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, EDIT_DONT_RECREATE, FIND_THEN_ACT,
     ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
     SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
     SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
@@ -27,17 +26,34 @@ use crate::skill_rules::{
 };
 use nodespace_core::markdown::{NodeTemplate, SeedTier};
 
-/// Builds the Schema Creation skill's markdown_content, interpolating the
-/// shared rules from [`crate::skill_rules`] (imperative form) so this text
-/// cannot silently drift from the "Schema inspection and management" section
-/// of `packages/skill/SKILL.md`, which renders the same rules in prose form
-/// via `bin/gen_skill_md.rs`. Only the worked EXAMPLE blocks and structural
-/// headers are unique to this LLM-prompt rendering.
+/// Builds the Schema Creation skill's markdown_content.
+///
+/// Argument shape (which fields to omit, enum value casing, the
+/// `title_template` placeholder rule) now lives on `create_schema`'s own
+/// tool-schema descriptions (`local_agent/tools.rs`) — ADR-064 rule 1 — so
+/// the rules that state only that shape (`NO_NAME_TITLE_FIELD`,
+/// `NAME_PLACEHOLDER_EXCEPTION`, `FIELDS_FROM_REQUEST_ONLY`, `ENUM_FORMAT`)
+/// are no longer interpolated here: duplicating a schema-stated rule into
+/// prose is how the two drifted before (the `coreValues`/`core_values`
+/// contradiction ADR-064 records). The worked JSON examples moved the same
+/// way, onto `create_schema`'s own description, per ADR-038 Finding 2 (the
+/// model reproduces the worked example's pattern, so the example belongs
+/// where the model reads it right before calling).
+///
+/// What remains here is procedure: which tool to call, in what order, and
+/// facts about the API's response contract (already-exists, validation-error
+/// retry) that a schema cannot express. These rules are still interpolated
+/// from [`crate::skill_rules`] so they cannot drift from the "Schema
+/// inspection and management" section of `packages/skill/SKILL.md`
+/// (`bin/gen_skill_md.rs` renders the same source in prose form for that,
+/// separate, consumer).
 fn schema_creation_guidance() -> String {
     format!(
         r#"# Schema Creation & Editing Guidance
 
 CREATING A SCHEMA — call create_schema:
+
+CALL create_schema NOW: your next action is the tool call, not planning text.
 
 {one_schema_per_request}
 
@@ -45,95 +61,17 @@ CREATING A SCHEMA — call create_schema:
 
 {schema_validation_error_retry}
 
-EDITING A SCHEMA — call update_schema:
-
 {edit_dont_recreate}
-
-FIELDS: Only define type-specific fields. {no_name_title_field} {name_placeholder_exception} A 'description' field is acceptable when it adds value beyond the title. Good fields: status (enum), due_date (date), priority (enum), budget (number), owner (text).
-
-{fields_from_request_only}
-
-{enum_format}
 
 {relationship_vs_field} {target_type_must_exist}
 
-{title_template_placeholders} Examples:
-- Customer with fields [first_name, last_name]: title_template = "{{first_name}} {{last_name}}"
-- Invoice with fields [invoice_number, ...]: title_template = "Invoice #{{invoice_number}}"
-- Project with fields [name, status, ...]: title_template = "{{name}} ({{status}})"
+{title_template_placeholders}
 
-{unique_field_flags}
-
-EXAMPLE — Customer schema (email flagged unique_case_insensitive):
-{{
-  "name": "Customer",
-  "description": "A customer contact",
-  "title_template": "{{first_name}} {{last_name}}",
-  "fields": [
-    {{"name": "first_name", "type": "text", "required": true}},
-    {{"name": "last_name", "type": "text", "required": true}},
-    {{"name": "email", "type": "text", "required": true, "unique_case_insensitive": true}}
-  ]
-}}
-
-EXAMPLE — Invoice schema (references existing 'customer' type):
-
-```json
-{{
-  "name": "Invoice",
-  "description": "A billing invoice linked to a customer",
-  "title_template": "Invoice #{{invoice_number}}",
-  "fields": [
-    {{"name": "invoice_number", "type": "text", "required": true}},
-    {{"name": "issue_date", "type": "date", "required": true}},
-    {{"name": "due_date", "type": "date"}},
-    {{"name": "amount", "type": "number", "required": true}},
-    {{"name": "status", "type": "enum", "required": true, "coreValues": [
-      {{"value": "draft", "label": "Draft"}},
-      {{"value": "sent", "label": "Sent"}},
-      {{"value": "paid", "label": "Paid"}},
-      {{"value": "overdue", "label": "Overdue"}}
-    ]}}
-  ],
-  "relationships": [
-    {{"name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one"}}
-  ]
-}}
-```
-
-EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH are in fields):
-
-```json
-{{
-  "name": "Project",
-  "description": "A tracked project with status and timeline",
-  "title_template": "{{name}} ({{status}})",
-  "fields": [
-    {{"name": "name", "type": "text", "required": true}},
-    {{"name": "status", "type": "enum", "required": true, "coreValues": [
-      {{"value": "planning", "label": "Planning"}},
-      {{"value": "active", "label": "Active"}},
-      {{"value": "on_hold", "label": "On Hold"}},
-      {{"value": "completed", "label": "Completed"}}
-    ]}},
-    {{"name": "start_date", "type": "date"}},
-    {{"name": "due_date", "type": "date"}},
-    {{"name": "budget", "type": "number"}},
-    {{"name": "owner", "type": "text"}}
-  ],
-  "relationships": [
-    {{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}}
-  ]
-}}
-```"#,
+{unique_field_flags}"#,
         one_schema_per_request = ONE_SCHEMA_PER_REQUEST.imperative,
         schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.imperative,
         edit_dont_recreate = EDIT_DONT_RECREATE.imperative,
-        no_name_title_field = NO_NAME_TITLE_FIELD.imperative,
-        fields_from_request_only = FIELDS_FROM_REQUEST_ONLY.imperative,
-        name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.imperative,
-        enum_format = ENUM_FORMAT.imperative,
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.imperative,
         title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.imperative,
@@ -144,25 +82,36 @@ EXAMPLE — Project schema (title_template uses {{name}} AND {{status}}, so BOTH
 /// Builds the Graph Editing skill's markdown_content, interpolating shared
 /// interaction rules from [`crate::skill_rules`] (find-then-act, ambiguity
 /// clarification, dedicated task-status verb, success-means-stop).
+///
+/// The allowed-values / id-provenance rules below are stated in prose here
+/// as well as on `update_node`'s own schema (`local_agent/tools.rs`) — not a
+/// duplication ADR-064 forbids, because this text is procedure (WHEN to
+/// treat a description as already-resolved vs. needing `resolve_query`),
+/// not argument shape. The two invoice worked examples formerly here are
+/// deleted outright rather than reworded: no case exercising this skill
+/// needs a worked clarification example, and a business-domain one taught
+/// nothing this text's own principle didn't already state.
 fn graph_editing_guidance() -> String {
     format!(
         r#"# Graph Editing Guidance
 
 When updating an existing node:
 
-FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing. Exception: see INDIRECT TARGET below when the target is not named directly.
+CALL update_node NOW: your next action is the tool call, not planning text.
 
-INDIRECT TARGET: If the request identifies the target indirectly — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself. resolve_query performs the search itself: if it returns resolved:true, act on the returned id directly (e.g. pass it straight to update_node) — do not call search_nodes afterward. If it returns resolved:false with reason:"no_match", tell the user nothing matched. If it returns reason:"multiple_matches", ask the user which candidate they meant.
+FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the fields that need changing.
 
-AMBIGUITY: {ambiguity_clarify} Examples:
-- 0 results: "I couldn't find an invoice matching that description. Are you looking for the invoice with amount $500?"
-- Multiple results: "I found 3 invoices — which one did you mean: Invoice #001 ($500), Invoice #002 ($750), or Invoice #003 ($500 overdue)?"
+ALREADY IN THIS CONVERSATION: an indirect reference like "the auth one", "that one", or "the 2400 one" can still name a record already returned by a prior tool result in this conversation — match the description against those records and use that record's id, matching on what the description says, not on which record was discussed last. Never ask the user to supply an id that's already in the conversation.
+
+INDIRECT AND NOT YET FOUND: If the request identifies the target indirectly and no matching record has appeared in this conversation yet — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself. resolve_query performs the search itself: if it returns resolved:true, act on the returned id directly (e.g. pass it straight to update_node) — do not call search_nodes afterward. If it returns resolved:false with reason:"no_match", tell the user nothing matched. If it returns reason:"multiple_matches", ask the user which candidate they meant.
+
+AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that reports success — every call must also carry the change itself in `field_values`, using a field the type defines, copied character for character. When a field lists allowed values, use one of those values exactly — never a paraphrase of the user's wording, never a capitalised or spaced form of the value.
+
+{ambiguity_clarify}
 
 {task_status_dedicated_verb}
 
-update_node FIELDS: Pass only the fields that need to change, in `field_values`. Omit fields that should stay the same. Use the exact property key from the node's schema.
-
-CONTENT vs FIELD VALUES: Use the content field to update the node's title/main text. Use field_values for typed fields (status, due_date, amount, etc.).
+CONTENT vs FIELD VALUES: Use the content field only when the user is renaming the node. Use field_values for typed fields (status, assignee, due_date, etc.).
 
 SUCCESS: {success_no_reverify}"#,
         find_then_act = FIND_THEN_ACT.imperative,
@@ -174,13 +123,27 @@ SUCCESS: {success_no_reverify}"#,
 
 /// Builds the Relationship Management skill's markdown_content, interpolating
 /// the shared find-then-act and success-means-stop rules.
+/// The DIRECTION rule below is stated in prose here as well as on
+/// `create_relationship`'s own `from_id`/`to_id` parameter descriptions
+/// (`local_agent/tools.rs`) — a deliberate duplication, not a drift risk left
+/// unguarded: `create_relationship` is whitelisted by BOTH this skill and
+/// Organization (`seed_skill_nodes`'s "Organization" entry), and Organization's
+/// own guidance does not restate it. A turn routed to Organization instead of
+/// here would see `create_relationship` with only the tool schema's copy of
+/// the rule, so the tool schema alone must already carry it — the same
+/// reachability argument `graph_editing_guidance`'s doc comment makes for its
+/// id-provenance rules.
 fn relationship_management_guidance() -> String {
     format!(
         r#"# Relationship Management Guidance
 
 When linking nodes or exploring connections:
 
-CREATING A RELATIONSHIP: Call create_relationship with the source node ID, target node ID, and a relation_type label (e.g. "has_task", "billed_to", "related_to"). Both node IDs must exist — search for them first if you don't have them.
+CALL create_relationship NOW: your next action is the tool call, not planning text.
+
+CREATING A RELATIONSHIP: both ids come from a prior tool result — copy each exactly, do not ask the user for either. Use a relation_type label defined on the relevant schema (e.g. "supersedes", "has_task") if one applies, otherwise a generic label (member_of, mentions, related_to, etc.).
+
+DIRECTION: from_id is the record that ACTS, to_id is the record acted upon. "A supersedes B" is from_id=A, to_id=B. Reversing them records the opposite fact and still reports success.
 
 TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relation_type to narrow results.
 
@@ -302,13 +265,12 @@ search_nodes is the single tool for finding, listing, and filtering nodes — by
 
 LISTING BY TYPE: To list all nodes of a type, use search_nodes with an empty query. Examples:
 - "list all tasks" → `search_nodes(query="", node_type="task")`
-- "list all customers" → `search_nodes(query="", node_type="<customer-schema-id>")`
+- "show me our ADRs" → `search_nodes(query="", node_type="<adr-schema-id>")`
 
-STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc.) or comparison operators (gt, lt, gte, lte, in), pass filters to search_nodes. Examples:
-- "find all my open tasks" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"status","value":"open"}])`
+STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc.) or comparison operators (gt, lt, gte, lte, in), pass filters to search_nodes. Copy the type id and the field name exactly as they appear in EXISTING SCHEMAS, and use the exact enum member for a status filter — never a paraphrase. Examples:
+- "which tickets are still in dev?" → `search_nodes(node_type="ticket", filters=[{"type":"property","operator":"equals","property":"status","value":"in_dev"}])`
 - "tasks due tomorrow" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"due_date","value":"<tomorrow's date in YYYY-MM-DD>"}], sorting=[{"field":"due_date","direction":"asc"}])`
 - "tasks due this week" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"gte","property":"due_date","value":"<today's date in YYYY-MM-DD>"},{"type":"property","operator":"lte","property":"due_date","value":"<end of week in YYYY-MM-DD>"}])`
-- "find tasks for Acme" → `search_nodes(node_type="task", filters=[{"type":"property","operator":"equals","property":"company","value":"Acme"}])`
 - Date format: always YYYY-MM-DD. Operators: equals, contains, gt, lt, gte, lte, in, exists."#.to_string(),
         },
         NodeTemplate {
@@ -316,7 +278,7 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Project, Customer, Invoice. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.",
+                "description": "Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Spec, ADR, Ticket. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.",
                 "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
@@ -325,40 +287,13 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
             tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
 
-⚡ IMMEDIATE ACTION REQUIRED: Call create_node NOW with all values from the user message. Do NOT output any text — your response to receiving these instructions must be the create_node tool call.
+CALL create_node NOW: your next action is the tool call, not planning text.
 
-CALL create_node NOW: You received this instruction because this skill was matched to the request. Your NEXT action MUST be create_node — do not output any planning text. Gather all needed values from the user message and call create_node immediately.
+THE TYPE: set node_type to the id shown in EXISTING SCHEMAS, copied exactly.
 
-TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
+THE VALUES: put every particular the user supplied into field_values. Work through their message value by value and check each against the type's field list before calling. field_values is the ONLY way any value is stored — a value left out is lost silently while the record still reports as saved.
 
-FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields after `->` as `name: type` — fields marked `required` MUST be included in the field_values map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `field_values` is the ONLY way any field value is stored.
-
-VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `field_values` under a key of your own. `field_values` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
-
-KEY FORMAT FOR A VALUE WITH NO MATCHING FIELD: Name the key after the user's own noun for it — lowercase, singular, snake_case (they said "weighs 40kg" → `weight`). Reusing their wording keeps the same fact under the same key next time instead of inventing a new one. Then prefix it based on the type:
-- node_type is a type from RELEVANT ENTITY TYPES (one the user defined): use the bare key — `"weight": "40kg"`.
-- node_type is a built-in type (text, task, date): prefix with `custom:` — `"custom:weight": "40kg"`. Unprefixed names are reserved for built-in fields on these types, so a bare key there can collide with a real one (status, priority, due_date).
-
-TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from the field values — set content to a brief descriptive label (e.g. the most identifying value). If there is no title_template, set content to the best human-readable name the user provided.
-
-PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
-
-EXAMPLE — the shape of the call, NOT the values. Copy the structure; take every value from the RELEVANT ENTITY TYPES block and the user's message. Suppose that block lists `widget "Widget" -> label: string; quantity: number; received_on: date; condition: string`:
-
-```json
-{
-  "node_type": "widget",
-  "content": "Shipment 24",
-  "field_values": {
-    "label": "Shipment 24",
-    "quantity": 12,
-    "received_on": "2026-03-04",
-    "condition": "sealed"
-  }
-}
-```
-
-Never reuse "widget" or these field names — they are placeholders. Your node_type and property keys both come from the RELEVANT ENTITY TYPES block.
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in field_values under a key of your own — lowercase, singular, snake_case, named after the user's own noun for it. NEVER drop a value because the type has no field for it: a dropped value is gone silently and the user was told the record was saved. Bare on a type from EXISTING SCHEMAS; `custom:`-prefixed on a built-in type — text, task, date — where unprefixed names are reserved for built-in fields. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call.
 
 SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete."#.to_string(),
         },
@@ -367,7 +302,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Set up a structured way to keep track of, log, or maintain records for a kind of thing the user hasn't stored before — equipment, bookings, subscriptions, contacts, or any recurring category of item with its own details to fill in. Also covers defining a new entity type or schema with custom fields, enums, and relationships, or modifying an existing schema. Use when the user wants a place to record or organize instances of something new, or says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Project, Customer, or Invoice.",
+                "description": "Set up a structured way to keep track of, log, or maintain records for a kind of thing the user hasn't stored before — specs, sprints, releases, tickets, or any recurring category of item with its own details to fill in. Also covers defining a new entity type or schema with custom fields, enums, and relationships, or modifying an existing schema. Use when the user wants a place to record or organize instances of something new, or says 'new type', 'node type', 'define fields', 'create schema', 'update schema', 'add a field', 'rename a field', or wants to design or change a kind of entity like Spec, Ticket, or ADR.",
                 "tool_whitelist": ["create_schema", "update_schema", "get_node"],
                 "max_iterations": 3,
             }),
@@ -743,11 +678,23 @@ mod tests {
     /// silently degrades to paragraph text. Fencing is what makes these examples
     /// round-trip as structured markdown (`flatten_subtree_content` re-emits each
     /// node's content verbatim, fence markers included).
+    ///
+    /// Neither seed carries a multi-line JSON example any more: both moved
+    /// their worked example onto their tool's own description
+    /// (`create_node`/`create_schema` in `local_agent/tools.rs`), per
+    /// ADR-064 rule 1 and Finding 2 — the model reads the tool schema right
+    /// before calling, so that is where the pattern it reproduces should
+    /// live, not duplicated into the skill's prose too. This test now pins
+    /// the negative: a future edit that re-adds a fenced JSON block to
+    /// either skill's markdown_content should be a deliberate, reviewed
+    /// choice, not a silent reintroduction of the duplication ADR-064
+    /// removed.
     #[test]
     fn seed_skill_json_examples_produce_code_block_children() {
-        // Only these two seeds carry multi-line JSON worked examples; the rest
-        // use inline code spans for short call shapes, which stay in `text`.
-        let expected: &[(&str, usize)] = &[("Node Creation", 1), ("Schema Creation", 2)];
+        // Neither seed carries a multi-line JSON worked example any more —
+        // see the moved-to-tool-description note above. The rest use inline
+        // code spans for short call shapes, which stay in `text`.
+        let expected: &[(&str, usize)] = &[("Node Creation", 0), ("Schema Creation", 0)];
 
         for (title, want_blocks) in expected {
             let seed = seed_skill_nodes()
@@ -861,7 +808,7 @@ mod tests {
     /// `find_skills`' unscoped branch — all non-core schemas, capped at
     /// `MAX_UNSCOPED_SCHEMA_METADATA`. Every candidate therefore carries an
     /// *identical* schema list, which is what makes the repeated
-    /// `RELEVANT ENTITY TYPES` copies in one Stage-2 prompt genuinely
+    /// `EXISTING SCHEMAS` copies in one Stage-2 prompt genuinely
     /// redundant rather than differently-scoped.
     ///
     /// This pins the premise of that finding: a seed gaining `node_types`
@@ -906,14 +853,21 @@ mod tests {
 
     /// `UNIQUE_FIELD_FLAGS` is interpolated into `schema_creation_guidance()`
     /// via a format-string placeholder — a future edit to that format string
-    /// could silently drop the `{unique_field_flags}` slot (or the worked
-    /// EXAMPLE block) with no compiler error, since the value is still a
-    /// valid `String` either way. The `SCHEMA_RULES` structural tests
-    /// (`no_rule_text_is_empty` etc.) only check the constant in isolation,
-    /// not that it actually reaches the seeded markdown a model sees — this
-    /// pins the advisory-only claim specifically, since a model that thinks
-    /// `unique` is an enforced constraint could tell a user it will block
-    /// duplicates, which is false (see `NodeService::find_duplicate_for`).
+    /// could silently drop the `{unique_field_flags}` slot with no compiler
+    /// error, since the value is still a valid `String` either way. The
+    /// `SCHEMA_RULES` structural tests (`no_rule_text_is_empty` etc.) only
+    /// check the constant in isolation, not that it actually reaches the
+    /// seeded markdown a model sees — this pins the advisory-only claim
+    /// specifically, since a model that thinks `unique` is an enforced
+    /// constraint could tell a user it will block duplicates, which is false
+    /// (see `NodeService::find_duplicate_for`).
+    ///
+    /// The worked example demonstrating a unique-flagged field lives on
+    /// `create_schema`'s own tool description now, per ADR-064 rule 1 and
+    /// Finding 2 (the example the model reads right before calling is the
+    /// one it reproduces) — checked below by
+    /// `create_schema_tool_description_keeps_dev_domain_worked_example`, not
+    /// here.
     #[test]
     fn schema_creation_guidance_covers_unique_field_flags() {
         let seeds = seed_skill_nodes();
@@ -932,11 +886,32 @@ mod tests {
             "Schema Creation guidance must state the unique flag is advisory only, \
              not an enforced constraint"
         );
+    }
+
+    /// The worked example that replaced Schema Creation's inline "EXAMPLE —
+    /// Customer schema" block now lives on `create_schema`'s tool
+    /// description (ADR-064 rule 1 / Finding 2). Pins its presence and its
+    /// dev-workflow domain, so a future edit can't silently drop it or drift
+    /// back to a business-domain example.
+    #[test]
+    fn create_schema_tool_description_keeps_dev_domain_worked_example() {
+        let desc = crate::local_agent::tools::Tool::CreateSchema
+            .definition()
+            .description;
         assert!(
-            md.contains("EXAMPLE — Customer schema"),
-            "Schema Creation guidance must keep a worked example demonstrating \
-             a unique-flagged field"
+            desc.contains("Example call:") && desc.contains("\"coreValues\""),
+            "create_schema's description must keep a worked example with a coreValues enum, got: {desc:?}"
         );
+        assert!(
+            desc.contains("Ticket") && desc.contains("ready_for_dev"),
+            "create_schema's worked example must be dev-workflow domain (Ticket/status enum), got: {desc:?}"
+        );
+        for business_word in ["Invoice", "Customer", "Product"] {
+            assert!(
+                !desc.contains(business_word),
+                "create_schema's description regressed to a business-domain example: found {business_word:?}"
+            );
+        }
     }
 
     /// Schema Creation's description must lead with the natural phrasing users

@@ -20,7 +20,7 @@
 //! system's ability to bound K and enforce the trust boundary.
 
 use crate::agent_types::{SkillCandidate, ToolDefinition};
-use nodespace_core::ops::context_ops::RELEVANT_ENTITY_TYPES_HEADER;
+use nodespace_core::ops::context_ops::EXISTING_SCHEMAS_HEADER;
 use serde::Deserialize;
 
 use super::tools::Tool;
@@ -366,13 +366,13 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
         }
         if let Some(meta) = render_schema_metadata(&c.schema_metadata) {
             // Shared heading with context_ops.rs's resident workspace-context
-            // block — see RELEVANT_ENTITY_TYPES_HEADER's doc comment. This
+            // block — see EXISTING_SCHEMAS_HEADER's doc comment. This
             // per-candidate rendering is a second, independent site that
             // shows the same schema metadata; a fix applied only to the
             // resident copy left this one to reinforce the exact
             // contamination the resident copy was changed to guard against
             // (#1846).
-            out.push_str(&format!("\n{RELEVANT_ENTITY_TYPES_HEADER}\n{meta}\n"));
+            out.push_str(&format!("\n{EXISTING_SCHEMAS_HEADER}\n{meta}\n"));
         }
     }
     Some(out)
@@ -381,7 +381,7 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
 /// Wire names of tools that both require routed guidance (see
 /// [`super::tools::Tool::requires_routed_guidance`]) and have that guidance
 /// actually available: an eligible candidate whitelists the tool AND a
-/// `RELEVANT ENTITY TYPES` block will reach this turn's prompt.
+/// `EXISTING SCHEMAS` block will reach this turn's prompt.
 ///
 /// The block reaches the prompt from **either** of two independent sites, and
 /// the tool's required parameter cannot tell them apart — it points at a
@@ -440,7 +440,7 @@ pub fn tools_with_available_guidance<'a>(
     // `entity_types_block::EntityTypeDescriptor::render_line`), so the first
     // non-blank line after the heading is the check.
     let workspace_has_block = workspace_context
-        .split_once(RELEVANT_ENTITY_TYPES_HEADER)
+        .split_once(EXISTING_SCHEMAS_HEADER)
         .and_then(|(_, after)| after.lines().find(|l| !l.trim().is_empty()))
         .is_some_and(|first| first.trim_start().starts_with("- "));
     candidates
@@ -483,7 +483,7 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
 /// Falls back to the full surface when nothing was retrieved, so an
 /// unavailable embedding service degrades to today's behaviour rather than
 /// leaving the model with no tools at all — minus any tool whose required
-/// parameters depend on the `RELEVANT ENTITY TYPES` block (see
+/// parameters depend on the `EXISTING SCHEMAS` block (see
 /// [`super::tools::Tool::requires_routed_guidance`] and
 /// [`fail_open_surface`]). That exclusion is about *eligibility*, not about
 /// the block being absent: workspace context renders it independently of
@@ -515,8 +515,73 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
     scoped
 }
 
+/// Declares `field_values` sub-properties (see
+/// [`super::tools::with_declared_field_values`]) on any tool in `tools`
+/// shaped for it, sourced from the retrieved-schema data of whichever
+/// cleared candidate(s) whitelisting that specific tool scored highest on
+/// this turn.
+///
+/// "The top-scoring candidate that whitelists this tool", not "every cleared
+/// candidate's schema_metadata unioned": `dev-schema-creation.toml`
+/// (`packages/agent/goldens/`) offers `create_node` on the same turn as
+/// `create_schema` specifically so the model can choose wrongly, and
+/// measures it never called. Declaring `create_node`'s fields there — it is
+/// whitelisted only by the lower-scoring Node Creation candidate, not by the
+/// turn's actual top match — would make the wrong tool easier to use on
+/// exactly the turn that must not reward it, so it stays on the bare-object
+/// fallback `def_create_node` declares statically.
+///
+/// Ties at the top score are unioned rather than one arbitrarily shadowing
+/// the other (see `tools::declared_field_values_properties`) — the fixture
+/// this snapshot gate exercises scores its two candidates identically on
+/// purpose, and both legitimately whitelist `create_node`.
+///
+/// This rule is inferred from which of the corpus's own cases declare a
+/// write tool's fields and which deliberately do not — the corpus itself
+/// states the outcome per case, not the selection mechanism, so this is
+/// the plumbing side filling in a mechanism the golden corpus didn't need
+/// to specify. Worth confirming against a live measurement if a future case
+/// exercises a tie or a three-or-more-candidate turn.
+///
+/// Deliberately a separate step from [`stage2_tools`], not folded into it —
+/// this injects retrieved-schema CONTENT into the tool surface, the same
+/// class of payload `agent_loop.rs`'s `candidate_block` skips injecting into
+/// the prompt when `session.routing_disabled`. The routing-reliability
+/// matrix (`tests/live_openai_compat_routing.rs`) found that injecting that
+/// content suppressed tool-calling outright on some served models,
+/// independent of the block's content — the finding was about *any*
+/// retrieved-schema payload reaching the model, not specifically the
+/// prompt-text channel it happened to be measured through. `stage2_tools`'s
+/// own tool-list SCOPING (which tools are offered at all) is a different,
+/// already-proven-safe mechanism and stays unconditional; this CONTENT step
+/// is the caller's responsibility to gate the same way `candidate_block` is,
+/// so a model probed unsafe for one retrieved-schema channel is not handed
+/// materially the same content through another, unmeasured one.
+pub fn declare_write_tool_fields(
+    candidates: &[SkillCandidate],
+    tools: Vec<ToolDefinition>,
+) -> Vec<ToolDefinition> {
+    let cleared: Vec<&SkillCandidate> = candidates.iter().filter(|c| clears_score_gate(c)).collect();
+    let max_score = cleared.iter().map(|c| c.score).fold(f32::MIN, f32::max);
+    tools
+        .into_iter()
+        .map(|tool| {
+            let descriptors: Vec<_> = cleared
+                .iter()
+                .filter(|c| c.score >= max_score && c.tools.iter().any(|t| t == &tool.name))
+                .flat_map(|c| {
+                    nodespace_core::ops::entity_types_block::descriptors_from_json(
+                        &c.schema_metadata,
+                    )
+                })
+                .collect();
+            super::tools::with_declared_field_values(tool, &descriptors)
+        })
+        .collect()
+}
+
 /// The full tool surface, minus tools whose required parameters depend on the
-/// `RELEVANT ENTITY TYPES` block. Shared by both fail-open branches of
+/// `EXISTING SCHEMAS` block. Shared by both fail-open branches of
 /// [`stage2_tools`] so they can't drift apart.
 ///
 /// The exclusion is an *eligibility* judgement, not a claim that the block is
@@ -782,6 +847,139 @@ mod tests {
         );
     }
 
+    /// A tool shaped like `create_node`/`update_node` — a `field_values`
+    /// object parameter alongside others — for exercising
+    /// `declare_write_tool_fields` without depending on the real registry.
+    fn write_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: String::new(),
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "field_values": { "type": "object" }
+                }
+            }),
+        }
+    }
+
+    fn schema_metadata_for(type_id: &str, fields: &[(&str, &str)]) -> serde_json::Value {
+        use nodespace_core::ops::entity_types_block::{EntityFieldDescriptor, EntityTypeDescriptor};
+        json!([EntityTypeDescriptor {
+            type_id: type_id.to_string(),
+            name: Some(type_id.to_string()),
+            fields: fields
+                .iter()
+                .map(|(name, field_type)| EntityFieldDescriptor {
+                    name: name.to_string(),
+                    field_type: field_type.to_string(),
+                    enum_values: Vec::new(),
+                    required: false,
+                })
+                .collect(),
+            title_template: None,
+        }
+        .to_json()])
+    }
+
+    fn field_values_property_names(tool: &ToolDefinition) -> Vec<String> {
+        tool.parameters_schema["properties"]["field_values"]["properties"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// The single-candidate case: its own retrieved schema declares the
+    /// write tool's `field_values` fields. Calls `declare_write_tool_fields`
+    /// directly, not through `stage2_tools` — the two are deliberately
+    /// separate steps (see `declare_write_tool_fields`'s doc comment), and a
+    /// production turn only reaches this one when `!routing_disabled`.
+    #[test]
+    fn declare_write_tool_fields_declares_from_the_sole_candidates_schema() {
+        let mut c = candidate("Node Creation", 0.85, &["create_node"]);
+        c.schema_metadata = schema_metadata_for("ticket", &[("status", "text"), ("assignee", "text")]);
+        let declared = declare_write_tool_fields(&[c], vec![write_tool("create_node")]);
+        let names = field_values_property_names(&declared[0]);
+        assert!(names.contains(&"status".to_string()));
+        assert!(names.contains(&"assignee".to_string()));
+    }
+
+    /// The distractor case `dev-schema-creation.toml` (packages/agent/goldens/)
+    /// measures: a write tool whitelisted only by a LOWER-scoring candidate
+    /// than the turn's actual top match must stay on the bare-object
+    /// fallback, not gain declarations that would make the wrong tool easier
+    /// to reach for.
+    #[test]
+    fn declare_write_tool_fields_leaves_a_lower_scored_candidates_tool_bare() {
+        let mut top = candidate("Schema Creation", 0.9, &["create_schema"]);
+        top.schema_metadata = schema_metadata_for("ticket", &[("status", "text")]);
+        let mut distractor = candidate("Node Creation", 0.5, &["create_node"]);
+        distractor.schema_metadata = schema_metadata_for("ticket", &[("status", "text")]);
+
+        let declared = declare_write_tool_fields(
+            &[top, distractor],
+            vec![write_tool("create_schema"), write_tool("create_node")],
+        );
+        let create_node = declared
+            .iter()
+            .find(|t| t.name == "create_node")
+            .expect("create_node must still be present in the input list");
+        assert!(
+            field_values_property_names(create_node).is_empty(),
+            "the distractor's tool must not receive field declarations"
+        );
+    }
+
+    /// Two candidates tied at the top score both whitelisting the same tool:
+    /// their schemas are unioned rather than one arbitrarily winning — the
+    /// snapshot-gate fixture (`prompt_assembly_snapshot.rs`) scores "Node
+    /// Creation" and "Schema Creation" identically on purpose.
+    #[test]
+    fn declare_write_tool_fields_unions_tied_top_scoring_candidates() {
+        let mut a = candidate("A", 0.85, &["create_node"]);
+        a.schema_metadata = schema_metadata_for("ticket", &[("status", "text")]);
+        let mut b = candidate("B", 0.85, &["create_node"]);
+        b.schema_metadata = schema_metadata_for("adr", &[("supersedes", "text")]);
+
+        let declared = declare_write_tool_fields(&[a, b], vec![write_tool("create_node")]);
+        let names = field_values_property_names(&declared[0]);
+        assert!(names.contains(&"status".to_string()));
+        assert!(names.contains(&"supersedes".to_string()));
+    }
+
+    /// No cleared candidate must leave every tool's `field_values` on the
+    /// static bare-object fallback — there is no retrieved schema to declare
+    /// from, and the function must not panic or fabricate a declaration on
+    /// an empty candidate list (this exercises `declare_write_tool_fields`
+    /// directly with `&[]`, unlike `stage2_tools`'s own fail-open path,
+    /// which never reaches this function at all — see
+    /// `an_ineligible_candidate_does_not_widen_the_tool_surface` and
+    /// neighbouring tests below for `stage2_tools`'s fail-open behaviour).
+    #[test]
+    fn declare_write_tool_fields_is_a_no_op_with_no_cleared_candidates() {
+        let declared = declare_write_tool_fields(&[], vec![write_tool("create_node"), tool("search_nodes")]);
+        let create_node = declared
+            .iter()
+            .find(|t| t.name == "create_node")
+            .expect("create_node must still be present in the input list");
+        assert!(field_values_property_names(create_node).is_empty());
+    }
+
+    /// `agent_loop.rs` gates this function behind `!session.routing_disabled`
+    /// the same way it gates `candidate_block` prompt injection — this pins
+    /// that `stage2_tools` itself never calls it, so a caller that forgets
+    /// the gate cannot accidentally get it "for free" from tool scoping.
+    #[test]
+    fn stage2_tools_alone_never_declares_field_values() {
+        let mut c = candidate("Node Creation", 0.85, &["create_node"]);
+        c.schema_metadata = schema_metadata_for("ticket", &[("status", "text")]);
+        let scoped = stage2_tools(&[c], &[write_tool("create_node")]);
+        assert!(
+            field_values_property_names(&scoped[0]).is_empty(),
+            "stage2_tools must not itself declare field_values — that is declare_write_tool_fields's job, gated separately by the caller"
+        );
+    }
+
     #[test]
     fn an_ineligible_candidate_does_not_widen_the_tool_surface() {
         let all = vec![tool("search_nodes"), tool("delete_node")];
@@ -815,10 +1013,10 @@ mod tests {
     #[test]
     fn fail_open_on_empty_retrieval_excludes_resolve_query() {
         // No candidates at all — the emptiest fail-open case. resolve_query's
-        // required node_type parameter depends on the RELEVANT ENTITY TYPES
+        // required node_type parameter depends on the EXISTING SCHEMAS
         // block, which only renders alongside a scoped whitelist; handing the
         // tool over here would strand the model with an instruction ("copy
-        // the id from the RELEVANT ENTITY TYPES block") pointing at nothing.
+        // the id from the EXISTING SCHEMAS block") pointing at nothing.
         let all = vec![
             tool("search_nodes"),
             tool("resolve_query"),
@@ -865,7 +1063,7 @@ mod tests {
     fn a_graph_editing_candidate_that_clears_its_bar_offers_resolve_query_with_its_guidance() {
         // The positive case: when Graph Editing genuinely clears the mutating
         // bar, resolve_query is offered — and the same eligibility filter
-        // that scopes stage2_tools also renders the RELEVANT ENTITY TYPES
+        // that scopes stage2_tools also renders the EXISTING SCHEMAS
         // block resolve_query's description depends on, so the tool never
         // reaches the model without its guidance.
         let all = vec![
@@ -886,7 +1084,7 @@ mod tests {
 
         let rendered =
             render_candidates_for_prompt(&[c]).expect("cleared candidate renders a block");
-        assert!(rendered.contains("RELEVANT ENTITY TYPES"));
+        assert!(rendered.contains("EXISTING SCHEMAS"));
     }
 
     #[test]
@@ -905,7 +1103,7 @@ mod tests {
     /// A workspace context carrying a rendered entity-types block, as
     /// `context_ops::build_workspace_context` produces it.
     fn workspace_with_block() -> String {
-        format!("Collections: none\n{RELEVANT_ENTITY_TYPES_HEADER}\n- invoice (amount, status)\n")
+        format!("Collections: none\n{EXISTING_SCHEMAS_HEADER}\n- invoice (amount, status)\n")
     }
 
     #[test]
@@ -1019,7 +1217,7 @@ mod tests {
         // while its required `node_type` pointed at an empty list, which is
         // the strand this gate exists to prevent.
         let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
-        let truncated = format!("COLLECTIONS: Invoices\n\n{RELEVANT_ENTITY_TYPES_HEADER}\n");
+        let truncated = format!("COLLECTIONS: Invoices\n\n{EXISTING_SCHEMAS_HEADER}\n");
         assert!(tools_with_available_guidance(&cands, false, &truncated).is_empty());
     }
 
@@ -1028,7 +1226,7 @@ mod tests {
         // Guards the shape of the check itself: both renderers emit `- <id>`
         // lines, so anything else under the heading is not a type listing.
         let cands = vec![candidate("Graph Editing", 0.9, &["resolve_query"])];
-        let prose = format!("{RELEVANT_ENTITY_TYPES_HEADER}\n(none recorded yet)\n");
+        let prose = format!("{EXISTING_SCHEMAS_HEADER}\n(none recorded yet)\n");
         assert!(tools_with_available_guidance(&cands, false, &prose).is_empty());
     }
 
@@ -1093,11 +1291,11 @@ mod tests {
         let mut c = candidate("Node Creation", 0.9, &["create_node"]);
         c.schema_metadata = json!([{"fields": []}]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
-        assert!(!rendered.contains("RELEVANT ENTITY TYPES"));
+        assert!(!rendered.contains("EXISTING SCHEMAS"));
     }
 
     /// This site's heading must be the exact shared constant, not an
-    /// independently-worded copy — see RELEVANT_ENTITY_TYPES_HEADER's doc
+    /// independently-worded copy — see EXISTING_SCHEMAS_HEADER's doc
     /// comment (#1846: two independently-maintained copies of this heading,
     /// one carrying an anti-copy clause and the other not, let contamination
     /// persist after the first was fixed).
@@ -1107,7 +1305,7 @@ mod tests {
         c.schema_metadata = json!([{"type_id": "invoice", "fields": []}]);
         let rendered = render_candidates_for_prompt(&[c]).unwrap();
         assert!(
-            rendered.contains(RELEVANT_ENTITY_TYPES_HEADER),
+            rendered.contains(EXISTING_SCHEMAS_HEADER),
             "got: {rendered}"
         );
     }
@@ -1180,7 +1378,7 @@ mod tests {
         let block = render_candidates_for_prompt(&candidates).expect("all are eligible");
 
         assert_eq!(
-            block.matches("RELEVANT ENTITY TYPES").count(),
+            block.matches("EXISTING SCHEMAS").count(),
             RETRIEVAL_TOP_K,
             "each eligible candidate carries its own copy of the entity block"
         );

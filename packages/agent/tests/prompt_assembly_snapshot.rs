@@ -110,7 +110,8 @@ use std::collections::HashMap;
 use nodespace_agent::agent_types::{SkillCandidate, ToolDefinition};
 use nodespace_agent::local_agent::agent_loop::STAGE1_SYSTEM_PROMPT;
 use nodespace_agent::local_agent::routing::{
-    render_candidates_for_prompt, stage1_tool_definitions, stage2_tools,
+    declare_write_tool_fields, render_candidates_for_prompt, stage1_tool_definitions,
+    stage2_tools,
 };
 use nodespace_agent::local_agent::tools::model_facing_tool_definitions;
 use nodespace_agent::prompt_assembler::PromptAssembler;
@@ -641,6 +642,15 @@ fn stage2_tool_surface_matches_golden() {
     let candidates = fixture_candidates();
     let all_tools = model_facing_tool_definitions();
     let scoped = stage2_tools(&candidates, &all_tools);
+    // `agent_loop.rs` calls this immediately after `stage2_tools`, gated on
+    // `!session.routing_disabled` (core#2120) — the fixture models the
+    // routing-enabled path (the default, and the only one this fixture's
+    // candidates give a meaningful answer for), so it is called
+    // unconditionally here to keep this gate a faithful reproduction of what
+    // production actually sends on that path. `declare_write_tool_fields`'s
+    // own doc comment explains why this is a separate call rather than
+    // folded into `stage2_tools` itself.
+    let scoped = declare_write_tool_fields(&candidates, scoped);
     assert!(
         scoped.len() < all_tools.len(),
         "fixture candidates should scope the tool surface down from the full {} tools, not \

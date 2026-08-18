@@ -270,8 +270,8 @@ impl PromptAssembler {
                 child_node_type: Some("text".to_string()),
                 child_properties: None,
                 tier: SeedTier::System,
-                markdown_content: "You are NodeSpace's built-in assistant. You help users work with their \
-                    knowledge graph — creating, finding, updating, and connecting nodes."
+                markdown_content: "You are NodeSpace's assistant, acting on a user's workspace.\n\
+                    Call exactly one tool. Do not answer the user in prose when a tool applies."
                         .to_string(),
             },
             NodeTemplate {
@@ -305,7 +305,6 @@ impl PromptAssembler {
                 tier: SeedTier::System,
                 markdown_content: format!(
                     "RESPONSE RULES:\n\
-                    - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
                     - After tool results: respond in natural language. Never paste raw JSON.\n\
                     - {}\n\
                     - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
@@ -370,7 +369,6 @@ mod tests {
             format!("{}\n\n{}", SCHEMA_CREATION_RULES, TOOL_STRATEGY_RULES);
 
         let expected_response_rules = "RESPONSE RULES:\n\
-            - Call tools immediately when intent is clear. Do NOT output text before the tool call — your first response token must be the tool call.\n\
             - After tool results: respond in natural language. Never paste raw JSON.\n\
             - Reference nodes with bare URI: nodespace://abc-123 (no markdown links, no backticks)\n\
             - Tool call enums: exact schema values (\"done\", \"in_progress\"). User-facing: friendly labels (\"Done\").\n\
