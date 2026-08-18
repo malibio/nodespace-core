@@ -104,7 +104,7 @@ fn exec(name: &str, args: serde_json::Value, result: serde_json::Value) -> ToolE
 ///     fields=[isReturned: boolean, replacementCost: number])
 ///     -> schema_id "equipment_checkout_record"
 ///   turn 2: create_node(node_type="equipment_checkout_record",
-///     properties={isReturned: false, replacementCost: 2400})
+///     field_values={isReturned: false, replacementCost: 2400})
 ///     -> nodespace://laser-cutter-node
 fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
     let turn1_writes = completed_writes_from(&[exec(
@@ -128,7 +128,7 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
         serde_json::json!({
             "node_type": "equipment_checkout_record",
             "content": "Laser Cutter",
-            "properties": {"isReturned": false, "replacementCost": 2400}
+            "field_values": {"isReturned": false, "replacementCost": 2400}
         }),
         serde_json::json!({"id": "nodespace://laser-cutter-node"}),
     )]);

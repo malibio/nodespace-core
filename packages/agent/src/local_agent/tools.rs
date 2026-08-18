@@ -57,16 +57,21 @@ pub type SharedChatInferenceEngine = Option<Arc<dyn ChatInferenceEngine>>;
 /// Parameters for the agent's create_node tool.
 ///
 /// The model passes `content` as the node text. `node_service` derives the
-/// display title automatically — from `title_template`+`properties` if the schema
-/// defines one, or from `strip_markdown(content)` for root nodes otherwise.
-/// The agent never sets or manipulates the title field.
+/// display title automatically — from `title_template`+`field_values` if the
+/// schema defines one, or from `strip_markdown(content)` for root nodes
+/// otherwise. The agent never sets or manipulates the title field.
+///
+/// The wire parameter is named `field_values`, not `properties` — the latter
+/// collides with JSON Schema's own `properties` keyword while llama.cpp's
+/// embedded Gemma-4 chat template walks the nested schema, silently deleting
+/// the parameter (and its entire description) before the model ever sees it.
 ///
 /// Deliberately NOT `deny_unknown_fields`: `exec_create_node` tolerates a model
 /// that passes schema fields flat at the top level (instead of nested under
-/// `properties`) by pre-scanning the raw args for keys outside `content`/
-/// `node_type`/`parent_id`/`properties` and promoting them into `properties`
-/// itself. Those same "unknown" keys must still deserialize cleanly here, or
-/// that tolerance would break.
+/// `field_values`) by pre-scanning the raw args for keys outside `content`/
+/// `node_type`/`parent_id`/`field_values` and promoting them into
+/// `field_values` itself. Those same "unknown" keys must still deserialize
+/// cleanly here, or that tolerance would break.
 #[derive(Debug, Deserialize)]
 struct AgentCreateNodeParams {
     #[serde(default)]
@@ -75,10 +80,13 @@ struct AgentCreateNodeParams {
     #[serde(default)]
     pub parent_id: Option<String>,
     #[serde(default)]
-    pub properties: Option<Value>,
+    pub field_values: Option<Value>,
 }
 
 /// Parameters for the agent's update_node tool.
+///
+/// The wire parameter is named `field_values`, not `properties` — see
+/// [`AgentCreateNodeParams`] for why.
 ///
 /// Deliberately NOT `deny_unknown_fields` — same flat-schema-field tolerance
 /// as [`AgentCreateNodeParams`], via `exec_update_node`'s own flat-extras scan.
@@ -89,7 +97,7 @@ struct AgentUpdateNodeParams {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
-    pub properties: Option<Value>,
+    pub field_values: Option<Value>,
 }
 
 /// Parameters for the agent's get_node tool (includes optional format field)
@@ -629,7 +637,7 @@ fn def_get_node() -> ToolDefinition {
 fn def_create_node() -> ToolDefinition {
     ToolDefinition {
         name: "create_node".into(),
-        description: "Create a new node. Always pass 'content' as the node name or text. Always pass 'properties' with every schema field value the user supplied — it is the only way those values are stored, and a call without them creates an empty record. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'properties' — the service composes the displayed title from them automatically.".into(),
+        description: "Create a new node. Always pass 'content' as the node name or text. Always pass 'field_values' with every schema field value the user supplied — it is the only way those values are stored, and a call without them creates an empty record. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'field_values' — the service composes the displayed title from them automatically.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -641,7 +649,15 @@ fn def_create_node() -> ToolDefinition {
                     "type": "string",
                     "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'project', 'customer'). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it."
                 },
-                "properties": {
+                // Named `field_values`, NOT `properties` — a parameter literally
+                // named `properties` collides with JSON Schema's own `properties`
+                // keyword while llama.cpp's embedded Gemma-4 chat template walks
+                // this nested schema, and is silently dropped along with its
+                // entire description before the model ever sees it. Confirmed via
+                // a controlled probe (420 vs 694 rendered chars, `allowed_values`
+                // guidance present only under the non-colliding name). Do not
+                // rename this back to `properties`.
+                "field_values": {
                     "type": "object",
                     "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from RELEVANT ENTITY TYPES (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"})."
                 },
@@ -658,7 +674,7 @@ fn def_create_node() -> ToolDefinition {
 fn def_update_node() -> ToolDefinition {
     ToolDefinition {
         name: "update_node".into(),
-        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"properties\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"properties\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"properties\": {\"isPaid\": true}}.".into(),
+        description: "Update an existing node's content or properties immediately — call this directly with the node ID you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or provide it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in \"content\", \"field_values\", or both. When the user describes a new state in words (\"came back\", \"it's paid\", \"mark it done\"), express that state in \"field_values\" — see that parameter for which key to use. Example call: {\"id\": \"a1b2c3d4-...\", \"content\": \"Buy milk and eggs\"}. Example state change: {\"id\": \"a1b2c3d4-...\", \"field_values\": {\"isPaid\": true}}.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -670,9 +686,12 @@ fn def_update_node() -> ToolDefinition {
                     "type": "string",
                     "description": "New content/text for the node (optional), e.g. \"Buy milk and eggs\""
                 },
-                "properties": {
+                // Named `field_values`, NOT `properties` — see the identical note
+                // on `def_create_node`'s parameter of the same name. Do not rename
+                // this back to `properties`.
+                "field_values": {
                     "type": "object",
-                    "description": "Properties to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use a key the node's type already defines, copied character for character — either one of the node's OWN existing property keys (from the properties returned by resolve_query, get_node, or search_nodes) or any field listed in that node's 'available_properties' from get_node. A field listed there with \"set\": false is still a legitimate target: it is defined on the type and simply has no value yet, so writing it is how it gets one. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. Pick the key the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}; \"set the due date to Friday\" against an available_properties entry {\"name\": \"due_date\", \"set\": false} means {\"due_date\": \"...\"}. When a field lists allowed_values, use one of those values exactly. Send only the keys that change, with their new values, not the unchanged ones."
+                    "description": "Field values to merge/update — required whenever the request changes the node's state rather than its text, e.g. {\"status\": \"done\"}. Use a key the node's type already defines, copied character for character — either one of the node's OWN existing property keys (from the properties returned by resolve_query, get_node, or search_nodes) or any field listed in that node's 'available_properties' from get_node. A field listed there with \"set\": false is still a legitimate target: it is defined on the type and simply has no value yet, so writing it is how it gets one. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. Pick the key the request would change: \"the invoice cleared\" against properties {\"isPaid\": false} means {\"isPaid\": true}; \"set the due date to Friday\" against an available_properties entry {\"name\": \"due_date\", \"set\": false} means {\"due_date\": \"...\"}. When a field lists allowed_values, use one of those values exactly. Send only the keys that change, with their new values, not the unchanged ones."
                 }
             },
             "required": ["id"]
@@ -2003,11 +2022,11 @@ impl GraphToolExecutor {
         tool_call_id: &str,
         args: Value,
     ) -> Result<ToolResult, ToolError> {
-        // Collect any flat (unknown) keys and promote them into properties.
+        // Collect any flat (unknown) keys and promote them into field_values.
         // This tolerates models that pass schema fields at the top level rather
-        // than nested inside "properties".
+        // than nested inside "field_values".
         let flat_extras: serde_json::Map<String, Value> = {
-            const KNOWN: &[&str] = &["content", "node_type", "properties", "parent_id"];
+            const KNOWN: &[&str] = &["content", "node_type", "field_values", "parent_id"];
             args.as_object()
                 .map(|obj| {
                     obj.iter()
@@ -2024,9 +2043,9 @@ impl GraphToolExecutor {
                 reason: e.to_string(),
             })?;
 
-        // Merge explicit properties with flat extras
+        // Merge explicit field_values with flat extras
         let mut props = params
-            .properties
+            .field_values
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         props.extend(flat_extras);
@@ -2107,9 +2126,9 @@ impl GraphToolExecutor {
         tool_call_id: &str,
         args: Value,
     ) -> Result<ToolResult, ToolError> {
-        // Collect any flat (unknown) keys and promote them into properties.
+        // Collect any flat (unknown) keys and promote them into field_values.
         let flat_extras: serde_json::Map<String, Value> = {
-            const KNOWN: &[&str] = &["id", "node_id", "content", "properties"];
+            const KNOWN: &[&str] = &["id", "node_id", "content", "field_values"];
             args.as_object()
                 .map(|obj| {
                     obj.iter()
@@ -2126,9 +2145,9 @@ impl GraphToolExecutor {
                 reason: e.to_string(),
             })?;
 
-        // Merge explicit properties with flat extras
+        // Merge explicit field_values with flat extras
         let mut props = params
-            .properties
+            .field_values
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         props.extend(flat_extras);
@@ -2141,7 +2160,7 @@ impl GraphToolExecutor {
         if params.content.is_none() && new_properties.is_none() {
             return Err(ToolError::InvalidArguments {
                 tool: "update_node".into(),
-                reason: "At least one of 'content' or 'properties' must be provided".into(),
+                reason: "At least one of 'content' or 'field_values' must be provided".into(),
             });
         }
 
@@ -2163,7 +2182,7 @@ impl GraphToolExecutor {
         // a call carrying `content` alone satisfies it — including when that
         // content is the node's existing title echoed back verbatim, which is
         // exactly the shape a state-change request degrades into when the model
-        // omits `properties`. Such a call provably cannot change anything, yet
+        // omits `field_values`. Such a call provably cannot change anything, yet
         // the ops layer accepts it, bumps `modifiedAt`, and returns success; the
         // model then reads that success as confirmation and reports a write that
         // never happened.
@@ -2201,9 +2220,9 @@ impl GraphToolExecutor {
                     return Err(ToolError::InvalidArguments {
                         tool: "update_node".into(),
                         reason: "This call would change nothing: 'content' is identical to the \
-                                 node's current content and no 'properties' were supplied. If the \
+                                 node's current content and no 'field_values' were supplied. If the \
                                  request was to change the node's state, re-send it with the \
-                                 changed value in 'properties', using a property key this node's \
+                                 changed value in 'field_values', using a property key this node's \
                                  type defines. If you do not know which key that is, call get_node \
                                  on this id and read 'available_properties' — it lists every field \
                                  the type defines, including ones not yet set on this node, which \
@@ -3534,7 +3553,7 @@ mod tests {
                     json!({
                         "content": title,
                         "node_type": "invoice",
-                        "properties": properties,
+                        "field_values": properties,
                     }),
                 )
                 .await
@@ -4396,7 +4415,7 @@ mod tests {
                     json!({
                         "content": content,
                         "node_type": "task",
-                        "properties": {"status": "in_progress"},
+                        "field_values": {"status": "in_progress"},
                     }),
                 )
                 .await
@@ -4429,8 +4448,8 @@ mod tests {
                     // not just that it failed — otherwise the retry repeats the
                     // same shape.
                     assert!(
-                        reason.contains("properties"),
-                        "rejection must point at the missing 'properties'; got: {reason}"
+                        reason.contains("field_values"),
+                        "rejection must point at the missing 'field_values'; got: {reason}"
                     );
                 }
                 other => panic!("expected InvalidArguments, got {other:?}"),
@@ -4480,7 +4499,7 @@ mod tests {
             let result = executor
                 .execute(
                     "update_node",
-                    json!({ "id": id, "properties": {"due_date": "2026-08-06"} }),
+                    json!({ "id": id, "field_values": {"due_date": "2026-08-06"} }),
                 )
                 .await
                 .unwrap();
@@ -4504,7 +4523,7 @@ mod tests {
             assert_eq!(stored.result["properties"]["status"], json!("in_progress"));
         }
 
-        /// A flat (unknown-key) property is promoted into `properties`, so it is
+        /// A flat (unknown-key) property is promoted into `field_values`, so it is
         /// a real change and must pass the gate even alongside identical
         /// content — the gate keys on "no properties after promotion", not on
         /// the raw shape the model happened to send.
@@ -4568,7 +4587,7 @@ mod tests {
                     json!({
                         "content": "Buy milk",
                         "node_type": "task",
-                        "properties": {"status": "in_progress"},
+                        "field_values": {"status": "in_progress"},
                     }),
                 )
                 .await
@@ -4743,7 +4762,7 @@ mod tests {
                 json!({
                     "content": "Laser cutter",
                     "node_type": "Equipment Item Tracker",
-                    "properties": { "replacement_cost": 2400 },
+                    "field_values": { "replacement_cost": 2400 },
                 }),
             )
             .await;

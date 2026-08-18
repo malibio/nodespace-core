@@ -160,9 +160,9 @@ AMBIGUITY: {ambiguity_clarify} Examples:
 
 {task_status_dedicated_verb}
 
-update_node FIELDS: Pass only the properties that need to change. Omit properties that should stay the same. Use the exact property key from the node's schema.
+update_node FIELDS: Pass only the fields that need to change, in `field_values`. Omit fields that should stay the same. Use the exact property key from the node's schema.
 
-CONTENT vs PROPERTIES: Use the content field to update the node's title/main text. Use properties for typed fields (status, due_date, amount, etc.).
+CONTENT vs FIELD VALUES: Use the content field to update the node's title/main text. Use field_values for typed fields (status, due_date, amount, etc.).
 
 SUCCESS: {success_no_reverify}"#,
         find_then_act = FIND_THEN_ACT.imperative,
@@ -331,15 +331,15 @@ CALL create_node NOW: You received this instruction because this skill was match
 
 TYPE MAPPING FROM RELEVANT ENTITY TYPES: When entity types are listed with this skill, set node_type to the type_id shown there, copied exactly as written — never the user's noun for it, and never a shortened or paraphrased form. For generic text notes use node_type="text". For tasks use node_type="task".
 
-FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields after `->` as `name: type` — fields marked `required` MUST be included in the properties map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `properties` is the ONLY way any field value is stored.
+FIELD VALUES: The RELEVANT ENTITY TYPES block lists each type's fields after `->` as `name: type` — fields marked `required` MUST be included in the field_values map, and every other listed field MUST be included when the user's message supplies a value for it. Scan the user's message for a value matching each listed field name before you call. Omitting a value the user gave you loses it: `field_values` is the ONLY way any field value is stored.
 
-VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `properties` under a key of your own. `properties` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in `field_values` under a key of your own. `field_values` accepts keys beyond the ones listed and stores them as given. NEVER drop a value because the type has no field for it, and never answer that the type "doesn't support" it — a dropped value is gone silently and the user was told the record was saved. Recording it under a new key is always better than discarding it. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call and mention in your reply which values you recorded under new keys.
 
 KEY FORMAT FOR A VALUE WITH NO MATCHING FIELD: Name the key after the user's own noun for it — lowercase, singular, snake_case (they said "weighs 40kg" → `weight`). Reusing their wording keeps the same fact under the same key next time instead of inventing a new one. Then prefix it based on the type:
 - node_type is a type from RELEVANT ENTITY TYPES (one the user defined): use the bare key — `"weight": "40kg"`.
 - node_type is a built-in type (text, task, date): prefix with `custom:` — `"custom:weight": "40kg"`. Unprefixed names are reserved for built-in fields on these types, so a bare key there can collide with a real one (status, priority, due_date).
 
-TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from properties — set content to a brief descriptive label (e.g. the most identifying property value). If there is no title_template, set content to the best human-readable name the user provided.
+TITLE: The node title is the content field. If the type has a title_template, the title is auto-generated from the field values — set content to a brief descriptive label (e.g. the most identifying value). If there is no title_template, set content to the best human-readable name the user provided.
 
 PROPERTY KEYS FOR LISTED FIELDS: Use the field name exactly as it appears in the RELEVANT ENTITY TYPES block, with no namespace prefix added. This applies to fields that block lists; for a value with no field listed, follow KEY FORMAT above instead.
 
@@ -349,7 +349,7 @@ EXAMPLE — the shape of the call, NOT the values. Copy the structure; take ever
 {
   "node_type": "widget",
   "content": "Shipment 24",
-  "properties": {
+  "field_values": {
     "label": "Shipment 24",
     "quantity": 12,
     "received_on": "2026-03-04",
@@ -610,9 +610,9 @@ mod tests {
     #[test]
     fn create_node_tool_description_admits_keys_beyond_listed_fields() {
         let def = crate::local_agent::tools::Tool::CreateNode.definition();
-        let props = def.parameters_schema["properties"]["properties"]["description"]
+        let props = def.parameters_schema["properties"]["field_values"]["description"]
             .as_str()
-            .expect("properties field must document itself");
+            .expect("field_values field must document itself");
         assert!(
             props.contains("Not limited to the listed fields"),
             "create_node must tell the model extra keys are allowed, got: {props}"
@@ -641,9 +641,9 @@ mod tests {
             .markdown_content;
         let tool_desc = crate::local_agent::tools::Tool::CreateNode
             .definition()
-            .parameters_schema["properties"]["properties"]["description"]
+            .parameters_schema["properties"]["field_values"]["description"]
             .as_str()
-            .expect("properties field must document itself")
+            .expect("field_values field must document itself")
             .to_string();
 
         for (surface, text) in [

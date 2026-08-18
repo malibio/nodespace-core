@@ -151,9 +151,10 @@ pub fn canonical_args(args_json: &str) -> String {
 /// and even a stray `node_id` is renamed identically on both sides of the
 /// comparison, so the identity stays consistent either way.
 ///
-/// Only the top level: a nested `properties` blob is the user's own data, where
-/// a key named `node_id` means whatever the user's schema says and must not be
-/// renamed. When a call carries *both* spellings the object is left untouched —
+/// Only the top level: a nested `field_values` blob is the user's own data,
+/// where a key named `node_id` means whatever the user's schema says and must
+/// not be renamed. When a call carries *both* spellings the object is left
+/// untouched —
 /// serde's own precedence decides which wins, and picking one here could make
 /// two genuinely different calls compare equal, which is the one failure this
 /// guard must never have.
@@ -200,8 +201,8 @@ fn repair_parsed_tool_arguments(args: &mut serde_json::Value) {
 /// taking an array of objects is reachable the same way.
 ///
 /// Deliberately recurses where [`normalize_param_aliases`] deliberately does
-/// not. That function stays top-level because a nested `properties` blob is the
-/// user's own data, where a key means whatever the user's schema says; this one
+/// not. That function stays top-level because a nested `field_values` blob is
+/// the user's own data, where a key means whatever the user's schema says; this one
 /// must reach exactly that data, because the malformation only ever appears
 /// nested — inside `fields`, `add_fields`, or any other array of objects — and a
 /// top-level-only rule would decline every case it exists for. The divergence is
@@ -364,7 +365,7 @@ pub fn repair_tool_call_arguments(arguments_json: &mut String) {
 /// key repairs this one rewrites *values*, and some values are the user's own
 /// authored text rather than the model's structural choices. A pasted CSV header
 /// fragment (`name","email":`) matches the mechanical shape exactly and would be
-/// silently truncated to `name`. So `content` and `properties` subtrees are
+/// silently truncated to `name`. So `content` and `field_values` subtrees are
 /// skipped entirely at any depth: those carry user data verbatim, where a string
 /// means whatever the user wrote and no repair is this function's to make. The
 /// malformation this exists for appears in the model's *structural* slots —
@@ -382,7 +383,7 @@ fn repair_spliced_object_values(args: &mut serde_json::Value) {
         serde_json::Value::Object(obj) => {
             for (key, value) in obj.iter_mut() {
                 // User-authored text: not the model's structure to repair.
-                if key == "content" || key == "properties" {
+                if key == "content" || key == "field_values" {
                     continue;
                 }
                 if let serde_json::Value::String(s) = value {
@@ -4609,7 +4610,7 @@ mod tests {
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_3".to_string(),
-                    args_json: r#"{"id":"nodespace://invoice-1","properties":{"status":"paid"}}"#.to_string(),
+                    args_json: r#"{"id":"nodespace://invoice-1","field_values":{"status":"paid"}}"#.to_string(),
                 },
                 StreamingChunk::Done {
                     usage: InferenceUsage {
@@ -5431,7 +5432,7 @@ mod tests {
     async fn noop_guard_leaves_a_claim_backed_by_a_real_write_alone() {
         let response = run_guard_turn(
             "update_node",
-            r#"{"id":"abc","properties":{"due_date":"2026-08-06"}}"#,
+            r#"{"id":"abc","field_values":{"due_date":"2026-08-06"}}"#,
             json!({"id": "nodespace://abc", "updated": true, "property_count": 1}),
             "I have updated the due date to 2026-08-06.",
         )
@@ -7089,18 +7090,18 @@ mod tests {
         );
     }
 
-    /// The alias is resolved at the top level only. A nested `properties` blob is
-    /// the user's own data, where a field named `node_id` means whatever their
+    /// The alias is resolved at the top level only. A nested `field_values` blob
+    /// is the user's own data, where a field named `node_id` means whatever their
     /// schema says — renaming it would silently rewrite user data into a
     /// different field for identity purposes.
     #[test]
     fn alias_normalisation_does_not_reach_into_nested_user_data() {
         // A realistic `update_node`: the tool's own target under the alias, plus
         // a user-defined field that happens to be named `node_id` inside the
-        // `properties` blob. The top-level key is renamed; the user's field is
+        // `field_values` blob. The top-level key is renamed; the user's field is
         // not, and its value must survive untouched.
         let canonical = canonical_args(
-            r#"{"node_id":"nodespace://n1","properties":{"node_id":"user-value","capacity":10}}"#,
+            r#"{"node_id":"nodespace://n1","field_values":{"node_id":"user-value","capacity":10}}"#,
         );
         assert!(
             canonical.contains(r#""id":"nodespace://n1""#),
@@ -7369,13 +7370,13 @@ mod tests {
     /// The repair rewrites *values*, so it must never reach the user's own
     /// authored text. A pasted CSV header fragment matches the mechanical splice
     /// shape exactly, and truncating it would silently corrupt stored data —
-    /// so `content` and `properties` are skipped at any depth.
+    /// so `content` and `field_values` are skipped at any depth.
     #[test]
     fn spliced_repair_never_touches_user_authored_content() {
         let original = serde_json::json!({
             "id": "node-1",
             "content": "name\",\"email\":",
-            "properties": {
+            "field_values": {
                 "notes": "Reviewed the paper\",\"Notes\":",
                 "nested": {"deep": "a\",\"b\":"}
             }
@@ -7384,7 +7385,7 @@ mod tests {
         repair_spliced_object_values(&mut v);
         assert_eq!(
             v, original,
-            "user-authored content and properties must survive repair verbatim"
+            "user-authored content and field values must survive repair verbatim"
         );
 
         // But the model's structural slots are still repaired.

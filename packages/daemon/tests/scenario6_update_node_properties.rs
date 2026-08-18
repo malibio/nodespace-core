@@ -1,10 +1,15 @@
 //! Diagnoses and locks the scenario-6 residual gap: after `resolve_query`
 //! correctly resolves "the 2400 one", the follow-on `update_node` call must
-//! carry the requested state change in `properties` — not just the `id`.
+//! carry the requested state change in `field_values` — not just the `id`.
 //!
 //! The observed failure (issue #1927) was `update_node({"id": "..."})` with no
-//! `properties`, so the requested change silently no-ops. The node is right and
-//! the tool is right; only the payload is empty.
+//! `field_values`, so the requested change silently no-ops. The node is right
+//! and the tool is right; only the payload is empty.
+//!
+//! The write parameter is named `field_values`, not `properties`, per #2123: a
+//! tool parameter literally named `properties` collides with JSON Schema's own
+//! `properties` keyword and is silently dropped by the Gemma-4 chat template
+//! before the model ever sees it.
 //!
 //! Everything upstream of the failing step is REAL, so a pass here is evidence
 //! about production rather than about a hand-authored fixture:
@@ -91,7 +96,7 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
         serde_json::json!({
             "node_type": "equipment_checkout_record",
             "content": "Laser Cutter",
-            "properties": {"isReturned": false, "replacementCost": 2400}
+            "field_values": {"isReturned": false, "replacementCost": 2400}
         }),
         serde_json::json!({"id": "nodespace://laser-cutter-node"}),
     )]);
@@ -292,27 +297,27 @@ async fn update_node_after_resolve_carries_the_changed_property() {
             "trial {trial}: must target the resolved node id, got: {args}"
         );
 
-        // The actual gap: `properties` must be present AND must set the return
-        // state. An empty object, or one that only echoes replacementCost,
-        // leaves the user's request unperformed.
+        // The actual gap: `field_values` must be present AND must set the
+        // return state. An empty object, or one that only echoes
+        // replacementCost, leaves the user's request unperformed.
         let returned = args
-            .get("properties")
+            .get("field_values")
             .and_then(|p| p.get("isReturned"))
             .cloned();
         if returned == Some(serde_json::Value::Bool(true)) {
             carried += 1;
         } else {
             println!(
-                "UPDATE-STEP[trial {trial}] MISSING state change; properties = {:?}",
-                args.get("properties")
+                "UPDATE-STEP[trial {trial}] MISSING state change; field_values = {:?}",
+                args.get("field_values")
             );
         }
     }
 
     assert_eq!(
         carried, 3,
-        "update_node must carry properties.isReturned = true on every trial \
-         (got {carried}/3) — resolving the right node but sending no properties \
+        "update_node must carry field_values.isReturned = true on every trial \
+         (got {carried}/3) — resolving the right node but sending no field_values \
          silently drops the user's requested change"
     );
 }
