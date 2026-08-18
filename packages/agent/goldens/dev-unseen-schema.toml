@@ -200,6 +200,28 @@ LATER step.
       type = "string"
       description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
 
+      # Declared sub-properties, mirroring the `release` type's own fields —
+      # the pattern dev-instance-creation.toml established. This case is its
+      # hardest test: the type is one no example or instruction mentions, so
+      # the declarations are generated from the schema rather than recognised
+      # from training.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
-      description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly."
+      description = "The change itself: field keys to new values. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.stage]
+        type = "string"
+        enum = ["cut", "soak", "shipped", "rolled_back"]
+        description = "The release's lifecycle stage."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.version]
+        type = "string"
+        description = "The release version."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.build]
+        type = "string"
+        description = "The build identifier."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.owner]
+        type = "string"
+        description = "Who owns the release."

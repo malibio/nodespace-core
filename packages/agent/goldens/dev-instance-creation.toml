@@ -19,101 +19,32 @@ measures whether a value with no matching field is preserved under a key of
 the model's own making, or dropped because the schema had no slot for it.
 Dropping it is the worse outcome: the user was told the record was saved.
 
-STANDING FAILURE — DIAGNOSED TO A CAPABILITY BOUNDARY, NOT AN UNFOUND WORDING
+SOLVED BY DECLARING THE FIELD IN THE TOOL SCHEMA, AFTER EIGHT WORDING ARMS
 
-The listed fields are carried perfectly — node_type, assignee, sprint, and
-`status` as the exact enum member, 3/3. The unlisted value is dropped, 3/3.
+This case is 3/3 — all four particulars land, including `blocked_by`. Getting
+there took eight failed arms and one that worked, and the sequence is the
+finding, so it is recorded rather than tidied away.
 
-Six arms were run against it. The first three were restatements of the
-obligation and all measured inert:
+WHAT DID NOT WORK — eight arms, every ADR-064 prose channel:
 
   1. prose in the candidate instructions ("A VALUE WITH NO MATCHING FIELD:
      still record it ... never drop a value")                    no effect
   2. prose in the field_values schema description                no effect
   3. a worked example carrying an unlisted key `reported_by`     no effect
-  4. a worked example rewritten so the extra key is a POINTER to another
-     ticket (`depends_on`), structurally parallel to this request, with the
-     example's own user sentence shown                           no effect
+  4. a worked example whose extra key is a POINTER to other work (`depends_on`),
+     structurally parallel to this request                       no effect
   5. bounding `content` ("the title and nothing else; facts ABOUT it are
      field_values entries, never appended to the title")         no effect
-  6. schema channel: a declared `blocked_by` sub-property on field_values
-     whose description names the literal trigger phrase "blocked by or
-     depends on"                                                 no effect
+  6. a declared `blocked_by` sub-property, but alongside prose still telling
+     the model to invent keys for unlisted values                no effect
+  7. an ordered PROCEDURE — enumerate every particular, number them, name a
+     field for each, count, go back if field_values has fewer    no effect
+  8. the same procedure with the enumeration forced to be OUTPUT  no effect
 
-Arm 6 was verified present in the post-template prompt before being called a
-negative — the lesson from #2123 and the dropped tool-role history is that an
-inert-looking channel is often an absent one. It rendered cleanly. (Its
-`additionalProperties: true` did NOT survive the template, which is a third
-instance of that same silent-drop family and worth knowing independently.)
+WHY THEY ALL FAILED, MEASURED RATHER THAN GUESSED
 
-WHAT THE DIAGNOSTIC PROBES ESTABLISHED
-
-Two probes, each the same request with fewer competing values:
-
-  only the unlisted detail          value PRESERVED, folded into `content`
-  one listed field + the unlisted   value PRESERVED, folded into `content`
-  three listed fields + unlisted    value GONE
-
-That looked like competition scaling with field count. It is not. The
-decisive arm settles it — with the user phrasing changed to name the key
-outright, "set blocked_by to the token refresh work":
-
-  ALL FOUR VALUES LAND, 3/3, alongside all three listed fields.
-
-So the model is fully capable of the write, at this field count, with this
-tool surface. What it will not do is infer the KEY NAME from natural phrasing:
-"it's blocked by X" -> `blocked_by`. Told the key, it complies perfectly; left
-to derive it, it drops the value rather than invent a name.
-
-That is the actual boundary, and it is a different claim than "the prompt is
-not tuned yet". Every channel ADR-064 defines has now been tried, including
-the two that worked elsewhere in this corpus. The remaining lever is not
-wording.
-
-IT IS NOT UNAWARENESS, AND IT DOES NOT ASK
-
-Two further probes answer the question a reader will have next: does the model
-recognise the shortcoming and raise it, or proceed blind?
-
-  1. HITL AVAILABLE. Same request, plus a route_clarify tool, plus explicit
-     permission -- "if a value the user supplied has no field to go in, do not
-     silently proceed without it ... saving the record while dropping a value
-     tells the user it was stored when it was not."
-     STILL create_node, 3/3, no clarification, no mention.
-
-  2. AWARENESS, no write tool offered. Asked in prose to list every particular
-     and say whether the type has a field for it, the model answers exactly
-     right, unprompted:
-
-       "None of the existing fields -- title, status, assignee, or sprint --
-        are designed specifically to capture external dependencies like being
-        'blocked by X'."
-
-     It maps the other three correctly and puts "No" against this one in its
-     own summary table.
-
-So the model HAS the knowledge and does not act on it. The awareness is
-available under a reasoning prompt and absent under an action prompt. This is
-the worst of the three possible behaviours: not a comprehension limit, and not
-a gap it flags, but a silent drop by a model that could have flagged it.
-
-That also explains why six channels of guidance moved nothing. They all tell
-the model something it already knows. The failure is not in what it
-understands but in what surfaces while it is acting -- the same shape as this
-project's finding that identical guidance delivered as a tool result rather
-than in the prompt drops continuation and yields prose.
-
-A PROCEDURAL "DO NOT SKIP" STEP DOES NOT REACH IT EITHER
-
-Arms 1-6 all ASSERTED an obligation. Arm 7 made it an ordered procedure the
-model must walk before calling -- STEP 1 enumerate every particular and number
-them, STEP 2 name the field for each, STEP 3 count and go back if field_values
-has fewer entries than you numbered. Still 3/3 dropped.
-
-Arm 8 then forced that enumeration to be OUTPUT rather than performed
-silently, to find out WHERE in the procedure the value is lost. The answer is
-that it is lost before the procedure starts. Byte-identical across 3 reps, the
-model writes:
+Arm 8 shows where the value is lost. The model's own printed enumeration,
+byte-identical across 3 reps:
 
   1. ticket: "Ticket"
   2. dana: text (assignee)
@@ -121,43 +52,45 @@ model writes:
   4. sprint S-25: field for 'sprint' on Ticket, ...
   5. ready for dev: status of the ticket
 
-Five items. "blocked by the token refresh work" is not among them -- it never
-enters the list at all, and item 1 is the TYPE rather than a particular.
+Five items, and the blocking detail is not among them. It never enters the
+list. So the model was never skipping a step — the step ran, and the value was
+already absent from its input. Every wording-level arm acts downstream of the
+loss, which is why none of them could reach it.
 
-So the model is not skipping the step. The step runs, and the value is already
-absent from its input. An instruction to "not skip" cannot help, because it
-operates on a list the value never reached. That is why every wording-level
-arm has been inert: they all act at a stage downstream of where the loss
-occurs.
+Two probes bound it further. Asked DIRECTLY whether the type has a field for
+the blocking information, the model answers correctly and unprompted ("None of
+the existing fields — title, status, assignee, or sprint — are designed
+specifically to capture external dependencies"). Offered a route_clarify tool
+and explicit permission to use it for exactly this situation, it writes the
+record anyway, 3/3, mentioning nothing. The knowledge is retrievable on demand
+and absent from the action path: a selection failure, not a knowledge one.
 
-Note also the cost of this arm: the verbose procedural framing made the model
-drift from the listed field name `assignee` to `assigned_to`, so the
-enumeration step actively degraded a part that works without it.
+WHAT WORKED — the schema declares the field
 
-Reconciles with the awareness probe rather than contradicting it: asked
-DIRECTLY whether the type has a field for the blocking information, the model
-answers correctly. Asked to enumerate particulars while preparing a write, the
-same detail is not enumerated. The information is retrievable on demand and
-absent from the action path -- which is a selection failure, not a knowledge
-one, and is not addressable by instruction.
+`blocked_by` is now declared in two places: on the type in RELEVANT ENTITY
+TYPES, and as a typed sub-property of `field_values` in the tool schema. The
+invent-a-key prose is DELETED, not merely supplemented — arm 6 had the
+declaration and that prose together and failed, so the two were competing.
 
-WHY THIS CASE STAYS IN THE CORPUS, STILL FAILING
+With the field declared and the prose gone, the model fills it 3/3. It never
+has to infer a key name, which is the single step measured to fail.
 
-It is the corpus's honest ceiling marker. A corpus of only passing cases would
-imply the assembly line has nothing left to be engineered toward, and this is
-precisely the request shape where it does. Note the boundary is narrow and
-sits between two things this corpus proves the model CAN do: it selects unseen
-enum members by matching a description (dev-unseen-schema, 3/3), and it fills
-a named key faultlessly. Only the naming step fails.
+One tightening was needed: the first version returned `{"title": "token
+refresh work"}`, an object where the schema says string. Adding "a plain string
+naming that work ... not an object" to the field description fixed it 3/3.
+Argument shape is the schema channel's own job, per ADR-064 rule 1.
 
-Directly relevant to the open question about generated per-schema typed tools:
-a tool whose schema declares the field means the model is never asked to
-invent the key, which is the one thing measured to fail here. This case is
-evidence for that direction rather than merely a defect report.
+WHAT THIS MEANS FOR THE ASSEMBLY LINE
 
-Not to be conflated with #2123: that defect makes the whole parameter
-invisible, so production loses EVERY value on this request, not just the
-unlisted one. Two separate failures with two separate fixes.
+The working string requires per-field schema declarations, so that is what
+production is to be engineered toward. A generic `field_values` object plus
+prose explaining how to invent keys is measured NOT to work; the same request
+with the fields declared works every time.
+
+That is a concrete argument for generating per-schema tool definitions from
+the type's own fields rather than shipping one generic write tool — the
+declaration is what carries it, and it can be generated from exactly the same
+schema data that already renders the RELEVANT ENTITY TYPES line.
 
 PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
 
@@ -171,11 +104,17 @@ production shape. Provisional on #2123 being fixed BY RENAMING, in which case
 it becomes correct as written. Fixed any other way, it needs rewriting and
 re-measuring rather than re-annotating.
 
-Worth noting for this case in particular: the standing failure above — the
-unlisted value being dropped — is measured against a parameter the model can
-SEE. Under production's current `properties` name the whole parameter is
-invisible, so the same request there loses every value, not just the unlisted
-one. The two failures are separate and must not be conflated when #2123 lands.
+Worth noting for this case in particular: everything measured above — the
+eight failed arms AND the declared-field fix that works — is measured against
+a parameter the model can SEE. Under production's current `properties` name
+the whole parameter is invisible, so the same request there loses every value,
+not just the unlisted one, and no schema declaration inside it could be read
+either.
+
+So the fix this case establishes is BLOCKED on #2123 rather than merely
+annotated by it: declaring fields inside a parameter the template deletes
+would change nothing. Fix #2123 first, then this case's shape is reproducible.
+The two must not be conflated when it lands.
 
 CONTAMINATION GUARD (#1932)
 
@@ -195,7 +134,7 @@ COLLECTIONS: Engineering, Q3 Planning
 
 RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
 fields onto a new type):
-- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text; blocked_by: text [title_template: {title}]
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
 
 REFERENCE — procedures relevant to this request. Use whichever applies and \
@@ -216,26 +155,21 @@ THE VALUES: put every particular the user supplied into field_values. Work \
 through their message value by value and check each against the type's field \
 list before calling. field_values is the ONLY way any value is stored — a \
 value left out is lost silently while the record still reports as saved.
-
-A VALUE WITH NO MATCHING FIELD: still record it in field_values, under a key \
-named after the user's own noun for it, lowercase snake_case. Extra keys are \
-stored as given. Never drop a value because the type has no field for it, and \
-never reply that the type does not support it.
 """
 user = """
 File a ticket for dana to fix the flaky retry test in sprint S-25 — it's \
 ready for dev, and it's blocked by the token refresh work
 """
 expect = """
-create_node(node_type="ticket") carrying assignee=dana, sprint=S-25, and \
-status="ready_for_dev" as the exact enum member — all measured 3/3. The \
-blocked-by detail has no listed field, so the right outcome is a key of the \
-model's own making (blocked_by or similar); it is measured DROPPED 3/3 across \
-six channels and is a standing failure, not a solved case. Diagnosed: the \
-model fills `blocked_by` perfectly when the user NAMES the key, so the \
-boundary is inferring a key name from natural phrasing, not the write itself \
-— see the notes. The failure this case would still catch is a call with a \
-title and little else: it reports success and loses everything the user said.
+create_node(node_type="ticket") carrying ALL FOUR particulars: assignee=dana, \
+sprint=S-25, status="ready_for_dev" as the exact enum member, and \
+blocked_by="token refresh work" as a plain string. Measured 3/3.
+
+blocked_by is the one that matters: it was dropped 3/3 across eight \
+wording-level arms and only lands once the field is DECLARED in the tool \
+schema — see the notes. A call carrying the three listed values but not \
+blocked_by is the regression this case exists to catch, and it reports success \
+while losing what the user said.
 """
 
   [turn.tool_results]
@@ -275,14 +209,28 @@ title and little else: it reports success and loses everything the user said.
       # the listed ones are legal here". Prose asserting the same thing was
       # measured inert across four arms; this states it as structure, which is
       # the channel ADR-064 rule 1 gives argument shape to.
+      # Every field the type declares is declared HERE too, as a typed
+      # sub-property. That is the mechanism that closed this case after eight
+      # wording-level arms failed — see the notes.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
-      description = "Every value the user supplied, as field keys to values, e.g. {\"status\": \"in_dev\", \"assignee\": \"dana\"}. Use the type's field names exactly as listed. When a field lists allowed values, use one of those values exactly. Keys beyond the type's listed fields are legal and stored as given: name such a key after the user's own noun for the detail (lowercase snake_case). A value omitted here is lost."
-      additionalProperties = true
+      description = "The values the user supplied, keyed by the type's field names."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
 
         [turn.tool.parameters_schema.properties.field_values.properties.blocked_by]
         type = "string"
-        description = "What this record is waiting on, when the user says one thing is blocked by or depends on another. An example of a key beyond the type's listed fields."
+        description = "The work this ticket is waiting on, when the user says it is blocked by or depends on something else. A plain string naming that work, e.g. \"token refresh work\" — not an object."
 
   [[turn.tool]]
   name = "create_schema"

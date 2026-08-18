@@ -1,0 +1,102 @@
+# Not a case file. A `.toml` so it sits beside the cases it describes; the
+# runner is never pointed at it.
+#
+# ---------------------------------------------------------------------------
+# THE PATTERN EVERY WRITE CASE IN THIS CORPUS FOLLOWS
+# ---------------------------------------------------------------------------
+#
+# A write tool's value parameter DECLARES each of the type's fields as a typed
+# sub-property, with enums rendered as `enum = [...]`. It is not a bare
+# `type = "object"` accompanied by prose explaining what may go inside it.
+#
+#   [turn.tool.parameters_schema.properties.field_values]
+#   type = "object"
+#   description = "The values the user supplied, keyed by the type's field names."
+#
+#     [turn.tool.parameters_schema.properties.field_values.properties.status]
+#     type = "string"
+#     enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+#
+#     [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+#     type = "string"
+#     description = "Who the work is assigned to."
+#
+# ---------------------------------------------------------------------------
+# WHY — measured, not stylistic
+# ---------------------------------------------------------------------------
+#
+# dev-instance-creation.toml dropped a user-supplied value 3/3 across EIGHT
+# arms spanning every prose channel ADR-064 defines: candidate instructions, a
+# schema description, three shapes of worked example, a `content` boundary
+# rule, an ordered procedure, and that procedure with its enumeration forced
+# to be printed.
+#
+# The printed enumeration is what diagnosed it. The model listed five
+# particulars and the dropped one was not among them — it never entered the
+# list. So the value was already gone before any instruction could act on it,
+# which is why every wording-level arm was inert: they all operate downstream
+# of the loss.
+#
+# Declaring the field closed it immediately, 3/3. The model never has to infer
+# a key name, which is the single step measured to fail.
+#
+# Two further probes bound the failure:
+#   - asked DIRECTLY whether the type had a field for the value, the model
+#     answered correctly and unprompted. It is not ignorance.
+#   - offered a route_clarify tool and told to use it when a supplied value has
+#     nowhere to go, it wrote the record anyway, 3/3, silently. It does not
+#     surface the gap.
+# Knowledge available under a reasoning prompt, absent under an action prompt:
+# a selection failure, not addressable by instruction.
+#
+# ---------------------------------------------------------------------------
+# DELETE THE COMPETING PROSE, DO NOT MERELY ADD THE DECLARATION
+# ---------------------------------------------------------------------------
+#
+# Arm 6 had a declared sub-property AND prose telling the model to invent keys
+# for unlisted values, and it FAILED. The same declaration with that prose
+# removed passes. Adding structure while leaving the instruction it replaces is
+# measurably not the same edit.
+#
+# ---------------------------------------------------------------------------
+# APPLIED CORPUS-WIDE, AND EACH APPLICATION RE-MEASURED
+# ---------------------------------------------------------------------------
+#
+# The pattern is applied to every case carrying a write tool, not only the one
+# that forced it — a pattern present only where it was discovered is a patch.
+# All five hold at 3/3 after the change:
+#
+#   dev-instance-creation      the case that forced it; now passes
+#   dev-status-change-enum     unchanged, 3/3
+#   dev-indirect-reference     unchanged, 3/3, all three turns
+#   dev-unseen-schema          unchanged, 3/3 — the hardest test, since its
+#                              `release` type appears in no example, so the
+#                              declarations must be GENERATED from the schema
+#                              rather than recognised from training
+#   dev-ambiguous-clarify      still asks rather than writing, 3/3
+#   dev-relationship-creation  still picks create_relationship over a field
+#                              write, 3/3 — and this one got HARDER: its
+#                              `supersedes` field is now explicitly declared,
+#                              so the wrong answer is more available than
+#                              before and is still not taken
+#
+# The last two matter most. Declaring fields makes the write tool easier to
+# use, so the risk was that it would pull the model toward writing in cases
+# where a write is the WRONG answer. Measured: it does not.
+#
+# Declare the fields of the type the case actually operates on. An early pass
+# put ticket fields (assignee, sprint, ticket statuses) on the ADR case, which
+# would have been an incoherent surface; it now declares the ADR's own.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE ASSEMBLY LINE HAS TO REPRODUCE
+# ---------------------------------------------------------------------------
+#
+# Per-field declarations on the write tool, generated per request from the
+# retrieved schemas — the same data that already renders the RELEVANT ENTITY
+# TYPES line, so no new source of truth is required.
+#
+# BLOCKED ON #2123. Production's value parameter is named `properties`, which
+# the Gemma-4 template deletes wholesale. Declarations inside a deleted
+# parameter reach the model no more than its description does, so the rename
+# has to land before any of this is reproducible.
