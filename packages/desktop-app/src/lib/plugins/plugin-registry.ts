@@ -562,7 +562,7 @@ export class PluginRegistry {
 
   /**
    * Get a schema form component for a node type
-   * Returns null if no schema form is registered (fallback to SchemaPropertyForm)
+   * Returns null if no schema form is registered (fallback to the generic GenericSchemaForm)
    *
    * @param nodeType - Node type to get schema form for
    * @returns Schema form component or null

@@ -35,7 +35,7 @@ export interface ReferenceRegistration {
 
 /**
  * Schema form component type
- * Used for type-specific property editing forms (TaskSchemaForm, DateSchemaForm, etc.)
+ * Used for type-specific property editing forms (TaskSchemaForm, PersonSchemaForm, etc.)
  */
 export type SchemaFormComponent = Component<{ nodeId: string }>;
 
@@ -213,10 +213,11 @@ export interface PluginDefinition {
   /**
    * Type-specific schema form for editing type-specific properties
    *
-   * Core node types with type-specific properties (task, date, entity) should provide
-   * hardcoded schema forms for full TypeScript type safety.
+   * Core node types with type-specific properties and bespoke UI/business logic (task,
+   * person) should provide hardcoded schema forms for full TypeScript type safety.
    *
-   * User-defined types fall back to the generic SchemaPropertyForm.
+   * Everything else — user-defined types, and core types with a schema but no hardcoded
+   * form (e.g. project) — falls back to the generic GenericSchemaForm.
    *
    * @example
    * schemaForm: {
