@@ -8,7 +8,9 @@
 //!        The filename and launchd label vary by build variant (debug/release × community/Pro)
 //!        so dev builds and the production app never collide on the same launchd job or socket.
 //!      - Linux: write ~/.config/systemd/user/nodespace.service and enable it.
-//!      - Windows: spawn the daemon process directly and write an HKCU autorun key.
+//!      - Windows: spawn the daemon process directly (stdout/stderr routed to
+//!        ~/.nodespace/logs/nodespaced.log and nodespaced-error.log, mirroring
+//!        launchd/systemd on the other two platforms) and write an HKCU autorun key.
 //!   4. Wait for the IPC endpoint to appear (UDS on Unix, Named Pipe on Windows).
 //!
 //! On subsequent launches:
@@ -274,9 +276,15 @@ pub async fn ensure_daemon_running(app: &AppHandle) -> Result<DaemonStatus> {
     // Windows: spawn the daemon process directly and register it in HKCU autorun
     // so it restarts automatically on next login. Full SCM registration requires
     // elevation which a normal user app cannot assume — direct spawn is used instead.
+    // stdout/stderr are routed to log files in log_dir (mirroring launchd's
+    // StandardOutPath/StandardErrorPath on macOS and systemd's StandardOutput=/
+    // StandardError=append: on Linux) rather than Stdio::null() — otherwise any
+    // diagnostic the daemon writes to stdout/stderr (tracing's default writer,
+    // or an eprintln!-based diagnostic like SchemaNode::from_node's fields-parse
+    // failure message) is silently discarded.
     #[cfg(windows)]
     {
-        spawn_daemon_windows(&daemon_bin).context("Failed to spawn daemon on Windows")?;
+        spawn_daemon_windows(&daemon_bin, &log_dir).context("Failed to spawn daemon on Windows")?;
         register_autorun_windows(&daemon_bin);
     }
 
@@ -879,25 +887,105 @@ const WINDOWS_AUTORUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Ru
 #[cfg(windows)]
 const WINDOWS_AUTORUN_VALUE: &str = "NodeSpaceDaemon";
 
+/// Compute the (stdout, stderr) log file paths for the daemon, given its log
+/// directory. Filenames are identical to the ones the macOS `launchd` plist
+/// (`write_plist`'s `StandardOutPath`/`StandardErrorPath`) and the Linux
+/// `systemd` unit (`write_systemd_service`'s `StandardOutput=`/`StandardError=`)
+/// already write to, so support/debugging habits transfer across platforms.
+///
+/// Kept as a plain, platform-independent function (no `#[cfg(windows)]`) so
+/// it can be exercised by an ordinary `#[test]` on any development machine,
+/// even though only the Windows direct-spawn path calls it today.
+#[cfg(any(windows, test))]
+fn daemon_log_paths(log_dir: &Path) -> (PathBuf, PathBuf) {
+    (
+        log_dir.join("nodespaced.log"),
+        log_dir.join("nodespaced-error.log"),
+    )
+}
+
+/// Open a daemon log file for append, creating it if it doesn't exist yet.
+///
+/// Uses `append` (not `truncate`) so log history survives across daemon
+/// restarts — this file is reopened every time `ensure_daemon_running` spawns
+/// a fresh daemon process (binary updates, crash recovery, etc.), which would
+/// otherwise silently drop everything logged before the most recent restart.
+/// This mirrors the Linux systemd unit's explicit `append:` prefix on
+/// `StandardOutput=`/`StandardError=` in `write_systemd_service`.
+///
+/// Pure `std::fs` — no Windows-specific API — so it's directly testable here.
+#[cfg(any(windows, test))]
+fn open_daemon_log(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+
+/// Open a daemon log file for the spawned child's stdio, falling back to
+/// `Stdio::null()` (the pre-existing behavior this PR replaces) with a
+/// warning if the file can't be opened — e.g. a locked-by-AV or permissions
+/// edge case. A log-file-open failure must not block daemon startup itself:
+/// on macOS/Linux, a failed `launchd`/`systemd` log write never prevents the
+/// service from running (the app only ever writes the plist/unit text; the
+/// service manager owns opening the log), so treating it as fatal here would
+/// be a Windows-only regression relative to that behavior.
+#[cfg(windows)]
+fn daemon_log_stdio(path: &Path) -> std::process::Stdio {
+    match open_daemon_log(path) {
+        Ok(f) => std::process::Stdio::from(f),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to open daemon log file — falling back to discarding this stream"
+            );
+            std::process::Stdio::null()
+        }
+    }
+}
+
 /// Spawn the nodespaced binary as a detached background process on Windows.
 ///
 /// Uses `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` so the child is not a
 /// member of the parent's job object. Without these flags, Windows terminates
 /// all job members (including nodespaced) when the Tauri app exits.
+///
+/// stdout/stderr are opened as log files in `log_dir` and handed to the child
+/// via `Stdio::from(File)` rather than `Stdio::null()` — mirroring `launchd`'s
+/// `StandardOutPath`/`StandardErrorPath` (macOS) and `systemd`'s
+/// `StandardOutput=`/`StandardError=append:` (Linux), both defined earlier in
+/// this file. Without this, any diagnostic the daemon writes to stdout/stderr
+/// — including `tracing_subscriber::fmt()`'s default stdout writer and
+/// `eprintln!`-based diagnostics such as `SchemaNode::from_node`'s
+/// fields-parse-failure message — is discarded outright, since a Windows
+/// child spawned with `Stdio::null()` has no destination at all for that
+/// output (unlike `/dev/null`, there's no dropped-but-consistent sink; the
+/// handle is simply absent).
+///
+/// A log file that fails to open (see `daemon_log_stdio`) falls back to
+/// `Stdio::null()` for that stream rather than aborting the spawn — daemon
+/// startup must not fail just because logging couldn't be set up.
 #[cfg(windows)]
-fn spawn_daemon_windows(daemon_bin: &Path) -> Result<()> {
+fn spawn_daemon_windows(daemon_bin: &Path, log_dir: &Path) -> Result<()> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
+    let (stdout_path, stderr_path) = daemon_log_paths(log_dir);
+
     Command::new(daemon_bin)
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(daemon_log_stdio(&stdout_path))
+        .stderr(daemon_log_stdio(&stderr_path))
         .spawn()
         .with_context(|| format!("Failed to spawn {}", daemon_bin.display()))?;
-    tracing::info!("nodespaced spawned (Windows)");
+    tracing::info!(
+        log_dir = %log_dir.display(),
+        "nodespaced spawned (Windows), stdout/stderr routed to log files"
+    );
     Ok(())
 }
 
@@ -985,5 +1073,99 @@ mod macos_codesign_tests {
             "tampered binary must fail --verify --strict — this is exactly the \
              corruption class that causes the CODESIGNING SIGKILL crash-loop"
         );
+    }
+}
+
+/// These exercise the platform-independent halves of the Windows daemon-stdio
+/// fix (path construction, append-not-truncate file semantics) that can be
+/// verified on any development machine. They deliberately do NOT and cannot
+/// cover `spawn_daemon_windows` itself — `Command::creation_flags`,
+/// `DETACHED_PROCESS`/`CREATE_NEW_PROCESS_GROUP`, and `Stdio::from(File)`
+/// handle-inheritance into a Windows child process have no macOS/Linux
+/// equivalent to run against, so that code path is compile-checked only
+/// (against the `x86_64-pc-windows-msvc` target) and awaits validation on a
+/// real Windows machine.
+#[cfg(test)]
+mod windows_daemon_stdio_tests {
+    use super::{daemon_log_paths, open_daemon_log};
+    use std::io::{Read, Write};
+    use std::path::Path;
+
+    #[test]
+    fn daemon_log_paths_match_macos_linux_filenames() {
+        let (stdout, stderr) = daemon_log_paths(Path::new("/home/user/.nodespace/logs"));
+        assert_eq!(
+            stdout,
+            Path::new("/home/user/.nodespace/logs/nodespaced.log"),
+            "stdout log filename must match write_plist/write_systemd_service's nodespaced.log"
+        );
+        assert_eq!(
+            stderr,
+            Path::new("/home/user/.nodespace/logs/nodespaced-error.log"),
+            "stderr log filename must match write_plist/write_systemd_service's nodespaced-error.log"
+        );
+    }
+
+    #[test]
+    fn daemon_log_paths_are_distinct_files_under_the_given_dir() {
+        let dir = Path::new("/tmp/example-nodespace-logs");
+        let (stdout, stderr) = daemon_log_paths(dir);
+        assert_ne!(
+            stdout, stderr,
+            "stdout and stderr must not collide on one file"
+        );
+        assert!(stdout.starts_with(dir));
+        assert!(stderr.starts_with(dir));
+    }
+
+    #[test]
+    fn open_daemon_log_creates_missing_file() {
+        let dir =
+            std::env::temp_dir().join(format!("ns-daemon-log-test-create-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nodespaced.log");
+        assert!(!path.exists());
+
+        let mut f = open_daemon_log(&path).expect("should create and open the log file");
+        writeln!(f, "first line").unwrap();
+        drop(f);
+
+        assert!(path.exists());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "first line\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_daemon_log_appends_rather_than_truncates_on_reopen() {
+        // Regression guard for the exact behavior spawn_daemon_windows depends
+        // on: each daemon restart reopens the same log path, and prior runs'
+        // output must survive rather than being wiped on every relaunch.
+        let dir =
+            std::env::temp_dir().join(format!("ns-daemon-log-test-append-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nodespaced-error.log");
+
+        {
+            let mut f = open_daemon_log(&path).unwrap();
+            writeln!(f, "run 1").unwrap();
+        }
+        {
+            let mut f = open_daemon_log(&path).unwrap();
+            writeln!(f, "run 2").unwrap();
+        }
+
+        let mut contents = String::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(
+            contents, "run 1\nrun 2\n",
+            "reopening the log across restarts must append, not truncate"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
