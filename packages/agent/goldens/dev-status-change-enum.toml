@@ -1,5 +1,5 @@
 name = "dev-status-change-enum"
-reps = 3
+reps = 5
 
 notes = """
 PRODUCTION-SHAPED. Dev-workflow domain. Tuned, not ported.

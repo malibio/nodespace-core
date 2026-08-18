@@ -1,5 +1,5 @@
 name = "dev-instance-creation"
-reps = 3
+reps = 5
 
 notes = """
 PRODUCTION-SHAPED. Dev-workflow domain.
@@ -67,8 +67,8 @@ and absent from the action path: a selection failure, not a knowledge one.
 
 WHAT WORKED — the schema declares the field
 
-`blocked_by` is now declared in two places: on the type in RELEVANT NODE
-TYPES, and as a typed sub-property of `field_values` in the tool schema. The
+`blocked_by` is now declared in two places: on the type in EXISTING SCHEMAS,
+and as a typed sub-property of `field_values` in the tool schema. The
 invent-a-key prose is DELETED, not merely supplemented — arm 6 had the
 declaration and that prose together and failed, so the two were competing.
 

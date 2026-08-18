@@ -1,5 +1,5 @@
 name = "dev-unseen-schema"
-reps = 3
+reps = 5
 
 notes = """
 PRODUCTION-SHAPED. Dev-workflow domain. THE GENERALISATION TEST.

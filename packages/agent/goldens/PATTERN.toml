@@ -62,9 +62,9 @@
 # APPLIED CORPUS-WIDE, AND EACH APPLICATION RE-MEASURED
 # ---------------------------------------------------------------------------
 #
-# The pattern is applied to every case carrying a write tool, not only the one
-# that forced it — a pattern present only where it was discovered is a patch.
-# All five hold at 3/3 after the change:
+# The pattern is applied to every case whose write tool is actually EXERCISED,
+# not only the one that forced it — a pattern present only where it was
+# discovered is a patch. All six hold after the change:
 #
 #   dev-instance-creation      the case that forced it; now passes
 #   dev-status-change-enum     unchanged, 3/3
@@ -79,6 +79,18 @@
 #                              `supersedes` field is now explicitly declared,
 #                              so the wrong answer is more available than
 #                              before and is still not taken
+#
+# One deliberate exception, stated so the rule reads as exact rather than
+# nearly-true: dev-schema-creation's `create_node` keeps a bare `field_values`
+# object. That tool is a DISTRACTOR on that case — it exists so the model can
+# choose wrongly between defining a type and creating an instance, and it is
+# measured never called. Declaring its fields would tune a path the case does
+# not measure, and would mean declaring fields for a type (`adr`) that the case
+# is asking the model to CREATE and therefore deliberately withholds from
+# EXISTING SCHEMAS.
+#
+# So the rule for #2120 is: declare the fields of any write tool the turn can
+# legitimately call. A tool present only to be rejected does not need them.
 #
 # The last two matter most. Declaring fields makes the write tool easier to
 # use, so the risk was that it would pull the model toward writing in cases
@@ -187,6 +199,26 @@
 # wrongly cleared the rename of causing this regression, and the 5-rep
 # comparison is what settled it. Rep counts in this corpus were raised to 5
 # for heading-level changes.
+#
+# CAVEAT ON THE ABOVE, raised in re-review and verified:
+#
+# Production's constant already carries the parenthetical —
+# `RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their
+# fields onto a new type):` (context_ops.rs:118). So the arms above were NOT
+# label-vs-constraint. `RELEVANT ENTITY TYPES (...)` and `EXISTING SCHEMAS (...)`
+# are both constraint-framed and both score 5/5; the two that scored 0 dropped
+# the parenthetical AND changed the noun at the same time.
+#
+# The measurement therefore supports "keeping the parenthetical matters" and
+# is CONSISTENT with the noun being irrelevant, but it does not isolate the
+# two. The arm that would isolate it — `EXISTING SCHEMAS:` bare, no
+# parenthetical — was run only on a probe during the tool-description
+# experiment (where it held 5/5 with the constraint moved into the tool
+# description), not as a clean single-variable arm here. Recorded as NOT
+# ISOLATED rather than left implying more than was measured.
+#
+# What is safe to carry into #2120: keep the parenthetical. The noun change is
+# a consistency fix with no measured cost, not a measured improvement.
 #
 # For #2120: production's constant is RELEVANT_ENTITY_TYPES_HEADER in
 # context_ops.rs, rendered at two sites. Adopting this means renaming the

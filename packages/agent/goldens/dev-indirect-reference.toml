@@ -1,5 +1,5 @@
 name = "dev-indirect-reference"
-reps = 3
+reps = 5
 
 notes = """
 PRODUCTION-SHAPED. Dev-workflow domain.
