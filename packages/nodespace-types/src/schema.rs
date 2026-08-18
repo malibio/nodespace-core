@@ -258,20 +258,31 @@ pub struct SchemaNode {
 /// Parses the `fields` array out of a schema node's stored properties.
 ///
 /// A parse failure (malformed/legacy field JSON) is intentionally NOT
-/// surfaced by widening `from_node`'s `Result` — `node_to_typed_value` (the
-/// sole caller reachable from every entry point: Tauri commands, MCP, HTTP)
-/// feeds `nodes_to_typed_values`, which `.collect()`s a
-/// `Vec<Result<_, _>>` into a single `Result<Vec<_>, _>`; turning this into
-/// an `Err` would fail an entire batch read over one unrelated bad schema
-/// node. Instead this returns a ready-to-print diagnostic line alongside the
-/// (necessarily empty, on failure) field list, so the caller can surface it
-/// without silently dropping the data.
+/// surfaced by widening `from_node`'s `Result`. `from_node` has three
+/// production callers: `node_to_typed_value` — reachable from every entry
+/// point (Tauri commands, MCP, HTTP) via `nodes_to_typed_values`, which
+/// `.collect()`s a `Vec<Result<_, _>>` into a single `Result<Vec<_>, _>` —
+/// and two direct call sites in
+/// `desktop-app/src-tauri/src/commands/schemas.rs`
+/// (`get_all_schemas`/`get_schema_definition`), which do not go through
+/// `nodes_to_typed_values` at all. Only the `node_to_typed_value` path risks
+/// a blast-radius problem: turning this into an `Err` there would fail an
+/// entire unrelated batch read over one bad schema node. Fixing the
+/// diagnostic here, inside `from_node` itself, covers all three callers
+/// uniformly without touching any of their signatures or `nodes_to_typed_values`'s
+/// batch-collect behavior.
 ///
 /// `nodespace-types` deliberately carries no logging dependency (see the
 /// crate-level doc comment), so the diagnostic is plain text for the caller
 /// to print via `eprintln!` — the closest thing to "a log line" available
 /// without pulling in `tracing`/`log`, and one that fires the same way no
-/// matter which binary (Tauri app, daemon, CLI) embeds this crate.
+/// matter which binary (Tauri app, daemon, CLI) embeds this crate. Note this
+/// is not airtight on every platform: on Windows, the daemon process is
+/// spawned with its stderr piped to `/dev/null`-equivalent, and a release
+/// desktop-app build has no console at all, so this specific diagnostic is
+/// currently invisible there (both platforms' stdout/stderr routing is a
+/// pre-existing daemon/app-launch concern, out of scope for this fix — see
+/// the follow-up issue tracking it).
 fn parse_fields(
     properties: &serde_json::Value,
     node_id: &str,
