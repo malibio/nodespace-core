@@ -221,6 +221,7 @@
     let unlistenSettings: Promise<() => void> | null = null;
     let unlistenIntegrations: Promise<() => void> | null = null;
     let unlistenSkillCliMissing: Promise<() => void> | null = null;
+    let unlistenSkillInstallFailed: Promise<() => void> | null = null;
     let cleanupMCP: (() => Promise<void>) | null = null;
     let staleNodesInterval: ReturnType<typeof setInterval> | null = null;
     let cleanupProSync: (() => void) | null = null;
@@ -269,6 +270,13 @@
       unlistenSkillCliMissing = listen<{ warning: string }>('skill:cli-missing', (event) => {
         log.warn('nodespace CLI not on PATH:', event.payload.warning);
         statusBar.error(event.payload.warning);
+      });
+
+      // Surface a genuine skill-install failure once (backend suppresses the
+      // event on repeat failures across launches — see skill_setup.rs).
+      unlistenSkillInstallFailed = listen<{ error: string }>('skill:install-failed', (event) => {
+        log.warn('NodeSpace skill install failed:', event.payload.error);
+        statusBar.error(`NodeSpace skill installation failed: ${event.payload.error}`);
       });
 
       // Start the shared daemon-status listener.
@@ -598,6 +606,9 @@
       }
       if (unlistenSkillCliMissing) {
         (await unlistenSkillCliMissing)();
+      }
+      if (unlistenSkillInstallFailed) {
+        (await unlistenSkillInstallFailed)();
       }
       if (unlistenTier) {
         (await unlistenTier)();

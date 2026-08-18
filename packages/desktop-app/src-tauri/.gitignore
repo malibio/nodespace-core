@@ -9,3 +9,7 @@
 # Sidecar binaries — built from source by dev:tauri:sidecars, never committed
 binaries/nodespaced-*
 binaries/nodespace-*
+
+# Bundled skill installer — staged from packages/skill by `bun run build:skill`,
+# never committed (mirrors the binaries/ pattern above).
+resources/skill/

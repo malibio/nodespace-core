@@ -356,7 +356,14 @@ pub fn run() {
                     // Idempotent — no-op once ~/.nodespace/setup.json marks skill_installed.
                     {
                         use crate::skill_setup;
-                        let result = skill_setup::install_skill(false).await;
+                        // WARN logging (once per new failure, DEBUG on repeats) happens
+                        // inside install_skill itself — see its module docs. Emitting to
+                        // the frontend only happens here: this is the one fire-and-forget
+                        // call site with no other way to reach the user (the onboarding/
+                        // manual-retry commands already return their result synchronously
+                        // to an awaiting caller, so emitting there too would show the same
+                        // failure twice).
+                        let result = skill_setup::install_skill(false, &app_handle).await;
                         if result.success {
                             if !result.agents_installed.is_empty() {
                                 tracing::info!(
@@ -373,8 +380,15 @@ pub fn run() {
                                     );
                                 }
                             }
-                        } else {
-                            tracing::warn!("Skill install failed: {:?}", result.error);
+                        } else if result.failure_is_new {
+                            if let (Some(window), Some(error)) =
+                                (app_handle.get_webview_window("main"), result.error)
+                            {
+                                let _ = window.emit(
+                                    "skill:install-failed",
+                                    serde_json::json!({ "error": error }),
+                                );
+                            }
                         }
                     }
 
