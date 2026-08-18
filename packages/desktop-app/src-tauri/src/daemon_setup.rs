@@ -52,13 +52,23 @@ pub(crate) fn is_pro_build() -> bool {
     PRO_SUPABASE_URL.is_some()
 }
 
-/// The daemon sidecar this edition installs + launches.
-fn daemon_binary_name() -> &'static str {
-    if is_pro_build() {
+/// Pure function form of `daemon_binary_name()`, taking edition as a
+/// parameter instead of reading it from `is_pro_build()`'s compile-time-baked
+/// constant. This lets both editions' binary-name logic be exercised by an
+/// ordinary `#[test]` on any development machine — a real Pro build can only
+/// ever produce one edition per binary, so `is_pro_build()` itself can't be
+/// flipped at test time.
+fn daemon_binary_name_for(is_pro: bool) -> &'static str {
+    if is_pro {
         PRO_DAEMON_BINARY_NAME
     } else {
         DAEMON_BINARY_NAME
     }
+}
+
+/// The daemon sidecar this edition installs + launches.
+fn daemon_binary_name() -> &'static str {
+    daemon_binary_name_for(is_pro_build())
 }
 
 /// Relative path from HOME to the daemon socket, scoped by build variant.
@@ -368,17 +378,41 @@ async fn kill_running_daemon(socket_path: &Path) {
     let _ = std::fs::remove_file(socket_path);
 }
 
+/// Windows taskkill `/IM` image name for a given edition's daemon binary.
+///
+/// Pure function form, gated on `any(windows, test)` rather than `windows`
+/// alone (mirroring `daemon_log_paths`/`open_daemon_log` below), so the exact
+/// bug class this fixes — an image name that can silently drift from
+/// `daemon_binary_name_for()` — is directly testable on any platform, not
+/// just compile-checked against the Windows target.
+///
+/// The `.exe` suffix mirrors the literal this replaces (`"nodespaced.exe"`);
+/// it assumes the installed daemon binary carries that extension on Windows,
+/// which — like everything else `#[cfg(windows)]` in this file — has not
+/// been confirmed by an actual Windows run.
+#[cfg(any(windows, test))]
+fn daemon_image_name_for(is_pro: bool) -> String {
+    format!("{}.exe", daemon_binary_name_for(is_pro))
+}
+
 /// Kill the running daemon on Windows via taskkill and wait for it to exit.
+///
+/// Targets the edition-correct image name (`nodespaced.exe` or
+/// `nodespaced-pro.exe`, via `daemon_binary_name_for()`) rather than a
+/// hardcoded community-edition literal — a Pro build's `nodespaced-pro.exe`
+/// would otherwise never be matched and killed before launching the updated
+/// binary.
 #[cfg(windows)]
 async fn kill_running_daemon(socket_path: &Path) {
     if check_daemon_socket(socket_path).await != DaemonStatus::Healthy {
         return;
     }
 
+    let image_name = daemon_image_name_for(is_pro_build());
     let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", "nodespaced.exe"])
+        .args(["/F", "/IM", &image_name])
         .output();
-    tracing::info!("Sent taskkill to nodespaced.exe");
+    tracing::info!(%image_name, "Sent taskkill to daemon");
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
@@ -1167,5 +1201,32 @@ mod windows_daemon_stdio_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Unit coverage for the edition-selection and image-name-formatting logic
+/// `kill_running_daemon` (Windows) consumes: `daemon_binary_name_for` and
+/// `daemon_image_name_for` are pure functions that take edition as a
+/// parameter, so both editions' exact output strings are pinned here even
+/// though a real build only ever bakes in one edition via `is_pro_build()`.
+///
+/// This does NOT exercise `kill_running_daemon` itself or the actual
+/// `taskkill` invocation — that remains compile-check-only against the
+/// Windows target (see the `windows_daemon_stdio_tests` module docs above
+/// for why: no macOS/Linux equivalent exists to run it against).
+#[cfg(test)]
+mod windows_taskkill_image_name_tests {
+    use super::{daemon_binary_name_for, daemon_image_name_for};
+
+    #[test]
+    fn community_edition_image_name_matches_community_binary() {
+        assert_eq!(daemon_binary_name_for(false), "nodespaced");
+        assert_eq!(daemon_image_name_for(false), "nodespaced.exe");
+    }
+
+    #[test]
+    fn pro_edition_image_name_matches_pro_binary() {
+        assert_eq!(daemon_binary_name_for(true), "nodespaced-pro");
+        assert_eq!(daemon_image_name_for(true), "nodespaced-pro.exe");
     }
 }
