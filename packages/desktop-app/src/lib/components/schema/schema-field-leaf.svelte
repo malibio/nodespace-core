@@ -20,12 +20,11 @@
   import * as Popover from '$lib/components/ui/popover';
   import { Calendar } from '$lib/components/ui/calendar';
   import { Input } from '$lib/components/ui/input';
-  import type { SchemaField, EnumValue } from '$lib/types/schema-node';
-  import { parseDate, type DateValue } from '@internationalized/date';
-  import { createLogger } from '$lib/utils/logger';
+  import type { SchemaField } from '$lib/types/schema-node';
+  import type { DateValue } from '@internationalized/date';
   import { labelForField } from '$lib/utils/schema-field-label';
-
-  const log = createLogger('SchemaFieldLeaf');
+  import { getEnumValues, enumValueLabel } from '$lib/utils/schema-enum-values';
+  import { parseScalarDate, formatDateDisplay, formatDateForStorage } from '$lib/utils/schema-date-values';
 
   let {
     field,
@@ -42,43 +41,6 @@
   // Date picker popover state — owned here so picking a date dismisses the
   // calendar instead of leaving it open over the rest of the form.
   let datePickerOpen = $state(false);
-
-  function formatFieldLabel(fieldName: string): string {
-    return fieldName
-      .replace(/[_-]/g, ' ')
-      .split(' ')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
-
-  function getEnumValues(f: SchemaField): EnumValue[] {
-    const values: EnumValue[] = [];
-    if (f.coreValues) values.push(...f.coreValues);
-    if (f.userValues) values.push(...f.userValues);
-    return values;
-  }
-
-  function parseDateFromValue(raw: string | null | undefined): DateValue | undefined {
-    if (!raw) return undefined;
-    try {
-      const dateOnly = typeof raw === 'string' && raw.includes('T') ? raw.split('T')[0] : raw;
-      return parseDate(dateOnly as string);
-    } catch (error) {
-      log.warn(`Failed to parse date value "${raw}":`, error);
-      return undefined;
-    }
-  }
-
-  function formatDateDisplay(raw: string | null | undefined): string {
-    if (!raw) return 'Pick a date';
-    const date = parseDateFromValue(raw as string);
-    return date ? date.toString() : (raw as string);
-  }
-
-  function formatDateForStorage(dateValue: DateValue | undefined): string | null {
-    if (!dateValue) return null;
-    return `${dateValue.year}-${String(dateValue.month).padStart(2, '0')}-${String(dateValue.day).padStart(2, '0')}`;
-  }
 </script>
 
 {#if field.type === 'enum'}
@@ -90,12 +52,10 @@
     onValueChange={(newValue) => onChange(newValue)}
   >
     <Select.Trigger id={fieldId} class="w-full">
-      <!-- A stored value the schema no longer declares still reads as a label rather than a
-           raw key, so the control agrees with the collapsed header that humanizes the same
-           value. -->
-      {enumValues.find((ev) => ev.value === currentValue)?.label ||
-        (currentValue ? formatFieldLabel(currentValue) : '') ||
-        `Select ${labelForField(field)}...`}
+      <!-- enumValueLabel is the SAME lookup a collapsed-header summary uses for this field, so
+           a stored value the schema no longer declares (or a value with a blank label) reads
+           identically wherever it's displayed — one implementation, not two "agreeing" copies. -->
+      {enumValueLabel(field, currentValue) || `Select ${labelForField(field)}...`}
     </Select.Trigger>
     <Select.Content>
       {#each enumValues as ev}
@@ -105,7 +65,7 @@
   </Select.Root>
 {:else if field.type === 'date'}
   {@const rawValue = value as string | null}
-  {@const dateVal = parseDateFromValue(rawValue)}
+  {@const dateVal = parseScalarDate(rawValue)}
   <Popover.Root bind:open={datePickerOpen}>
     <Popover.Trigger
       id={fieldId}
