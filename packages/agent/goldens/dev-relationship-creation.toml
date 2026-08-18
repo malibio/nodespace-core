@@ -57,7 +57,7 @@ Call exactly one tool. Do not answer the user in prose when a tool applies.
 
 COLLECTIONS: Engineering, Q3 Planning
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
@@ -75,7 +75,7 @@ CALL search_nodes NOW: your next action is the tool call, not planning text.
 LISTING BY TYPE: to list every record of a type, use an empty query with \
 node_type set.
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
 """
@@ -107,7 +107,7 @@ not a free-text search for the word "ADRs".
 
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Restrict to one type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `adr`), never the quoted display name that follows it (e.g. \"ADR\")."
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `adr`), never the quoted display name that follows it (e.g. \"ADR\")."
 
 # ---------------------------------------------------------------------------
 # Turn 2 — the link. Direction is the measurement.
@@ -120,7 +120,7 @@ Call exactly one tool. Do not answer the user in prose when a tool applies.
 
 COLLECTIONS: Engineering, Q3 Planning
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
@@ -143,7 +143,7 @@ DIRECTION: from_id is the record that ACTS, to_id is the record acted upon. \
 "A supersedes B" is from_id=A, to_id=B. Reversing them records the opposite \
 fact and still reports success.
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
 """

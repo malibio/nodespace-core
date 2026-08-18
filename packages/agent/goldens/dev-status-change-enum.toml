@@ -21,13 +21,13 @@ in production's own order, each sourced from the code that emits it:
 
   resident system prompt   agent_loop.rs STAGE1_SYSTEM_PROMPT
   COLLECTIONS:             context_ops.rs format_for_prompt
-  RELEVANT ENTITY TYPES:   context_ops.rs RELEVANT_ENTITY_TYPES_HEADER, with
+  EXISTING SCHEMAS:   context_ops.rs RELEVANT_NODE_TYPES_HEADER, with
                            the per-type line from entity_types_block.rs
                            render_line: `- id "Name" -> f: type {a,b}, required`
   REFERENCE — procedures   routing.rs render_candidates_for_prompt: a
                            `--- Candidate N:` / `Purpose:` / instruction
                            subtree, then that candidate's OWN second
-                           rendering of RELEVANT ENTITY TYPES
+                           rendering of EXISTING SCHEMAS
   tool surface             real parameter schemas
 
 The entity-types heading appearing TWICE is production's actual shape, not
@@ -98,7 +98,7 @@ Call exactly one tool. Do not answer the user in prose when a tool applies.
 
 COLLECTIONS: Engineering, Q3 Planning
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
@@ -119,7 +119,7 @@ node_type set.
 FILTERING BY FIELD: to narrow by a stored value, pass filters. Copy the type \
 id and the field name exactly as they appear below.
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
@@ -156,7 +156,7 @@ status filter is the miss worth noting.
       # actionable — "copied exactly" alone left the model sending "Ticket".
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Restrict to one type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
 
       [turn.tool.parameters_schema.properties.filters]
       type = "array"
@@ -191,7 +191,7 @@ Call exactly one tool. Do not answer the user in prose when a tool applies.
 
 COLLECTIONS: Engineering, Q3 Planning
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
@@ -218,7 +218,7 @@ never a capitalised or spaced form of the value.
 AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that \
 reports success.
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
@@ -300,4 +300,4 @@ absent or empty `field_values` means the write silently changes nothing.
 
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Restrict to one type id, copied exactly from RELEVANT ENTITY TYPES."
+      description = "Restrict to one type id, copied exactly from EXISTING SCHEMAS."

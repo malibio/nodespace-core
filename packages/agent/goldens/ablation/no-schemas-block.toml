@@ -1,10 +1,10 @@
-name = "no-entity-types"
+name = "no-schemas-block"
 reps = 3
 
 notes = """
 ABLATION ARM. Built by subtraction from dev-status-change-enum.toml.
 
-Every RELEVANT ENTITY TYPES block removed — both the resident one and the
+Every EXISTING SCHEMAS block removed — both the resident one and the
 per-candidate one, since production renders the heading at two independent
 sites and removing only one would measure neither.
 
@@ -55,7 +55,7 @@ block. Re-measuring changed the finding, so the original is kept below it.
 Turn 2 recovered because the enum now reaches the model through a SECOND
 channel: `update_node`'s own schema declares
 status: enum [ready_for_dev, in_dev, ready_for_review, in_review, done].
-With the entity-types block deleted, that declaration alone was sufficient.
+With the node-types block deleted, that declaration alone was sufficient.
 
 Turn 1 did not recover, and the asymmetry is the evidence rather than noise:
 `search_nodes`'s `filters` parameter takes a free-form property/value pair and
@@ -65,14 +65,14 @@ in the same run.
 
 WHAT THAT REVISES
 
-The earlier conclusion — "RELEVANT ENTITY TYPES is the only block that paid" —
+The earlier conclusion — "EXISTING SCHEMAS is the only block that paid" —
 was measured when the schema channel was empty. It is more precisely: the
 allowed-values must reach the model SOMEHOW, and either channel can carry
-them. The entity-types block is not uniquely load-bearing; it was simply the
+them. The node-types block is not uniquely load-bearing; it was simply the
 only carrier present at the time.
 
 Practical consequence: declaring enums on the tool schema covers writes, but
-filters need the same treatment or the entity-types block has to stay for
+filters need the same treatment or the node-types block has to stay for
 reads. This corpus does not yet have an arm declaring enums on a read tool —
 recorded as not-run rather than assumed.
 
@@ -183,7 +183,7 @@ status filter is the miss worth noting.
       # actionable — "copied exactly" alone left the model sending "Ticket".
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Restrict to one type id. Use the unquoted id at the start of the RELEVANT ENTITY TYPES line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
 
       [turn.tool.parameters_schema.properties.filters]
       type = "array"
@@ -318,4 +318,4 @@ absent or empty `field_values` means the write silently changes nothing.
 
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Restrict to one type id, copied exactly from RELEVANT ENTITY TYPES."
+      description = "Restrict to one type id, copied exactly from EXISTING SCHEMAS."

@@ -93,7 +93,7 @@
 # ---------------------------------------------------------------------------
 #
 # Per-field declarations on the write tool, generated per request from the
-# retrieved schemas — the same data that already renders the RELEVANT ENTITY
+# retrieved schemas — the same data that already renders the RELEVANT NODE
 # TYPES line, so no new source of truth is required.
 #
 # BLOCKED ON #2123. Production's value parameter is named `properties`, which
@@ -106,32 +106,32 @@
 # ---------------------------------------------------------------------------
 #
 # The arms in ablation/ were re-synced to the new base and re-measured, since
-# they must differ from it by exactly one block. no-entity-types CHANGED:
+# they must differ from it by exactly one block. no-schemas-block CHANGED:
 #
 #   turn 1  status filter "dev"        still wrong
 #   turn 2  status "ready_for_review"  NOW CORRECT (was "ready for review")
 #
-# Deleting the RELEVANT ENTITY TYPES block no longer breaks the write, because
+# Deleting the EXISTING SCHEMAS block no longer breaks the write, because
 # the enum now also reaches the model through update_node's own schema. Turn 1
 # still fails because search_nodes's `filters` takes a free-form
 # property/value pair and declares no enum — so nothing states the legal
 # values on a READ.
 #
-# That revises the earlier headline. "RELEVANT ENTITY TYPES is the only block
+# That revises the earlier headline. "EXISTING SCHEMAS is the only block
 # that paid" was measured when the schema channel was empty. More precisely:
 # the allowed values must reach the model somehow, and either channel can
 # carry them. The block was the only carrier present, not uniquely
 # load-bearing.
 #
 # Open and NOT run: declaring enums on a read tool's filter parameter. If that
-# works, the entity-types block may be redundant for writes AND reads, which
+# works, the node-types block may be redundant for writes AND reads, which
 # would be a materially larger context saving than this corpus has measured.
 #
 # ---------------------------------------------------------------------------
-# THE TWO-SITE ENTITY-TYPES SHAPE — UNIFORM, AND DELIBERATELY REDUNDANT
+# THE TWO-SITE NODE-TYPES SHAPE — UNIFORM, AND DELIBERATELY REDUNDANT
 # ---------------------------------------------------------------------------
 #
-# Every turn in every case carries the RELEVANT ENTITY TYPES block TWICE: once
+# Every turn in every case carries the EXISTING SCHEMAS block TWICE: once
 # resident (context_ops's workspace context) and once inside the candidate
 # block (routing.rs's per-candidate metadata). That is production's actual
 # shape, from two independent call sites sharing one heading constant.
@@ -145,10 +145,49 @@
 #
 # The turn-1 result is why the removal is not free. The instruction "use an
 # empty query with node_type set" outlived the block above it and the model
-# answered with a malformed argument — the same shape as no-entity-types'
+# answered with a malformed argument — the same shape as no-schemas-block'
 # dangling "as they appear below" pointer. Guidance that outlives the block it
 # references yields a plausible-looking wrong ARGUMENT, not a visible error.
 #
 # Kept because #2120 must reproduce production's shape and #2119 will assert on
 # it. Removing the duplication is production's decision; the corpus's job is to
 # carry the measurement of what it costs.
+#
+# ---------------------------------------------------------------------------
+# THE HEADING IS A CONSTRAINT, NOT A LABEL — MEASURED
+# ---------------------------------------------------------------------------
+#
+# The block is headed `EXISTING SCHEMAS (do not recreate these; do not copy
+# their fields onto a new type):`. The wording was measured, not chosen.
+#
+# The corpus originally inherited production's `RELEVANT ENTITY TYPES`. That
+# word is an outlier in the system: storage calls these nodes with
+# node_type == "schema", the tool parameter the block exists to feed is
+# `node_type` (44 uses in tools.rs), and `ENTITY` appears nowhere outside
+# prompt text. Renaming it was a consistency fix.
+#
+# Measured on dev-schema-creation, which is the case that must NOT reuse a
+# listed type, counting how often the `supersedes` field survives:
+#
+#   RELEVANT ENTITY TYPES                        5/5
+#   RELEVANT NODE TYPES                          0/5
+#   RELEVANT SCHEMAS                             0/3
+#   EXISTING SCHEMAS (do not recreate these...)  5/5
+#
+# So the noun is not what matters. `RELEVANT X` reads as a topic label;
+# `EXISTING X (do not recreate these)` reads as a constraint. On the one case
+# where the model must avoid the listed types rather than use them, only the
+# constraint framing carries it. `ENTITY` was doing that work accidentally, by
+# being a word with no other referent to pull toward.
+#
+# The chosen heading keeps the system's own vocabulary AND the case. Every
+# other case is unchanged by it, at 5 reps.
+#
+# METHOD NOTE, learned the hard way here: 3 reps was not enough. A 3/3 run
+# wrongly cleared the rename of causing this regression, and the 5-rep
+# comparison is what settled it. Rep counts in this corpus were raised to 5
+# for heading-level changes.
+#
+# For #2120: production's constant is RELEVANT_ENTITY_TYPES_HEADER in
+# context_ops.rs, rendered at two sites. Adopting this means renaming the
+# constant and its text.

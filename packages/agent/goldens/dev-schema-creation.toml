@@ -57,7 +57,7 @@ Two failures the enum field invites, both worth telling apart in the output:
 - more than one schema per request — the "supersedes" mention in the user's
   message is a field on ADR, not a second type to create
 
-RELEVANT ENTITY TYPES carries `ticket` but NOT `adr`: the block's contract is
+EXISTING SCHEMAS carries `ticket` but NOT `adr`: the block's contract is
 "existing types — do not recreate", so listing the type under construction
 would invert the case. `ticket` is present because a workspace is never empty
 and because contamination between a listed type's fields and a new type's
@@ -93,7 +93,7 @@ Call exactly one tool. Do not answer the user in prose when a tool applies.
 
 COLLECTIONS: Engineering, Q3 Planning
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 
@@ -117,7 +117,7 @@ A FIELD WITH A FIXED SET OF STATES: give it type "enum" and list every legal \
 value in allowed_values. An enum with no allowed_values can never be filled \
 legally afterwards.
 
-RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):
 - ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
@@ -201,7 +201,7 @@ field copied off `ticket` (assignee, sprint) that this request never mentioned.
 
       [turn.tool.parameters_schema.properties.node_type]
       type = "string"
-      description = "Type id, copied exactly from RELEVANT ENTITY TYPES."
+      description = "Type id, copied exactly from EXISTING SCHEMAS."
 
       [turn.tool.parameters_schema.properties.content]
       type = "string"
