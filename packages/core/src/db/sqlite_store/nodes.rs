@@ -82,6 +82,23 @@ impl SqliteStore {
     /// can never look like a content edit or perturb LWW/echo state. Errors
     /// are logged and swallowed: the create this follows has already
     /// succeeded and must not be undone by a marker-write failure.
+    ///
+    /// Only called from `create_node`, and only for a collision detected
+    /// there — this is create-time detection only. `update_node` performs no
+    /// equivalent check, so a sync-applied rename that introduces a fresh
+    /// name collision is neither rejected nor marked (a known, documented
+    /// gap; see `update_path_introducing_a_name_collision_is_currently_unmarked`
+    /// in `tests/collection_name_convergence_test.rs`).
+    ///
+    /// The collision detection this backs (`get_collection_by_name`, called
+    /// by the caller BEFORE the insert) has a real TOCTOU gap under genuine
+    /// concurrent creates of the same name: two concurrent `create_node`
+    /// calls can each run their pre-insert lookup before either INSERT
+    /// lands, so both see "no collision" and neither gets marked. This is
+    /// accepted as best-effort — the same non-atomicity
+    /// `NodeService::mark_possible_duplicates` and nodespace-sync's own
+    /// `mark_possible_duplicate` already accept for person.email — not a bug
+    /// unique to this mechanism.
     async fn mark_collection_name_collision(&self, new_id: &str, existing_id: &str) {
         let path = format!(
             "$.collection.{}",

@@ -41,7 +41,7 @@
 mod collection_name_convergence_tests {
     use anyhow::Result;
     use nodespace_core::db::SqliteStore;
-    use nodespace_core::models::Node;
+    use nodespace_core::models::{Node, NodeUpdate};
     use nodespace_core::services::NodeService;
     use serde_json::json;
     use std::sync::Arc;
@@ -262,14 +262,31 @@ mod collection_name_convergence_tests {
         Ok(())
     }
 
-    /// A narrow, real concurrency case: two devices' same-named collections
-    /// applied CONCURRENTLY into one hub (as two racing sync-pull tasks
-    /// might), rather than the sequential applies every other test in this
-    /// file uses. Both must land, and neither may error — proving the
-    /// no-rejection guarantee isn't an artifact of strict sequencing.
+    /// A narrow, real concurrency case: two different peer devices
+    /// concurrently push a same-named collection into ONE hub that already
+    /// holds a THIRD, pre-existing collection of that name — as two racing
+    /// sync-pull tasks might. The hub's own collection is durably committed
+    /// BEFORE either concurrent apply starts, so each apply's pre-insert
+    /// collision check (`get_collection_by_name`) is guaranteed to see it
+    /// regardless of how the two concurrent applies interleave with EACH
+    /// OTHER — unlike a race between two brand-new nodes with no pre-existing
+    /// third party, where the marking outcome would genuinely depend on
+    /// unspecified SELECT/INSERT interleaving (a real, accepted TOCTOU gap;
+    /// see `mark_collection_name_collision`'s doc comment). This design lets
+    /// the test assert markers deterministically while still exercising real
+    /// concurrent writers, not just proving the no-rejection guarantee isn't
+    /// an artifact of strict sequencing.
     #[tokio::test]
     async fn concurrent_convergence_of_two_same_named_collections_never_rejects() -> Result<()> {
         let hub = Arc::new(device().await?);
+        let hub_id = hub
+            .service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "Concurrent".to_string(),
+                json!({}),
+            ))
+            .await?;
 
         let device_a = device().await?;
         let a_id = device_a
@@ -307,8 +324,139 @@ mod collection_name_convergence_tests {
             .expect("task must not panic")
             .expect("concurrent apply of B must never be rejected on a name collision");
 
-        assert!(hub.service.get_node(&a_id).await?.is_some());
-        assert!(hub.service.get_node(&b_id).await?.is_some());
+        let hub_after = hub.service.get_node(&hub_id).await?.unwrap();
+        let a_after = hub.service.get_node(&a_id).await?.unwrap();
+        let b_after = hub.service.get_node(&b_id).await?.unwrap();
+        assert!(
+            marker(&hub_after),
+            "hub's pre-existing collection must be marked — it was durably committed \
+             before the race started, so both concurrent applies' collision checks are \
+             guaranteed to see it regardless of interleaving"
+        );
+        assert!(
+            marker(&a_after),
+            "A's concurrently-applied collection must be marked"
+        );
+        assert!(
+            marker(&b_after),
+            "B's concurrently-applied collection must be marked"
+        );
+
+        Ok(())
+    }
+
+    /// Unlike `person`'s convergence marking (an explicit, opt-in
+    /// `mark_possible_duplicates` call, LIMIT-1 pairwise — see
+    /// `person_duplicate_convergence_test.rs`'s three-way test, which ends up
+    /// with exactly 2 of 3 marked from a SINGLE call), the collection-name
+    /// marker is stamped automatically on EVERY create. With three
+    /// independent devices each creating "Triple" and converging
+    /// sequentially into one hub, that automatic-and-cascading design means
+    /// every new arrival transitively re-marks the whole existing colliding
+    /// set (an already-marked node's marker write is an idempotent no-op) —
+    /// so, unlike person's "exactly 2 of 3" LIMIT-1 caveat, ALL THREE end up
+    /// marked here. This locks in that (stronger) guarantee so a future
+    /// change to automatic-vs-opt-in marking is caught by this test rather
+    /// than discovered later.
+    #[tokio::test]
+    async fn three_way_name_collision_all_survive_and_all_get_marked() -> Result<()> {
+        let hub = device().await?;
+        let mut ids = Vec::new();
+
+        for i in 0..3 {
+            let d = device().await?;
+            let id = d
+                .service
+                .create_node(Node::new(
+                    "collection".to_string(),
+                    "Triple".to_string(),
+                    json!({}),
+                ))
+                .await?;
+            let node = d.service.get_node(&id).await?.unwrap();
+
+            let applied = apply_incoming(&hub.service, node)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("sync apply must never reject copy {i} on a name collision: {e}")
+                });
+            assert_eq!(applied, id);
+            ids.push(id);
+        }
+
+        // All three survive side by side.
+        for id in &ids {
+            assert!(hub.service.get_node(id).await?.is_some());
+        }
+
+        for (i, id) in ids.iter().enumerate() {
+            let n = hub.service.get_node(id).await?.unwrap();
+            assert!(marker(&n), "device {i}'s collection must be marked");
+        }
+
+        Ok(())
+    }
+
+    /// KNOWN GAP, documented deliberately (tracked as a fast-follow, not
+    /// fixed by this change): `SqliteStore::update_node` has no
+    /// name-collision detection at all — unlike `create_node`, a
+    /// sync-applied rename (the "node already exists locally" branch of a
+    /// real `apply_node_upsert`, which calls `update_node` directly) that
+    /// introduces a fresh name collision is neither rejected NOR marked. This
+    /// is not a regression (renames were already suggest-don't-block, since
+    /// no check existed at all) — it's a visibility gap: the collision is
+    /// completely silent rather than surfaced via the marker. This test
+    /// documents today's actual behavior explicitly (it does not endorse it)
+    /// so that closing the gap later is a deliberate, visible change to this
+    /// test, not a silent behavior change nobody notices.
+    #[tokio::test]
+    async fn update_path_introducing_a_name_collision_is_currently_unmarked() -> Result<()> {
+        let hub = device().await?;
+        let existing_id = hub
+            .service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "Original".to_string(),
+                json!({}),
+            ))
+            .await?;
+
+        let renamed_id = hub
+            .service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "ToRename".to_string(),
+                json!({}),
+            ))
+            .await?;
+        let renamed_before = hub.service.get_node(&renamed_id).await?.unwrap();
+
+        // Simulate a sync-applied rename (apply_node_upsert's "node already
+        // exists locally" branch, which calls `update_node` directly) that
+        // introduces a collision with `existing_id`'s name.
+        let updated = hub
+            .service
+            .update_node(
+                &renamed_id,
+                renamed_before.version,
+                NodeUpdate::new().with_content("Original".to_string()),
+            )
+            .await
+            .expect(
+                "update_node has no collision check to begin with, so this must never error \
+                 regardless of the fix in this PR",
+            );
+        assert_eq!(updated.content, "Original");
+
+        let existing_after = hub.service.get_node(&existing_id).await?.unwrap();
+        let renamed_after = hub.service.get_node(&renamed_id).await?.unwrap();
+        assert!(
+            !marker(&existing_after) && !marker(&renamed_after),
+            "current known gap: update_node performs no collision detection or marking at \
+             all, unlike create_node — this assertion should FLIP (both become marked) if \
+             that gap is ever closed, at which point this test's doc comment should be \
+             updated to match"
+        );
 
         Ok(())
     }
