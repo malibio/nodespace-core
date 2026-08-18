@@ -42,6 +42,8 @@ mod collection_name_convergence_tests {
     use anyhow::Result;
     use nodespace_core::db::SqliteStore;
     use nodespace_core::models::{Node, NodeUpdate};
+    use nodespace_core::ops::collection_ops::{create_collection, CreateCollectionInput};
+    use nodespace_core::ops::OpsError;
     use nodespace_core::services::NodeService;
     use serde_json::json;
     use std::sync::Arc;
@@ -530,6 +532,41 @@ mod collection_name_convergence_tests {
         Ok(())
     }
 
+    /// Same self-exclusion guarantee as `case_only_rename_never_self_marks`,
+    /// but through the unchecked update path (`SqliteStore::update_node`).
+    /// The self-exclusion filter is implemented independently in each of the
+    /// two update functions, not shared, so this closes a gap where a
+    /// regression specific to the unchecked variant's filter would otherwise
+    /// go uncaught.
+    #[tokio::test]
+    async fn case_only_rename_never_self_marks_via_unchecked_path() -> Result<()> {
+        let hub = device().await?;
+        let id = hub
+            .service
+            .create_node(Node::new(
+                "collection".to_string(),
+                "Engineering".to_string(),
+                json!({}),
+            ))
+            .await?;
+
+        hub.service
+            .update_node_unchecked(
+                &id,
+                NodeUpdate::new().with_content("ENGINEERING".to_string()),
+            )
+            .await?;
+
+        let updated = hub.service.get_node(&id).await?.unwrap();
+        assert_eq!(updated.content, "ENGINEERING");
+        assert!(
+            !marker(&updated),
+            "a case-only rename must not match itself as a collision, on the unchecked path either"
+        );
+
+        Ok(())
+    }
+
     /// Gap 2: `get_collection_by_name` filters to `lifecycle_status =
     /// 'active'`, so archiving a collection genuinely frees up its name — a
     /// new collection (or a rename) reusing that name does not get flagged
@@ -596,6 +633,61 @@ mod collection_name_convergence_tests {
             !marker(&other_after) && !marker(&archived_after_rename),
             "renaming onto an archived collection's name must not mark either side either"
         );
+
+        Ok(())
+    }
+
+    /// Regression for a fix required by gap 2: `collection_ops::create_collection`
+    /// derives its new node's id deterministically from the (normalized) name
+    /// alone (`deterministic_collection_id`), independent of lifecycle_status.
+    /// Its own `AlreadyExists` guard now checks by id rather than by
+    /// `get_collection_by_name` (which — correctly, per gap 2 — only matches
+    /// ACTIVE collections) precisely so recreating a collection with an
+    /// archived collection's name still rejects cleanly, instead of the
+    /// active-only name check letting it through into an INSERT that fails
+    /// with an opaque primary-key-constraint error (there is no get-or-create
+    /// here — `NodeService::create_node` does a plain insert for the
+    /// `collection` node type).
+    #[tokio::test]
+    async fn create_collection_op_rejects_reusing_an_archived_collections_name() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("device.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await?);
+        let service = Arc::new(NodeService::new(&mut store).await?);
+
+        let created = create_collection(
+            &service,
+            CreateCollectionInput {
+                name: "Legacy".to_string(),
+                description: String::new(),
+            },
+        )
+        .await?;
+        let before = service.get_node(&created.collection_id).await?.unwrap();
+        service
+            .update_node(
+                &created.collection_id,
+                before.version,
+                NodeUpdate::new().with_lifecycle_status("archived".to_string()),
+            )
+            .await?;
+
+        let result = create_collection(
+            &service,
+            CreateCollectionInput {
+                name: "Legacy".to_string(),
+                description: String::new(),
+            },
+        )
+        .await;
+
+        match result {
+            Err(OpsError::AlreadyExists { .. }) => {}
+            other => panic!(
+                "expected OpsError::AlreadyExists when recreating an archived collection's \
+                 name, got {other:?}"
+            ),
+        }
 
         Ok(())
     }

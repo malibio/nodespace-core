@@ -291,7 +291,7 @@ impl SqliteStore {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", id))?;
 
-        let updated_content = update.content.unwrap_or(current.content.clone());
+        let updated_content = update.content.unwrap_or_else(|| current.content.clone());
         let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
 
         // Rename-path collision detection, mirroring create_node's suggest-
@@ -303,6 +303,18 @@ impl SqliteStore {
         // (effectively) collection-typed node — a no-op rename (including a
         // case-only one, which would otherwise match itself) or a
         // non-content update never re-checks or re-marks.
+        //
+        // Self-exclusion is a post-query `.filter`, not a SQL-level `id !=`
+        // (unlike `find_conflicting_unique`'s `exclude_id`), because
+        // `get_collection_by_name` has no exclude param — widening its
+        // signature is out of scope here (it has several other callers; see
+        // its own doc comment). This is provably safe despite the unordered
+        // `LIMIT 1`: a self-match can only occur when this row's OLD title,
+        // lowercased, already equals the NEW content — which means any THIRD
+        // row also matching the new content necessarily already matched the
+        // OLD title too, so a genuine collision was already detectable (and
+        // would already have been marked) before this rename, not newly
+        // hidden by filtering out the self-match here.
         let colliding_collection =
             if updated_node_type == "collection" && updated_content != current.content {
                 self.get_collection_by_name(&updated_content)
