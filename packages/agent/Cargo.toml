@@ -62,6 +62,11 @@ testing = []
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
+# Line-level diff rendering for the prompt-assembly snapshot gate
+# (tests/prompt_assembly_snapshot.rs) — the same crate `insta` uses
+# internally for its own diff output. No other test in this crate needs a
+# byte-blob failure to read as "which line moved", so it is a dev-only dep.
+similar = "2"
 
 [[test]]
 name = "search_skills_latency"

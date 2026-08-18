@@ -1,0 +1,505 @@
+### search_nodes
+description: Find, list, and filter nodes. This is the single tool for querying the graph by title, type, and/or typed properties — use it for all three of: (1) title/keyword lookup (query='invoice'); (2) listing every node of a type (query='' or query='*', node_type='task' — both enumerate all of that type; do not expect '*' to do a wildcard substring match, it means "no keyword filter" just like ''); (3) filtering by typed properties with operators (status='open', amount > 500, due_date before a date) — pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). Returns each node's properties, so this is the right tool whenever the user wants to see or act on typed data. When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. Never ask the user to confirm a field name or value that appears in that list. Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; use search_semantic only for meaning-based / fuzzy questions.
+parameters_schema:
+{
+  "properties": {
+    "filters": {
+      "description": "Optional typed-property filters. Use for status/due_date/amount and any custom schema field, with operators. Omit for plain title/type listing.",
+      "items": {
+        "properties": {
+          "case_sensitive": {
+            "description": "For 'contains' operator: case sensitivity (default: true)",
+            "type": "boolean"
+          },
+          "node_id": {
+            "description": "For 'relationship' filters: the anchor node ID to traverse from",
+            "type": "string"
+          },
+          "operator": {
+            "description": "Comparison operator",
+            "enum": [
+              "equals",
+              "contains",
+              "gt",
+              "lt",
+              "gte",
+              "lte",
+              "in",
+              "exists"
+            ],
+            "type": "string"
+          },
+          "property": {
+            "description": "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata.",
+            "type": "string"
+          },
+          "relationship_type": {
+            "description": "For 'relationship' filters: which graph edge direction to traverse",
+            "enum": [
+              "parent",
+              "children",
+              "mentions",
+              "mentioned_by"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "description": "Filter category: 'property' for ANY schema/node field (status, due_date, priority, and all custom schema fields) — use this for status. 'content' for node text. 'metadata' ONLY for the 4 built-in fields created_at, modified_at, node_type, content — NEVER use 'metadata' for status or any schema field, it will fail with 'Invalid metadata field'. 'relationship' for graph edges.",
+            "enum": [
+              "property",
+              "content",
+              "metadata",
+              "relationship"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator.",
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "operator"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "limit": {
+      "description": "Max results to return (default 50)",
+      "type": "integer"
+    },
+    "node_type": {
+      "description": "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types.",
+      "type": "string"
+    },
+    "query": {
+      "description": "Keyword or phrase to match against node titles (substring match). Pass empty string or '*' to skip the title filter and enumerate all matching nodes (e.g. to list all nodes of a type).",
+      "type": "string"
+    },
+    "sorting": {
+      "description": "Optional sort configuration, applied in order.",
+      "items": {
+        "properties": {
+          "direction": {
+            "description": "Sort direction (default: asc)",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "type": "string"
+          },
+          "field": {
+            "description": "Field to sort by (e.g. 'due_date', 'created_at', 'status')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+
+### search_semantic
+description: Find nodes semantically related to a natural-language query. By default returns full content for the top result (include_markdown=1). Increase include_markdown to get full content for more results, or set to 0 for IDs and snippets only. If a result's 'markdown' field is non-empty, that is the complete document — summarize or answer from it directly, do not call get_node or search_nodes again for that result.
+parameters_schema:
+{
+  "properties": {
+    "collection": {
+      "description": "Filter results to a specific collection path (e.g. 'Architecture', 'Development'). Use for namespace/folder filtering.",
+      "type": "string"
+    },
+    "exclude_collections": {
+      "description": "Collection paths to exclude from results (e.g. [\"Archived\", \"Drafts\"]). Useful to narrow results when a collection is noisy.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "graph_boost": {
+      "description": "When true, re-rank results by blending similarity with graph connectivity (nodes with more relationships score higher). Formula: 0.7 * similarity + 0.3 * normalized_degree. Default: false.",
+      "type": "boolean"
+    },
+    "include_archived": {
+      "description": "Whether to include archived nodes in results. Default: false. Set to true when the user explicitly asks about archived or historical content.",
+      "type": "boolean"
+    },
+    "include_edges": {
+      "description": "When true, attach outgoing 'mentions' relationships of each result as an 'edges' array. Reduces round-trips for graph traversal. Default: false.",
+      "type": "boolean"
+    },
+    "include_markdown": {
+      "description": "Number of top results to include full markdown content for (0-5, default 1). Set to 0 for IDs and snippets only, or increase to get full content for multiple results.",
+      "type": "integer"
+    },
+    "limit": {
+      "description": "Max results to return (default 5)",
+      "type": "integer"
+    },
+    "node_types": {
+      "description": "Filter results to specific node types (e.g. [\"task\", \"text\"]). Use for type filtering; use 'collection' for namespace/folder filtering.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "property_filters": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Filter by node properties (AND logic, e.g. {\"status\": \"done\"})",
+      "type": "object"
+    },
+    "query": {
+      "description": "Natural language query for semantic search",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Search scope: 'knowledge' (default, searches text/header/code/schema nodes) or 'everything' (all embedded node types). Note: ai-chat conversations are not embedded, so they are never returned by search regardless of scope.",
+      "enum": [
+        "knowledge",
+        "everything"
+      ],
+      "type": "string"
+    },
+    "threshold": {
+      "description": "Minimum similarity score (0.0-1.0). Lower values return more results with less precision. Default: 0.3. Lower to 0.1-0.2 for broader recall when initial results are too few.",
+      "type": "number"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}
+
+### get_node
+description: Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with "set": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields.
+parameters_schema:
+{
+  "properties": {
+    "format": {
+      "description": "Output format: json (default) returns node fields, markdown returns the node and all descendants as a readable document",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "id": {
+      "description": "Node ID to retrieve",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+
+### create_node
+description: Create a new node. Always pass 'content' as the node name or text. Always pass 'field_values' with every schema field value the user supplied — it is the only way those values are stored, and a call without them creates an empty record. If the schema has a title_template (shown in ENTITY TYPES), include those template fields in 'field_values' — the service composes the displayed title from them automatically.
+parameters_schema:
+{
+  "properties": {
+    "content": {
+      "description": "The node name or text content",
+      "type": "string"
+    },
+    "field_values": {
+      "description": "Schema field values (e.g. {\"status\": \"active\"}). Include every field listed for this type in RELEVANT ENTITY TYPES that the user gave a value for; values omitted here are lost. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from RELEVANT ENTITY TYPES (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields. For schemas with a title_template, include the template fields (e.g. {\"name\": \"Olympics Campaign\", \"status\": \"Closed\"}).",
+      "type": "object"
+    },
+    "node_type": {
+      "description": "Node type: 'text', 'task', or a custom schema ID (e.g. 'project', 'customer'). For a custom schema ID, copy the id exactly from the RELEVANT ENTITY TYPES block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it.",
+      "type": "string"
+    },
+    "parent_id": {
+      "description": "Optional parent node ID",
+      "type": "string"
+    }
+  },
+  "required": [
+    "node_type",
+    "content"
+  ],
+  "type": "object"
+}
+
+### create_schema
+description: Create a new entity type (schema) with custom fields and relationships. The top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. 'Invoice', 'Project'). The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Customer Profile' → 'customer_profile'). After creation, use this ID as node_type when creating instances. FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), you MUST define 'name' as a text field so the template can reference it. Only define type-specific fields. If a field maps to an existing node type, define it as a relationship instead.
+parameters_schema:
+{
+  "properties": {
+    "description": {
+      "description": "Brief prose summary of what this entity type represents. This is NOT parsed into fields — define every field explicitly in \"fields\".",
+      "type": "string"
+    },
+    "fields": {
+      "description": "REQUIRED. Array of field definitions — every field on this entity type must be listed explicitly here, even if empty ([]). Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.",
+      "items": {
+        "properties": {
+          "coreValues": {
+            "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.",
+            "items": {
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "Field description",
+            "type": "string"
+          },
+          "indexed": {
+            "description": "Whether to index for search/filter",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Field name (e.g., 'status', 'email')",
+            "type": "string"
+          },
+          "required": {
+            "description": "Whether this field is required",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "Field type: text, number, date, enum, array, object, boolean",
+            "type": "string"
+          },
+          "unique": {
+            "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides.",
+            "type": "boolean"
+          },
+          "unique_case_insensitive": {
+            "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "Display name for the entity type (e.g., 'Project', 'Customer')",
+      "type": "string"
+    },
+    "relationships": {
+      "description": "Relationships to other node types. Use instead of array fields when referencing existing types (e.g., project has_task task).",
+      "items": {
+        "properties": {
+          "cardinality": {
+            "description": "Cardinality: 'one' or 'many' (default)",
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "What this relationship represents",
+            "type": "string"
+          },
+          "direction": {
+            "description": "Direction: 'out' (this→target, default) or 'in' (target→this)",
+            "enum": [
+              "out",
+              "in"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Relationship name (e.g., 'has_task', 'assigned_to', 'depends_on')",
+            "type": "string"
+          },
+          "targetType": {
+            "description": "Target node type ID — MUST be an existing type from the ENTITY TYPES list (e.g., 'task', 'project', 'customer'). Do NOT invent types that don't exist yet.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "targetType",
+          "direction",
+          "cardinality"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "title_template": {
+      "description": "Template for auto-generating node titles. Use {field_name} placeholders. RULE: every {field_name} token MUST have a matching entry in the fields array — if you write '{name}' here, you MUST add {\"name\": \"name\", \"type\": \"text\"} to fields. Missing fields cause a validation error.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "fields"
+  ],
+  "type": "object"
+}
+
+### update_schema
+description: Modify an existing schema type: add/remove/rename fields, add/remove relationships, update description or title_template. Use rename_fields to safely rename a field — it migrates all existing node property data to the new key and updates the schema definition.
+parameters_schema:
+{
+  "properties": {
+    "add_fields": {
+      "description": "Fields to add",
+      "items": {
+        "properties": {
+          "coreValues": {
+            "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.",
+            "items": {
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "description": "text, number, date, enum, boolean",
+            "type": "string"
+          },
+          "unique": {
+            "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides.",
+            "type": "boolean"
+          },
+          "unique_case_insensitive": {
+            "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "add_relationships": {
+      "description": "Relationships to add",
+      "items": {
+        "properties": {
+          "cardinality": {
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "out",
+              "in"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "targetType",
+          "direction",
+          "cardinality"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "description": {
+      "description": "New description (optional)",
+      "type": "string"
+    },
+    "remove_fields": {
+      "description": "Field names to remove",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "remove_relationships": {
+      "description": "Relationship names to remove",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "rename_fields": {
+      "description": "Fields to rename. Each entry rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "Current field name",
+            "type": "string"
+          },
+          "to": {
+            "description": "New field name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_id": {
+      "description": "ID of the schema to update (e.g. 'project', 'customer')",
+      "type": "string"
+    },
+    "title_template": {
+      "description": "New title template using {field_name} placeholders (e.g. '{name} ({status})'). All referenced fields must exist in the schema.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_id"
+  ],
+  "type": "object"
+}
+
