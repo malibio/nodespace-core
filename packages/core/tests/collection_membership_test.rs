@@ -616,7 +616,16 @@ mod collection_service_tests {
     }
 
     #[tokio::test]
-    async fn test_collection_name_uniqueness_enforced() -> Result<()> {
+    async fn test_collection_name_uniqueness_is_best_effort_not_enforced() -> Result<()> {
+        // NodeSpace is local-first: a collection-name collision is suggest-don't-block
+        // (non-blocking `_possible_duplicate` marker on both sides), never a hard
+        // rejection — a hard error here would propagate straight out of
+        // `nodespace-sync`'s `apply_node_upsert` and permanently wedge the sync
+        // cursor on a benign duplicate name. See
+        // `tests/collection_name_convergence_test.rs` for the full adversarial
+        // convergence coverage of this behavior; this test only re-confirms that
+        // `resolve_path`'s deterministic-id get-or-create still avoids ever hitting
+        // the collision in the first place for its own callers.
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
 
@@ -633,44 +642,72 @@ mod collection_service_tests {
             "resolve_path should reuse existing collection"
         );
 
-        // Also verify that creating a collection node directly with duplicate name fails
+        // A caller that creates a collection node directly (bypassing resolve_path's
+        // deterministic id) with a colliding name — e.g. a sync-pulled peer node —
+        // must succeed, not error, and both nodes must be marked as possible
+        // duplicates.
         use nodespace_core::models::Node;
         let duplicate_node = Node::new(
             "collection".to_string(),
             "unique-test".to_string(),
             serde_json::json!({}),
         );
-        let result = store.create_node(duplicate_node, None, None).await;
-        assert!(result.is_err(), "Creating duplicate collection should fail");
-        let err_msg = result.unwrap_err().to_string();
+        let duplicate_id = duplicate_node.id.clone();
+        let created = store.create_node(duplicate_node, None, None).await?;
+        assert_eq!(created.id, duplicate_id);
+
+        let first = store.get_node(&first_id).await?.unwrap();
+        let duplicate = store.get_node(&duplicate_id).await?.unwrap();
+        let marked = |n: &Node| {
+            n.properties
+                .get("collection")
+                .and_then(|p| p.get("_possible_duplicate"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
+        assert!(marked(&first), "the pre-existing collection must be marked");
         assert!(
-            err_msg.contains("already exists"),
-            "Error should mention collection already exists: {}",
-            err_msg
+            marked(&duplicate),
+            "the newly-created collection must be marked"
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_collection_uniqueness_case_insensitive() -> Result<()> {
+    async fn test_collection_uniqueness_case_insensitive_is_marked_not_rejected() -> Result<()> {
         let (store, node_service, _temp_dir) = create_test_services().await?;
         let collection_service = CollectionService::new(&store, &node_service);
 
         // Create collection with lowercase name
-        collection_service.resolve_path("engineering").await?;
+        let resolved = collection_service.resolve_path("engineering").await?;
+        let first_id = resolved.leaf_id().to_string();
 
-        // Try to create with different case - should fail
+        // Create with different case, directly (bypassing resolve_path's
+        // deterministic id) — must succeed and mark both sides, not error.
         use nodespace_core::models::Node;
         let uppercase_node = Node::new(
             "collection".to_string(),
             "ENGINEERING".to_string(),
             serde_json::json!({}),
         );
-        let result = store.create_node(uppercase_node, None, None).await;
+        let uppercase_id = uppercase_node.id.clone();
+        let created = store.create_node(uppercase_node, None, None).await?;
+        assert_eq!(created.id, uppercase_id);
+
+        let first = store.get_node(&first_id).await?.unwrap();
+        let uppercase = store.get_node(&uppercase_id).await?.unwrap();
+        let marked = |n: &Node| {
+            n.properties
+                .get("collection")
+                .and_then(|p| p.get("_possible_duplicate"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
+        assert!(marked(&first), "the pre-existing collection must be marked");
         assert!(
-            result.is_err(),
-            "Creating collection with same name (different case) should fail"
+            marked(&uppercase),
+            "the newly-created, differently-cased collection must be marked"
         );
 
         Ok(())
