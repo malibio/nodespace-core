@@ -16,15 +16,29 @@
 //!
 //! ## The five sites this covers
 //!
-//! 1. **Resident system prompt** — [`PromptAssembler::assemble_static`],
-//!    which composes the seeded `agent-guidance` nodes
+//! 1. **Resident system prompt** — `assemble_resident_system_prompt` (defined
+//!    in this file), which composes the seeded `agent-guidance` nodes
 //!    (`PromptAssembler::seed_agent_guidance_nodes`, sourced from
-//!    `agent_guidance.rs`) through the same Minijinja rendering `assemble()`
-//!    uses. `assemble_static` skips only the graph fetch — a DB round-trip
-//!    that hands back the identical committed seed content — not any
-//!    model-facing logic; it is `PromptAssembler`'s own documented DB-free
-//!    test path ("Intended for use in unit/integration tests where no DB is
-//!    available").
+//!    `agent_guidance.rs`) the same way `PromptAssembler::assemble()` does:
+//!    each seed's `markdown_content` is parsed into a node subtree via
+//!    `prepare_nodes_from_template` (`assemble()`'s callers seed the graph
+//!    with exactly this), flattened via the real `flatten_subtree_content`
+//!    (matching `fetch_prompt_body`'s traversal), THEN rendered through
+//!    Minijinja and joined.
+//!
+//!    Deliberately does NOT use `PromptAssembler::assemble_static()` — that
+//!    helper renders each seed's raw `markdown_content` string directly,
+//!    skipping the parse+flatten step entirely. For a single-line seed body
+//!    that's a no-op, but `agent_guidance.rs`'s `TOOL_STRATEGY_RULES`/
+//!    `SCHEMA_CREATION_RULES` bodies are multi-line with `"HEADER:\n- bullet"`
+//!    structure: `prepare_nodes_from_template` parses each bullet into a
+//!    child node (stripping the `"- "` prefix) and `flatten_subtree_content`
+//!    rejoins them with blank lines — a materially different string than the
+//!    raw source text `assemble_static` would emit. `fetch_prompt_body`'s own
+//!    doc comment names the historical bug this exact mechanism guards
+//!    against ("seed prompt body dropped" — a direct-children-only flatten
+//!    silently ate the bullets). Using `assemble_static` here would leave
+//!    that mechanism, and any regression in it, outside this gate.
 //! 2. **Stage-2 candidate block** — `routing::render_candidates_for_prompt`,
 //!    including each candidate's rendered instruction subtree.
 //! 3. **Stage-2 tool surface** — `routing::stage2_tools`: names,
@@ -121,7 +135,20 @@ const FIXTURE_DATE: &str = "2026-06-15";
 /// `context.format_for_prompt(4000)` call. Using the same number here means
 /// a future change to that budget is itself a change this gate would need a
 /// golden update for, rather than an untested constant.
+///
+/// The fixture's rendered context is far under this budget (well under 1000
+/// chars), so `format_for_prompt`'s per-section truncation branches (the
+/// `out.len() + line.len() > max_chars` checks) are NOT exercised here —
+/// this gate only pins the budget *value*, not truncation behavior at the
+/// boundary. That's `context_ops.rs`'s own unit-test territory, not
+/// something a fixed fixture at snapshot precision is a good fit for (a
+/// fixture sized to sit exactly at the boundary would be one content change
+/// away from silently drifting off it).
 const WORKSPACE_CONTEXT_MAX_CHARS: usize = 4000;
+
+/// Fixed fixture model name — never read from `model_manager` or any
+/// runtime source, so this text never varies with what's actually installed.
+const FIXTURE_MODEL_NAME: &str = "gemma-4-E4B-it-Q4_K_M";
 
 // ---------------------------------------------------------------------------
 // Schema fixtures — stand in for what semantic schema retrieval would return
@@ -280,9 +307,14 @@ fn fixture_schema_metadata() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// Skill-candidate fixtures — real seeded skill content, no DB
+// Shared subtree-flatten helper — used by both the resident-prompt and
+// skill-candidate fixtures below.
 // ---------------------------------------------------------------------------
 
+/// Build the `(node_map, adjacency_list)` pair `flatten_subtree_content`
+/// expects, directly from a `prepare_nodes_from_template` parse — the same
+/// shape `get_subtree_data` would hand back from a real DB for the
+/// equivalent seeded node, minus the round trip.
 fn build_node_map_and_adjacency(
     prepared: &[PreparedNode],
 ) -> (HashMap<String, Node>, HashMap<String, Vec<String>>) {
@@ -307,6 +339,58 @@ fn build_node_map_and_adjacency(
     }
     (node_map, adjacency)
 }
+
+// ---------------------------------------------------------------------------
+// Resident system prompt fixture — real seed -> parse -> flatten -> render,
+// no DB. Deliberately reimplements `PromptAssembler::assemble()`'s
+// composition using the same building blocks, rather than calling
+// `PromptAssembler::assemble_static()` — see the module doc comment for why
+// that helper is not a faithful stand-in for multi-line seed bodies.
+// ---------------------------------------------------------------------------
+
+/// One seed's contribution to the resident prompt: parse its
+/// `markdown_content` into a node subtree exactly as first-run seeding does
+/// (`prepare_nodes_from_template`), flatten it exactly as
+/// `PromptAssembler::fetch_prompt_body` does (`flatten_subtree_content`,
+/// joined with `"\n\n"`), then render through Minijinja exactly as
+/// `PromptAssembler::render_template` does (raw text on a render error,
+/// never a panic). Returns `None` for an empty body, matching `assemble()`'s
+/// own skip.
+fn render_seed_prompt_section(
+    tmpl: &NodeTemplate,
+    ctx: &nodespace_agent::prompt_assembler::TemplateContext,
+) -> Option<String> {
+    let prepared = prepare_nodes_from_template(tmpl).expect("seed prompt template parses");
+    let root_id = prepared[0].id.clone();
+    let (node_map, adjacency) = build_node_map_and_adjacency(&prepared);
+    let body = flatten_subtree_content(&root_id, &node_map, &adjacency).join("\n\n");
+    if body.trim().is_empty() {
+        return None;
+    }
+    let env = minijinja::Environment::new();
+    Some(env.render_str(&body, ctx).unwrap_or(body))
+}
+
+/// The full resident system prompt: every seed section from
+/// `PromptAssembler::seed_agent_guidance_nodes()` (the real production seed
+/// list — `agent_guidance.rs` content included), rendered and joined the
+/// same way `PromptAssembler::assemble()` joins its sections.
+fn assemble_resident_system_prompt(workspace_context: &str) -> String {
+    let ctx = nodespace_agent::prompt_assembler::TemplateContext {
+        current_date: FIXTURE_DATE.to_string(),
+        model_name: FIXTURE_MODEL_NAME.to_string(),
+        workspace_context: workspace_context.to_string(),
+    };
+    let sections: Vec<String> = PromptAssembler::seed_agent_guidance_nodes()
+        .iter()
+        .filter_map(|tmpl| render_seed_prompt_section(tmpl, &ctx))
+        .collect();
+    sections.join("\n\n")
+}
+
+// ---------------------------------------------------------------------------
+// Skill-candidate fixtures — real seeded skill content, no DB
+// ---------------------------------------------------------------------------
 
 /// Render a seeded skill's instruction subtree to markdown the same way
 /// production does: `skill_ops::render_skill_instructions` fetches
@@ -524,7 +608,7 @@ mod golden {
 fn resident_system_prompt_matches_golden() {
     let workspace_context =
         fixture_workspace_context().format_for_prompt(WORKSPACE_CONTEXT_MAX_CHARS);
-    let system_prompt = PromptAssembler::assemble_static(&workspace_context, Some(FIXTURE_DATE));
+    let system_prompt = assemble_resident_system_prompt(&workspace_context);
     golden::assert_matches("resident_system_prompt", &system_prompt);
 }
 
