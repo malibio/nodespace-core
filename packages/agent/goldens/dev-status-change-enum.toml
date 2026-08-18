@@ -117,7 +117,7 @@ LISTING BY TYPE: to list every node of a type, use an empty query with \
 node_type set.
 
 FILTERING BY FIELD: to narrow by a stored value, pass filters. Copy the type \
-id and the field name exactly as they appear below.
+id and the field name exactly as they appear in EXISTING SCHEMAS.
 
 EXISTING SCHEMAS (do not recreate these; do not copy their \
 fields onto a new type):

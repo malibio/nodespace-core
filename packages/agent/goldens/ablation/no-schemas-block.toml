@@ -1,4 +1,5 @@
 name = "no-schemas-block"
+# derived-from: dev-status-change-enum.toml — the base this arm subtracts from.
 reps = 3
 
 notes = """
@@ -83,8 +84,8 @@ would be rejected.
 Size, measured on the POST-TEMPLATE prompt via NODESPACE_PROMPT_DUMP (see
 no-candidate-block.toml for why that is the figure quoted):
 
-  turn 1   2708 -> 2036
-  turn 2   4091 -> 3416
+  turn 1   2681 -> 2031
+  turn 2   4401 -> 3762
 
 Both enum values collapsed to prose, in both turns, in all three reps:
 

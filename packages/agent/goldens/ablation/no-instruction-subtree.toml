@@ -1,4 +1,5 @@
 name = "no-instruction-subtree"
+# derived-from: dev-status-change-enum.toml — the base this arm subtracts from.
 reps = 3
 
 notes = """
@@ -55,8 +56,8 @@ whole mechanism bought nothing measurable on this case.
 Size, measured on the POST-TEMPLATE prompt via NODESPACE_PROMPT_DUMP (see
 no-candidate-block.toml for why that is the figure quoted):
 
-  turn 1   2708 -> 2412
-  turn 2   4091 -> 3515
+  turn 1   2681 -> 2371
+  turn 2   4401 -> 3828
 
 ISOLATION CORRECTED AFTER REVIEW
 

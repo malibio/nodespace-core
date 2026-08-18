@@ -1,4 +1,5 @@
 name = "no-candidate-block"
+# derived-from: dev-status-change-enum.toml — the base this arm subtracts from.
 reps = 3
 
 notes = """
@@ -50,11 +51,18 @@ unambiguous referent: the `system` field alone, the escaped `--check`
 rendering, and the full prompt are three different numbers, and quoting the
 wrong one is how a size claim stops reproducing.
 
-  turn 1   2708 -> 1788   (-34%)
-  turn 2   4091 -> 2790   (-32%)
+  turn 1   2681 -> 1765   (-34%)
+  turn 2   4401 -> 3136   (-29%)
 
 A third of the prompt, at no measured cost on this case. What remains is
 COLLECTIONS, EXISTING SCHEMAS, and the tool surface.
+
+Turn 1 and turn 2 carry BYTE-IDENTICAL system prompts in this arm. That is
+correct and unavoidable, not content lost by accident: everything that
+distinguished the two turns lived in the candidate block, and this arm removes
+it. What still differs between the turns is the user message, the tool surface,
+and the chained history. Noted because a reader diffing the two system strings
+would otherwise suspect a truncation bug.
 
 Read against ADR-064 rule 2: tool selection belongs to the tool description
 channel, and here the tool descriptions alone were sufficient to select the
