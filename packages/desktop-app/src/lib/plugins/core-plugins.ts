@@ -700,8 +700,9 @@ export const personNodePlugin: PluginDefinition = {
  *
  * Two surfaces predate this rule and still contradict it: `person` and `ai-chat` carry
  * slash commands above, and `createPluginFromSchema` generates one for every user-defined
- * schema type. Each removes a working affordance if changed, so each needs its own
- * decision — do not read either as precedent for adding new entity-type slash commands.
+ * schema type. Both are slated for removal — entity types reach creation through the
+ * sidenav's type view instead — so do not read either as precedent for adding new
+ * entity-type slash commands.
  *
  * `project` therefore has no plugin here at all. If you are here because `/project` seems
  * to be "missing", it is absent by decision, not by oversight. Note that `project` renders
