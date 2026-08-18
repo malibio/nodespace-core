@@ -11,16 +11,26 @@
   match) or keep-as-new (dismiss, keep editing this node). This is
   suggest-don't-block by design: the field save above is never gated on the
   lookup, and create-anyway always remains possible.
+
+  Convergence duplicate indicator (ADR-065 §4, core#2116): a duplicate that
+  slips past the creation-time suggestion above (offline write, sync
+  convergence) gets detected out-of-band and stamped onto BOTH colliding
+  nodes as `properties.person._possible_duplicate`. When that marker is set,
+  a small "Possible duplicate" badge appears; clicking it re-runs the exact
+  same lookup and reuses the exact same suggestion UI as the blur-triggered
+  check above — no separate merge/resolution machinery.
 -->
 
 <script lang="ts">
   import { Input } from '$lib/components/ui/input';
   import { Alert, AlertDescription } from '$lib/components/ui/alert';
+  import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { createLogger } from '$lib/utils/logger';
+  import { isPossibleDuplicate } from '$lib/utils/possible-duplicate';
   import type { Node } from '$lib/types';
   import RelationshipViewerModal from '$lib/components/relationships/relationship-viewer-modal.svelte';
   import WaypointsIcon from '@lucide/svelte/icons/waypoints';
@@ -50,6 +60,12 @@
   // error path — never clobbers a newer, still-valid result.
   let duplicateMatch = $state<Node | null>(null);
   let checkedForEmail: string | null = null;
+
+  // Convergence duplicate indicator (ADR-065 §4, core#2116): true once
+  // out-of-band detection (offline write, sync convergence) has stamped
+  // `properties.person._possible_duplicate` on this node — independent of
+  // (and typically set well after) the blur-triggered check above.
+  const isFlaggedDuplicate = $derived(isPossibleDuplicate(node));
 
   // A component instance can be reused across different person nodes (no
   // `{#key nodeId}` at the call site) — reset the suggestion when the node
@@ -136,6 +152,22 @@
     }
   }
 
+  /**
+   * Entry point for the convergence duplicate indicator badge (core#2116):
+   * re-runs the exact same lookup `checkForDuplicate` performs on blur,
+   * reusing the exact same suggestion UI (`duplicateMatch` +
+   * adoptExisting/dismissDuplicateSuggestion below) rather than a parallel
+   * resolution path. Clears `checkedForEmail` first so the lookup isn't
+   * skipped as "already checked" — the badge exists precisely because a
+   * marker set by out-of-band detection can be stale relative to whatever
+   * this form last checked (or never checked at all, if the marker was set
+   * before this form ever loaded).
+   */
+  function recheckPossibleDuplicate() {
+    checkedForEmail = null;
+    void checkForDuplicate(email);
+  }
+
   function dismissDuplicateSuggestion() {
     // "Keep as new" — create-anyway. Nothing to undo: the field save already
     // went through above: this only clears the suggestion banner.
@@ -184,6 +216,22 @@
       onblur={handleEmailBlur}
     />
   </div>
+
+  {#if isFlaggedDuplicate && !duplicateMatch}
+    <!-- Convergence duplicate indicator (ADR-065 §4, core#2116): informational,
+         non-modal — never blocks editing this node. Clicking re-runs the same
+         lookup as the blur check and reuses the Alert below, rather than
+         showing a second, different suggestion UI. -->
+    <button type="button" class="possible-duplicate-trigger" onclick={recheckPossibleDuplicate}>
+      <Badge
+        variant="outline"
+        class="border-yellow-500 text-yellow-700 dark:text-yellow-400"
+      >
+        <UserRoundSearchIcon class="h-3 w-3" />
+        Possible duplicate — click to review
+      </Badge>
+    </button>
+  {/if}
 
   {#if duplicateMatch}
     <Alert variant="warning">
@@ -251,5 +299,16 @@
   .duplicate-actions {
     display: flex;
     gap: 0.5rem;
+  }
+
+  /* Reset: the badge trigger is a <button> for accessibility/click semantics,
+     not for its default chrome — the Badge inside supplies the visible pill. */
+  .possible-duplicate-trigger {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
   }
 </style>

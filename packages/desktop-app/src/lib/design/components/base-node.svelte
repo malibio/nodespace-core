@@ -547,6 +547,11 @@
   // Pro-only inline badge for sync conflict "losers". Renders nothing
   // unless this node has a preserved superseded edit, so it is inert in community.
   import RecoveredItemsBadge from '$lib/components/recovered-items-badge.svelte';
+  // Convergence duplicate indicator (ADR-065 §4, core#2116). Renders nothing
+  // unless this node is a `person` currently flagged
+  // `properties.person._possible_duplicate`, so it is inert for every other
+  // node type and for unflagged people.
+  import PossibleDuplicateBadge from '$lib/components/possible-duplicate-badge.svelte';
 
   // Event dispatcher - aligned with NodeViewerEventDetails interface
   const dispatch = createEventDispatcher<{
@@ -949,6 +954,7 @@
   {/if}
 
   <RecoveredItemsBadge {nodeId} />
+  <PossibleDuplicateBadge {nodeId} />
 </div>
 
 <!-- Professional Node Autocomplete Component -->

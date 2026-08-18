@@ -66,12 +66,12 @@ mod offline_convergence_tests {
         Ok(id)
     }
 
+    /// Delegates to the real read-side accessor under test
+    /// (`NodeService::is_possible_duplicate`) rather than re-deriving the
+    /// property path locally, so every assertion below that calls `marker()`
+    /// doubles as coverage of the accessor itself.
     fn marker(n: &Node) -> bool {
-        n.properties
-            .get("person")
-            .and_then(|p| p.get("_possible_duplicate"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        NodeService::is_possible_duplicate(n)
     }
 
     #[tokio::test]
@@ -502,6 +502,78 @@ mod offline_convergence_tests {
 
         assert!(hub.service.get_node(&a_id).await?.is_some());
         assert!(hub.service.get_node(&b_id).await?.is_some());
+
+        Ok(())
+    }
+
+    /// `NodeService::is_possible_duplicate` is the read-side accessor the
+    /// desktop UI badge relies on (core#2116) to decide whether to render —
+    /// it must default to `false` for every "nothing to show" shape (a fresh
+    /// node with no marker property at all, and a node whose marker was
+    /// explicitly written as `false`), and only ever report `true` once
+    /// `mark_possible_duplicates` has actually stamped it. This is a pure,
+    /// synchronous reader — no store round-trip — so it is exercised directly
+    /// against `Node` values rather than through a `Device`.
+    #[tokio::test]
+    async fn is_possible_duplicate_defaults_false_and_reflects_the_written_marker() -> Result<()> {
+        let unmarked = Node::new(
+            "person".to_string(),
+            "Alice".to_string(),
+            json!({ "person": { "name": "Alice", "email": "alice@example.com" } }),
+        );
+        assert!(
+            !NodeService::is_possible_duplicate(&unmarked),
+            "a node with no marker property at all must read as not-flagged"
+        );
+
+        let explicitly_false = Node::new(
+            "person".to_string(),
+            "Alice".to_string(),
+            json!({ "person": { "name": "Alice", "_possible_duplicate": false } }),
+        );
+        assert!(
+            !NodeService::is_possible_duplicate(&explicitly_false),
+            "an explicit `false` marker must read as not-flagged, same as absent"
+        );
+
+        // Exercise the real write path (mark_possible_duplicates) end to end,
+        // then confirm the accessor sees exactly what it wrote — the accessor
+        // is the read-side counterpart, so it must never disagree with the
+        // writer about the property's location or shape.
+        let device_a = device().await?;
+        let alice_id = device_a
+            .service
+            .create_node(Node::new(
+                "person".to_string(),
+                "Alice".to_string(),
+                json!({ "person": { "name": "Alice", "email": "alice@example.com" } }),
+            ))
+            .await?;
+        let device_b = device().await?;
+        let bob_id = device_b
+            .service
+            .create_node(Node::new(
+                "person".to_string(),
+                "Bob".to_string(),
+                json!({ "person": { "name": "Bob", "email": "alice@example.com" } }),
+            ))
+            .await?;
+        let bobs_node = device_b.service.get_node(&bob_id).await?.unwrap();
+        apply_incoming(&device_a.service, bobs_node).await?;
+
+        let before = device_a.service.get_node(&alice_id).await?.unwrap();
+        assert!(
+            !NodeService::is_possible_duplicate(&before),
+            "not flagged until mark_possible_duplicates actually runs"
+        );
+
+        assert!(device_a.service.mark_possible_duplicates(&bob_id).await?);
+
+        let after = device_a.service.get_node(&alice_id).await?.unwrap();
+        assert!(
+            NodeService::is_possible_duplicate(&after),
+            "must read true once mark_possible_duplicates has written it"
+        );
 
         Ok(())
     }

@@ -266,6 +266,44 @@ impl NodeService {
         Ok(true)
     }
 
+    /// Read-side counterpart to `mark_possible_duplicates`: does `node` carry
+    /// the convergence "possible duplicate" marker (ADR-065 §4)?
+    ///
+    /// Pure and synchronous — no store access, since the marker lives on the
+    /// `Node` a caller already has in hand (from `get_node`, `query_nodes`, a
+    /// `WatchNodes` push, etc.), never requiring a fresh fetch just to answer
+    /// this question. Reads the same `properties.<node_type>._possible_duplicate`
+    /// path `mark_possible_duplicates` writes, via the same single-source-of-truth
+    /// `core_schemas::POSSIBLE_DUPLICATE_FIELD` constant, so the two can never
+    /// disagree on the marker's location.
+    ///
+    /// Generic across node types by construction, matching
+    /// `mark_possible_duplicates`: any schema that declares the marker field
+    /// (today, only `person`) is readable here without a type-specific accessor.
+    /// Returns `false` for a node with no properties under its own type, a
+    /// missing/non-boolean marker, or a marker explicitly set to `false` — the
+    /// marker is only ever meaningfully `true` (see `mark_possible_duplicates`,
+    /// which only ever writes `true`; nothing currently clears it).
+    ///
+    /// This is the accessor the desktop UI badge (property panel + inline node
+    /// view) reads to decide whether to render — see `person-schema-form.svelte`
+    /// and `possible-duplicate-badge.svelte`. The frontend does not call this
+    /// method directly (no RPC wraps it): `node.properties` already reaches the
+    /// frontend unfiltered on every existing read path, so the desktop side has
+    /// its own equivalent TypeScript accessor (`isPossibleDuplicate` in
+    /// `lib/utils/possible-duplicate.ts`) reading the same field name rather
+    /// than parsing raw properties ad hoc at each call site. This Rust method
+    /// exists so any *backend* consumer (a future query filter, a gRPC field, a
+    /// sync-side check) has the same single, tested source of truth instead of
+    /// re-deriving the property path.
+    pub fn is_possible_duplicate(node: &Node) -> bool {
+        node.properties
+            .get(&node.node_type)
+            .and_then(|p| p.get(crate::models::core_schemas::POSSIBLE_DUPLICATE_FIELD))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
     /// Get schema definition for a given node type
     pub async fn get_schema_for_type(
         &self,

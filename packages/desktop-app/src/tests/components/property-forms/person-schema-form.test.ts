@@ -254,3 +254,100 @@ describe('PersonSchemaForm — adopt-existing suggestion', () => {
     expect(screen.queryByText(/already exists/i)).toBeNull();
   });
 });
+
+/**
+ * Convergence duplicate indicator badge (ADR-065 §4, core#2116). Distinct
+ * from the blur-triggered suggestion above: this marker is stamped
+ * out-of-band (offline write, sync convergence) rather than by anything this
+ * form's own blur handler did — so it can be present on first render, before
+ * any field has ever been touched. Clicking the badge must reuse the exact
+ * same lookup + Alert UI as the blur-triggered suggestion, not a separate
+ * mechanism.
+ */
+describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
+  it('shows no badge for a person node without the marker', () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(personNode());
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    expect(screen.queryByText(/Possible duplicate/i)).toBeNull();
+  });
+
+  it('shows the badge on first render when the node already carries the marker', () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    expect(screen.getByText(/Possible duplicate/i)).toBeTruthy();
+    // No lookup has been triggered yet — the badge is inert until clicked.
+    expect(findDuplicateForSpy).not.toHaveBeenCalled();
+  });
+
+  it('clicking the badge re-runs the lookup and reuses the same adopt-existing Alert', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(existingMatch());
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i));
+
+    expect(findDuplicateForSpy).toHaveBeenCalledWith(
+      'person',
+      'email',
+      'alice@example.com',
+      'person-1'
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/already exists: Bob Existing/i)).toBeTruthy()
+    );
+    // The same buttons the blur-triggered suggestion uses — one Alert
+    // implementation, not a second parallel one.
+    expect(screen.getByRole('button', { name: 'Use existing' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep as new' })).toBeTruthy();
+  });
+
+  it('hides the badge trigger while the reused Alert is showing (no duplicate UI stacking)', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(existingMatch());
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i));
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+
+    expect(screen.queryByRole('button', { name: /Possible duplicate/i })).toBeNull();
+  });
+
+  it('"Use existing" from the badge-triggered Alert navigates and is non-destructive', async () => {
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
+      personNode({
+        properties: {
+          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+        }
+      })
+    );
+    findDuplicateForSpy.mockResolvedValue(existingMatch());
+    render(PersonSchemaForm, { props: { nodeId: 'person-1' } });
+
+    await fireEvent.click(screen.getByText(/Possible duplicate/i));
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Use existing' }));
+
+    expect(navigateToNodeInOtherPane).toHaveBeenCalledWith('person-existing');
+    expect(updateNodeSpy).not.toHaveBeenCalled();
+  });
+});
