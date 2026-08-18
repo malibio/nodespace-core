@@ -684,6 +684,33 @@ export const personNodePlugin: PluginDefinition = {
   }
 };
 
+/**
+ * Which types get a slash command
+ *
+ * Slash commands are for **content primitives** — the building blocks you type while
+ * outlining: text, headers, checkboxes, code, quotes, ordered lists, rules, tables.
+ * `task` is the one deliberate exception, because capturing a task mid-thought is core to
+ * outlining.
+ *
+ * Entity types should **not** be slash-creatable — neither core entity types nor
+ * user-defined schema types. Projects, collections, documents and users are containers and
+ * records set up deliberately — by the agent, or through the schema/entity surfaces — not
+ * typed in ad hoc mid-outline. They stay reachable: most core entity types are listed in
+ * the sidenav as user-queryable types and open to schema-driven properties forms
+ * (`SIDENAV_CORE_TYPES`), and the rest reach creation through a surface of their own.
+ *
+ * Two surfaces predate this rule and still contradict it: `person` and `ai-chat` carry
+ * slash commands above, and `createPluginFromSchema` generates one for every user-defined
+ * schema type. Both are slated for removal — `person` and user-defined types already
+ * reach creation through the sidenav's type view, and `ai-chat` gets a dedicated sidebar
+ * section before its command goes — so do not read either as precedent for adding new
+ * entity-type slash commands.
+ *
+ * `project` therefore has no plugin here at all. If you are here because `/project` seems
+ * to be "missing", it is absent by decision, not by oversight. Note that `project` renders
+ * as a read-only entity row regardless — that follows from having no inline node component
+ * (see `rendersAsEntityRow`), independent of registration.
+ */
 export const corePlugins = [
   textNodePlugin,
   headerNodePlugin,

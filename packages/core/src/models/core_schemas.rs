@@ -241,6 +241,17 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
         // Project schema - container for tasks, milestones, related work.
         // Name is the node `content`; ownership/membership are graph edges, not
         // properties (Universal Graph). Enum values validated by the schema system.
+        //
+        // Intentionally not slash-command-creatable. Slash commands are reserved for
+        // content primitives (text, headers, checkboxes, code, quotes, ordered lists,
+        // rules, tables) plus `task`; entity types like `project` are containers set up
+        // deliberately — by the agent, or via the schema/entity surfaces — rather than
+        // typed in ad hoc mid-outline. If `/project` appears to be "missing", it is absent
+        // by decision, not by oversight.
+        //
+        // This crate cannot enforce that: slash commands and the surfaces that keep
+        // projects reachable are frontend concerns. The rule and its known exceptions live
+        // next to the plugin registry, in the desktop app's `core-plugins.ts`.
         SchemaNode {
             id: "project".to_string(),
             content: "Project".to_string(),
