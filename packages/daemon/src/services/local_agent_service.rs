@@ -1968,7 +1968,7 @@ fn terse_write_fact(w: &AiChatCompletedWrite) -> Option<String> {
         "create_node" => {
             let node_type = args.get("node_type").and_then(|v| v.as_str());
             let props = args
-                .get("properties")
+                .get("field_values")
                 .and_then(|v| v.as_object())
                 .filter(|o| !o.is_empty());
             let prop_list = props.map(|o| {
@@ -2001,7 +2001,7 @@ fn terse_write_fact(w: &AiChatCompletedWrite) -> Option<String> {
         "update_node" => {
             let id = w.node_id.as_deref()?;
             let props = args
-                .get("properties")
+                .get("field_values")
                 .and_then(|v| v.as_object())
                 .filter(|o| !o.is_empty());
             let prop_list = props.map(|o| {
@@ -3470,6 +3470,48 @@ model = "model-b"
         assert_eq!(
             prior[1].canonical_args, "sha256:abc123",
             "a digested identity must be carried through unchanged"
+        );
+    }
+
+    /// #2123 regression: the wire parameter carrying field values on
+    /// create_node/update_node was renamed from `properties` to `field_values`
+    /// (a parameter literally named `properties` collides with JSON Schema's
+    /// own `properties` keyword and is silently dropped by the Gemma-4 chat
+    /// template before the model ever sees it). `terse_write_fact` reads a
+    /// completed write's recorded canonical args by that same key to render
+    /// the "Fact: ..." line a later turn's history depends on, so it must read
+    /// `field_values` — pins the exact key against a rendered assertion, not
+    /// merely "does not panic", so a regression back to the old key name
+    /// (which would silently render `None` for the field values) is caught.
+    #[test]
+    fn terse_write_fact_reads_field_values_key() {
+        let history = node_history_from_messages(vec![AiChatMessage {
+            role: "assistant".to_string(),
+            content: "Marked the invoice as paid.".to_string(),
+            timestamp: None,
+            reasoning: None,
+            completed_writes: vec![AiChatCompletedWrite {
+                tool: "update_node".to_string(),
+                node_id: Some("nodespace://n1".to_string()),
+                summary: None,
+                canonical_args: r#"{"id":"nodespace://n1","field_values":{"status":"paid"}}"#
+                    .to_string(),
+            }],
+            question: None,
+            options: Vec::new(),
+        }]);
+
+        let assistant = history
+            .iter()
+            .find(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant message present");
+        assert!(
+            assistant.content.contains("status") && assistant.content.contains("paid"),
+            "the terse fact must surface the field value recorded under \
+             'field_values' — production's actual wire key since #2123 — \
+             instead of silently omitting it the way it would if this still \
+             read the old 'properties' key: {:?}",
+            assistant.content
         );
     }
 

@@ -159,7 +159,7 @@ async fn state_change_either_persists_or_is_rejected_never_silently_succeeds() {
                 json!({
                     "content": title,
                     "node_type": "task",
-                    "properties": {"status": "in_progress"},
+                    "field_values": {"status": "in_progress"},
                 }),
             )
             .await

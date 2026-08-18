@@ -103,7 +103,7 @@ async fn create_polestar_task(executor: &GraphToolExecutor) -> String {
             json!({
                 "content": "Schedule chip upgrade on the Polestar",
                 "node_type": "task",
-                "properties": {"status": "in_progress"},
+                "field_values": {"status": "in_progress"},
             }),
         )
         .await
@@ -192,7 +192,7 @@ async fn deterministic_unset_field_name_round_trips_through_update_node() {
     let outcome = executor
         .execute(
             "update_node",
-            json!({ "id": node_id, "properties": { field_name.clone(): "2026-08-06" } }),
+            json!({ "id": node_id, "field_values": { field_name.clone(): "2026-08-06" } }),
         )
         .await
         .expect("update_node must accept a schema-defined field name");
@@ -695,7 +695,7 @@ async fn live_model_recovers_from_a_bad_enum_value_without_asking() {
                 json!({
                     "content": "Renew the parking permit",
                     "node_type": "task",
-                    "properties": {"status": "open"},
+                    "field_values": {"status": "open"},
                 }),
             )
             .await
