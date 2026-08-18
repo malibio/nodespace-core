@@ -155,6 +155,10 @@ THE VALUES: put every particular the user supplied into field_values. Work \
 through their message value by value and check each against the type's field \
 list before calling. field_values is the ONLY way any value is stored — a \
 value left out is lost silently while the record still reports as saved.
+
+RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text; blocked_by: text [title_template: {title}]
 """
 user = """
 File a ticket for dana to fix the flaky retry test in sprint S-25 — it's \

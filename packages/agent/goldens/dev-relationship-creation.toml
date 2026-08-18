@@ -78,7 +78,6 @@ node_type set.
 RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
-- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
 user = "Show me our ADRs"
 expect = """
@@ -147,7 +146,6 @@ fact and still reports success.
 RELEVANT ENTITY TYPES (existing types — do not recreate; do not copy their \
 fields onto a new type):
 - adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
-- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
 """
 user = "ADR-12 replaces the old caching one"
 expect = """
