@@ -255,6 +255,43 @@ pub struct SchemaNode {
     pub properties_header_summary_template: Option<String>,
 }
 
+/// Parses the `fields` array out of a schema node's stored properties.
+///
+/// A parse failure (malformed/legacy field JSON) is intentionally NOT
+/// surfaced by widening `from_node`'s `Result` — `node_to_typed_value` (the
+/// sole caller reachable from every entry point: Tauri commands, MCP, HTTP)
+/// feeds `nodes_to_typed_values`, which `.collect()`s a
+/// `Vec<Result<_, _>>` into a single `Result<Vec<_>, _>`; turning this into
+/// an `Err` would fail an entire batch read over one unrelated bad schema
+/// node. Instead this returns a ready-to-print diagnostic line alongside the
+/// (necessarily empty, on failure) field list, so the caller can surface it
+/// without silently dropping the data.
+///
+/// `nodespace-types` deliberately carries no logging dependency (see the
+/// crate-level doc comment), so the diagnostic is plain text for the caller
+/// to print via `eprintln!` — the closest thing to "a log line" available
+/// without pulling in `tracing`/`log`, and one that fires the same way no
+/// matter which binary (Tauri app, daemon, CLI) embeds this crate.
+fn parse_fields(
+    properties: &serde_json::Value,
+    node_id: &str,
+) -> (Vec<SchemaField>, Option<String>) {
+    match properties.get("fields") {
+        None => (Vec::new(), None),
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(fields) => (fields, None),
+            Err(e) => (
+                Vec::new(),
+                Some(format!(
+                    "nodespace-types: SchemaNode::from_node: failed to parse `fields` for \
+                     schema node `{node_id}`: {e} — reading back as an empty field list. \
+                     Likely a stale/corrupted storage format."
+                )),
+            ),
+        },
+    }
+}
+
 impl SchemaNode {
     pub fn from_node(node: Node) -> Result<Self, String> {
         if node.node_type != "schema" {
@@ -281,11 +318,10 @@ impl SchemaNode {
             .unwrap_or_default()
             .to_string();
 
-        let fields: Vec<SchemaField> = node
-            .properties
-            .get("fields")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let (fields, fields_diagnostic) = parse_fields(&node.properties, &node.id);
+        if let Some(msg) = &fields_diagnostic {
+            eprintln!("{msg}");
+        }
 
         let relationships: Vec<SchemaRelationship> = node
             .properties
@@ -953,5 +989,88 @@ mod tests {
         assert_eq!(json["name"], "related");
         // targetType absent when None
         assert!(json.get("targetType").is_none());
+    }
+
+    // Regression coverage for the silent-swallow bug: `parse_fields` (the
+    // helper `SchemaNode::from_node` delegates to for its `fields` array) must
+    // surface a diagnostic on a genuine parse failure instead of defaulting to
+    // an empty `Vec` with zero signal. `nodespace-types` has no logging
+    // dependency, so the diagnostic is a plain `String` message the caller
+    // (`from_node`) prints via `eprintln!` — asserting on the message content
+    // here is the stable, testable half of that; `eprintln!`'s actual stderr
+    // write is exercised (not asserted) by
+    // `test_from_node_malformed_fields_still_succeeds_with_empty_fields`
+    // below and is visible under `cargo test -- --nocapture`.
+
+    #[test]
+    fn test_parse_fields_malformed_json_surfaces_diagnostic() {
+        // `type` must be a string (`field_type`); a number is a genuine parse
+        // failure, not merely an absent-and-defaulted key.
+        let malformed = json!({ "fields": [{ "name": "status", "type": 42 }] });
+        let (fields, diagnostic) = parse_fields(&malformed, "test-schema-id");
+
+        assert!(
+            fields.is_empty(),
+            "malformed fields still default to empty — behavior is unchanged"
+        );
+        let msg = diagnostic.expect(
+            "a fields parse failure must surface a diagnostic, not silently default to empty",
+        );
+        assert!(
+            msg.contains("test-schema-id"),
+            "diagnostic must name the affected schema node: {msg}"
+        );
+        assert!(
+            msg.contains("fields"),
+            "diagnostic must name the affected property: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_valid_json_no_diagnostic() {
+        let json = json!({ "fields": [{ "name": "status", "type": "enum" }] });
+        let (fields, diagnostic) = parse_fields(&json, "test-schema-id");
+
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "status");
+        assert!(
+            diagnostic.is_none(),
+            "a successful parse must not produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_absent_key_no_diagnostic() {
+        // A schema node with no `fields` key at all (e.g. a freshly created
+        // schema) is not a parse failure — must stay silent, same as before.
+        let json = json!({});
+        let (fields, diagnostic) = parse_fields(&json, "test-schema-id");
+
+        assert!(fields.is_empty());
+        assert!(diagnostic.is_none());
+    }
+
+    #[test]
+    fn test_from_node_malformed_fields_still_succeeds_with_empty_fields() {
+        // End-to-end through `from_node`: a malformed `fields` value must not
+        // fail the whole node conversion (that would propagate up through
+        // `node_to_typed_value` into `nodes_to_typed_values`'s batch
+        // `.collect()` and fail an entire unrelated batch read) — it must
+        // still resolve to `Ok` with an empty `fields` Vec, now with a
+        // diagnostic printed to stderr along the way (see
+        // `test_parse_fields_malformed_json_surfaces_diagnostic` for the
+        // assertable half of that diagnostic).
+        let node = Node::new(
+            "schema".to_string(),
+            "Malformed schema".to_string(),
+            json!({
+                "isCore": false,
+                "schemaVersion": 1,
+                "fields": [{ "name": "status", "type": 42 }],
+            }),
+        );
+
+        let schema = SchemaNode::from_node(node).expect("must not fail the whole conversion");
+        assert!(schema.fields.is_empty());
     }
 }

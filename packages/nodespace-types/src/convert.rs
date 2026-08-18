@@ -316,6 +316,49 @@ mod wire_contract {
         assert_eq!(out["description"], "Task type");
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
     }
+
+    /// A schema node with malformed `fields` JSON must not zero out the rest
+    /// of an unrelated batch read: `nodes_to_typed_values` `.collect()`s a
+    /// `Vec<Result<_, _>>` into a single `Result<Vec<_>, _>`, so if
+    /// `SchemaNode::from_node`'s fields-parse failure were ever propagated as
+    /// this function's own `Err` (rather than defaulting to an empty `Vec`
+    /// with a diagnostic printed on the side), one bad schema node would fail
+    /// every other node in the same batch. This pins the batch-safety
+    /// property the fix for the silent-swallow bug deliberately preserved.
+    #[test]
+    fn schema_with_malformed_fields_does_not_fail_an_unrelated_batch_read() {
+        let good_task = Node::new(
+            "task".to_string(),
+            "Buy milk".to_string(),
+            serde_json::json!({ "task": { "status": "open" } }),
+        );
+        let bad_schema = Node::new(
+            "schema".to_string(),
+            "Broken schema".to_string(),
+            serde_json::json!({
+                "isCore": false,
+                "schemaVersion": 1,
+                // `type` must be a string — this is a genuine parse failure,
+                // not merely an absent/defaulted field.
+                "fields": [{ "name": "status", "type": 42 }],
+            }),
+        );
+        let other_good_task = Node::new(
+            "task".to_string(),
+            "Walk dog".to_string(),
+            serde_json::json!({ "task": { "status": "done" } }),
+        );
+
+        let out = nodes_to_typed_values(vec![good_task, bad_schema, other_good_task])
+            .expect("one malformed schema node must not fail the whole batch");
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["status"], "open");
+        // The malformed schema node still degrades to an empty `fields` Vec
+        // (unchanged behavior) rather than dropping out of the batch.
+        assert_eq!(out[1]["fields"], serde_json::json!([]));
+        assert_eq!(out[2]["status"], "done");
+    }
 }
 
 /// Property tests for the Node → wire-JSON promotion contract.
