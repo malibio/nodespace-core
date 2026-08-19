@@ -525,10 +525,44 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  sync-homebrew-cask:
+    name: Sync Homebrew tap cask
+    runs-on: ubuntu-22.04
+    needs: [build-tauri-macos-arm, build-tauri]
+    # The Intel/x64 macOS leg (part of the build-tauri matrix) is not a hard
+    # requirement -- scripts/update-homebrew-cask.ts tolerates a release that
+    # only ships one macOS architecture (see nodespace-core#2154) and renders
+    # an honest single-arch cask rather than failing. The ARM leg producing
+    # the .dmg this cask always needs is the one build that must succeed.
+    if: >-
+      always() &&
+      github.event_name == 'release' &&
+      needs.build-tauri-macos-arm.result == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Update homebrew-nodespace cask
+        run: bun run scripts/update-homebrew-cask.ts ${{ github.event.release.tag_name }} --push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT (or fine-grained token) with contents:write on
+          # NodeSpaceAI/homebrew-nodespace -- secrets.GITHUB_TOKEN is scoped
+          # to this repo only and cannot push cross-repo. Must be added as a
+          # repo secret before this step can succeed; until then it fails
+          # loudly here and notify-failure below opens an issue.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
   notify-failure:
     name: Notify on build failure
     runs-on: ubuntu-22.04
-    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless]
+    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless, sync-homebrew-cask]
     if: failure()
 
     steps:
