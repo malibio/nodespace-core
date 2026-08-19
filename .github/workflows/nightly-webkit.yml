@@ -60,29 +60,53 @@ jobs:
         working-directory: packages/desktop-app
 
       - name: Run WebKit smoke suite
-        run: bun run test:webkit
+        # tee'd to a file so the failure step below can quote the actual
+        # message. A suite failure and the runner failing to get that far
+        # (Playwright install, bun, network) are the same red X otherwise,
+        # and whoever triages the filed issue can't tell which happened
+        # without opening the raw run log.
+        #
+        # The pipe is only safe because Actions runs `run:` under
+        # `bash -e -o pipefail`: without pipefail, tee's exit code would win
+        # and a failing suite would report GREEN. Do not add a `shell:` here
+        # that drops pipefail.
+        run: bun run test:webkit 2>&1 | tee webkit-output.txt
 
       # A nightly that fails silently is a nightly nobody reads: this suite was
       # red for five consecutive nights before anyone noticed. On failure, open
-      # (or update) a single tracking issue and assign the people who triage it,
-      # so the red arrives as an assignment notification rather than sitting in
-      # the Actions tab. The issue is reused rather than reopened per night so a
-      # long red streak is one thread, not one issue per day.
+      # a tracking issue and assign the people who triage it, so the red arrives
+      # as an assignment notification rather than sitting in the Actions tab.
+      #
+      # An already-OPEN tracking issue is commented on rather than duplicated, so
+      # a long red streak stays one thread instead of one issue per night. A
+      # closed one is not reopened — once someone has called an outage resolved,
+      # the next failure is new news and deserves its own thread.
       - name: Report failure
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          {
+            echo "Nightly WebKit smoke failed. Run: ${RUN_URL}"
+            echo
+            echo "Output:"
+            echo '```'
+            tail -n 40 webkit-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo
+            echo "A \"Failed Suites\" line above is a real test failure. Anything else"
+            echo "(or no output at all) means the job failed before the suite ran —"
+            echo "Playwright install, bun, or network — not necessarily a regression."
+          } > issue-body.txt
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
             --state open --label nightly-failure --limit 1 --json number --jq '.[0].number')
-          body="Nightly WebKit smoke failed: $RUN_URL"
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.txt
           else
             gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "Nightly WebKit smoke is failing" \
               --label nightly-failure \
               --assignee malibio,mstomar125 \
-              --body "$body"
+              --body-file issue-body.txt
           fi

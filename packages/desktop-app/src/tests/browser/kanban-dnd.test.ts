@@ -22,7 +22,12 @@ import type { Node } from '$lib/types';
 
 // The factory replaces the WHOLE module, so every binding any transitive import
 // needs must be listed here. `daemon-status.ts` imports `isTauri`; omitting it
-// fails the file at import time, not as a test failure.
+// fails this file at import time — the suite is reported failed, but every test
+// in it silently stops counting, so the totals still look green. That is how it
+// went unnoticed for five nightly runs.
+//
+// `isTauri` must return false: the true branch calls `listen` from
+// @tauri-apps/api/event, which this file does not mock.
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn(() => false) }));
 
 import KanbanView from '$lib/components/query/kanban-view.svelte';
