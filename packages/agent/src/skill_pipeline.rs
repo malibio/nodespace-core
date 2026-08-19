@@ -806,14 +806,20 @@ mod tests {
 
     /// No seeded skill declares `node_types`, so every candidate takes
     /// `find_skills`' unscoped branch — all non-core schemas, capped at
-    /// `MAX_UNSCOPED_SCHEMA_METADATA`. Every candidate therefore carries an
-    /// *identical* schema list, which is what makes the repeated
+    /// `MAX_UNSCOPED_SCHEMA_METADATA`, UNLESS the query itself names exactly
+    /// one non-core type (`skill_ops::schema_named_in_query`), in which case
+    /// that one type's schema is all that's attached instead. On a query that
+    /// doesn't resolve to a single named type, every candidate still carries
+    /// an *identical* schema list, which is what makes the repeated
     /// `EXISTING SCHEMAS` copies in one Stage-2 prompt genuinely
     /// redundant rather than differently-scoped.
     ///
     /// This pins the premise of that finding: a seed gaining `node_types`
     /// would scope its copy to a subset, and the de-duplication argument would
-    /// need re-measuring rather than silently ceasing to hold.
+    /// need re-measuring rather than silently ceasing to hold. (The
+    /// query-named-type narrowing above is a separate, per-query mechanism —
+    /// it does not give any seed a static `node_types` list, so this test's
+    /// own premise, "no seed declares node_types", is unaffected by it.)
     #[test]
     fn no_seeded_skill_scopes_its_schema_metadata() {
         let scoped: Vec<String> = seed_skill_nodes()
