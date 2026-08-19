@@ -228,8 +228,10 @@ impl LocalAgentServiceImpl {
         // way a missing NLP model disables only the embedding wiring
         // (`SharedContext::has_model`) rather than failing the database open:
         // this database still opens, with local GGUF model management
-        // unavailable until the daemon is restarted in an environment where
-        // `GgufModelManager::new()` succeeds.
+        // unavailable until this constructor runs again in an environment where
+        // `GgufModelManager::new()` succeeds — a daemon restart, or (ADR-053)
+        // this database simply being reopened after the idle reaper evicts it,
+        // both of which re-run `build_database_services`.
         let model_manager = match GgufModelManager::new() {
             Ok(m) => Some(Arc::new(m)),
             Err(e) => {
@@ -3934,6 +3936,68 @@ model = "model-b"
             result.is_err(),
             "create_dir_all over an existing file must fail (and be caught as an \
              Err, not a panic) rather than succeed"
+        );
+    }
+
+    /// Drives `LocalAgentServiceImpl::new` itself — not `from_model_manager`'s
+    /// injected shortcut — through a real `GgufModelManager::new()` failure, by
+    /// pointing `$HOME` at a directory whose `.nodespace/models` path is
+    /// occupied by a plain file. This is the one test that actually exercises
+    /// the `match GgufModelManager::new() { Ok(..) => Some(..), Err(..) =>
+    /// None }` arm that replaced the original `.expect(...)`: the other
+    /// degraded-mode tests construct via `from_model_manager(..., None)`
+    /// directly and would keep passing even if that match arm regressed back
+    /// to a panic.
+    ///
+    /// Mutating `$HOME` is process-global, so this is deliberately narrow: the
+    /// window is exactly the synchronous `LocalAgentServiceImpl::new` call
+    /// (`new` performs no `.await`, so no other task can interleave before
+    /// `$HOME` is restored), and a repo-wide audit confirms no other test in
+    /// this crate's unit-test binary reads `$HOME` — `SettingsServiceImpl::
+    /// with_default_path` and `assembly::build_shared_services`'s
+    /// `dirs::home_dir()` calls are only reached from real daemon startup
+    /// (`main.rs`) and from separate integration-test *binaries* (their own
+    /// OS processes, unaffected by an env mutation in this one).
+    #[tokio::test]
+    async fn local_agent_service_new_survives_a_real_model_manager_init_failure() {
+        let fake_home = tempfile::TempDir::new().expect("fake home tempdir");
+        let models_path = fake_home.path().join(".nodespace").join("models");
+        std::fs::create_dir_all(
+            models_path
+                .parent()
+                .expect("models path has a .nodespace parent"),
+        )
+        .expect("create .nodespace dir");
+        std::fs::write(&models_path, b"not a directory").expect("occupy the models path");
+
+        // Build the node service this constructor needs, exactly like
+        // `test_service`, but under a separate tempdir from `fake_home` so the
+        // database and the (broken) models directory don't collide.
+        let db_tempdir = tempfile::TempDir::new().expect("db tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(db_tempdir.path().join("daemon-db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let daemon_config_path = db_tempdir.path().join("daemon.toml");
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", fake_home.path());
+        let svc = LocalAgentServiceImpl::new(node_service, embedding, daemon_config_path);
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        // The construction above must not have panicked (if it had, this test
+        // would already be reported as a failure) and must have landed in
+        // degraded mode, not silently succeeded with some other directory.
+        assert!(
+            svc.inner.model_manager.is_none(),
+            "a real GgufModelManager::new() failure during LocalAgentServiceImpl::new \
+             must degrade (model_manager: None), not panic or silently recover"
         );
     }
 
