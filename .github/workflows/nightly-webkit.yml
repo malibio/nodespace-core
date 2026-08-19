@@ -24,6 +24,12 @@ concurrency:
   group: nightly-webkit-${{ github.ref }}
   cancel-in-progress: true
 
+# `issues: write` is needed by the failure reporter below; the default token is
+# read-only for issues on a scheduled run.
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   webkit:
     name: test:webkit (Playwright WebKit)
@@ -55,3 +61,28 @@ jobs:
 
       - name: Run WebKit smoke suite
         run: bun run test:webkit
+
+      # A nightly that fails silently is a nightly nobody reads: this suite was
+      # red for five consecutive nights before anyone noticed. On failure, open
+      # (or update) a single tracking issue and assign the people who triage it,
+      # so the red arrives as an assignment notification rather than sitting in
+      # the Actions tab. The issue is reused rather than reopened per night so a
+      # long red streak is one thread, not one issue per day.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --state open --label nightly-failure --limit 1 --json number --jq '.[0].number')
+          body="Nightly WebKit smoke failed: $RUN_URL"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Nightly WebKit smoke is failing" \
+              --label nightly-failure \
+              --assignee malibio,mstomar125 \
+              --body "$body"
+          fi

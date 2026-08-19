@@ -20,7 +20,10 @@ import { render, cleanup, fireEvent, waitFor } from '@testing-library/svelte';
 import type { SchemaNode } from '$lib/types/schema-node';
 import type { Node } from '$lib/types';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+// The factory replaces the WHOLE module, so every binding any transitive import
+// needs must be listed here. `daemon-status.ts` imports `isTauri`; omitting it
+// fails the file at import time, not as a test failure.
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn(() => false) }));
 
 import KanbanView from '$lib/components/query/kanban-view.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
