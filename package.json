@@ -85,6 +85,8 @@
     "release:delete": "bun run scripts/release.ts delete",
     "release:bump": "bun run scripts/release.ts bump",
     "release:help": "bun run scripts/release.ts --help",
+    "homebrew:sync": "bun run scripts/update-homebrew-cask.ts",
+    "homebrew:drift-check": "bun run scripts/update-homebrew-cask.ts drift-check",
     "prepare": "husky",
     "audit": "bun scripts/audit-npm.ts"
   },
