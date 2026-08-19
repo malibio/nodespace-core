@@ -13,7 +13,6 @@ on:
         options:
           - all
           - macos-arm
-          - macos-intel
           - macos-pkg
           - linux-arm
           - linux-x86
@@ -137,12 +136,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS Intel
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            rust_targets: 'x86_64-apple-darwin'
-            id: 'macos-intel'
-
           # Windows x86_64
           - platform: 'windows-latest'
             args: '--target x86_64-pc-windows-msvc'
@@ -182,13 +175,6 @@ jobs:
             ./packages/desktop-app/src-tauri -> target
             . -> target
 
-      - name: Install Protobuf (macOS)
-        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
-        run: |
-          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
-          brew untap aws/tap azure/bicep 2>/dev/null || true
-          brew install protobuf
-
       - name: Setup Bun
         if: steps.filter.outputs.skip != 'true'
         uses: oven-sh/setup-bun@v2
@@ -202,39 +188,6 @@ jobs:
       - name: Generate SvelteKit types
         if: steps.filter.outputs.skip != 'true'
         run: bun run --cwd packages/desktop-app sync
-
-      # Download nomic-embed-text GGUF model for llama.cpp embeddings
-      - name: Download embedding model for bundling (macOS)
-        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
-        run: |
-          mkdir -p packages/desktop-app/src-tauri/resources/models
-          gh release download models-v2 --pattern "nomic-embed-text-v1.5.Q8_0.gguf" --dir packages/desktop-app/src-tauri/resources/models/
-          echo "Model downloaded:"
-          ls -la packages/desktop-app/src-tauri/resources/models/
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build nodespaced and nodespace CLI sidecars for macOS bundle (Issue #1179).
-      # The binaries are placed in the exact path tauri.conf.json externalBin expects.
-      - name: Build nodespaced and nodespace sidecars (macOS)
-        if: steps.filter.outputs.skip != 'true' && matrix.platform == 'macos-latest'
-        run: |
-          TRIPLE="${{ matrix.rust_targets }}"
-          BIN_DIR="packages/desktop-app/src-tauri/binaries"
-          mkdir -p "${BIN_DIR}"
-
-          echo "Building nodespaced for ${TRIPLE}..."
-          cargo build --release --bin nodespaced --target "${TRIPLE}"
-          cp "target/${TRIPLE}/release/nodespaced" "${BIN_DIR}/nodespaced-${TRIPLE}"
-          chmod +x "${BIN_DIR}/nodespaced-${TRIPLE}"
-
-          echo "Building nodespace CLI for ${TRIPLE}..."
-          cargo build --release --bin nodespace --target "${TRIPLE}"
-          cp "target/${TRIPLE}/release/nodespace" "${BIN_DIR}/nodespace-${TRIPLE}"
-          chmod +x "${BIN_DIR}/nodespace-${TRIPLE}"
-
-          echo "Sidecars built:"
-          ls -la "${BIN_DIR}/"
 
       - name: Install Protobuf (Windows)
         if: steps.filter.outputs.skip != 'true' && matrix.platform == 'windows-latest'
@@ -402,9 +355,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             id: macos-arm
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            id: macos-intel
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             id: linux-arm
@@ -529,11 +479,15 @@ jobs:
     name: Sync Homebrew tap cask
     runs-on: ubuntu-22.04
     needs: [build-tauri-macos-arm, build-tauri]
-    # The Intel/x64 macOS leg (part of the build-tauri matrix) is not a hard
-    # requirement -- scripts/update-homebrew-cask.ts tolerates a release that
-    # only ships one macOS architecture (see nodespace-core#2154) and renders
-    # an honest single-arch cask rather than failing. The ARM leg producing
-    # the .dmg this cask always needs is the one build that must succeed.
+    # build-tauri only builds Windows now (the macOS Intel leg was removed --
+    # Apple Silicon is the only supported macOS target). It stays in `needs`
+    # purely for sequencing: this job waits for it to finish, success or
+    # failure, before running -- but only build-tauri-macos-arm's result
+    # gates execution below, since scripts/update-homebrew-cask.ts only
+    # cares about the ARM .dmg, the one macOS artifact the cask ships. A
+    # Windows build failure must not block the cask sync. The script also
+    # tolerates a release that ships no second macOS architecture and
+    # renders an honest single-arch cask rather than failing.
     if: >-
       always() &&
       github.event_name == 'release' &&
@@ -575,11 +529,11 @@ jobs:
     #
     # Unlike sync-homebrew-cask, which can depend on one narrow upstream
     # job (build-tauri-macos-arm) for exactly the leg it needs,
-    # build-headless is a single job with an internal 5-way matrix
+    # build-headless is a single job with an internal 4-way matrix
     # (fail-fast: false), and GitHub Actions only exposes that job's
     # AGGREGATE result -- not individual matrix legs -- to `needs`. This
     # script's own required set (REQUIRED_HEADLESS_TARGETS in
-    # publish-install-script.ts) is only 3 of those 5 legs, so gating on
+    # publish-install-script.ts) is only 3 of those 4 legs, so gating on
     # `needs.build-headless.result == 'success'` would skip this job
     # entirely -- silently, with no signal in the resulting
     # "Release build failed" issue -- whenever an UNRELATED leg (e.g.
