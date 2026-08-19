@@ -131,6 +131,94 @@ impl SkillProperties {
     }
 }
 
+/// Whether `phrase` (already lowercased) appears in `haystack` (already
+/// lowercased) at word boundaries — not as a substring of a longer word.
+///
+/// Both `phrase` and `haystack` are tokenized identically, splitting on any
+/// non-alphanumeric character (not only whitespace) — a schema id like
+/// `release_plan` or `pull-request` must match a query that spells it with
+/// spaces, and vice versa, since ids and queries are not guaranteed to use
+/// the same separator. Single-token phrases (the common case: a type id
+/// like `ticket`) are checked by exact token match. Multi-token phrases (an
+/// id or display name like `release_plan` / `Pull Request`) are checked as
+/// a contiguous run of exact tokens, so `release` alone does not count as a
+/// match.
+fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
+    fn tokenize(s: &str) -> Vec<&str> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+    let words = tokenize(phrase);
+    if words.is_empty() {
+        return false;
+    }
+    let tokens = tokenize(haystack);
+    if words.len() == 1 {
+        tokens.iter().any(|t| *t == words[0])
+    } else {
+        tokens
+            .windows(words.len())
+            .any(|window| window.iter().zip(&words).all(|(t, w)| t == w))
+    }
+}
+
+/// The single non-core schema `query` names by id or display name, when
+/// exactly one is nameable this way.
+///
+/// A purely mechanical, string-level signal — not a new relevance model or a
+/// confidence judgment. Two or more named types (the query mentions several
+/// non-core types by name) or none (it names none) both return `None`: real
+/// ambiguity is left to the caller's existing broader fallback rather than
+/// guessed at here.
+///
+/// This is the narrower, per-query retrieval pass core#2148 calls for: a
+/// request that plainly says "create a ticket" scopes `schema_metadata` to
+/// just `ticket` instead of `find_skills`' unscoped top-N fallback, which
+/// would otherwise sweep in every other non-core type in the same fallback
+/// window (e.g. `adr`) — the exact imprecision that caused
+/// `declare_write_tool_fields` to union unrelated types' fields onto a write
+/// tool's declaration. Per-skill `node_types` (the other mechanism
+/// `find_skills` already supports) cannot fix this case: the seeded skills
+/// whose whitelist includes `create_node`/`update_node` (Node Creation,
+/// Graph Editing) are deliberately generic across every non-core type, so
+/// there is no single static type list to give them without contradicting
+/// their purpose. This mechanism narrows per query instead, so a generic
+/// skill still contributes a scoped `schema_metadata` when the query itself
+/// determines the type.
+///
+/// **Known, accepted tradeoff** (core#2158 tracks it): a lexical match can
+/// be a false positive if a user-defined schema's id or display name
+/// happens to also be a common word or phrase (e.g. a schema literally
+/// named `Note`), narrowing to a confidently WRONG type rather than the old
+/// broad-but-safe top-N fallback. Bounded blast radius — this only affects
+/// one prompt-assist channel's precision (`schema_metadata`, which shapes a
+/// write tool's declared fields), never write validation itself, which
+/// still enforces the real schema at the write boundary regardless of what
+/// this function returns. Not guarded against here: doing so needs its own
+/// measurement (a stopword list or length floor could as easily suppress
+/// true positives as false ones), which core#2158 is the place for.
+fn schema_named_in_query<'a>(
+    query: &str,
+    all_schemas: &'a [crate::models::SchemaNode],
+) -> Option<&'a crate::models::SchemaNode> {
+    let query_lower = query.to_lowercase();
+    let mut named = all_schemas.iter().filter(|s| {
+        !s.is_core
+            && (mentions_phrase(&query_lower, &s.id.to_lowercase())
+                || mentions_phrase(&query_lower, &s.content.to_lowercase()))
+    });
+
+    let first = named.next()?;
+    if named.next().is_some() {
+        // Two or more non-core types named in the same query — genuinely
+        // ambiguous by this signal. Not this function's job to break the tie.
+        None
+    } else {
+        Some(first)
+    }
+}
+
 /// Search for skill nodes via semantic search and return flat results with
 /// schema metadata for the matched skill's scoped types.
 ///
@@ -187,6 +275,13 @@ pub async fn find_skills(
     let total_results = skill_results.len();
     let mut skills = Vec::with_capacity(total_results);
 
+    // Computed once per call, not per matched skill: it depends only on the
+    // query text and the schema list, neither of which varies across
+    // `skill_results`. See `schema_named_in_query` — `None` when the query
+    // doesn't determine a single non-core type, in which case every
+    // unscoped-branch candidate below keeps today's fallback unchanged.
+    let query_named_schema = schema_named_in_query(&input.query, &all_schemas);
+
     for (node, confidence) in &skill_results {
         let SkillProperties {
             description,
@@ -195,37 +290,37 @@ pub async fn find_skills(
         } = SkillProperties::from_node_properties(&node.properties);
 
         // Attach schema metadata for entity types relevant to this skill.
-        // The skill's `node_types` property lists the type IDs in scope.
-        // When absent, fall back to all custom (non-core) schemas, capped at
-        // MAX_UNSCOPED_SCHEMA_METADATA to bound token cost for general-purpose
-        // skills that haven't declared an explicit scope. Skills should set
-        // `node_types` to avoid this fallback as workspaces grow.
-        let schema_metadata: Vec<Value> = all_schemas
-            .iter()
-            .filter(|s| {
-                if scoped_type_ids.is_empty() {
-                    !s.is_core
-                } else {
-                    scoped_type_ids.contains(&s.id)
-                }
-            })
-            .take(if scoped_type_ids.is_empty() {
-                // Unscoped: cap to avoid returning all schemas for general-purpose skills.
-                MAX_UNSCOPED_SCHEMA_METADATA
-            } else {
-                // Scoped: return all explicitly requested type IDs.
-                scoped_type_ids.len()
-            })
-            .map(|s| {
-                // Encoded from the same descriptor the prompt block renders
-                // from, so this JSON cannot describe a schema differently than
-                // the model is told about it. The shape stays what it was —
-                // it is the model-facing `search_skills` response body, not an
-                // internal detail — but it is no longer an independently
-                // hand-written projection that can drift.
-                super::entity_types_block::EntityTypeDescriptor::from_schema(s).to_json()
-            })
-            .collect();
+        // The skill's `node_types` property lists the type IDs in scope. When
+        // absent: if the query itself names exactly one non-core type, scope
+        // to that type (see `schema_named_in_query`); otherwise fall back to
+        // all custom (non-core) schemas, capped at MAX_UNSCOPED_SCHEMA_METADATA
+        // to bound token cost for general-purpose skills whose query didn't
+        // resolve to one type.
+        let schema_metadata: Vec<Value> = if scoped_type_ids.is_empty() {
+            match query_named_schema {
+                Some(named) => vec![
+                    super::entity_types_block::EntityTypeDescriptor::from_schema(named).to_json(),
+                ],
+                None => all_schemas
+                    .iter()
+                    .filter(|s| !s.is_core)
+                    .take(MAX_UNSCOPED_SCHEMA_METADATA)
+                    .map(|s| {
+                        // Encoded from the same descriptor the prompt block
+                        // renders from, so this JSON cannot describe a schema
+                        // differently than the model is told about it.
+                        super::entity_types_block::EntityTypeDescriptor::from_schema(s).to_json()
+                    })
+                    .collect(),
+            }
+        } else {
+            all_schemas
+                .iter()
+                .filter(|s| scoped_type_ids.contains(&s.id))
+                .take(scoped_type_ids.len())
+                .map(|s| super::entity_types_block::EntityTypeDescriptor::from_schema(s).to_json())
+                .collect()
+        };
 
         let instructions = render_skill_instructions(node_service.as_ref(), &node.id).await;
 
@@ -257,9 +352,128 @@ pub async fn find_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Node;
+    use crate::models::{Node, SchemaNode};
     use serde_json::json;
     use std::collections::HashMap;
+
+    fn make_schema(id: &str, content: &str, is_core: bool) -> SchemaNode {
+        SchemaNode::from_node(Node::new_with_id(
+            id.to_string(),
+            "schema".to_string(),
+            content.to_string(),
+            json!({ "isCore": is_core, "fields": [] }),
+        ))
+        .expect("schema node")
+    }
+
+    #[test]
+    fn mentions_phrase_matches_a_single_word_type_id_at_word_boundaries() {
+        assert!(mentions_phrase("create a ticket for the bug", "ticket"));
+        assert!(!mentions_phrase("update the address field", "adr"));
+        assert!(!mentions_phrase("no match here", "ticket"));
+    }
+
+    #[test]
+    fn mentions_phrase_matches_a_multi_word_display_name_contiguously() {
+        assert!(mentions_phrase(
+            "open a pull request for this",
+            "pull request"
+        ));
+        assert!(!mentions_phrase("pull the request later", "pull request"));
+    }
+
+    #[test]
+    fn mentions_phrase_matches_a_snake_case_id_against_a_space_separated_query() {
+        // A multi-word type id like `release_plan` has no whitespace of its
+        // own, so it must be tokenized the same way the query is — on any
+        // non-alphanumeric separator, not only whitespace — or it can never
+        // match a query that spells the same words with spaces.
+        assert!(mentions_phrase(
+            "create a release plan for q3",
+            "release_plan"
+        ));
+        assert!(!mentions_phrase(
+            "create a release for the plan later",
+            "release_plan"
+        ));
+    }
+
+    #[test]
+    fn mentions_phrase_matches_a_kebab_case_id_against_a_space_separated_query() {
+        assert!(mentions_phrase(
+            "open a pull request for this",
+            "pull-request"
+        ));
+    }
+
+    #[test]
+    fn schema_named_in_query_scopes_to_the_single_named_non_core_type() {
+        let schemas = vec![
+            make_schema("ticket", "Ticket", false),
+            make_schema("adr", "ADR", false),
+        ];
+        let found = schema_named_in_query("create a ticket for the login bug", &schemas);
+        assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
+    }
+
+    #[test]
+    fn schema_named_in_query_matches_a_snake_case_id_by_id_alone() {
+        // Regression: the id-path must work even when the display name
+        // (content) doesn't share the same words as the id, so this only
+        // passes via `id` matching, not `content`.
+        let schemas = vec![
+            make_schema("release_plan", "Q3 Rollout", false),
+            make_schema("adr", "ADR", false),
+        ];
+        let found = schema_named_in_query("create a release plan for q3", &schemas);
+        assert_eq!(found.map(|s| s.id.as_str()), Some("release_plan"));
+    }
+
+    #[test]
+    fn schema_named_in_query_matches_by_display_name_too() {
+        let schemas = vec![
+            make_schema("ticket", "Ticket", false),
+            make_schema("adr", "Architecture Decision Record", false),
+        ];
+        let found = schema_named_in_query(
+            "draft an architecture decision record for the new store",
+            &schemas,
+        );
+        assert_eq!(found.map(|s| s.id.as_str()), Some("adr"));
+    }
+
+    #[test]
+    fn schema_named_in_query_returns_none_when_two_types_are_named() {
+        let schemas = vec![
+            make_schema("ticket", "Ticket", false),
+            make_schema("adr", "ADR", false),
+        ];
+        let found = schema_named_in_query("link this ticket to the adr", &schemas);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn schema_named_in_query_returns_none_when_no_type_is_named() {
+        let schemas = vec![
+            make_schema("ticket", "Ticket", false),
+            make_schema("adr", "ADR", false),
+        ];
+        let found = schema_named_in_query("what did we work on yesterday", &schemas);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn schema_named_in_query_ignores_core_schemas() {
+        // A query naming a core type ("task") alongside a real non-core match
+        // must not let the core mention count toward ambiguity — core types
+        // are never in the unscoped fallback's candidate pool to begin with.
+        let schemas = vec![
+            make_schema("task", "Task", true),
+            make_schema("ticket", "Ticket", false),
+        ];
+        let found = schema_named_in_query("create a ticket, not a task", &schemas);
+        assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
+    }
 
     fn make_node(id: &str, content: &str) -> Node {
         Node {
