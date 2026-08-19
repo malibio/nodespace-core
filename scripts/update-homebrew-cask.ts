@@ -191,10 +191,12 @@ export function renderCask(version: string, digests: ArchDigestResult): string {
 
   on_arm do
     sha256 "${digests.arm.sha256}"
+
     url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${urlFileName("arm")}"
   end
   on_intel do
     sha256 "${digests.intel.sha256}"
+
     url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${urlFileName("intel")}"
   end
 
@@ -274,7 +276,20 @@ async function pushCaskUpdate(version: string, caskContent: string, token: strin
   const workDir = mkdtempSync(join(tmpdir(), "homebrew-nodespace-push-"));
   try {
     const authUrl = `https://x-access-token:${token}@github.com/${TAP_REPO}.git`;
-    await $`git clone --depth 1 ${authUrl} ${workDir}`.quiet();
+    try {
+      await $`git clone --depth 1 ${authUrl} ${workDir}`.quiet();
+    } catch (err) {
+      // Defense in depth: git itself redacts credentials from its own
+      // stderr on an auth failure (verified against a real bad-token
+      // clone), but scrub `token` out of whatever the shell wrapper's
+      // error carries anyway, in case its message ever echoes the
+      // command it ran -- this must never surface the raw token.
+      const message = (err instanceof Error ? err.message : String(err)).replaceAll(
+        token,
+        "***",
+      );
+      throw new Error(`git clone of ${TAP_REPO} failed: ${message}`);
+    }
     writeFileSync(join(workDir, "Casks", "nodespace.rb"), caskContent);
 
     await $`git -C ${workDir} add Casks/nodespace.rb`.quiet();
@@ -289,6 +304,9 @@ async function pushCaskUpdate(version: string, caskContent: string, token: strin
     await $`git -C ${workDir} push origin HEAD:main`.quiet();
     console.log(`Pushed cask update for v${v} to ${TAP_REPO}.`);
   } finally {
+    // Also closes the residual window where a temp credential URL sits in
+    // workDir/.git/config in cleartext -- removed as soon as this function
+    // returns or throws, on every path.
     rmSync(workDir, { recursive: true, force: true });
   }
 }
@@ -309,7 +327,21 @@ async function main(): Promise<void> {
   }
 
   if (command === "drift-check") {
-    const r = await checkTapDrift();
+    // Genuine drift and "the check itself couldn't run" (network/gh/auth
+    // blip) both need to fail loud (exit 1), but they are NOT the same
+    // situation -- an operator triaging an auto-filed issue needs to be able
+    // to tell them apart from the message alone, so they're deliberately
+    // worded and labeled differently rather than sharing one code path.
+    let r: DriftCheckResult;
+    try {
+      r = await checkTapDrift();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `DRIFT CHECK ERROR (not necessarily drift -- the check itself failed to run): ${message}`,
+      );
+      process.exit(1);
+    }
     if (r.ok) {
       console.log(`Tap in sync: v${normalizeVersion(r.tapVersion)}`);
       return;
@@ -360,5 +392,14 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
+  // Matches scripts/test-gate.ts's convention: a bare uncaught rejection
+  // here would otherwise print a raw Bun stack trace / ShellError dump
+  // instead of an operator-facing message.
+  try {
+    await main();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`✗ ${message}`);
+    process.exit(1);
+  }
 }

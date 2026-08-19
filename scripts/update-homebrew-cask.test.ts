@@ -67,6 +67,10 @@ describe("renderCask", () => {
     expect(cask).toContain(`sha256 "${armDigest.sha256}"`);
     expect(cask).toContain(`sha256 "${intelDigest.sha256}"`);
     expect(cask).not.toContain("depends_on arch:");
+    // `brew style` requires a blank line between the sha256 and url stanzas
+    // even nested inside on_arm/on_intel (Cask/StanzaGrouping) -- verified
+    // against a real `brew style` run in an isolated Homebrew prefix.
+    expect(cask).toMatch(/sha256 "[a-f0-9]{64}"\n\n {4}url /);
   });
 
   test("always points the binary stanza at Contents/MacOS/nodespace", () => {
