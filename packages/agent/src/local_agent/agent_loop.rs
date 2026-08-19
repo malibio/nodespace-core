@@ -1723,6 +1723,18 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
             // Execute each tool call
             let mut tool_results_for_span: Vec<serde_json::Value> = Vec::new();
+            // Set when this iteration's calls include a well-formed Stage-2
+            // `route_clarify` (see the guard branch below). Checked once the
+            // whole iteration's calls are recorded, the same way Stage 1's
+            // clarify path ends the turn — surface the question, execute
+            // nothing further. Declared outside the loop, not returned
+            // immediately from inside it, so any OTHER call the model made in
+            // the same iteration still gets a matching tool result and the
+            // assistant tool-calls message pushed above stays well-formed.
+            let mut stage2_clarify: Option<(
+                String,
+                Vec<crate::local_agent::tools::ClarifyOption>,
+            )> = None;
             for tc in &tool_calls {
                 if cancel.is_cancelled() {
                     return Err(InferenceError::Engine("cancelled".into()));
@@ -1849,6 +1861,53 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                                     is_error: true,
                                 })),
                             )
+                        } else if tc.function_name == routing::ROUTE_CLARIFY_TOOL {
+                            // Stage-2 counterpart to Stage 1's clarify handling
+                            // (see `route` above): a whitelisted skill called
+                            // route_clarify instead of answering in prose.
+                            // Parsed via `tools::parse_route_clarify_args`, NOT
+                            // `routing::parse_route_decision` — same tool name,
+                            // deliberately different argument shape (see
+                            // `tools::def_route_clarify`'s doc comment: Stage-2
+                            // options carry `{id, label}` pairs, not bare
+                            // strings). Handled here, before the generic
+                            // executor, because surfacing a question and
+                            // ending the turn is an agent-loop concern the
+                            // executor has no way to do: it can only return a
+                            // tool result, not stop the loop or address the
+                            // user.
+                            match crate::local_agent::tools::parse_route_clarify_args(&args) {
+                                Some((question, options)) => {
+                                    stage2_clarify = Some((question.clone(), options.clone()));
+                                    (
+                                        args,
+                                        Some(Ok(crate::agent_types::ToolResult {
+                                            tool_call_id: tc.id.clone(),
+                                            name: tc.function_name.clone(),
+                                            result: serde_json::json!({
+                                                "acknowledged": true,
+                                                "question": question,
+                                                "options": options,
+                                            }),
+                                            is_error: false,
+                                        })),
+                                    )
+                                }
+                                // Malformed (e.g. a blank question, or options
+                                // missing an id/label) — not a decision to act
+                                // on specially. Falls through to the normal
+                                // executor so the model gets the same
+                                // invalid-arguments error `exec_route_clarify`
+                                // would report on direct dispatch, rather than
+                                // a second, differently-worded validation path.
+                                None => {
+                                    let result = self
+                                        .tool_executor
+                                        .execute(&tc.function_name, args.clone())
+                                        .await;
+                                    (args, Some(result))
+                                }
+                            }
                         } else {
                             let result = self
                                 .tool_executor
@@ -1952,6 +2011,41 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     tc.id.clone(),
                     tc.function_name.clone(),
                 ));
+            }
+
+            // Stage-2 route_clarify: end the turn now, the same way Stage 1's
+            // clarify does — surface the question and stop, without running
+            // another inference round or any further tool call. Checked here
+            // (after every call this iteration got its matching tool result,
+            // keeping the conversation well-formed) rather than returning
+            // from inside the loop above.
+            if let Some((question, options)) = stage2_clarify {
+                // `ClarifyPrompt.options`/`format_clarification` are Stage-1's
+                // existing shape (`Vec<String>`) and stay that way — the
+                // richer `{id, label}` pair only needs to reach the MODEL
+                // (so it can name an exact candidate precisely); the id has
+                // no role in what the USER is shown, so flattening to labels
+                // here reuses both unchanged rather than widening a
+                // frontend-facing contract Stage 1 already established.
+                let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
+                let clarification = format_clarification(&question, &labels);
+                session
+                    .messages
+                    .push(ChatMessage::text(Role::Assistant, clarification.clone()));
+                on_status(LocalAgentStatus::Idle);
+                session.status = LocalAgentStatus::Idle;
+                let reasoning = (!accumulated_reasoning.trim().is_empty())
+                    .then(|| accumulated_reasoning.trim().to_string());
+                return Ok(AgentTurnResult {
+                    response: clarification,
+                    reasoning,
+                    tool_calls_made: all_tool_executions,
+                    usage: total_usage,
+                    clarify: Some(crate::agent_types::ClarifyPrompt {
+                        question,
+                        options: labels,
+                    }),
+                });
             }
 
             // A model that cannot emit valid JSON is not making progress, and each
@@ -8293,6 +8387,226 @@ mod tests {
                 "Search existing notes".to_string()
             ]
         );
+    }
+
+    /// core#2149: a Stage-2 skill whose whitelist includes `route_clarify`
+    /// calls it instead of guessing or answering in prose — this must end the
+    /// turn the same way Stage 1's clarify does, without any further tool
+    /// call or inference round.
+    #[tokio::test]
+    async fn stage2_route_clarify_ends_the_turn_without_further_tool_calls() {
+        let engine = MockEngine::new(vec![
+            // Stage 1: routes normally.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_QUERY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "query": "update the ticket" }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            // Stage 2: the judged candidate whitelists route_clarify and the
+            // model calls it — with the richer {id, label} option shape
+            // (core#2149; see tools::def_route_clarify).
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: routing::ROUTE_CLARIFY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: json!({
+                        "question": "Which ticket did you mean?",
+                        "options": [
+                            {"id": "abc-1", "label": "Rotate signing keys"},
+                            {"id": "abc-2", "label": "Backfill audit log retention"}
+                        ]
+                    })
+                    .to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            // A third batch that must never be consumed — proves the loop
+            // returned immediately rather than running another inference
+            // round to "finish" the turn.
+            vec![
+                StreamingChunk::Token {
+                    text: "should never run".into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 99,
+                        completion_tokens: 99,
+                    },
+                },
+            ],
+        ]);
+
+        let candidates = vec![skill_candidate(
+            "Graph Editing",
+            0.9,
+            &["update_node", "route_clarify"],
+        )];
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new().with_tool(
+                "route_clarify",
+                json!({"type": "object", "properties": {
+                    "question": {"type": "string"},
+                    "options": {"type": "array"}
+                }}),
+                json!({}),
+            ),
+            candidates,
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "update the ticket",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // The route_clarify call itself is a real, recorded tool execution
+        // (unlike Stage 1's clarify, which never reaches the tool layer) —
+        // but nothing after it ran.
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert_eq!(result.tool_calls_made[0].name, "route_clarify");
+        assert!(!result.tool_calls_made[0].is_error);
+
+        let clarify = result
+            .clarify
+            .expect("a Stage-2 route_clarify turn must carry a structured ClarifyPrompt");
+        assert_eq!(clarify.question, "Which ticket did you mean?");
+        // Flattened to labels — the id is for the MODEL (so it can name an
+        // exact candidate), not part of what the user is shown.
+        assert_eq!(
+            clarify.options,
+            vec![
+                "Rotate signing keys".to_string(),
+                "Backfill audit log retention".to_string()
+            ]
+        );
+        assert!(result.response.contains("Rotate signing keys"));
+        assert!(result.response.contains("Backfill audit log retention"));
+
+        // The conversation stays well-formed: the assistant's tool-calls
+        // message and its matching tool result are both present, followed by
+        // the clarification text as the final assistant message.
+        let last = session.messages.last().expect("at least one message");
+        assert_eq!(last.role, Role::Assistant);
+        assert!(last.content.contains("Which ticket did you mean?"));
+    }
+
+    /// A route_clarify call with a blank question is not a decision to act
+    /// on — it must fall through to the normal executor's own validation
+    /// error rather than silently ending the turn as if it were a real
+    /// clarification.
+    #[tokio::test]
+    async fn stage2_route_clarify_with_blank_question_falls_through_to_executor_error() {
+        let engine = MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_QUERY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "query": "update the ticket" }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: routing::ROUTE_CLARIFY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: json!({ "question": "   ", "options": [] }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+            vec![
+                StreamingChunk::Token {
+                    text: "final reply".into(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 30,
+                        completion_tokens: 12,
+                    },
+                },
+            ],
+        ]);
+
+        let candidates = vec![skill_candidate(
+            "Graph Editing",
+            0.9,
+            &["update_node", "route_clarify"],
+        )];
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new().with_tool(
+                "route_clarify",
+                json!({"type": "object", "properties": {
+                    "question": {"type": "string"},
+                    "options": {"type": "array"}
+                }}),
+                json!({}),
+            ),
+            candidates,
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "update the ticket",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // Not treated as a clarification decision — the fallthrough runs the
+        // normal executor path (this test's mock, unlike the real
+        // `GraphToolExecutor::exec_route_clarify`, does not itself validate
+        // the blank question — that validation is covered directly by
+        // `tools::parse_route_clarify_args`'s own unit tests) and the loop
+        // continues to a real third inference round, proving the turn was
+        // NOT ended early as a clarification.
+        assert!(result.clarify.is_none());
+        assert_eq!(result.tool_calls_made.len(), 1);
+        assert_eq!(result.tool_calls_made[0].name, "route_clarify");
+        assert_eq!(result.response, "final reply");
     }
 
     #[tokio::test]
