@@ -1225,9 +1225,9 @@ fn def_route_clarify() -> ToolDefinition {
     ToolDefinition {
         name: super::routing::ROUTE_CLARIFY_TOOL.into(),
         description: "Ask the user one specific clarifying question when a request can't be \
-             completed as understood — e.g. a search returned more than one plausible match, or \
-             the request's wording could mean more than one thing. Ends the turn with the \
-             question; do not call another tool in the same turn."
+             completed as understood — e.g. a search returned more than one plausible match and \
+             nothing already said picks one, or the request's wording could mean more than one \
+             thing. Ends the turn with the question; do not call another tool in the same turn."
             .into(),
         parameters_schema: json!({
             "type": "object",

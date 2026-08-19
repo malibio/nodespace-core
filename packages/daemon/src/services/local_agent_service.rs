@@ -742,6 +742,18 @@ impl LocalAgentServiceImpl {
                         // convention (`assistant_count` polling,
                         // frontend rendering) rather than inventing a second,
                         // differently-handled channel for errors.
+                        // This text becomes a normal `role: "assistant"` history
+                        // entry, so a later turn's model call sees it like any
+                        // other prior reply (`node_history_from_messages`,
+                        // `terse_assistant_facts` — the latter returns `None`
+                        // here since `completed_writes` is empty, so it cannot
+                        // trip the cross-turn duplicate-write guard). Accepted
+                        // rather than filtered out or specially tagged: the two
+                        // existing safety nets already cover it — unbounded
+                        // history growth is bounded by `maybe_summarize_history`
+                        // the same as any other turn, and a model that sees its
+                        // own stated failure is exactly the context it needs to
+                        // avoid repeating the same failing action blindly.
                         let error_text = format!("This turn failed and could not complete: {e}");
                         match self
                             .append_assistant_message(&node_id, &error_text, None, Vec::new(), None)
