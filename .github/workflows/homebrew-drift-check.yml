@@ -42,6 +42,10 @@ jobs:
         # vs. the check itself erroring out (network/gh/auth) read as the
         # same red X otherwise, and an operator triaging the filed issue
         # couldn't tell which happened without opening the raw run log.
+        # `shell: bash` is required for the pipe: with no `shell:` key Actions
+        # runs `bash -e {0}` without pipefail, so tee's exit code would win and
+        # real drift would report GREEN.
+        shell: bash
         run: bun run homebrew:drift-check 2>&1 | tee drift-output.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
