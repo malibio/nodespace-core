@@ -653,12 +653,34 @@ impl NodeService {
             )));
         }
 
+        // `SchemaField::friendly_name` is documented as always populated in
+        // storage, with every reader assuming so unconditionally — a blank
+        // value must never reach it here any more than it can through
+        // `apply_friendly_name_defaults` on create/`add_fields`. Mirrors that
+        // function's treatment of an omitted value exactly: derive from the
+        // field's own name, disambiguating against a sibling field's label
+        // if the derived form collides.
+        let resolved_friendly_name = if friendly_name.trim().is_empty() {
+            let derived = crate::models::schema::derive_friendly_name(field_name);
+            let collides = schema
+                .fields
+                .iter()
+                .any(|f| f.name != field_name && f.friendly_name == derived);
+            if collides {
+                crate::schema::disambiguate_friendly_name(&derived, field_name)
+            } else {
+                derived
+            }
+        } else {
+            friendly_name.to_string()
+        };
+
         let updated_fields: Vec<crate::models::schema::SchemaField> = schema
             .fields
             .into_iter()
             .map(|mut f| {
                 if f.name == field_name {
-                    f.friendly_name = friendly_name.to_string();
+                    f.friendly_name = resolved_friendly_name.clone();
                 }
                 f
             })

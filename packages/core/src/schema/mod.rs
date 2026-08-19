@@ -172,7 +172,13 @@ fn apply_friendly_name_defaults(existing: &[SchemaField], new_fields: &mut [Sche
 /// (`"Employee name" -> "Employee name (employeeName)"`). `name` is unique
 /// within a schema (a duplicate is rejected before this runs), so the result
 /// is guaranteed unique too.
-fn disambiguate_friendly_name(label: &str, name: &str) -> String {
+///
+/// `pub(crate)` rather than private: `NodeService::update_schema_field_friendly_name`
+/// (`services/node_service/schema.rs`) reuses this to apply the exact same
+/// derive-and-disambiguate treatment `apply_friendly_name_defaults` gives an
+/// omitted `friendly_name` on create/`add_fields`, so a blank value can never
+/// reach storage through either path.
+pub(crate) fn disambiguate_friendly_name(label: &str, name: &str) -> String {
     match name.split_once(':') {
         Some((prefix, _)) if !prefix.is_empty() => format!("{label} ({prefix})"),
         _ => format!("{label} ({name})"),
@@ -753,6 +759,18 @@ pub async fn handle_update_schema(
                         MarkdownError::invalid_params(format!("Field rename failed: {}", e))
                     })?;
                 if let Some(ref friendly_name) = rename.friendly_name {
+                    // Not atomic with the rename above — they are two
+                    // separate schema-node writes (the data migration inside
+                    // `rename_schema_field` is itself a distinct step from
+                    // the schema-definition rewrite, so there is no single
+                    // write these two calls could be merged into that would
+                    // also cover it). If this second call fails, the rename
+                    // has ALREADY happened: the field now exists under `to`,
+                    // and a retry of this same `rename_fields` entry would
+                    // fail differently (`from` no longer exists). Say so
+                    // explicitly rather than returning an error that reads
+                    // like nothing happened — the caller (model, then user)
+                    // needs to know the storage key already changed.
                     node_service
                         .update_schema_field_friendly_name(
                             &params.schema_id,
@@ -762,8 +780,12 @@ pub async fn handle_update_schema(
                         .await
                         .map_err(|e| {
                             MarkdownError::invalid_params(format!(
-                                "Field friendly_name update failed: {}",
-                                e
+                                "Field '{}' was successfully renamed to '{}' (and its node data \
+                                 migrated), but updating its display label failed: {}. Do NOT \
+                                 retry with the original 'from'/'to' pair — the field now exists \
+                                 as '{}'. To retry the label update alone, send \
+                                 {{\"from\": \"{}\", \"to\": \"{}\", \"friendlyName\": ...}}.",
+                                rename.from, rename.to, e, rename.to, rename.to, rename.to
                             ))
                         })?;
                 }

@@ -5648,9 +5648,11 @@ mod tests {
              storage unchanged, not silently dropped or overridden by a derived label"
         );
 
-        // Omitting friendlyName on a second field, same call, must still
-        // derive one — the write-boundary default is not bypassed just
-        // because a SIBLING field supplied an explicit label.
+        // friendlyName must be additive, not a substitute for the storage
+        // key — `name` must reach storage exactly as sent, unaffected by
+        // friendlyName being present alongside it. (The omitted-friendlyName
+        // derivation path is covered separately, by
+        // `create_schema_omitted_friendly_name_is_derived_end_to_end`.)
         assert_eq!(
             result.result["fields"][0]["name"], "poc",
             "storage key must be unaffected by friendlyName"
