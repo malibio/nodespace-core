@@ -363,7 +363,7 @@ pub(crate) fn cli_warning(cli_on_path: bool) -> Option<String> {
     Some(
         "The `nodespace` CLI was not found on $PATH. \
          Install it with `curl -fsSL https://nodespace.ai/install.sh | sh`, \
-         via the NodeSpace DMG, or `brew install --cask nodespace`, \
+         via the NodeSpace DMG, or `brew install --cask nodespaceai/nodespace/nodespace`, \
          then restart your terminal."
             .to_string(),
     )

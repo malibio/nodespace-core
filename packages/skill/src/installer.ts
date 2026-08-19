@@ -36,7 +36,7 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
       'WARNING: `nodespace` is not on $PATH. The skill will be installed, but the CLI\n' +
       'must be installed and on $PATH before agents can use NodeSpace.\n' +
       'Install it with `curl -fsSL https://nodespace.ai/install.sh | sh`, via the\n' +
-      'NodeSpace DMG, or `cargo install nodespace-cli`.\n',
+      'NodeSpace DMG, or `brew install --cask nodespaceai/nodespace/nodespace`.\n',
     );
   }
 

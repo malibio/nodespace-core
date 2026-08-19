@@ -564,18 +564,36 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build-headless
     # A sibling of sync-homebrew-cask above, same reasoning: install.sh
-    # (nodespace-core#2146) deliberately pins to a specific, confirmed-built
-    # release rather than floating to "latest" (this repo's own
-    # `release: types: [created]` trigger fires before build-headless's
-    # binaries even start building, so "latest" can point at a release
-    # with no CLI assets yet). This job is what advances the pin once
-    # those binaries are confirmed uploaded -- without it, the pin would
-    # have to be hand-edited in nodespace-website after every release,
-    # exactly the kind of drift #2114 found in the Homebrew cask.
+    # deliberately pins to a specific, confirmed-built release rather than
+    # floating to "latest" (this repo's own `release: types: [created]`
+    # trigger fires before build-headless's binaries even start building,
+    # so "latest" can point at a release with no CLI assets yet). This job
+    # is what advances the pin once those binaries are confirmed uploaded
+    # -- without it, the pin would have to be hand-edited in
+    # nodespace-website after every release, the same kind of drift the
+    # Homebrew cask sync job above exists to prevent for the cask.
+    #
+    # Unlike sync-homebrew-cask, which can depend on one narrow upstream
+    # job (build-tauri-macos-arm) for exactly the leg it needs,
+    # build-headless is a single job with an internal 5-way matrix
+    # (fail-fast: false), and GitHub Actions only exposes that job's
+    # AGGREGATE result -- not individual matrix legs -- to `needs`. This
+    # script's own required set (REQUIRED_HEADLESS_TARGETS in
+    # publish-install-script.ts) is only 3 of those 5 legs, so gating on
+    # `needs.build-headless.result == 'success'` would skip this job
+    # entirely -- silently, with no signal in the resulting
+    # "Release build failed" issue -- whenever an UNRELATED leg (e.g.
+    # windows-x86, which install.sh never even downloads) flakes. Instead,
+    # run whenever build-headless actually finished (not cancelled) and
+    # let publish-install-script.ts's own checkReleaseAssets() be the real
+    # gate: it re-verifies the specific assets this job needs via `gh
+    # release view` and fails loudly (exit 1) if any are missing, which
+    # correctly fails this job and feeds notify-failure with a real,
+    # specific reason instead of a silent no-op.
     if: >-
       always() &&
       github.event_name == 'release' &&
-      needs.build-headless.result == 'success'
+      needs.build-headless.result != 'cancelled'
 
     steps:
       - name: Checkout repository
