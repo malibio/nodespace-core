@@ -126,9 +126,25 @@ const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Durati
 /// conflict is expected; the retry re-reads the winning version and reapplies.
 const MAX_WRITE_ATTEMPTS: usize = 5;
 
+/// gRPC error message for local-GGUF-model-management calls reaching a
+/// database whose `GgufModelManager::new()` failed at construction (see
+/// `LocalAgentServiceImpl::new`). Chat turns and OpenAI-compatible models are
+/// unaffected — only local GGUF model management (list/download/delete/load/
+/// unload/cancel/recommended) is degraded for this database.
+const MODEL_MANAGER_UNAVAILABLE: &str =
+    "local GGUF model manager is unavailable for this database (see daemon logs for the \
+     initialization error); chat turns and OpenAI-compatible models are unaffected";
+
 struct LocalAgentServiceInner {
     service: RwLock<AgentService>,
-    model_manager: Arc<GgufModelManager>,
+    /// `None` when `GgufModelManager::new()` failed at construction (e.g.
+    /// `$HOME` unset, an unwritable/occupied models directory) — a recoverable
+    /// environmental condition, not a programming error. This database still
+    /// opens; local GGUF model management (list/download/delete/load/unload/
+    /// cancel/recommended) reports `UNAVAILABLE` instead, while everything
+    /// else (ai-chat turns, OpenAI-compatible models, status) is unaffected.
+    /// See `LocalAgentServiceImpl::new` and `LocalAgentServiceImpl::model_manager`.
+    model_manager: Option<Arc<GgufModelManager>>,
     node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
     /// Whether Stage-2 candidate injection is disabled for the currently
@@ -204,9 +220,49 @@ impl LocalAgentServiceImpl {
         embedding_service: SharedEmbeddingService,
         daemon_config_path: std::path::PathBuf,
     ) -> Self {
-        let model_manager =
-            Arc::new(GgufModelManager::new().expect("GgufModelManager initialization failed"));
+        // `build_database_services` runs on every per-database open (ADR-053: one
+        // daemon, many databases opened lazily on demand), not once at daemon
+        // startup — an `expect` here used to panic the whole process on a single
+        // failing open, taking every other already-open database, the sync
+        // service, and the gRPC server down with it. Degrade instead, the same
+        // way a missing NLP model disables only the embedding wiring
+        // (`SharedContext::has_model`) rather than failing the database open:
+        // this database still opens, with local GGUF model management
+        // unavailable until this constructor runs again in an environment where
+        // `GgufModelManager::new()` succeeds — a daemon restart, or (ADR-053)
+        // this database simply being reopened after the idle reaper evicts it,
+        // both of which re-run `build_database_services`.
+        let model_manager = match GgufModelManager::new() {
+            Ok(m) => Some(Arc::new(m)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "GgufModelManager initialization failed — local GGUF model management \
+                     disabled for this database (chat turns and OpenAI-compatible models are \
+                     unaffected)"
+                );
+                None
+            }
+        };
 
+        Self::from_model_manager(
+            node_service,
+            embedding_service,
+            daemon_config_path,
+            model_manager,
+        )
+    }
+
+    /// Shared construction path for `new` and (via `model_manager: None`) tests
+    /// that regression-cover the degraded shape a failed `GgufModelManager::new()`
+    /// produces, without needing to actually break `$HOME` or the real models
+    /// directory to trigger it.
+    fn from_model_manager(
+        node_service: Arc<NodeService>,
+        embedding_service: SharedEmbeddingService,
+        daemon_config_path: std::path::PathBuf,
+        model_manager: Option<Arc<GgufModelManager>>,
+    ) -> Self {
         // Channel capacity: enough headroom for burst token output (~256 tokens per broadcast).
         let (token_tx, _) = broadcast::channel(512);
 
@@ -256,6 +312,24 @@ impl LocalAgentServiceImpl {
 
     async fn get_service(&self) -> AgentService {
         self.inner.service.read().await.clone()
+    }
+
+    /// The GGUF model manager, or `None` when `GgufModelManager::new()` failed
+    /// at construction (see the field's doc comment on
+    /// `LocalAgentServiceInner`). Every gRPC handler that manages local GGUF
+    /// models (list/download/delete/load/unload/cancel/recommended) routes
+    /// through this instead of unwrapping the field directly, pairing it with
+    /// `MODEL_MANAGER_UNAVAILABLE` via `.ok_or_else(...)?` so a failed init
+    /// degrades those RPCs one at a time rather than being able to panic
+    /// anywhere the field is read.
+    ///
+    /// Returns `Option`, not a `Result<_, Status>`, so this helper's own
+    /// return type does not trip `clippy::result_large_err` — `Status` is
+    /// ~176 bytes, and unlike the gRPC handlers themselves (whose `Ok` side,
+    /// `Response<T>`, is comparably large), the natural `Ok` side here is a
+    /// single pointer.
+    fn model_manager(&self) -> Option<&Arc<GgufModelManager>> {
+        self.inner.model_manager.as_ref()
     }
 
     async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
@@ -1007,12 +1081,16 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
     ) -> Result<Response<ListModelsResponse>, Status> {
         let force_refresh = request.into_inner().force_refresh;
 
-        let mut models = self
-            .inner
-            .model_manager
-            .list()
-            .await
-            .map_err(|e| Status::internal(format!("Failed to list models: {e}")))?;
+        // A missing local model manager contributes no GGUF catalog rows rather
+        // than failing the whole listing — the OpenAI-compatible catalog below
+        // is independent of it and must still be usable.
+        let mut models = match self.model_manager() {
+            Some(manager) => manager
+                .list()
+                .await
+                .map_err(|e| Status::internal(format!("Failed to list models: {e}")))?,
+            None => Vec::new(),
+        };
 
         models.extend(self.discover_openai_compat_models(force_refresh).await);
 
@@ -1046,7 +1124,10 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<ModelLoadProgressEvent, Status>>(16);
 
         let model_id_clone = model_id.clone();
-        let manager = self.inner.model_manager.clone();
+        let manager = self
+            .model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
+            .clone();
 
         let tx_gguf = tx.clone();
         let mid_gguf = model_id.clone();
@@ -1108,8 +1189,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<DeleteModelRequest>,
     ) -> Result<Response<DeleteModelResponse>, Status> {
         let model_id = request.into_inner().model_id;
-        self.inner
-            .model_manager
+        self.model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .delete(&model_id)
             .await
             .map_err(|e| Status::internal(format!("Failed to delete model: {e}")))?;
@@ -1121,8 +1202,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<LoadModelRequest>,
     ) -> Result<Response<LoadModelResponse>, Status> {
         let model_id = request.into_inner().model_id;
-        self.inner
-            .model_manager
+        self.model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .load(&model_id)
             .await
             .map_err(|e| Status::internal(format!("Failed to load model: {e}")))?;
@@ -1133,8 +1214,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         &self,
         _request: Request<UnloadModelRequest>,
     ) -> Result<Response<UnloadModelResponse>, Status> {
-        self.inner
-            .model_manager
+        self.model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .unload()
             .await
             .map_err(|e| Status::internal(format!("Failed to unload model: {e}")))?;
@@ -1146,8 +1227,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<CancelModelDownloadRequest>,
     ) -> Result<Response<CancelModelDownloadResponse>, Status> {
         let model_id = request.into_inner().model_id;
-        self.inner
-            .model_manager
+        self.model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .cancel_download(&model_id)
             .await
             .map_err(|e| Status::internal(format!("Failed to cancel download: {e}")))?;
@@ -1159,8 +1240,8 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         _request: Request<RecommendedModelRequest>,
     ) -> Result<Response<RecommendedModelResponse>, Status> {
         let model_id = self
-            .inner
-            .model_manager
+            .model_manager()
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .recommended_model()
             .await
             .map_err(|e| Status::internal(format!("Failed to get recommended model: {e}")))?;
@@ -1469,7 +1550,20 @@ impl LocalAgentServiceImpl {
             return events;
         }
 
-        let models = match self.inner.model_manager.list().await {
+        let manager = match self.model_manager() {
+            Some(m) => m,
+            None => {
+                emit!(ModelLoadProgressEvent {
+                    event_type: "error".to_string(),
+                    model_id: model_id.to_string(),
+                    error_message: Some(MODEL_MANAGER_UNAVAILABLE.to_string()),
+                    ..Default::default()
+                });
+                return events;
+            }
+        };
+
+        let models = match manager.list().await {
             Ok(m) => m,
             Err(e) => {
                 emit!(ModelLoadProgressEvent {
@@ -1519,7 +1613,7 @@ impl LocalAgentServiceImpl {
                     ..Default::default()
                 });
 
-                if let Err(e) = self.inner.model_manager.download(model_id).await {
+                if let Err(e) = manager.download(model_id).await {
                     emit!(ModelLoadProgressEvent {
                         event_type: "error".to_string(),
                         model_id: model_id.to_string(),
@@ -1542,7 +1636,7 @@ impl LocalAgentServiceImpl {
             }
         }
 
-        let model_path = match self.inner.model_manager.model_path(model_id) {
+        let model_path = match manager.model_path(model_id) {
             Ok(p) => p,
             Err(e) => {
                 emit!(ModelLoadProgressEvent {
@@ -1579,7 +1673,7 @@ impl LocalAgentServiceImpl {
             ..Default::default()
         });
 
-        let (family, chat_config) = match self.inner.model_manager.model_spec_for(model_id) {
+        let (family, chat_config) = match manager.model_spec_for(model_id) {
             Ok(spec) => {
                 let config = ChatConfig {
                     n_ctx: spec.context_window,
@@ -1629,7 +1723,7 @@ impl LocalAgentServiceImpl {
             }
         };
 
-        if let Err(e) = self.inner.model_manager.load(model_id).await {
+        if let Err(e) = manager.load(model_id).await {
             emit!(ModelLoadProgressEvent {
                 event_type: "error".to_string(),
                 model_id: model_id.to_string(),
@@ -2215,6 +2309,34 @@ mod tests {
         let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
         let daemon_config_path = tempdir.path().join("daemon.toml");
         let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding, daemon_config_path);
+        (svc, node_service, tempdir)
+    }
+
+    /// Like `test_service`, but with the GGUF model manager forced absent —
+    /// the shape `LocalAgentServiceImpl::new` produces when
+    /// `GgufModelManager::new()` fails (unwritable models directory, `$HOME`
+    /// unset). Regression coverage for that failure staying a per-database
+    /// degradation rather than the panic it used to be, which — because
+    /// `build_database_services` runs on every per-database open under
+    /// ADR-053, not just once at startup — would otherwise take down the
+    /// whole daemon process and every other open database with it.
+    async fn test_service_without_model_manager(
+    ) -> (LocalAgentServiceImpl, Arc<NodeService>, tempfile::TempDir) {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(tempdir.path().join("daemon-db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let svc = LocalAgentServiceImpl::from_model_manager(
+            node_service.clone(),
+            embedding,
+            daemon_config_path,
+            None,
+        );
         (svc, node_service, tempdir)
     }
 
@@ -3791,5 +3913,188 @@ model = "model-b"
             "a second call within the TTL must be served from the cache, not \
              re-discovered — the fetch timestamp must not change"
         );
+    }
+
+    // -- Model-manager init failure (degraded mode, not a panic) ------------
+
+    /// The real environmental failure this regression guards against:
+    /// `GgufModelManager::with_dir` (what `GgufModelManager::new` calls after
+    /// resolving the default directory) fails, without panicking, when a
+    /// plain file already occupies the path it needs to `create_dir_all` —
+    /// one of the two ordinary conditions (`$HOME` unset is the other,
+    /// documented on `default_models_dir`) that used to reach an `expect` in
+    /// `LocalAgentServiceImpl::new`.
+    #[test]
+    fn gguf_model_manager_new_fails_cleanly_when_models_dir_path_is_a_file() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let occupied_path = tempdir.path().join("models");
+        std::fs::write(&occupied_path, b"not a directory").expect("create blocking file");
+
+        let result = GgufModelManager::with_dir(occupied_path);
+
+        assert!(
+            result.is_err(),
+            "create_dir_all over an existing file must fail (and be caught as an \
+             Err, not a panic) rather than succeed"
+        );
+    }
+
+    /// Drives `LocalAgentServiceImpl::new` itself — not `from_model_manager`'s
+    /// injected shortcut — through a real `GgufModelManager::new()` failure, by
+    /// pointing `$HOME` at a directory whose `.nodespace/models` path is
+    /// occupied by a plain file. This is the one test that actually exercises
+    /// the `match GgufModelManager::new() { Ok(..) => Some(..), Err(..) =>
+    /// None }` arm that replaced the original `.expect(...)`: the other
+    /// degraded-mode tests construct via `from_model_manager(..., None)`
+    /// directly and would keep passing even if that match arm regressed back
+    /// to a panic.
+    ///
+    /// Mutating `$HOME` is process-global, so this is deliberately narrow: the
+    /// window is exactly the synchronous `LocalAgentServiceImpl::new` call
+    /// (`new` performs no `.await`, so no other task can interleave before
+    /// `$HOME` is restored), and a repo-wide audit confirms no other test in
+    /// this crate's unit-test binary reads `$HOME` — `SettingsServiceImpl::
+    /// with_default_path` and `assembly::build_shared_services`'s
+    /// `dirs::home_dir()` calls are only reached from real daemon startup
+    /// (`main.rs`) and from separate integration-test *binaries* (their own
+    /// OS processes, unaffected by an env mutation in this one).
+    #[tokio::test]
+    async fn local_agent_service_new_survives_a_real_model_manager_init_failure() {
+        let fake_home = tempfile::TempDir::new().expect("fake home tempdir");
+        let models_path = fake_home.path().join(".nodespace").join("models");
+        std::fs::create_dir_all(
+            models_path
+                .parent()
+                .expect("models path has a .nodespace parent"),
+        )
+        .expect("create .nodespace dir");
+        std::fs::write(&models_path, b"not a directory").expect("occupy the models path");
+
+        // Build the node service this constructor needs, exactly like
+        // `test_service`, but under a separate tempdir from `fake_home` so the
+        // database and the (broken) models directory don't collide.
+        let db_tempdir = tempfile::TempDir::new().expect("db tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(db_tempdir.path().join("daemon-db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let daemon_config_path = db_tempdir.path().join("daemon.toml");
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", fake_home.path());
+        let svc = LocalAgentServiceImpl::new(node_service, embedding, daemon_config_path);
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        // The construction above must not have panicked (if it had, this test
+        // would already be reported as a failure) and must have landed in
+        // degraded mode, not silently succeeded with some other directory.
+        assert!(
+            svc.inner.model_manager.is_none(),
+            "a real GgufModelManager::new() failure during LocalAgentServiceImpl::new \
+             must degrade (model_manager: None), not panic or silently recover"
+        );
+    }
+
+    /// The regression this issue guards against: a failed `GgufModelManager`
+    /// init must degrade this database's local-model-management RPCs, not
+    /// crash the process. Every RPC that reaches the model manager returns a
+    /// clean error (or, for `list_models`, an empty local catalog) instead of
+    /// panicking — proving the daemon and every other open database survive a
+    /// single database's model-manager init failure rather than going down
+    /// with it.
+    #[tokio::test]
+    async fn model_management_rpcs_degrade_when_model_manager_init_failed() {
+        let (svc, _node_service, _tempdir) = test_service_without_model_manager().await;
+
+        // list_models: no local GGUF catalog, but the call itself succeeds —
+        // OpenAI-compatible discovery (independent of the local manager) must
+        // still be reachable, matching how a missing OpenAI-compat endpoint
+        // already contributes nothing rather than failing the whole listing.
+        let models = svc
+            .list_models(Request::new(ListModelsRequest {
+                force_refresh: false,
+            }))
+            .await
+            .expect("list_models must not fail outright when the model manager is absent")
+            .into_inner()
+            .models;
+        assert!(
+            models.is_empty(),
+            "no GGUF catalog rows should be reported without a model manager"
+        );
+
+        // Every other model-management RPC reports UNAVAILABLE rather than
+        // panicking or otherwise misbehaving.
+        let download_err = svc
+            .download_model(Request::new(DownloadModelRequest {
+                model_id: "gemma-4-e4b-q4km".to_string(),
+            }))
+            .await
+            .expect_err("download_model must fail cleanly, not panic");
+        assert_eq!(download_err.code(), tonic::Code::Unavailable);
+
+        let delete_err = svc
+            .delete_model(Request::new(DeleteModelRequest {
+                model_id: "gemma-4-e4b-q4km".to_string(),
+            }))
+            .await
+            .expect_err("delete_model must fail cleanly, not panic");
+        assert_eq!(delete_err.code(), tonic::Code::Unavailable);
+
+        let load_err = svc
+            .load_model(Request::new(LoadModelRequest {
+                model_id: "gemma-4-e4b-q4km".to_string(),
+            }))
+            .await
+            .expect_err("load_model must fail cleanly, not panic");
+        assert_eq!(load_err.code(), tonic::Code::Unavailable);
+
+        let unload_err = svc
+            .unload_model(Request::new(UnloadModelRequest {}))
+            .await
+            .expect_err("unload_model must fail cleanly, not panic");
+        assert_eq!(unload_err.code(), tonic::Code::Unavailable);
+
+        let cancel_err = svc
+            .cancel_model_download(Request::new(CancelModelDownloadRequest {
+                model_id: "gemma-4-e4b-q4km".to_string(),
+            }))
+            .await
+            .expect_err("cancel_model_download must fail cleanly, not panic");
+        assert_eq!(cancel_err.code(), tonic::Code::Unavailable);
+
+        let recommended_err = svc
+            .recommended_model(Request::new(RecommendedModelRequest {}))
+            .await
+            .expect_err("recommended_model must fail cleanly, not panic");
+        assert_eq!(recommended_err.code(), tonic::Code::Unavailable);
+    }
+
+    /// The other half of the regression: everything NOT routed through the
+    /// GGUF model manager keeps working normally on a database whose
+    /// `GgufModelManager` failed to initialize — an ai-chat turn runs to
+    /// completion end to end. A database opened in this degraded mode is
+    /// still a working database, just one without local GGUF model
+    /// management; it is not an unopenable or half-broken one.
+    #[tokio::test]
+    async fn ai_chat_turn_still_works_when_model_manager_init_failed() {
+        let (svc, node_service, _tempdir) = test_service_without_model_manager().await;
+        svc.replace_engine_if_changed("stub-model", Arc::new(StubEngine::new("Hello there")))
+            .await;
+
+        let node_id = create_processing_node_with_user_message(&node_service, "Hi").await;
+        svc.maybe_handle_ai_chat_node(&node_id).await;
+
+        let ai_chat = get_ai_chat(&node_service, &node_id).await;
+        assert_eq!(ai_chat.status, "idle");
+        assert_eq!(ai_chat.messages.len(), 2);
+        assert_eq!(ai_chat.messages[1].role, "assistant");
+        assert_eq!(ai_chat.messages[1].content, "Hello there");
     }
 }
