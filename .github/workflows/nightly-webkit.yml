@@ -94,7 +94,7 @@ jobs:
             echo
             echo "Output:"
             echo '```'
-            tail -n 100 webkit-output.txt 2>/dev/null || echo "(no output captured)"
+            tail -n 100 webkit-output.txt 2>/dev/null | grep . || echo "(no output captured)"
             echo '```'
             echo
             echo "A \"Failed Suites\" line above is a real test failure. Anything else"
