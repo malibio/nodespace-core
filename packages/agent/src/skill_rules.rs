@@ -71,8 +71,13 @@ pub const EDIT_DONT_RECREATE: SchemaRule = SchemaRule {
 
 pub const RENAME_VS_RELABEL: SchemaRule = SchemaRule {
     id: "rename-vs-relabel",
-    imperative: "RENAME VS RELABEL: rename_fields does two different things depending on 'from'/'to'. To change what a field is called FOR STORAGE (its name — breaking for title_template/query filters, migrates all existing node data), set 'from' and 'to' to different values. To change only its DISPLAY LABEL (friendlyName) without touching storage or data, set 'from' and 'to' to the SAME value and pass 'friendlyName'. A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.",
-    prose: "**Rename vs. relabel:** `rename_fields` does two different things depending on whether `from`/`to` differ. To change a field's storage key (breaking for `title_template`/query filters, migrates all existing node data), set `from` and `to` to different values. To change only its display label (`friendlyName`) without touching storage or data, set `from` and `to` to the SAME value and pass `friendlyName`. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.",
+    // Mechanics (which 'from'/'to'/'friendlyName' shape does which thing)
+    // are argument shape — the rename_fields tool-schema description
+    // (local_agent/tools.rs) is the one place that spells them out per
+    // ADR-064 rule 1. This rule states only the procedural judgment call a
+    // schema description cannot: which of the two the user actually means.
+    imperative: "RENAME VS RELABEL: rename_fields can rename a field's storage key OR relabel its display name (see the tool schema for the 'from'/'to'/'friendlyName' shape of each). A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.",
+    prose: "**Rename vs. relabel:** `rename_fields` can rename a field's storage key or relabel its display name only — see the tool schema for the `from`/`to`/`friendlyName` shape of each. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.",
 };
 
 pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
